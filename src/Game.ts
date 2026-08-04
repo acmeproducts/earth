@@ -17,6 +17,7 @@ import {
 import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
+import { EXAMPLE_LOCATIONS } from "./Locations";
 
 export class Game {
   private static readonly TERRAIN_COLOR_STOPS = [
@@ -37,10 +38,7 @@ export class Game {
   private terrainZoom = 15;
   private debugMapEnabled = false;
   private terrainRequestId = 0;
-  private readonly terrainLocation = {
-    lat: 58.79605454187253,
-    lon: 11.182361556113896,
-  };
+  private terrainLocationIndex = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -104,9 +102,10 @@ export class Game {
 
   private async rebuildTerrain(zoom: number): Promise<void> {
     const requestId = ++this.terrainRequestId;
+    const location = EXAMPLE_LOCATIONS[this.terrainLocationIndex];
     const terrainData = await TerrainTiles.fetchTileAtLocation(
-      this.terrainLocation.lat,
-      this.terrainLocation.lon,
+      location.lat,
+      location.lon,
       zoom,
     );
     if (requestId !== this.terrainRequestId) return;
@@ -183,8 +182,20 @@ export class Game {
         void this.changeTerrainZoom(1);
       } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
         void this.changeTerrainZoom(-1);
+      } else if (/^[1-9]$/.test(kbInfo.event.key)) {
+        const locationIndex = Number(kbInfo.event.key) - 1;
+        if (locationIndex < EXAMPLE_LOCATIONS.length) {
+          void this.changeTerrainLocation(locationIndex);
+        }
       }
     });
+  }
+
+  private async changeTerrainLocation(locationIndex: number): Promise<void> {
+    if (locationIndex === this.terrainLocationIndex) return;
+    this.terrainLocationIndex = locationIndex;
+    console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
+    await this.rebuildTerrain(this.terrainZoom);
   }
 
   private async toggleDebugMap(): Promise<void> {
