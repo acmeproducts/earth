@@ -1,9 +1,12 @@
+import { DynamicTexture, Scene } from "@babylonjs/core";
+
 /**
  * Utility class for fetching and processing AWS Terrain Tiles.
  * https://registry.opendata.aws/terrain-tiles/
  */
 export class TerrainTiles {
   private static readonly BASE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
+  private static readonly OPEN_TOPO_MAP_BASE_URL = "https://tile.opentopomap.org";
 
   /**
    * Converts latitude/longitude to tile coordinates at a given zoom level.
@@ -281,7 +284,58 @@ export class TerrainTiles {
     const result = this.processElevations(stitched, stitchedSize, stitchedSize, { z: zoom, x: tileX, y: tileY });
     result.groundWidthMeters = widthMeters;
     result.groundHeightMeters = heightMeters;
+    result.sourceTileStart = { z: zoom, x: startX, y: startY };
     return result;
+  }
+
+  /**
+   * Creates a texture from the same 2x2 OpenTopoMap tile area used for terrain.
+   * The result is deliberately kept separate from the normal terrain pipeline.
+   */
+  static async createOpenTopoMapTexture(
+    scene: Scene,
+    terrain: TerrainResult,
+  ): Promise<DynamicTexture> {
+    const start = terrain.sourceTileStart;
+    if (!start) {
+      throw new Error("Terrain result does not include its source tile range.");
+    }
+
+    const tileUrls = [
+      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x}/${start.y}.png`,
+      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x + 1}/${start.y}.png`,
+      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x}/${start.y + 1}.png`,
+      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x + 1}/${start.y + 1}.png`,
+    ];
+    const tiles = await Promise.all(tileUrls.map((url) => this.loadImage(url)));
+    const tileSize = tiles[0].width;
+    const texture = new DynamicTexture(
+      "openTopoMapDebugTexture",
+      { width: tileSize * 2, height: tileSize * 2 },
+      scene,
+      false,
+    );
+    const context = texture.getContext();
+
+    tiles.forEach((tile, index) => {
+      context.drawImage(tile, (index % 2) * tileSize, Math.floor(index / 2) * tileSize);
+    });
+    texture.update(false);
+    // Canvas tiles are drawn north-to-south; ground UVs run in the opposite V direction.
+    texture.vScale = -1;
+    texture.vOffset = 1;
+    return texture;
+  }
+
+  private static async loadImage(url: string): Promise<HTMLImageElement> {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Failed to load map tile: ${url}`));
+      image.src = url;
+    });
+    return image;
   }
 
   /**
@@ -377,4 +431,6 @@ export interface TerrainResult {
   groundWidthMeters?: number;
   /** Real-world ground height in meters (if available) */
   groundHeightMeters?: number;
+  /** Top-left source tile of the stitched 2x2 terrain area. */
+  sourceTileStart?: { z: number; x: number; y: number };
 }

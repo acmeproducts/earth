@@ -12,14 +12,32 @@ import {
   KeyboardEventTypes,
   VertexBuffer,
   VertexData,
-} from '@babylonjs/core';
-import { TerrainTiles, TerrainResult } from './TerrainTiles';
-import { createWaterPlane } from './Water';
+} from "@babylonjs/core";
+import { TerrainTiles, TerrainResult } from "./TerrainTiles";
+import { createWaterPlane } from "./Water";
 
 export class Game {
+  private static readonly TERRAIN_COLOR_STOPS = [
+    { height: 0, color: new Color3(0.12, 0.38, 0.16) },
+    { height: 0.2, color: new Color3(0.32, 0.62, 0.21) },
+    { height: 0.45, color: new Color3(0.68, 0.64, 0.31) },
+    { height: 0.7, color: new Color3(0.45, 0.38, 0.29) },
+    { height: 1, color: new Color3(0.92, 0.92, 0.9) },
+  ];
+
   private canvas: HTMLCanvasElement;
   private engine: Engine;
   private scene: Scene;
+  private terrain?: Mesh;
+  private water?: Mesh;
+  private terrainData?: TerrainResult;
+  private terrainZoom = 15;
+  private debugMapEnabled = false;
+  private terrainRequestId = 0;
+  private readonly terrainLocation = {
+    lat: 58.79605454187253,
+    lon: 11.182361556113896,
+  };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -37,17 +55,17 @@ export class Game {
 
     // Create fly camera with WASD controls
     const camera = new UniversalCamera(
-      'camera',
+      "camera",
       new Vector3(0, 5, -15),
-      this.scene
+      this.scene,
     );
     camera.setTarget(Vector3.Zero());
     camera.attachControl(this.canvas, true);
 
     // WASD keys for movement (W=87, A=65, S=83, D=68)
-    camera.keysUp = [87];    // W
-    camera.keysDown = [83];  // S
-    camera.keysLeft = [65];  // A
+    camera.keysUp = [87]; // W
+    camera.keysDown = [83]; // S
+    camera.keysLeft = [65]; // A
     camera.keysRight = [68]; // D
 
     // Movement speed
@@ -58,10 +76,10 @@ export class Game {
     const verticalSpeed = 0.2;
     this.scene.onKeyboardObservable.add((kbInfo) => {
       if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
-        if (kbInfo.event.key === 'q' || kbInfo.event.key === 'Q') {
+        if (kbInfo.event.key === "q" || kbInfo.event.key === "Q") {
           camera.position.y -= verticalSpeed;
         }
-        if (kbInfo.event.key === 'e' || kbInfo.event.key === 'E') {
+        if (kbInfo.event.key === "e" || kbInfo.event.key === "E") {
           camera.position.y += verticalSpeed;
         }
       }
@@ -69,48 +87,124 @@ export class Game {
 
     // Create lights
     const hemisphericLight = new HemisphericLight(
-      'hemisphericLight',
+      "hemisphericLight",
       new Vector3(1, 1, 0),
-      this.scene
+      this.scene,
     );
     hemisphericLight.intensity = 1.0;
     hemisphericLight.groundColor = new Color3(0.1, 0.1, 0.2);
 
     // Oslo coordinates: 59.91°N, 10.75°E
-    const storyodden = { lat: 59.8888085995981, lon: 10.593090176648504 };
-    const casa = { lat: 59.904706664625266, lon: 10.61104958556299 };
-    const terrainData = await TerrainTiles.fetchTileAtLocation(storyodden.lat, storyodden.lon, 15);
-    
+    await this.rebuildTerrain(this.terrainZoom);
+    this.setupDebugControls();
+  }
+
+  private async rebuildTerrain(zoom: number): Promise<void> {
+    const requestId = ++this.terrainRequestId;
+    const terrainData = await TerrainTiles.fetchTileAtLocation(
+      this.terrainLocation.lat,
+      this.terrainLocation.lon,
+      zoom,
+    );
+    if (requestId !== this.terrainRequestId) return;
+
     // Download the heightmap to disk
     //TerrainTiles.downloadHeightmap(terrainData, 'oslo_heightmap.png');
-    
+
     // Derive meters-per-unit from the real ground extent so
     // horizontal and vertical scales match 1:1 (absolute height).
-    const meshWidth = 100;   // scene units for the ground plane
+    const meshWidth = 100; // scene units for the ground plane
     const groundWidth = terrainData.groundWidthMeters ?? 1000;
     const groundHeight = terrainData.groundHeightMeters ?? 1000;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
 
-    console.log(`Ground extent: ${groundWidth.toFixed(0)}m × ${groundHeight.toFixed(0)}m → ${meshWidth} × ${meshDepth.toFixed(2)} units (1 unit = ${metersPerUnit.toFixed(1)}m)`);
-    console.log(`Elevation: ${terrainData.minElevation.toFixed(0)}m – ${terrainData.maxElevation.toFixed(0)}m`);
+    console.log(
+      `Ground extent: ${groundWidth.toFixed(0)}m × ${groundHeight.toFixed(0)}m → ${meshWidth} × ${meshDepth.toFixed(2)} units (1 unit = ${metersPerUnit.toFixed(1)}m)`,
+    );
+    console.log(
+      `Elevation: ${terrainData.minElevation.toFixed(0)}m – ${terrainData.maxElevation.toFixed(0)}m`,
+    );
 
     // Multiplier for mesh subdivisions relative to source image pixels.
     // 1 = one vertex per pixel, 0.5 = half resolution, 2 = double, etc.
     const subdivisionMultiplier = 1;
-    const subdivisions = Math.max(1, Math.round(terrainData.width * subdivisionMultiplier));
+    const subdivisions = Math.max(
+      1,
+      Math.round(terrainData.width * subdivisionMultiplier),
+    );
 
-    console.log(`Terrain: ${terrainData.width}×${terrainData.height}px → ${subdivisions} subdivisions (×${subdivisionMultiplier})`);
+    console.log(
+      `Terrain: ${terrainData.width}×${terrainData.height}px → ${subdivisions} subdivisions (×${subdivisionMultiplier})`,
+    );
 
-    const terrain = this.createTerrainMesh('terrain', terrainData, {
+    const terrain = this.createTerrainMesh("terrain", terrainData, {
       meshWidth,
       meshDepth,
       subdivisions,
       metersPerUnit,
     });
 
-    // Create water plane at 0 meters elevation
-    createWaterPlane(this.scene, [terrain]);
+    const water = createWaterPlane(this.scene, [terrain], {
+      width: meshWidth,
+      height: meshDepth,
+    });
+
+    this.terrain?.dispose(false, true);
+    this.water?.dispose(false, true);
+    this.terrain = terrain;
+    this.water = water;
+    this.terrainData = terrainData;
+
+    if (this.debugMapEnabled) await this.enableDebugMap(requestId);
+  }
+
+  /** Debug-only keyboard actions are isolated from camera input. */
+  private setupDebugControls(): void {
+    this.scene.onKeyboardObservable.add((kbInfo) => {
+      if (kbInfo.type !== KeyboardEventTypes.KEYDOWN || (kbInfo.event as KeyboardEvent).repeat) return;
+
+      if (kbInfo.event.key === "p" || kbInfo.event.key === "P") {
+        void this.toggleDebugMap();
+      } else if (kbInfo.event.key === "+" || kbInfo.event.code === "NumpadAdd") {
+        void this.changeTerrainZoom(1);
+      } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
+        void this.changeTerrainZoom(-1);
+      }
+    });
+  }
+
+  private async toggleDebugMap(): Promise<void> {
+    this.debugMapEnabled = !this.debugMapEnabled;
+    if (this.debugMapEnabled) {
+      await this.enableDebugMap(this.terrainRequestId);
+    } else if (this.terrain) {
+      this.applyDefaultTerrainMaterial(this.terrain);
+    }
+  }
+
+  private async changeTerrainZoom(delta: number): Promise<void> {
+    const nextZoom = Math.max(1, Math.min(15, this.terrainZoom + delta));
+    if (nextZoom === this.terrainZoom) return;
+    this.terrainZoom = nextZoom;
+    await this.rebuildTerrain(nextZoom);
+  }
+
+  private async enableDebugMap(requestId: number): Promise<void> {
+    if (!this.terrain || !this.terrainData) return;
+    const terrain = this.terrain;
+    const texture = await TerrainTiles.createOpenTopoMapTexture(this.scene, this.terrainData);
+    if (!this.debugMapEnabled || requestId !== this.terrainRequestId || terrain !== this.terrain) {
+      texture.dispose();
+      return;
+    }
+
+    terrain.material?.dispose(true, true);
+    terrain.removeVerticesData(VertexBuffer.ColorKind);
+    const material = new StandardMaterial("openTopoMapDebugMaterial", this.scene);
+    material.diffuseTexture = texture;
+    material.specularColor = new Color3(0.1, 0.1, 0.1);
+    terrain.material = material;
   }
 
   run(): void {
@@ -144,20 +238,21 @@ export class Game {
       meshDepth: number;
       subdivisions: number;
       metersPerUnit: number;
-    }
+    },
   ): Mesh {
     const { meshWidth, meshDepth, subdivisions, metersPerUnit } = options;
 
     const ground = MeshBuilder.CreateGround(
       name,
       { width: meshWidth, height: meshDepth, subdivisions, updatable: true },
-      this.scene
+      this.scene,
     );
 
     const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
     const indices = ground.getIndices()!;
     const { elevations, width: elevW, height: elevH } = terrain;
     const vPerRow = subdivisions + 1;
+    const colors = new Float32Array((positions.length / 3) * 4);
 
     for (let row = 0; row < vPerRow; row++) {
       for (let col = 0; col < vPerRow; col++) {
@@ -188,6 +283,13 @@ export class Game {
 
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
+
+        const color = this.colorForElevation(elevation, terrain.maxElevation);
+        const colorIndex = vertexIndex * 4;
+        colors[colorIndex] = color.r;
+        colors[colorIndex + 1] = color.g;
+        colors[colorIndex + 2] = color.b;
+        colors[colorIndex + 3] = 1;
       }
     }
 
@@ -196,13 +298,48 @@ export class Game {
     VertexData.ComputeNormals(positions, indices, normals);
     ground.updateVerticesData(VertexBuffer.PositionKind, positions);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
+    ground.setVerticesData(VertexBuffer.ColorKind, colors);
+    ground.metadata = { terrainColors: colors };
 
-    // Apply a default material
-    const groundMaterial = new StandardMaterial(`${name}Material`, this.scene);
-    groundMaterial.diffuseColor = new Color3(0.4, 0.9, 0.6);
-    groundMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
-    ground.material = groundMaterial;
+    this.applyDefaultTerrainMaterial(ground);
 
     return ground;
+  }
+
+  private applyDefaultTerrainMaterial(terrain: Mesh): void {
+    terrain.material?.dispose(true, true);
+    const colors = (terrain.metadata as { terrainColors?: Float32Array } | null)?.terrainColors;
+    if (colors && !terrain.isVerticesDataPresent(VertexBuffer.ColorKind)) {
+      terrain.setVerticesData(VertexBuffer.ColorKind, colors);
+    }
+    // Vertex colors retain terrain-height detail while the material supplies lighting.
+    const material = new StandardMaterial(`${terrain.name}Material`, this.scene);
+    material.diffuseColor = Color3.White();
+    material.specularColor = new Color3(0.1, 0.1, 0.1);
+    terrain.material = material;
+  }
+
+  private colorForElevation(
+    elevation: number,
+    maximumElevation: number,
+  ): Color3 {
+    // Keep the ramp focused on land. Negative elevations sit beneath the water plane.
+    const normalizedHeight = Math.min(
+      1,
+      Math.max(0, elevation) / Math.max(1, maximumElevation),
+    );
+    const stops = Game.TERRAIN_COLOR_STOPS;
+
+    for (let i = 1; i < stops.length; i++) {
+      const upper = stops[i];
+      const lower = stops[i - 1];
+      if (normalizedHeight <= upper.height) {
+        const amount =
+          (normalizedHeight - lower.height) / (upper.height - lower.height);
+        return Color3.Lerp(lower.color, upper.color, amount);
+      }
+    }
+
+    return stops[stops.length - 1].color;
   }
 }
