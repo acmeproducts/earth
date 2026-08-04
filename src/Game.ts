@@ -12,9 +12,11 @@ import {
   KeyboardEventTypes,
   VertexBuffer,
   VertexData,
+  TransformNode,
 } from "@babylonjs/core";
 import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
+import { createTreeField } from "./TreeField";
 
 export class Game {
   private static readonly TERRAIN_COLOR_STOPS = [
@@ -30,6 +32,7 @@ export class Game {
   private scene: Scene;
   private terrain?: Mesh;
   private water?: Mesh;
+  private treeField?: TransformNode;
   private terrainData?: TerrainResult;
   private terrainZoom = 15;
   private debugMapEnabled = false;
@@ -145,15 +148,25 @@ export class Game {
       metersPerUnit,
     });
 
-    const water = createWaterPlane(this.scene, [terrain], {
+    const treeField = createTreeField(this.scene, terrainData, {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+      seed: zoom,
+    });
+    console.log(`Trees: ${treeField.count} simplex-placed instances`);
+
+    const water = createWaterPlane(this.scene, [terrain, ...treeField.meshes], {
       width: meshWidth,
       height: meshDepth,
     });
 
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
+    this.treeField?.dispose(false, true);
     this.terrain = terrain;
     this.water = water;
+    this.treeField = treeField.root;
     this.terrainData = terrainData;
 
     if (this.debugMapEnabled) await this.enableDebugMap(requestId);
