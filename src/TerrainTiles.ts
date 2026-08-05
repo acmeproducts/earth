@@ -68,88 +68,7 @@ export class TerrainTiles {
   }
 
   /**
-   * Iteratively deepens water pixels. Each pass: if all 8 neighbours
-   * are at the same height or lower, decrease the elevation by `step`.
-   * Only affects pixels that started below sea level.
-   * Pixels next to higher ground (land or shallower water) are held in place,
-   * so depth naturally increases the further you get from shore.
-   */
-  private static applyWaterDepth(
-    elevations: Float32Array,
-    width: number,
-    height: number,
-    passes: number = 100,
-    step: number = 1
-  ): void {
-    // Mark original water pixels (only these will be modified)
-    const isWater = new Uint8Array(elevations.length);
-    for (let i = 0; i < elevations.length; i++) {
-      isWater[i] = elevations[i] <= 0 ? 1 : 0;
-      // Start all water at 0
-      if (isWater[i]) elevations[i] = 0;
-    }
-
-    // Deepening passes
-    for (let pass = 0; pass < passes; pass++) {
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const i = y * width + x;
-          if (!isWater[i]) continue;
-
-          // Check all 8 neighbours — if any is higher, skip
-          const h = elevations[i];
-          let allSameOrLower = true;
-
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const ny = y + dy;
-              const nx = x + dx;
-              if (ny < 0 || ny >= height || nx < 0 || nx >= width) continue;
-              if (elevations[ny * width + nx] > h) {
-                allSameOrLower = false;
-                break;
-              }
-            }
-            if (!allSameOrLower) break;
-          }
-
-          if (allSameOrLower) {
-            elevations[i] -= step;
-          }
-        }
-      }
-    }
-
-    // Smoothing passes — average each water pixel with its neighbours
-    const smoothPasses = 10;
-    for (let pass = 0; pass < smoothPasses; pass++) {
-      const copy = new Float32Array(elevations);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const i = y * width + x;
-          if (!isWater[i]) continue;
-
-          let sum = 0;
-          let count = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const ny = y + dy;
-              const nx = x + dx;
-              if (ny < 0 || ny >= height || nx < 0 || nx >= width) continue;
-              sum += copy[ny * width + nx];
-              count++;
-            }
-          }
-          elevations[i] = sum / count;
-        }
-      }
-    }
-  }
-
-  /**
-   * Processes raw elevation data: applies coastal slopes, computes min/max,
-   * and returns the full-precision Float32Array for direct vertex use.
+   * Computes the raw elevation range and retains full precision for direct vertex use.
    */
   private static processElevations(
     elevations: Float32Array,
@@ -157,9 +76,6 @@ export class TerrainTiles {
     height: number,
     tile: { z: number; x: number; y: number },
   ): TerrainResult {
-    // Iteratively deepen water pixels
-    this.applyWaterDepth(elevations, width, height, 100, 1);
-
     let minElevation = Infinity;
     let maxElevation = -Infinity;
     for (let i = 0; i < elevations.length; i++) {
@@ -285,6 +201,7 @@ export class TerrainTiles {
     result.groundWidthMeters = widthMeters;
     result.groundHeightMeters = heightMeters;
     result.sourceTileStart = { z: zoom, x: startX, y: startY };
+    result.bounds = stitchedBounds;
     return result;
   }
 
@@ -433,4 +350,6 @@ export interface TerrainResult {
   groundHeightMeters?: number;
   /** Top-left source tile of the stitched 2x2 terrain area. */
   sourceTileStart?: { z: number; x: number; y: number };
+  /** Geographic extent of the stitched terrain. */
+  bounds?: TileBounds;
 }

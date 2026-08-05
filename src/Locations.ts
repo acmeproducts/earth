@@ -1,6 +1,6 @@
 export const EXAMPLE_LOCATIONS = [
   {
-    name: "Swedish west coast",
+    name: "Reso",
     lat: 58.79605454187253,
     lon: 11.182361556113896,
   },
@@ -18,6 +18,11 @@ export const EXAMPLE_LOCATIONS = [
     name: "Fornebu",
     lat: 59.8833298,
     lon: 10.6166642,
+  },
+  {
+    name: "Valserud",
+    lat: 59.58990531228428,
+    lon: 13.783101006047959,
   },
 ] as const;
 

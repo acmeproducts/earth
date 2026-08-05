@@ -8,8 +8,9 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { createNoise2D } from "simplex-noise";
+import { sceneToLonLat, sampleElevation } from "./Geo";
 import { TerrainResult } from "./TerrainTiles";
+import { LandCoverClass, WorldCover } from "./WorldCover";
 
 export interface TreeFieldResult {
   root: TransformNode;
@@ -24,9 +25,10 @@ interface TreeFieldOptions {
   seed?: number;
   spacingMeters?: number;
   waterLineMeters?: number;
+  landCover?: WorldCover;
 }
 
-/** Creates a low-poly placeholder forest distributed by seeded simplex noise. */
+/** Creates a low-poly forest within ESA WorldCover tree-cover cells. */
 export function createTreeField(
   scene: Scene,
   terrain: TerrainResult,
@@ -39,6 +41,7 @@ export function createTreeField(
     seed = 0x4f534c4f,
     spacingMeters = 5,
     waterLineMeters = 0,
+    landCover,
   } = options;
   const root = new TransformNode("treeField", scene);
 
@@ -85,13 +88,18 @@ export function createTreeField(
   canopy.parent = root;
 
   const random = mulberry32(seed);
-  const noise = createNoise2D(random);
   const spacing = spacingMeters / metersPerUnit;
   const columns = Math.max(1, Math.floor(meshWidth / spacing));
   const rows = Math.max(1, Math.floor(meshDepth / spacing));
   const cellWidth = meshWidth / columns;
   const cellDepth = meshDepth / rows;
   const matrices: Matrix[] = [];
+
+  if (!landCover || !terrain.bounds) {
+    trunk.setEnabled(false);
+    canopy.setEnabled(false);
+    return { root, meshes: [trunk, canopy], count: 0 };
+  }
 
   for (let row = 0; row < rows; row++) {
     for (let column = 0; column < columns; column++) {
@@ -100,13 +108,12 @@ export function createTreeField(
       const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
       if (elevation <= waterLineMeters) continue;
 
-      // Two scales produce broad forest regions with some local variation.
-      const worldX = x * metersPerUnit;
-      const worldZ = z * metersPerUnit;
-      const density =
-        noise(worldX / 260, worldZ / 260) * 0.72 +
-        noise(worldX / 75, worldZ / 75) * 0.28;
-      if (density + (random() - 0.5) * 0.3 < -0.08) continue;
+      const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+      const cover = landCover.sample(lon, lat);
+      if (
+        (cover !== LandCoverClass.TreeCover && cover !== LandCoverClass.Mangrove) ||
+        random() > 0.45
+      ) continue;
 
       const heightScale = 0.75 + random() * 0.5;
       const widthScale = 0.75 + random() * 0.35;
@@ -134,36 +141,6 @@ export function createTreeField(
   canopy.freezeWorldMatrix();
 
   return { root, meshes: [trunk, canopy], count: matrices.length };
-}
-
-function sampleElevation(
-  terrain: TerrainResult,
-  x: number,
-  z: number,
-  meshWidth: number,
-  meshDepth: number,
-): number {
-  const u = Math.min(1, Math.max(0, x / meshWidth + 0.5));
-  const v = Math.min(1, Math.max(0, 0.5 - z / meshDepth));
-  const px = u * (terrain.width - 1);
-  const py = v * (terrain.height - 1);
-  const x0 = Math.floor(px);
-  const y0 = Math.floor(py);
-  const x1 = Math.min(x0 + 1, terrain.width - 1);
-  const y1 = Math.min(y0 + 1, terrain.height - 1);
-  const fx = px - x0;
-  const fy = py - y0;
-
-  const e00 = terrain.elevations[y0 * terrain.width + x0];
-  const e10 = terrain.elevations[y0 * terrain.width + x1];
-  const e01 = terrain.elevations[y1 * terrain.width + x0];
-  const e11 = terrain.elevations[y1 * terrain.width + x1];
-  return (
-    e00 * (1 - fx) * (1 - fy) +
-    e10 * fx * (1 - fy) +
-    e01 * (1 - fx) * fy +
-    e11 * fx * fy
-  );
 }
 
 function mulberry32(seed: number): () => number {

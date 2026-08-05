@@ -25,6 +25,18 @@
       display: block;
     }
 
+    #attribution {
+      position: fixed;
+      right: 8px;
+      bottom: 6px;
+      z-index: 10;
+      color: rgba(255, 255, 255, 0.78);
+      font: 11px Arial, sans-serif;
+      text-shadow: 0 1px 2px #000;
+    }
+
+    #attribution a { color: inherit; }
+
     #loading {
       position: fixed;
       top: 0;
@@ -74,5 +86,10 @@
     <div class="loader-text">Initializing</div>
   </div>
   <canvas id="renderCanvas"></canvas>
+  <div id="attribution">
+    &copy; ESA WorldCover 2020 &middot;
+    <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &middot;
+    &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+  </div>
 </body>
 </html>

@@ -42,6 +42,10 @@ module.exports = (env, argv) => {
             to: 'assets',
             noErrorOnMissing: true,
           },
+          {
+            from: require.resolve('lerc/lerc-wasm.wasm'),
+            to: 'lerc-wasm.wasm',
+          },
         ],
       }),
     ],

@@ -18,6 +18,9 @@ import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
+import { sceneToLonLat } from "./Geo";
+import { OpenStreetMap } from "./OpenStreetMap";
+import { landCoverColor, WorldCover } from "./WorldCover";
 
 export class Game {
   private static readonly TERRAIN_COLOR_STOPS = [
@@ -34,6 +37,7 @@ export class Game {
   private terrain?: Mesh;
   private water?: Mesh;
   private treeField?: TransformNode;
+  private mapFeatures?: TransformNode;
   private terrainData?: TerrainResult;
   private terrainZoom = 15;
   private debugMapEnabled = false;
@@ -109,6 +113,20 @@ export class Game {
       zoom,
     );
     if (requestId !== this.terrainRequestId) return;
+    if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
+
+    const [landCover, mapWays] = await Promise.all([
+      WorldCover.fetch(terrainData.bounds).catch((error: unknown) => {
+        console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
+        return undefined;
+      }),
+      OpenStreetMap.fetch(terrainData.bounds).catch((error: unknown) => {
+        console.warn("OpenStreetMap unavailable; map features were skipped.", error);
+        return [];
+      }),
+    ]);
+    if (requestId !== this.terrainRequestId) return;
+    landCover?.constrainElevations(terrainData);
 
     // Download the heightmap to disk
     //TerrainTiles.downloadHeightmap(terrainData, 'oslo_heightmap.png');
@@ -145,6 +163,7 @@ export class Game {
       meshDepth,
       subdivisions,
       metersPerUnit,
+      landCover,
     });
 
     const treeField = createTreeField(this.scene, terrainData, {
@@ -152,10 +171,20 @@ export class Game {
       meshDepth,
       metersPerUnit,
       seed: zoom,
+      landCover,
     });
-    console.log(`Trees: ${treeField.count} simplex-placed instances`);
+    console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
 
-    const water = createWaterPlane(this.scene, [terrain, ...treeField.meshes], {
+    const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+    });
+    console.log(
+      `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
+    );
+
+    const water = createWaterPlane(this.scene, [terrain, ...treeField.meshes, ...mapFeatures.meshes], {
       width: meshWidth,
       height: meshDepth,
     });
@@ -163,9 +192,11 @@ export class Game {
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
     this.treeField?.dispose(false, true);
+    this.mapFeatures?.dispose(false, true);
     this.terrain = terrain;
     this.water = water;
     this.treeField = treeField.root;
+    this.mapFeatures = mapFeatures.root;
     this.terrainData = terrainData;
 
     if (this.debugMapEnabled) await this.enableDebugMap(requestId);
@@ -262,9 +293,10 @@ export class Game {
       meshDepth: number;
       subdivisions: number;
       metersPerUnit: number;
+      landCover?: WorldCover;
     },
   ): Mesh {
-    const { meshWidth, meshDepth, subdivisions, metersPerUnit } = options;
+    const { meshWidth, meshDepth, subdivisions, metersPerUnit, landCover } = options;
 
     const ground = MeshBuilder.CreateGround(
       name,
@@ -308,7 +340,15 @@ export class Game {
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
 
-        const color = this.colorForElevation(elevation, terrain.maxElevation);
+        const color = this.colorForTerrain(
+          terrain,
+          elevation,
+          positions[vertexIndex * 3],
+          positions[vertexIndex * 3 + 2],
+          meshWidth,
+          meshDepth,
+          landCover,
+        );
         const colorIndex = vertexIndex * 4;
         colors[colorIndex] = color.r;
         colors[colorIndex + 1] = color.g;
@@ -365,5 +405,22 @@ export class Game {
     }
 
     return stops[stops.length - 1].color;
+  }
+
+  private colorForTerrain(
+    terrain: TerrainResult,
+    elevation: number,
+    x: number,
+    z: number,
+    meshWidth: number,
+    meshDepth: number,
+    landCover?: WorldCover,
+  ): Color3 {
+    if (!landCover || !terrain.bounds) {
+      return this.colorForElevation(elevation, terrain.maxElevation);
+    }
+    const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+    const [red, green, blue] = landCoverColor(landCover.sample(lon, lat));
+    return new Color3(red, green, blue);
   }
 }
