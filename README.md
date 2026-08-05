@@ -106,15 +106,17 @@ pnpm build
 
 ### Adding Textures
 
-Place texture images in the `public/` folder and load them in `Game.ts`:
+The normal terrain appearance is isolated in `src/TerrainMaterial.ts`. Place
+texture images in the `public/` folder and assign them in that factory:
 
 ```typescript
 import { Texture } from '@babylonjs/core';
 
-// In initialize():
-const earthTexture = new Texture('/earth-texture.jpg', this.scene);
-earthMaterial.diffuseTexture = earthTexture;
+material.diffuseTexture = new Texture('/terrain-texture.jpg', scene);
 ```
+
+WorldCover is a debug view toggled with `L`; OpenTopoMap is toggled with `P`.
+Neither debug layer affects the normal terrain material.
 
 ### Modifying the Scene
 

@@ -21,16 +21,15 @@ import { EXAMPLE_LOCATIONS } from "./Locations";
 import { sceneToLonLat } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, WorldCover } from "./WorldCover";
+import { createTerrainMaterial } from "./TerrainMaterial";
+
+type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
+
+interface TerrainMetadata {
+  worldCoverColors?: Float32Array;
+}
 
 export class Game {
-  private static readonly TERRAIN_COLOR_STOPS = [
-    { height: 0, color: new Color3(0.12, 0.38, 0.16) },
-    { height: 0.2, color: new Color3(0.32, 0.62, 0.21) },
-    { height: 0.45, color: new Color3(0.68, 0.64, 0.31) },
-    { height: 0.7, color: new Color3(0.45, 0.38, 0.29) },
-    { height: 1, color: new Color3(0.92, 0.92, 0.9) },
-  ];
-
   private canvas: HTMLCanvasElement;
   private engine: Engine;
   private scene: Scene;
@@ -40,7 +39,7 @@ export class Game {
   private mapFeatures?: TransformNode;
   private terrainData?: TerrainResult;
   private terrainZoom = 15;
-  private debugMapEnabled = false;
+  private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
   private terrainLocationIndex = 0;
 
@@ -199,7 +198,7 @@ export class Game {
     this.mapFeatures = mapFeatures.root;
     this.terrainData = terrainData;
 
-    if (this.debugMapEnabled) await this.enableDebugMap(requestId);
+    await this.applyTerrainLayer(requestId);
   }
 
   /** Debug-only keyboard actions are isolated from camera input. */
@@ -208,7 +207,9 @@ export class Game {
       if (kbInfo.type !== KeyboardEventTypes.KEYDOWN || (kbInfo.event as KeyboardEvent).repeat) return;
 
       if (kbInfo.event.key === "p" || kbInfo.event.key === "P") {
-        void this.toggleDebugMap();
+        void this.toggleDebugTerrainLayer("openTopoMap");
+      } else if (kbInfo.event.key === "l" || kbInfo.event.key === "L") {
+        void this.toggleDebugTerrainLayer("worldCover");
       } else if (kbInfo.event.key === "+" || kbInfo.event.code === "NumpadAdd") {
         void this.changeTerrainZoom(1);
       } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
@@ -229,13 +230,9 @@ export class Game {
     await this.rebuildTerrain(this.terrainZoom);
   }
 
-  private async toggleDebugMap(): Promise<void> {
-    this.debugMapEnabled = !this.debugMapEnabled;
-    if (this.debugMapEnabled) {
-      await this.enableDebugMap(this.terrainRequestId);
-    } else if (this.terrain) {
-      this.applyDefaultTerrainMaterial(this.terrain);
-    }
+  private async toggleDebugTerrainLayer(layer: Exclude<DebugTerrainLayer, "none">): Promise<void> {
+    this.debugTerrainLayer = this.debugTerrainLayer === layer ? "none" : layer;
+    await this.applyTerrainLayer(this.terrainRequestId);
   }
 
   private async changeTerrainZoom(delta: number): Promise<void> {
@@ -245,11 +242,26 @@ export class Game {
     await this.rebuildTerrain(nextZoom);
   }
 
-  private async enableDebugMap(requestId: number): Promise<void> {
+  private async applyTerrainLayer(requestId: number): Promise<void> {
     if (!this.terrain || !this.terrainData) return;
     const terrain = this.terrain;
+
+    if (this.debugTerrainLayer === "none") {
+      this.applyDefaultTerrainMaterial(terrain);
+      return;
+    }
+
+    if (this.debugTerrainLayer === "worldCover") {
+      this.applyWorldCoverDebugMaterial(terrain);
+      return;
+    }
+
     const texture = await TerrainTiles.createOpenTopoMapTexture(this.scene, this.terrainData);
-    if (!this.debugMapEnabled || requestId !== this.terrainRequestId || terrain !== this.terrain) {
+    if (
+      this.debugTerrainLayer !== "openTopoMap" ||
+      requestId !== this.terrainRequestId ||
+      terrain !== this.terrain
+    ) {
       texture.dispose();
       return;
     }
@@ -308,7 +320,9 @@ export class Game {
     const indices = ground.getIndices()!;
     const { elevations, width: elevW, height: elevH } = terrain;
     const vPerRow = subdivisions + 1;
-    const colors = new Float32Array((positions.length / 3) * 4);
+    const worldCoverColors = landCover && terrain.bounds
+      ? new Float32Array((positions.length / 3) * 4)
+      : undefined;
 
     for (let row = 0; row < vPerRow; row++) {
       for (let col = 0; col < vPerRow; col++) {
@@ -340,20 +354,21 @@ export class Game {
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
 
-        const color = this.colorForTerrain(
-          terrain,
-          elevation,
-          positions[vertexIndex * 3],
-          positions[vertexIndex * 3 + 2],
-          meshWidth,
-          meshDepth,
-          landCover,
-        );
-        const colorIndex = vertexIndex * 4;
-        colors[colorIndex] = color.r;
-        colors[colorIndex + 1] = color.g;
-        colors[colorIndex + 2] = color.b;
-        colors[colorIndex + 3] = 1;
+        if (worldCoverColors && landCover && terrain.bounds) {
+          const { lon, lat } = sceneToLonLat(
+            positions[vertexIndex * 3],
+            positions[vertexIndex * 3 + 2],
+            terrain.bounds,
+            meshWidth,
+            meshDepth,
+          );
+          const [red, green, blue] = landCoverColor(landCover.sample(lon, lat));
+          const colorIndex = vertexIndex * 4;
+          worldCoverColors[colorIndex] = red;
+          worldCoverColors[colorIndex + 1] = green;
+          worldCoverColors[colorIndex + 2] = blue;
+          worldCoverColors[colorIndex + 3] = 1;
+        }
       }
     }
 
@@ -362,8 +377,7 @@ export class Game {
     VertexData.ComputeNormals(positions, indices, normals);
     ground.updateVerticesData(VertexBuffer.PositionKind, positions);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
-    ground.setVerticesData(VertexBuffer.ColorKind, colors);
-    ground.metadata = { terrainColors: colors };
+    ground.metadata = { worldCoverColors } satisfies TerrainMetadata;
 
     this.applyDefaultTerrainMaterial(ground);
 
@@ -372,55 +386,23 @@ export class Game {
 
   private applyDefaultTerrainMaterial(terrain: Mesh): void {
     terrain.material?.dispose(true, true);
-    const colors = (terrain.metadata as { terrainColors?: Float32Array } | null)?.terrainColors;
-    if (colors && !terrain.isVerticesDataPresent(VertexBuffer.ColorKind)) {
-      terrain.setVerticesData(VertexBuffer.ColorKind, colors);
+    terrain.removeVerticesData(VertexBuffer.ColorKind);
+    terrain.material = createTerrainMaterial(this.scene);
+  }
+
+  private applyWorldCoverDebugMaterial(terrain: Mesh): void {
+    const colors = (terrain.metadata as TerrainMetadata | null)?.worldCoverColors;
+    if (!colors) {
+      console.warn("WorldCover debug layer is unavailable for this terrain.");
+      this.applyDefaultTerrainMaterial(terrain);
+      return;
     }
-    // Vertex colors retain terrain-height detail while the material supplies lighting.
-    const material = new StandardMaterial(`${terrain.name}Material`, this.scene);
+
+    terrain.material?.dispose(true, true);
+    terrain.setVerticesData(VertexBuffer.ColorKind, colors);
+    const material = new StandardMaterial("worldCoverDebugMaterial", this.scene);
     material.diffuseColor = Color3.White();
     material.specularColor = new Color3(0.1, 0.1, 0.1);
     terrain.material = material;
-  }
-
-  private colorForElevation(
-    elevation: number,
-    maximumElevation: number,
-  ): Color3 {
-    // Keep the ramp focused on land. Negative elevations sit beneath the water plane.
-    const normalizedHeight = Math.min(
-      1,
-      Math.max(0, elevation) / Math.max(1, maximumElevation),
-    );
-    const stops = Game.TERRAIN_COLOR_STOPS;
-
-    for (let i = 1; i < stops.length; i++) {
-      const upper = stops[i];
-      const lower = stops[i - 1];
-      if (normalizedHeight <= upper.height) {
-        const amount =
-          (normalizedHeight - lower.height) / (upper.height - lower.height);
-        return Color3.Lerp(lower.color, upper.color, amount);
-      }
-    }
-
-    return stops[stops.length - 1].color;
-  }
-
-  private colorForTerrain(
-    terrain: TerrainResult,
-    elevation: number,
-    x: number,
-    z: number,
-    meshWidth: number,
-    meshDepth: number,
-    landCover?: WorldCover,
-  ): Color3 {
-    if (!landCover || !terrain.bounds) {
-      return this.colorForElevation(elevation, terrain.maxElevation);
-    }
-    const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
-    const [red, green, blue] = landCoverColor(landCover.sample(lon, lat));
-    return new Color3(red, green, blue);
   }
 }
