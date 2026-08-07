@@ -53,6 +53,20 @@ npm run build
 
 The output will be in the `dist/` directory.
 
+### Tree Impostor Experiment
+
+Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
+The controls configure the number of samples along each cube-face edge and the
+resolution of each capture. The default produces 150 captures: six faces,
+each with a 5 by 5 grid of 500 by 500 pixel frames.
+
+After capture, the source mesh is disabled and the scene renders only a
+camera-facing impostor. Its shader selects the dominant cube face and
+bilinearly blends the four nearest frames. `Export ZIP` writes the six face
+atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
+black wherever alpha is zero.
+
+
 ## Project Structure
 
 ```

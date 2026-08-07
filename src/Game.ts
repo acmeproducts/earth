@@ -3,7 +3,6 @@ import {
   Scene,
   UniversalCamera,
   Vector3,
-  HemisphericLight,
   MeshBuilder,
   StandardMaterial,
   Color3,
@@ -22,6 +21,7 @@ import { sceneToLonLat } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, WorldCover } from "./WorldCover";
 import { createTerrainMaterial } from "./TerrainMaterial";
+import { SolarLighting } from "./SolarLighting";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 
@@ -42,6 +42,7 @@ export class Game {
   private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
   private terrainLocationIndex = 0;
+  private solarLighting?: SolarLighting;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -89,16 +90,14 @@ export class Game {
       }
     });
 
-    // Create lights
-    const hemisphericLight = new HemisphericLight(
-      "hemisphericLight",
-      new Vector3(1, 1, 0),
+    const location = EXAMPLE_LOCATIONS[this.terrainLocationIndex];
+    this.solarLighting = new SolarLighting(
       this.scene,
+      location.lat,
+      location.lon,
     );
-    hemisphericLight.intensity = 1.0;
-    hemisphericLight.groundColor = new Color3(0.1, 0.1, 0.2);
 
-    // Oslo coordinates: 59.91°N, 10.75°E
+    // Load terrain at the active example location.
     await this.rebuildTerrain(this.terrainZoom);
     this.setupDebugControls();
   }
@@ -197,6 +196,13 @@ export class Game {
     this.treeField = treeField.root;
     this.mapFeatures = mapFeatures.root;
     this.terrainData = terrainData;
+
+    this.solarLighting?.setLocation(location.lat, location.lon);
+    this.solarLighting?.setShadowCasters([
+      terrain,
+      ...treeField.meshes,
+      ...mapFeatures.meshes,
+    ]);
 
     await this.applyTerrainLayer(requestId);
   }

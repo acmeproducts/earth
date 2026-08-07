@@ -78,6 +78,33 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    #impostorControls {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 20;
+      width: 280px;
+      padding: 16px;
+      border: 1px solid #3d4650;
+      border-radius: 6px;
+      background: rgba(19, 23, 27, 0.94);
+      color: #f3f5f7;
+      font: 13px Arial, sans-serif;
+    }
+
+    #impostorControls h1 { margin-bottom: 14px; font-size: 17px; }
+    #impostorControls label { display: grid; grid-template-columns: 1fr 72px; align-items: center; gap: 10px; margin: 9px 0; }
+    #impostorControls input { width: 100%; padding: 5px 6px; border: 1px solid #56616b; border-radius: 3px; background: #0e1114; color: #fff; }
+    .impostor-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
+    .impostor-actions button { padding: 8px; border: 1px solid #697681; border-radius: 4px; background: #2d6a4f; color: #fff; cursor: pointer; }
+    .impostor-actions button:last-child { background: #35424c; }
+    .impostor-actions button:disabled { opacity: 0.45; cursor: default; }
+    #capturePreview { display: block; width: 100%; height: auto; border: 1px solid #364049; background: #000; image-rendering: auto; }
+    #captureStatus { display: block; min-height: 30px; margin-top: 10px; color: #b9c4cc; line-height: 1.35; }
+    .impostor-mode #loading { background: #101419; }
+    .impostor-mode .loader { border-color: #34404a; border-top-color: #62a67e; }
+    .impostor-mode .loader-text { color: #8fc4a4; letter-spacing: 0; }
   </style>
 </head>
 <body>

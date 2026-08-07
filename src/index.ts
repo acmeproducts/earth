@@ -1,4 +1,5 @@
 import { Game } from './Game';
+import { TreeImpostorDemo } from './TreeImpostorDemo';
 
 // Wait for DOM to be ready
 window.addEventListener('DOMContentLoaded', () => {
@@ -10,8 +11,12 @@ window.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  // Initialize the game
-  const game = new Game(canvas);
+  const isTreeImpostorDemo = new URLSearchParams(window.location.search).has('tree-impostor');
+  const game = isTreeImpostorDemo ? new TreeImpostorDemo(canvas) : new Game(canvas);
+
+  if (isTreeImpostorDemo) {
+    document.getElementById('attribution')?.remove();
+  }
 
   game.initialize().then(() => {
     // Hide loading screen

@@ -806,6 +806,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/suncalc@npm:^1.9.2":
+  version: 1.9.2
+  resolution: "@types/suncalc@npm:1.9.2"
+  checksum: 10c0/13fd49e65f3c31ac09d41f79c812a66b74f40574a683d0503d337114685eb84557748f98ff62c5c440470aa209d39f83dd5f783decbf06a1d68f48fdaf2aa758
+  languageName: node
+  linkType: hard
+
 "@types/ws@npm:^8.5.10":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
@@ -1167,12 +1174,14 @@ __metadata:
     "@mapbox/vector-tile": "npm:^3.0.0"
     "@types/earcut": "npm:^3.0.0"
     "@types/node": "npm:^20.10.0"
+    "@types/suncalc": "npm:^1.9.2"
     copy-webpack-plugin: "npm:^11.0.0"
     earcut: "npm:^3.2.3"
     html-webpack-plugin: "npm:^5.6.0"
     lerc: "npm:^4.2.0"
     pbf: "npm:^5.1.2"
     rimraf: "npm:^5.0.5"
+    suncalc: "npm:^2.0.1"
     ts-loader: "npm:^9.5.1"
     typescript: "npm:^5.3.3"
     webpack: "npm:^5.89.0"
@@ -3823,6 +3832,13 @@ __metadata:
   dependencies:
     ansi-regex: "npm:^6.2.2"
   checksum: 10c0/544d13b7582f8254811ea97db202f519e189e59d35740c46095897e254e4f1aa9fe1524a83ad6bc5ad67d4dd6c0281d2e0219ed62b880a6238a16a17d375f221
+  languageName: node
+  linkType: hard
+
+"suncalc@npm:^2.0.1":
+  version: 2.0.1
+  resolution: "suncalc@npm:2.0.1"
+  checksum: 10c0/7722397c4fde7091173fe83c4672bb23713a7bd3c5268f26a8a731b39316c294da1dfc32b0dae7abb68b0932c4069183736236c6932d5de385b77348d5a855b0
   languageName: node
   linkType: hard
 
