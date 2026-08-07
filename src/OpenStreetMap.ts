@@ -12,7 +12,12 @@ import {
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
 import earcut from "earcut";
-import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
+import {
+  HorizontalExclusionMask,
+  lonLatToScene,
+  sampleElevation,
+  SEA_LEVEL_METERS,
+} from "./Geo";
 import { TerrainResult, TileBounds } from "./TerrainTiles";
 
 interface MapTile {
@@ -23,6 +28,64 @@ interface MapTile {
 }
 
 type LonLat = [number, number];
+
+const BUILDING_GROUND_OVERLAP_METERS = 1;
+const LAKE_SHORE_OVERLAP_METERS = 5;
+const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
+
+interface MapLayerOptions {
+  meshWidth: number;
+  meshDepth: number;
+  metersPerUnit: number;
+  lakeElevationSource?: Float32Array;
+}
+
+interface RoadSegment {
+  start: { x: number; z: number };
+  end: { x: number; z: number };
+  halfWidth: number;
+}
+
+class RoadExclusionMask implements HorizontalExclusionMask {
+  private readonly cells = new Map<string, RoadSegment[]>();
+
+  constructor(segments: RoadSegment[], private readonly cellSize: number) {
+    for (const segment of segments) {
+      const minimumX = Math.floor((Math.min(segment.start.x, segment.end.x) - segment.halfWidth) / cellSize);
+      const maximumX = Math.floor((Math.max(segment.start.x, segment.end.x) + segment.halfWidth) / cellSize);
+      const minimumZ = Math.floor((Math.min(segment.start.z, segment.end.z) - segment.halfWidth) / cellSize);
+      const maximumZ = Math.floor((Math.max(segment.start.z, segment.end.z) + segment.halfWidth) / cellSize);
+      for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
+        for (let cellX = minimumX; cellX <= maximumX; cellX++) {
+          const key = `${cellX},${cellZ}`;
+          const cell = this.cells.get(key);
+          if (cell) cell.push(segment);
+          else this.cells.set(key, [segment]);
+        }
+      }
+    }
+  }
+
+  intersects(x: number, z: number, radius: number): boolean {
+    const minimumX = Math.floor((x - radius) / this.cellSize);
+    const maximumX = Math.floor((x + radius) / this.cellSize);
+    const minimumZ = Math.floor((z - radius) / this.cellSize);
+    const maximumZ = Math.floor((z + radius) / this.cellSize);
+    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
+      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
+        const segments = this.cells.get(`${cellX},${cellZ}`);
+        if (!segments) continue;
+        for (const segment of segments) {
+          const clearance = segment.halfWidth + radius;
+          if (pointSegmentDistanceSquared(x, z, segment.start, segment.end) <= clearance * clearance) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+}
 
 export interface MapFeatureLayer {
   root: TransformNode;
@@ -51,7 +114,7 @@ export class OpenStreetMap {
     scene: Scene,
     tiles: MapTile[],
     terrain: TerrainResult,
-    options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+    options: MapLayerOptions,
   ): MapFeatureLayer {
     if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
     const root = new TransformNode("mapFeatures", scene);
@@ -92,6 +155,29 @@ export class OpenStreetMap {
       meshes,
       counts: { buildings: buildings.length, roads: roads.length, water: water.length },
     };
+  }
+
+  static createRoadExclusionMask(
+    tiles: MapTile[],
+    terrain: TerrainResult,
+    options: MapLayerOptions,
+  ): HorizontalExclusionMask {
+    if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
+    const segments: RoadSegment[] = [];
+    for (const tile of tiles) {
+      forEachFeature(tile, "transportation", (feature) => {
+        const halfWidth = roadWidth(String(feature.properties.class ?? "")) / options.metersPerUnit / 2;
+        for (const coordinates of lines(feature, tile)) {
+          const points = coordinates.map(([lon, lat]) =>
+            lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth)
+          );
+          for (let index = 1; index < points.length; index++) {
+            segments.push({ start: points[index - 1], end: points[index], halfWidth });
+          }
+        }
+      });
+    }
+    return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
   }
 
   private static async fetchTile(x: number, y: number, zoom: number): Promise<MapTile | undefined> {
@@ -140,27 +226,32 @@ function createPolygon(
   scene: Scene,
   coordinates: LonLat[],
   terrain: TerrainResult,
-  options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+  options: MapLayerOptions,
   heightMeters: number,
   isWater = false,
 ): Mesh | undefined {
-  const points = coordinates.map(([lon, lat]) =>
+  let points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth),
   );
-  points.pop();
+  if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
+  if (isWater) points = offsetPolygon(points, LAKE_SHORE_OVERLAP_METERS / options.metersPerUnit);
   const clipped = clipPolygon(points, options.meshWidth / 2, options.meshDepth / 2);
   if (clipped.length < 3) return undefined;
   if (signedArea(clipped) < 0) clipped.reverse();
   const center = averagePoint(clipped);
+  const elevationSource = isWater && options.lakeElevationSource
+    ? options.lakeElevationSource
+    : terrain.elevations;
   const centerElevation = sampleElevation(
     terrain,
     center.x,
     center.z,
     options.meshWidth,
     options.meshDepth,
+    elevationSource,
   );
   const boundaryElevations = clipped.map((point) =>
-    sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth)
+    sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth, elevationSource)
   );
   if (!isWater && (
     centerElevation <= SEA_LEVEL_METERS ||
@@ -172,13 +263,17 @@ function createPolygon(
   );
   if (!isWater) {
     const shape = clipped.map(({ x, z }) => new Vector2(x, z));
-    const height = heightMeters / options.metersPerUnit;
-    const mesh = new PolygonMeshBuilder("building", shape, scene, earcut).build(false, height);
-    mesh.position.y = baseElevation / options.metersPerUnit + height;
+    const roofElevation = baseElevation + heightMeters;
+    const bottomElevation = terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
+    const depth = (roofElevation - bottomElevation) / options.metersPerUnit;
+    const mesh = new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth);
+    mesh.position.y = roofElevation / options.metersPerUnit;
     return mesh;
   }
   const shape = clipped.map(({ x, z }) => new Vector2(x, z));
-  const surface = Math.max(0, centerElevation) / options.metersPerUnit + 0.015;
+  const surfaceElevation = quantile([centerElevation, ...boundaryElevations], 0.25)
+    + LAKE_SURFACE_CLEARANCE_METERS;
+  const surface = surfaceElevation / options.metersPerUnit;
   const depth = Math.max(0.1, surface - terrain.minElevation / options.metersPerUnit + 0.1);
   const mesh = new PolygonMeshBuilder("water", shape, scene, earcut).build(false, depth);
   mesh.position.y = surface;
@@ -189,7 +284,7 @@ function createRoad(
   scene: Scene,
   coordinates: LonLat[],
   terrain: TerrainResult,
-  options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+  options: MapLayerOptions,
   widthMeters: number,
 ): Mesh[] {
   const points = coordinates.map(([lon, lat]) =>
@@ -214,7 +309,7 @@ function createRoadMeshes(
   scene: Scene,
   points: Array<{ x: number; z: number }>,
   terrain: TerrainResult,
-  options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+  options: MapLayerOptions,
   halfWidth: number,
 ): Mesh[] {
   const meshes: Mesh[] = [];
@@ -287,6 +382,64 @@ function resamplePath(
     }
   }
   return sampled;
+}
+
+function pointSegmentDistanceSquared(
+  x: number,
+  z: number,
+  start: { x: number; z: number },
+  end: { x: number; z: number },
+): number {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const lengthSquared = dx * dx + dz * dz;
+  const amount = lengthSquared === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
+  const offsetX = x - (start.x + dx * amount);
+  const offsetZ = z - (start.z + dz * amount);
+  return offsetX * offsetX + offsetZ * offsetZ;
+}
+
+/** Expands a ring so the water overlaps the terrain under the visible shoreline. */
+function offsetPolygon(
+  points: Array<{ x: number; z: number }>,
+  distance: number,
+): Array<{ x: number; z: number }> {
+  if (points.length < 3 || distance <= 0) return points;
+  const orientation = signedArea(points) >= 0 ? 1 : -1;
+  return points.map((point, index) => {
+    const previous = points[(index + points.length - 1) % points.length];
+    const next = points[(index + 1) % points.length];
+    const previousDx = point.x - previous.x;
+    const previousDz = point.z - previous.z;
+    const nextDx = next.x - point.x;
+    const nextDz = next.z - point.z;
+    const previousLength = Math.hypot(previousDx, previousDz) || 1;
+    const nextLength = Math.hypot(nextDx, nextDz) || 1;
+    const previousNormal = {
+      x: orientation * previousDz / previousLength,
+      z: -orientation * previousDx / previousLength,
+    };
+    const nextNormal = {
+      x: orientation * nextDz / nextLength,
+      z: -orientation * nextDx / nextLength,
+    };
+    const combinedX = previousNormal.x + nextNormal.x;
+    const combinedZ = previousNormal.z + nextNormal.z;
+    const combinedLength = Math.hypot(combinedX, combinedZ);
+    if (combinedLength < 1e-6) {
+      return {
+        x: point.x + nextNormal.x * distance,
+        z: point.z + nextNormal.z * distance,
+      };
+    }
+    const miterX = combinedX / combinedLength;
+    const miterZ = combinedZ / combinedLength;
+    const projection = Math.max(1 / 3, miterX * nextNormal.x + miterZ * nextNormal.z);
+    const miterDistance = Math.min(distance / projection, distance * 3);
+    return { x: point.x + miterX * miterDistance, z: point.z + miterZ * miterDistance };
+  });
 }
 
 function clipPolygon(
@@ -429,6 +582,15 @@ function averagePoint(points: Array<{ x: number; z: number }>): { x: number; z: 
     { x: 0, z: 0 },
   );
   return { x: total.x / points.length, z: total.z / points.length };
+}
+
+function quantile(values: number[], amount: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * amount));
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  const blend = position - lower;
+  return sorted[lower] * (1 - blend) + sorted[upper] * blend;
 }
 
 function roadWidth(type: string): number {

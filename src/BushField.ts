@@ -1,6 +1,6 @@
 import { Matrix, Mesh, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createImpostorCube, createImpostorMaterial } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
 import { LandCoverClass, WorldCover } from "./WorldCover";
@@ -20,6 +20,7 @@ interface BushFieldOptions {
   spacingMeters?: number;
   waterLineMeters?: number;
   landCover?: WorldCover;
+  exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
 }
 
@@ -47,6 +48,7 @@ export async function createBushField(
     spacingMeters = 6,
     waterLineMeters = 0,
     landCover,
+    exclusionMask,
     renderMode = "impostors",
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
@@ -90,6 +92,7 @@ export async function createBushField(
         if (random() > occupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
           x,

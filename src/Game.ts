@@ -33,7 +33,7 @@ import {
 } from "./VegetationControls";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
-const VEGETATION_LOD_UPDATE_MS = 200;
+const VEGETATION_LOD_UPDATE_MS = 100;
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
@@ -189,6 +189,7 @@ export class Game {
       }),
     ]);
     if (requestId !== this.terrainRequestId) return;
+    const lakeElevationSource = terrainData.elevations.slice();
     landCover?.constrainElevations(terrainData);
 
     // Download the heightmap to disk
@@ -201,6 +202,12 @@ export class Game {
     const groundHeight = terrainData.groundHeightMeters ?? 1000;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
+    const mapOptions = { meshWidth, meshDepth, metersPerUnit, lakeElevationSource };
+    const roadExclusionMask = OpenStreetMap.createRoadExclusionMask(
+      mapWays,
+      terrainData,
+      mapOptions,
+    );
 
     console.log(
       `Ground extent: ${groundWidth.toFixed(0)}m × ${groundHeight.toFixed(0)}m → ${meshWidth} × ${meshDepth.toFixed(2)} units (1 unit = ${metersPerUnit.toFixed(1)}m)`,
@@ -235,6 +242,7 @@ export class Game {
       metersPerUnit,
       seed: zoom,
       landCover,
+      exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
     });
     if (requestId !== this.terrainRequestId) {
@@ -250,6 +258,7 @@ export class Game {
       metersPerUnit,
       seed: zoom ^ 0x47524153,
       landCover,
+      exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.grass,
     });
     if (requestId !== this.terrainRequestId) {
@@ -266,6 +275,7 @@ export class Game {
       metersPerUnit,
       seed: zoom ^ 0x42555348,
       landCover,
+      exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.bushes,
     });
     if (requestId !== this.terrainRequestId) {
@@ -277,11 +287,7 @@ export class Game {
     }
     console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
-    const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, {
-      meshWidth,
-      meshDepth,
-      metersPerUnit,
-    });
+    const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, mapOptions);
     console.log(
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );

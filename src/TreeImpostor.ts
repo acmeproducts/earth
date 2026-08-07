@@ -2,18 +2,18 @@ import {
   Color4,
   DynamicTexture,
   FreeCamera,
-  Material,
   Mesh,
-  PBRMaterial,
   RenderTargetTexture,
   Scene,
-  SceneLoader,
   Texture,
-  TransformNode,
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
-import "@babylonjs/loaders/glTF";
+import {
+  createProceduralTree,
+  PROCEDURAL_TREE_CAPTURE_DIAMETER,
+  PROCEDURAL_TREE_SOURCE_HEIGHT,
+} from "./ProceduralTree";
 
 export interface ImpostorAssets {
   textures: DynamicTexture[];
@@ -44,9 +44,6 @@ export interface CubeFace {
   up: Vector3;
 }
 
-const TREE_URL = "/assets/realistic-high-poly-tree/Tree.glb";
-const ALPHA_URL = "/assets/realistic-high-poly-tree/textures/Eucalyptus_Alpha.png";
-
 export const TREE_IMPOSTOR_FACES: CubeFace[] = [
   { normal: new Vector3(1, 0, 0), right: new Vector3(0, 0, -1), up: new Vector3(0, 1, 0) },
   { normal: new Vector3(-1, 0, 0), right: new Vector3(0, 0, 1), up: new Vector3(0, 1, 0) },
@@ -58,15 +55,7 @@ export const TREE_IMPOSTOR_FACES: CubeFace[] = [
 
 const sceneAssets = new WeakMap<Scene, Promise<TreeImpostorAssets>>();
 
-interface PreparedTreeSource {
-  imported: Awaited<ReturnType<typeof SceneLoader.ImportMeshAsync>>;
-  root: TransformNode;
-  meshes: Mesh[];
-  sourceHeight: number;
-  captureDiameter: number;
-}
-
-/** Captures the high-poly source once and shares the resulting atlases across the scene. */
+/** Generates and captures the tree once, then shares its atlases across the scene. */
 export function getTreeImpostorAssets(
   scene: Scene,
   gridSize = queryNumber("impostor-grid", 10, 1, 16),
@@ -80,105 +69,41 @@ export function getTreeImpostorAssets(
 }
 
 async function captureTree(scene: Scene, gridSize: number, resolution: number): Promise<TreeImpostorAssets> {
-  const source = await prepareTreeSource(scene, "treeImpostorCaptureSource");
-  const { imported, root, meshes, sourceHeight, captureDiameter } = source;
-
-  const assets = await captureImpostorAtlases(scene, {
-    name: "treeImpostor",
-    meshes,
-    gridWidth: gridSize,
-    gridHeight: gridSize,
-    resolution,
-    sourceHeight,
-    captureDiameter,
-  });
-
-  root.dispose(false, true);
-  imported.meshes.forEach((mesh) => {
-    if (!mesh.isDisposed()) mesh.dispose(false, true);
-  });
-  imported.transformNodes.forEach((node) => {
-    if (!node.isDisposed()) node.dispose();
-  });
-  imported.skeletons.forEach((skeleton) => skeleton.dispose());
-  console.log("Tree impostor: capture complete; high-poly source disposed");
-  return assets;
-}
-
-async function prepareTreeSource(scene: Scene, rootName: string): Promise<PreparedTreeSource> {
-  const imported = await SceneLoader.ImportMeshAsync("", "", TREE_URL, scene);
-  const meshes = imported.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.getTotalVertices() > 0);
-  if (meshes.length === 0) throw new Error("Tree.glb contains no renderable meshes.");
-  const root = new TransformNode(rootName, scene);
-  imported.meshes.filter((mesh) => !mesh.parent).forEach((mesh) => { mesh.parent = root; });
-  // The converted FBX grows along -Y. Put its base at the bottom before capture.
-  root.rotation.z = Math.PI;
-  await configureMaterials(meshes, scene);
-  // ImportMeshAsync can resolve before every material texture is GPU-ready.
-  // The interactive demo gets this delay before Capture is clicked; runtime capture must wait explicitly.
+  const source = createProceduralTree(scene);
   await scene.whenReadyAsync();
-  for (let frame = 0; frame < 2; frame++) {
-    scene.render();
-    await nextFrame();
-  }
 
-  root.computeWorldMatrix(true);
-  let minimum = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
-  let maximum = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
-  for (const mesh of meshes) {
-    mesh.computeWorldMatrix(true);
-    const bounds = mesh.getBoundingInfo().boundingBox;
-    minimum = Vector3.Minimize(minimum, bounds.minimumWorld);
-    maximum = Vector3.Maximize(maximum, bounds.maximumWorld);
+  try {
+    const assets = await captureImpostorAtlases(scene, {
+      name: "treeImpostor",
+      meshes: [source],
+      gridWidth: gridSize,
+      gridHeight: gridSize,
+      resolution,
+      sourceHeight: PROCEDURAL_TREE_SOURCE_HEIGHT,
+      captureDiameter: PROCEDURAL_TREE_CAPTURE_DIAMETER,
+    });
+    console.log("Tree impostor: capture complete; procedural source disposed");
+    return assets;
+  } finally {
+    source.dispose(false, true);
   }
-  const rawSize = maximum.subtract(minimum);
-  const scale = 2 / Math.max(rawSize.x, rawSize.y, rawSize.z);
-  root.scaling.setAll(scale);
-  root.position.copyFrom(minimum.add(maximum).scale(-0.5 * scale));
-  root.computeWorldMatrix(true);
-  for (const mesh of meshes) mesh.computeWorldMatrix(true);
-  const sourceHeight = rawSize.y * scale;
-  const captureDiameter = rawSize.length() * scale * 1.08;
-  return { imported, root, meshes, sourceHeight, captureDiameter };
 }
 
-/** Loads and bakes the original GLB into thin-instance-ready meshes. */
+/** Builds the original procedural geometry at the requested rendered height. */
 export async function createTreeModels(scene: Scene, renderHeight: number): Promise<Mesh[]> {
-  const { imported, root, meshes, sourceHeight } = await prepareTreeSource(scene, "treeModelSource");
-  const renderScale = renderHeight / sourceHeight;
+  const tree = createProceduralTree(scene, { name: "treeModels", liveLighting: true });
+  const positions = tree.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) throw new Error("Procedural tree has no position data.");
 
-  for (const mesh of meshes) {
-    const world = mesh.computeWorldMatrix(true).clone();
-    mesh.parent = null;
-    mesh.bakeTransformIntoVertices(world);
-    mesh.position.setAll(0);
-    mesh.rotation.setAll(0);
-    mesh.rotationQuaternion = null;
-    mesh.scaling.setAll(1);
-
-    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-    if (!positions) throw new Error(`${mesh.name} has no position data.`);
-    for (let index = 0; index < positions.length; index += 3) {
-      positions[index] *= renderScale;
-      positions[index + 1] = positions[index + 1] * renderScale + renderHeight / 2;
-      positions[index + 2] *= renderScale;
-    }
-    mesh.setVerticesData(VertexBuffer.PositionKind, positions);
-    mesh.refreshBoundingInfo();
-    mesh.name = `treeModels-${mesh.name}`;
-    mesh.isPickable = false;
+  const renderScale = renderHeight / PROCEDURAL_TREE_SOURCE_HEIGHT;
+  for (let index = 0; index < positions.length; index += 3) {
+    positions[index] *= renderScale;
+    positions[index + 1] = positions[index + 1] * renderScale + renderHeight / 2;
+    positions[index + 2] *= renderScale;
   }
-
-  root.dispose(false, false);
-  imported.meshes.forEach((mesh) => {
-    const retained = mesh instanceof Mesh && meshes.includes(mesh);
-    if (!retained && !mesh.isDisposed()) mesh.dispose(false, false);
-  });
-  imported.transformNodes.forEach((node) => {
-    if (!node.isDisposed()) node.dispose();
-  });
-  imported.skeletons.forEach((skeleton) => skeleton.dispose());
-  return meshes;
+  tree.setVerticesData(VertexBuffer.PositionKind, positions);
+  tree.refreshBoundingInfo();
+  return [tree];
 }
 
 /** Captures any prepared, origin-centered source into six directional atlases. */
@@ -281,41 +206,6 @@ export async function captureImpostorAtlases(
     sourceHeight,
     captureDiameter,
   };
-}
-
-async function configureMaterials(meshes: Mesh[], scene: Scene): Promise<void> {
-  const pendingTextures: Promise<void>[] = [];
-  for (const mesh of meshes) {
-    const material = mesh.material;
-    if (!(material instanceof PBRMaterial)) continue;
-    material.unlit = false;
-    material.metallic = 0;
-    material.roughness = 1;
-    if (material.name.toLowerCase().includes("leaves")) {
-      let resolveTexture!: () => void;
-      let rejectTexture!: (error: Error) => void;
-      const ready = new Promise<void>((resolve, reject) => {
-        resolveTexture = resolve;
-        rejectTexture = reject;
-      });
-      const alpha = new Texture(
-        ALPHA_URL,
-        scene,
-        false,
-        false,
-        Texture.BILINEAR_SAMPLINGMODE,
-        resolveTexture,
-        (message, error) => rejectTexture(error ?? new Error(message ?? "Tree texture failed to load.")),
-      );
-      pendingTextures.push(alpha.isReady() ? Promise.resolve() : ready);
-      alpha.getAlphaFromRGB = true;
-      material.opacityTexture = alpha;
-      material.transparencyMode = Material.MATERIAL_ALPHATEST;
-      material.alphaCutOff = 0.5;
-      material.backFaceCulling = false;
-    }
-  }
-  await Promise.all(pendingTextures);
 }
 
 function binaryImage(pixels: ArrayBufferView, size: number, context: CanvasRenderingContext2D): ImageData {

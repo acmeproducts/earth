@@ -67,7 +67,7 @@ async function captureGrass(
 }
 
 /** Builds a dense clump from tapered, curved blade strips without external assets. */
-function createGrassSource(scene: Scene): Mesh {
+function createGrassSource(scene: Scene, liveLighting = false): Mesh {
   const random = mulberry32(0x47524153);
   const positions: number[] = [];
   const indices: number[] = [];
@@ -143,14 +143,18 @@ function createGrassSource(scene: Scene): Mesh {
   grass.isPickable = false;
   grass.useVertexColors = true;
 
-  const material = createVertexColorCaptureMaterial(scene, "grassImpostorSourceMaterial");
+  const material = createVertexColorCaptureMaterial(
+    scene,
+    "grassImpostorSourceMaterial",
+    liveLighting,
+  );
   grass.material = material;
   return grass;
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */
 export function createGrassModel(scene: Scene, renderHeight: number): Mesh {
-  const grass = createGrassSource(scene);
+  const grass = createGrassSource(scene, true);
   grass.name = "grassModels";
   scaleSourceToHeight(grass, renderHeight, SOURCE_HEIGHT);
   return grass;

@@ -59,7 +59,7 @@ async function captureBush(
   }
 }
 
-function createBushSource(scene: Scene): Mesh {
+function createBushSource(scene: Scene, liveLighting = false): Mesh {
   const random = mulberry32(0x42555348);
   const positions: number[] = [];
   const indices: number[] = [];
@@ -134,21 +134,28 @@ function createBushSource(scene: Scene): Mesh {
   }
 
   const data = new VertexData();
+  const normals = new Float32Array(positions.length);
+  VertexData.ComputeNormals(positions, indices, normals);
   data.positions = positions;
   data.indices = indices;
+  data.normals = normals;
   data.colors = colors;
 
   const bush = new Mesh("bushImpostorProceduralSource", scene);
   data.applyToMesh(bush);
   bush.isPickable = false;
   bush.useVertexColors = true;
-  bush.material = createVertexColorCaptureMaterial(scene, "bushImpostorSourceMaterial");
+  bush.material = createVertexColorCaptureMaterial(
+    scene,
+    "bushImpostorSourceMaterial",
+    liveLighting,
+  );
   return bush;
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */
 export function createBushModel(scene: Scene, renderHeight: number): Mesh {
-  const bush = createBushSource(scene);
+  const bush = createBushSource(scene, true);
   bush.name = "bushModels";
   const positions = bush.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Bush model has no position data.");

@@ -41,6 +41,9 @@ module.exports = (env, argv) => {
             from: 'assets',
             to: 'assets',
             noErrorOnMissing: true,
+            globOptions: {
+              ignore: ['**/realistic-high-poly-tree/**'],
+            },
           },
           {
             from: require.resolve('lerc/lerc-wasm.wasm'),

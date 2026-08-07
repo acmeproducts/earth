@@ -2,6 +2,8 @@ import { Mesh, TransformNode, Vector3 } from "@babylonjs/core";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
 
+const LOD_TRANSITION_WIDTH_METERS = 40;
+
 export interface VegetationFieldResult {
   root: TransformNode;
   meshes: Mesh[];
@@ -55,8 +57,11 @@ export function createVegetationFieldResult(
   };
 
   const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number): void => {
-    const maximumDistance = distanceMeters / metersPerUnit;
-    const maximumDistanceSquared = maximumDistance * maximumDistance;
+    const transitionWidthMeters = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters);
+    const innerDistance = (distanceMeters - transitionWidthMeters / 2) / metersPerUnit;
+    const outerDistance = (distanceMeters + transitionWidthMeters / 2) / metersPerUnit;
+    const innerDistanceSquared = innerDistance * innerDistance;
+    const outerDistanceSquared = outerDistance * outerDistance;
     let impostorCount = 0;
     let modelCount = 0;
 
@@ -64,7 +69,18 @@ export function createVegetationFieldResult(
       const dx = matrices[matrixOffset + 12] - cameraPosition.x;
       const dy = matrices[matrixOffset + 13] - cameraPosition.y;
       const dz = matrices[matrixOffset + 14] - cameraPosition.z;
-      const useModel = dx * dx + dy * dy + dz * dz <= maximumDistanceSquared;
+      const distanceSquared = dx * dx + dy * dy + dz * dz;
+      let useModel: boolean;
+      if (distanceSquared <= innerDistanceSquared) {
+        useModel = true;
+      } else if (distanceSquared >= outerDistanceSquared) {
+        useModel = false;
+      } else {
+        const distance = Math.sqrt(distanceSquared);
+        const linearBlend = (outerDistance - distance) / (outerDistance - innerDistance);
+        const modelWeight = linearBlend * linearBlend * (3 - 2 * linearBlend);
+        useModel = stableLodThreshold(matrixOffset / 16) < modelWeight;
+      }
       const destination = useModel ? modelMatrices : impostorMatrices;
       const instanceIndex = useModel ? modelCount++ : impostorCount++;
       const destinationOffset = instanceIndex * 16;
@@ -99,6 +115,14 @@ export function createVegetationFieldResult(
     setRenderMode: applyRenderMode,
     updateLod,
   };
+}
+
+/** Stable per-instance noise turns the distance lerp into a spatial cross-dissolve. */
+function stableLodThreshold(instanceIndex: number): number {
+  let hash = Math.imul(instanceIndex + 1, 0x45d9f3b);
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+  hash ^= hash >>> 16;
+  return (hash >>> 0) / 4294967296;
 }
 
 function initializeMeshes(meshes: Mesh[], matrices: Float32Array): void {

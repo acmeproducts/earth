@@ -2,6 +2,11 @@ import { TerrainResult, TileBounds } from "./TerrainTiles";
 
 export const SEA_LEVEL_METERS = 0;
 
+/** Horizontal feature mask used to keep scene objects clear of mapped surfaces. */
+export interface HorizontalExclusionMask {
+  intersects(x: number, z: number, radius: number): boolean;
+}
+
 const mercatorY = (latitude: number): number =>
   Math.asinh(Math.tan((latitude * Math.PI) / 180));
 
@@ -41,6 +46,7 @@ export function sampleElevation(
   z: number,
   meshWidth: number,
   meshDepth: number,
+  elevations: Float32Array | number[] = terrain.elevations,
 ): number {
   const u = Math.min(1, Math.max(0, x / meshWidth + 0.5));
   const v = Math.min(1, Math.max(0, 0.5 - z / meshDepth));
@@ -52,7 +58,7 @@ export function sampleElevation(
   const y1 = Math.min(y0 + 1, terrain.height - 1);
   const fx = px - x0;
   const fy = py - y0;
-  const values = terrain.elevations;
+  const values = elevations;
 
   return (
     values[y0 * terrain.width + x0] * (1 - fx) * (1 - fy) +

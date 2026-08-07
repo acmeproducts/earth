@@ -5,21 +5,21 @@ import {
   DynamicTexture,
   Engine,
   FreeCamera,
-  Material,
   Mesh,
   MeshBuilder,
-  PBRMaterial,
   RenderTargetTexture,
   Scene,
-  SceneLoader,
   ShaderMaterial,
   Texture,
   TransformNode,
   Vector2,
   Vector3,
 } from "@babylonjs/core";
-import "@babylonjs/loaders/glTF";
 import { FpsCounter } from "./FpsCounter";
+import {
+  createProceduralTree,
+  PROCEDURAL_TREE_CAPTURE_DIAMETER,
+} from "./ProceduralTree";
 
 interface CaptureSettings {
   gridSize: number;
@@ -38,9 +38,6 @@ interface CaptureSet {
   textures: DynamicTexture[];
   settings: CaptureSettings;
 }
-
-const TREE_URL = "/assets/realistic-high-poly-tree/Tree.glb";
-const ALPHA_URL = "/assets/realistic-high-poly-tree/textures/Eucalyptus_Alpha.png";
 
 const CUBE_FACES: CubeFace[] = [
   { name: "pos-x", normal: new Vector3(1, 0, 0), right: new Vector3(0, 0, -1), up: new Vector3(0, 1, 0) },
@@ -137,19 +134,16 @@ export class TreeImpostorDemo {
   }
 
   async initialize(): Promise<void> {
-    this.setStatus("Loading source tree...");
-    const result = await SceneLoader.ImportMeshAsync("", "", TREE_URL, this.scene);
-    this.sourceMeshes = result.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.getTotalVertices() > 0);
-    if (this.sourceMeshes.length === 0) throw new Error("Tree.glb did not contain renderable meshes.");
-    const sourceRoot = new TransformNode("treeCaptureSource", this.scene);
-    this.sourceRoot = sourceRoot;
-    result.meshes.filter((mesh) => !mesh.parent).forEach((mesh) => { mesh.parent = sourceRoot; });
-    sourceRoot.rotation.z = Math.PI;
-    this.configureUnlitMaterials();
-    this.normalizeSource();
+    this.setStatus("Generating source tree...");
+    const source = createProceduralTree(this.scene, { name: "treeCaptureSource" });
+    this.sourceRoot = source;
+    this.sourceMeshes = [source];
+    this.center = Vector3.Zero();
+    this.diameter = PROCEDURAL_TREE_CAPTURE_DIAMETER;
+    await this.scene.whenReadyAsync();
     this.camera.target.copyFrom(this.center);
     this.camera.radius = this.diameter * 1.35;
-    this.setStatus(`${this.sourceMeshes.length} source meshes ready. Capture uses the source only; preview uses only atlases.`);
+    this.setStatus("Procedural source ready. Capture uses the source only; preview uses only atlases.");
   }
 
   run(): void {
@@ -162,44 +156,6 @@ export class TreeImpostorDemo {
 
   resize(): void {
     this.engine.resize();
-  }
-
-  private configureUnlitMaterials(): void {
-    for (const mesh of this.sourceMeshes) {
-      const material = mesh.material;
-      if (!(material instanceof PBRMaterial)) continue;
-      material.unlit = true;
-      material.metallic = 0;
-      material.roughness = 1;
-      if (material.name.toLowerCase().includes("leaves")) {
-        const alpha = new Texture(ALPHA_URL, this.scene, false, false, Texture.BILINEAR_SAMPLINGMODE);
-        alpha.getAlphaFromRGB = true;
-        material.opacityTexture = alpha;
-        material.transparencyMode = Material.MATERIAL_ALPHATEST;
-        material.alphaCutOff = 0.5;
-        material.backFaceCulling = false;
-      }
-    }
-  }
-
-  private normalizeSource(): void {
-    this.sourceRoot!.computeWorldMatrix(true);
-    let minimum = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
-    let maximum = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
-    for (const mesh of this.sourceMeshes) {
-      mesh.computeWorldMatrix(true);
-      const bounds = mesh.getBoundingInfo().boundingBox;
-      minimum = Vector3.Minimize(minimum, bounds.minimumWorld);
-      maximum = Vector3.Maximize(maximum, bounds.maximumWorld);
-    }
-    const rawCenter = minimum.add(maximum).scale(0.5);
-    const rawSize = maximum.subtract(minimum);
-    const scale = 2 / Math.max(rawSize.x, rawSize.y, rawSize.z);
-    this.sourceRoot!.scaling.setAll(scale);
-    this.sourceRoot!.position.copyFrom(rawCenter.scale(-scale));
-    this.sourceRoot!.computeWorldMatrix(true);
-    this.center = Vector3.Zero();
-    this.diameter = rawSize.length() * scale * 1.08;
   }
 
   private async capture(settings: CaptureSettings): Promise<void> {

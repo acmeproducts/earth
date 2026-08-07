@@ -60,13 +60,14 @@ The controls configure the number of samples along each cube-face edge and the
 resolution of each capture. The default produces 600 captures: six faces,
 each with a 10 by 10 grid of 500 by 500 pixel frames.
 
-After capture, the source mesh is disabled and the scene renders only a
+The source is a deterministic procedural broadleaf built from tapered branches
+and vertex-colored leaf geometry. After capture, that source mesh is disabled and the scene renders only a
 camera-facing impostor. Its shader selects the dominant cube face and
 bilinearly blends the four nearest frames. `Export ZIP` writes the six face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
-The Earth view also generates a grass clump procedurally at startup, captures
+The Earth view generates the same tree plus a grass clump procedurally at startup, captures
 it through the same six-face impostor pipeline, and thin-instances it across
 vegetated ESA WorldCover classes. Grass uses a horizontally biased 16 by 4,
 80 px capture by default. `grass-impostor-x-samples`,
@@ -79,8 +80,8 @@ WorldCover shrubland with lighter placement in other vegetated classes.
 
 The production view can switch trees, grass, and bushes independently between
 their impostors, automatic distance LOD, and original geometry. Auto mode uses
-real models inside the configurable model range (10 m by default) and impostors
-beyond it. Press `V` to cycle all three modes. The top-right counter reports
+a dithered 6 m transition around the configurable model range (10 m by default)
+to blend real models into impostors. Press `V` to cycle all three modes. The top-right counter reports
 live FPS and active triangles; use `?vegetation=models` to force every real
 model or `?vegetation-distance=20` to change the initial Auto range.
 

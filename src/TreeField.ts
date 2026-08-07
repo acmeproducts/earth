@@ -1,5 +1,8 @@
 import {
   Camera,
+  Color3,
+  DirectionalLight,
+  HemisphericLight,
   Matrix,
   Mesh,
   Scene,
@@ -9,7 +12,7 @@ import {
   Vector3,
   VertexData,
 } from "@babylonjs/core";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { TerrainResult } from "./TerrainTiles";
 import { createTreeModels, getTreeImpostorAssets, TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
 import {
@@ -39,6 +42,7 @@ interface TreeFieldOptions {
   fullDensityDepthMeters?: number;
   waterLineMeters?: number;
   landCover?: WorldCover;
+  exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
 }
 
@@ -51,6 +55,9 @@ uniform float captureCenterY;
 #include<instancesDeclaration>
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
+varying vec3 vWorldAxisX;
+varying vec3 vWorldAxisY;
+varying vec3 vWorldAxisZ;
 
 void main(void) {
   #include<instancesVertex>
@@ -67,6 +74,9 @@ void main(void) {
     dot(worldViewDirection, axisY),
     dot(worldViewDirection, axisZ)
   );
+  vWorldAxisX = axisX;
+  vWorldAxisY = axisY;
+  vWorldAxisZ = axisZ;
   gl_Position = viewProjection * worldPosition;
 }`;
 
@@ -74,6 +84,9 @@ export const impostorFragmentShader = `
 precision highp float;
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
+varying vec3 vWorldAxisX;
+varying vec3 vWorldAxisY;
+varying vec3 vWorldAxisZ;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -84,6 +97,10 @@ uniform vec2 gridDimensions;
 uniform float tileInset;
 uniform float captureSize;
 uniform float cameraOrthographic;
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform vec3 skyColor;
+uniform vec3 groundColor;
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -193,7 +210,30 @@ void main(void) {
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
   if (color.a <= alphaChoice) discard;
   vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
-  gl_FragColor = vec4(straightColor, 1.0);
+
+  // Treat the complete impostor as one softly rounded volume. This keeps
+  // lighting coherent instead of exposing every captured leaf normal.
+  vec2 centered = imageUV * 2.0 - 1.0;
+  float bulge = sqrt(max(0.18, 1.0 - dot(centered, centered) * 0.68));
+  vec3 localNormal = normalize(
+    direction * bulge
+    + billboardRight * centered.x * 0.55
+    - billboardUp * centered.y * 0.38
+  );
+  vec3 worldNormal = normalize(
+    vWorldAxisX * localNormal.x
+    + vWorldAxisY * localNormal.y
+    + vWorldAxisZ * localNormal.z
+  );
+  worldNormal = normalize(mix(worldNormal, vec3(0.0, 1.0, 0.0), 0.58));
+  float upward = worldNormal.y * 0.5 + 0.5;
+  float skyEnergy = dot(skyColor, vec3(0.2126, 0.7152, 0.0722));
+  float groundEnergy = dot(groundColor, vec3(0.2126, 0.7152, 0.0722));
+  float sunEnergy = dot(sunColor, vec3(0.2126, 0.7152, 0.0722));
+  float ambient = mix(groundEnergy, skyEnergy, upward);
+  float direct = max(0.0, (dot(worldNormal, sunDirection) + 0.42) / 1.42);
+  float brightness = clamp(ambient + sunEnergy * (0.16 + direct * 0.62), 0.28, 1.25);
+  gl_FragColor = vec4(straightColor * brightness, 1.0);
 }`;
 
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
@@ -213,6 +253,7 @@ export async function createTreeField(
     fullDensityDepthMeters = 45,
     waterLineMeters = 0,
     landCover,
+    exclusionMask,
     renderMode = "impostors",
   } = options;
   const treeHeight = 11 / metersPerUnit;
@@ -264,6 +305,7 @@ export async function createTreeField(
         const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
         const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
           x,
@@ -346,7 +388,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureSize", "gridDimensions", "tileInset", "cameraOrthographic"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureSize", "gridDimensions", "tileInset", "cameraOrthographic", "sunDirection", "sunColor", "skyColor", "groundColor"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "atlas5"],
       needAlphaBlending: false,
     },
@@ -358,10 +400,35 @@ export function createImpostorMaterial(
   material.setFloat("tileInset", 0.5 / assets.resolution);
   material.setFloat("cameraOrthographic", 0);
   assets.textures.forEach((texture, index) => material.setTexture(`atlas${index}`, texture));
+  const black = Color3.Black();
+  const fallbackSky = new Color3(0.38, 0.42, 0.48);
+  const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
     material.setFloat(
       "cameraOrthographic",
       scene.activeCamera?.mode === Camera.ORTHOGRAPHIC_CAMERA ? 1 : 0,
+    );
+    const sun = scene.lights.find((light): light is DirectionalLight => (
+      light instanceof DirectionalLight && light.name === "sunLight"
+    ));
+    const ambient = scene.lights.find((light): light is HemisphericLight => (
+      light instanceof HemisphericLight && light.name === "skyAmbientLight"
+    ));
+    material.setVector3(
+      "sunDirection",
+      sun?.isEnabled() ? sun.direction.scale(-1).normalize() : Vector3.Up(),
+    );
+    material.setColor3(
+      "sunColor",
+      sun?.isEnabled() ? sun.diffuse.scale(sun.intensity) : black,
+    );
+    material.setColor3(
+      "skyColor",
+      ambient ? ambient.diffuse.scale(ambient.intensity) : fallbackSky,
+    );
+    material.setColor3(
+      "groundColor",
+      ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
     );
   });
   return material;

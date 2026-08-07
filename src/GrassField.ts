@@ -6,7 +6,7 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
 import { createImpostorCube, createImpostorMaterial } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
@@ -27,6 +27,7 @@ interface GrassFieldOptions {
   spacingMeters?: number;
   waterLineMeters?: number;
   landCover?: WorldCover;
+  exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
 }
 
@@ -54,6 +55,7 @@ export async function createGrassField(
     spacingMeters = 3,
     waterLineMeters = 0,
     landCover,
+    exclusionMask,
     renderMode = "impostors",
   } = options;
   const grassHeight = 0.42 / metersPerUnit;
@@ -102,6 +104,7 @@ export async function createGrassField(
         if (random() > occupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
           x,
