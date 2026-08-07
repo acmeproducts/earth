@@ -16,14 +16,28 @@ import {
 import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
+import { createGrassField } from "./GrassField";
+import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
 import { sceneToLonLat } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, WorldCover } from "./WorldCover";
 import { createTerrainMaterial } from "./TerrainMaterial";
 import { SolarLighting } from "./SolarLighting";
+import { FpsCounter } from "./FpsCounter";
+import { VegetationFieldResult, VegetationRenderMode } from "./VegetationField";
+import {
+  VegetationCategory,
+  VegetationControls,
+  VegetationModes,
+} from "./VegetationControls";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
+const VEGETATION_LOD_UPDATE_MS = 200;
+const MIN_FLY_SPEED = 0.05;
+const MAX_FLY_SPEED = 10;
+const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
+const WHEEL_NOTCH_PIXELS = 100;
 
 interface TerrainMetadata {
   worldCoverColors?: Float32Array;
@@ -35,7 +49,9 @@ export class Game {
   private scene: Scene;
   private terrain?: Mesh;
   private water?: Mesh;
-  private treeField?: TransformNode;
+  private treeField?: VegetationFieldResult;
+  private grassField?: VegetationFieldResult;
+  private bushField?: VegetationFieldResult;
   private mapFeatures?: TransformNode;
   private terrainData?: TerrainResult;
   private terrainZoom = 15;
@@ -43,6 +59,37 @@ export class Game {
   private terrainRequestId = 0;
   private terrainLocationIndex = 0;
   private solarLighting?: SolarLighting;
+  private readonly fpsCounter = new FpsCounter();
+  private readonly vegetationModes: VegetationModes;
+  private vegetationControls?: VegetationControls;
+  private vegetationLodDistanceMeters: number;
+  private lastVegetationLodUpdate = 0;
+  private lastVegetationCameraPosition?: Vector3;
+  private flyCamera?: UniversalCamera;
+  private flySpeedOutput?: HTMLOutputElement;
+
+  private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
+    if (!this.flyCamera || event.deltaY === 0) return;
+
+    event.preventDefault();
+    const pixelsPerUnit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? Math.max(this.canvas.clientHeight, WHEEL_NOTCH_PIXELS)
+        : 1;
+    const wheelNotches = Math.max(
+      -4,
+      Math.min(4, (event.deltaY * pixelsPerUnit) / WHEEL_NOTCH_PIXELS),
+    );
+    this.flyCamera.speed = Math.max(
+      MIN_FLY_SPEED,
+      Math.min(
+        MAX_FLY_SPEED,
+        this.flyCamera.speed * Math.pow(FLY_SPEED_FACTOR_PER_NOTCH, -wheelNotches),
+      ),
+    );
+    this.updateFlySpeedOutput();
+  };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -52,6 +99,16 @@ export class Game {
       antialias: true,
     });
     this.scene = new Scene(this.engine);
+    const query = new URLSearchParams(window.location.search);
+    const requestedMode = query.get("vegetation");
+    const initialMode: VegetationRenderMode = requestedMode === "models" || requestedMode === "impostors"
+      ? requestedMode
+      : "auto";
+    this.vegetationModes = { trees: initialMode, grass: initialMode, bushes: initialMode };
+    const requestedDistance = Number(query.get("vegetation-distance"));
+    this.vegetationLodDistanceMeters = Number.isFinite(requestedDistance)
+      ? Math.max(2, Math.min(50, requestedDistance))
+      : 10;
   }
 
   async initialize(): Promise<void> {
@@ -76,6 +133,8 @@ export class Game {
     // Movement speed
     camera.speed = 0.5;
     camera.angularSensibility = 1000;
+    this.flyCamera = camera;
+    this.setupFlySpeedControl();
 
     // Add Q/E for vertical movement
     const verticalSpeed = 0.2;
@@ -99,6 +158,12 @@ export class Game {
 
     // Load terrain at the active example location.
     await this.rebuildTerrain(this.terrainZoom);
+    this.vegetationControls = new VegetationControls(
+      this.vegetationModes,
+      this.vegetationLodDistanceMeters,
+      (category, mode) => this.setVegetationMode(category, mode),
+      (distance) => this.setVegetationLodDistance(distance),
+    );
     this.setupDebugControls();
   }
 
@@ -170,6 +235,7 @@ export class Game {
       metersPerUnit,
       seed: zoom,
       landCover,
+      renderMode: this.vegetationModes.trees,
     });
     if (requestId !== this.terrainRequestId) {
       terrain.dispose(false, true);
@@ -177,6 +243,39 @@ export class Game {
       return;
     }
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
+
+    const grassField = await createGrassField(this.scene, terrainData, {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+      seed: zoom ^ 0x47524153,
+      landCover,
+      renderMode: this.vegetationModes.grass,
+    });
+    if (requestId !== this.terrainRequestId) {
+      terrain.dispose(false, true);
+      treeField.root.dispose(false, false);
+      grassField.root.dispose(false, false);
+      return;
+    }
+    console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
+
+    const bushField = await createBushField(this.scene, terrainData, {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+      seed: zoom ^ 0x42555348,
+      landCover,
+      renderMode: this.vegetationModes.bushes,
+    });
+    if (requestId !== this.terrainRequestId) {
+      terrain.dispose(false, true);
+      treeField.root.dispose(false, false);
+      grassField.root.dispose(false, false);
+      bushField.root.dispose(false, false);
+      return;
+    }
+    console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
     const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, {
       meshWidth,
@@ -187,21 +286,32 @@ export class Game {
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );
 
-    const water = createWaterPlane(this.scene, [terrain, ...treeField.meshes, ...mapFeatures.meshes], {
+    const water = createWaterPlane(this.scene, [
+      terrain,
+      ...treeField.meshes,
+      ...grassField.meshes,
+      ...bushField.meshes,
+      ...mapFeatures.meshes,
+    ], {
       width: meshWidth,
       height: meshDepth,
     });
 
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
-    // Impostor atlases are cached and shared by every rebuilt tree field.
-    this.treeField?.dispose(false, false);
+    // Impostor atlases are cached and shared by every rebuilt vegetation field.
+    this.treeField?.root.dispose(false, false);
+    this.grassField?.root.dispose(false, false);
+    this.bushField?.root.dispose(false, false);
     this.mapFeatures?.dispose(false, true);
     this.terrain = terrain;
     this.water = water;
-    this.treeField = treeField.root;
+    this.treeField = treeField;
+    this.grassField = grassField;
+    this.bushField = bushField;
     this.mapFeatures = mapFeatures.root;
     this.terrainData = terrainData;
+    this.updateVegetationLod(true);
 
     this.solarLighting?.setLocation(location.lat, location.lon);
     this.solarLighting?.setShadowCasters([
@@ -225,6 +335,14 @@ export class Game {
         void this.changeTerrainZoom(1);
       } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
         void this.changeTerrainZoom(-1);
+      } else if (kbInfo.event.key === "v" || kbInfo.event.key === "V") {
+        const modes = Object.values(this.vegetationModes);
+        const nextMode: VegetationRenderMode = modes.every((mode) => mode === "auto")
+          ? "models"
+          : modes.every((mode) => mode === "models")
+            ? "impostors"
+            : "auto";
+        this.setAllVegetationModes(nextMode);
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
@@ -232,6 +350,50 @@ export class Game {
         }
       }
     });
+  }
+
+  private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
+    this.vegetationModes[category] = mode;
+    const field = category === "trees"
+      ? this.treeField
+      : category === "grass"
+        ? this.grassField
+        : this.bushField;
+    field?.setRenderMode(mode);
+    this.vegetationControls?.setMode(category, mode);
+  }
+
+  private setAllVegetationModes(mode: VegetationRenderMode): void {
+    this.setVegetationMode("trees", mode);
+    this.setVegetationMode("grass", mode);
+    this.setVegetationMode("bushes", mode);
+  }
+
+  private setVegetationLodDistance(distanceMeters: number): void {
+    this.vegetationLodDistanceMeters = distanceMeters;
+    this.updateVegetationLod(true);
+  }
+
+  private updateVegetationLod(force = false): void {
+    const now = performance.now();
+    if (!force && now - this.lastVegetationLodUpdate < VEGETATION_LOD_UPDATE_MS) return;
+    const camera = this.scene.activeCamera;
+    if (!camera) return;
+
+    const position = camera.globalPosition;
+    if (
+      !force &&
+      this.lastVegetationCameraPosition &&
+      Vector3.DistanceSquared(position, this.lastVegetationCameraPosition) < 0.000001
+    ) {
+      return;
+    }
+
+    this.lastVegetationLodUpdate = now;
+    this.lastVegetationCameraPosition = position.clone();
+    this.treeField?.updateLod(position, this.vegetationLodDistanceMeters);
+    this.grassField?.updateLod(position, this.vegetationLodDistanceMeters);
+    this.bushField?.updateLod(position, this.vegetationLodDistanceMeters);
   }
 
   private async changeTerrainLocation(locationIndex: number): Promise<void> {
@@ -287,7 +449,9 @@ export class Game {
 
   run(): void {
     this.engine.runRenderLoop(() => {
+      this.updateVegetationLod();
       this.scene.render();
+      this.fpsCounter.update(this.engine, this.scene);
     });
   }
 
@@ -296,8 +460,27 @@ export class Game {
   }
 
   dispose(): void {
+    this.canvas.removeEventListener("wheel", this.handleFlySpeedWheel);
+    this.flySpeedOutput?.remove();
+    this.fpsCounter.dispose();
+    this.vegetationControls?.dispose();
     this.scene.dispose();
     this.engine.dispose();
+  }
+
+  private setupFlySpeedControl(): void {
+    this.canvas.addEventListener("wheel", this.handleFlySpeedWheel, { passive: false });
+    this.flySpeedOutput = document.createElement("output");
+    this.flySpeedOutput.id = "flySpeed";
+    document.body.appendChild(this.flySpeedOutput);
+    this.updateFlySpeedOutput();
+  }
+
+  private updateFlySpeedOutput(): void {
+    if (!this.flyCamera || !this.flySpeedOutput) return;
+    const speed = this.flyCamera.speed.toFixed(2);
+    this.flySpeedOutput.value = `Speed ${speed}`;
+    this.flySpeedOutput.setAttribute("aria-label", `Fly speed ${speed}`);
   }
 
   /**

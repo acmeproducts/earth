@@ -14,6 +14,7 @@ import {
 } from "@babylonjs/core";
 import { createTreeImpostorPrototype } from "./TreeField";
 import { TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
+import { FpsCounter } from "./FpsCounter";
 
 interface FaceValidation {
   face: string;
@@ -40,6 +41,7 @@ export class TreeImpostorValidation {
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly camera: FreeCamera;
+  private readonly fpsCounter = new FpsCounter();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, {
@@ -345,7 +347,10 @@ export class TreeImpostorValidation {
   }
 
   run(): void {
-    this.engine.runRenderLoop(() => this.scene.render());
+    this.engine.runRenderLoop(() => {
+      this.scene.render();
+      this.fpsCounter.update(this.engine);
+    });
   }
 
   resize(): void {
@@ -471,8 +476,10 @@ void main(void) {
   else if (choice < weights.x + weights.y) color = frame(vec2(high.x, low.y));
   else if (choice < weights.x + weights.y + weights.z) color = frame(vec2(low.x, high.y));
   else color = frame(vec2(high.x, high.y));
-  if (color.a < 0.5) discard;
-  gl_FragColor = vec4(color.rgb, 1.0);
+  float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
+  if (color.a <= alphaChoice) discard;
+  vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
+  gl_FragColor = vec4(straightColor, 1.0);
 }`;
 
 function createDemoReference(

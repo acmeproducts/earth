@@ -19,6 +19,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
+import { FpsCounter } from "./FpsCounter";
 
 interface CaptureSettings {
   gridSize: number;
@@ -103,7 +104,8 @@ void main(void) {
   vec4 top = mix(frame(low.x, high.y), frame(high.x, high.y), blend.x);
   vec4 color = mix(bottom, top, blend.y);
   if (color.a < 0.01) discard;
-  gl_FragColor = color;
+  vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
+  gl_FragColor = vec4(straightColor, color.a);
 }`;
 
 export class TreeImpostorDemo {
@@ -120,6 +122,7 @@ export class TreeImpostorDemo {
   private captureSet?: CaptureSet;
   private proxy?: Mesh;
   private proxyMaterial?: ShaderMaterial;
+  private readonly fpsCounter = new FpsCounter();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: true, antialias: true });
@@ -153,6 +156,7 @@ export class TreeImpostorDemo {
     this.engine.runRenderLoop(() => {
       this.updateProxyView();
       this.scene.render();
+      this.fpsCounter.update(this.engine);
     });
   }
 

@@ -1,5 +1,7 @@
 import { TerrainResult, TileBounds } from "./TerrainTiles";
 
+export const SEA_LEVEL_METERS = 0;
+
 const mercatorY = (latitude: number): number =>
   Math.asinh(Math.tan((latitude * Math.PI) / 180));
 
@@ -57,5 +59,28 @@ export function sampleElevation(
     values[y0 * terrain.width + x1] * fx * (1 - fy) +
     values[y1 * terrain.width + x0] * (1 - fx) * fy +
     values[y1 * terrain.width + x1] * fx * fy
+  );
+}
+
+/** Returns true when the center and full rectangular footprint are above an elevation. */
+export function isTerrainFootprintAbove(
+  terrain: TerrainResult,
+  x: number,
+  z: number,
+  halfWidth: number,
+  halfDepth: number,
+  meshWidth: number,
+  meshDepth: number,
+  minimumElevation = SEA_LEVEL_METERS,
+): boolean {
+  const offsets: ReadonlyArray<readonly [number, number]> = [
+    [0, 0],
+    [-halfWidth, -halfDepth],
+    [halfWidth, -halfDepth],
+    [-halfWidth, halfDepth],
+    [halfWidth, halfDepth],
+  ];
+  return offsets.every(([offsetX, offsetZ]) =>
+    sampleElevation(terrain, x + offsetX, z + offsetZ, meshWidth, meshDepth) > minimumElevation
   );
 }

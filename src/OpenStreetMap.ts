@@ -12,7 +12,7 @@ import {
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
 import earcut from "earcut";
-import { lonLatToScene, sampleElevation } from "./Geo";
+import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
 import { TerrainResult, TileBounds } from "./TerrainTiles";
 
 interface MapTile {
@@ -159,11 +159,16 @@ function createPolygon(
     options.meshWidth,
     options.meshDepth,
   );
+  const boundaryElevations = clipped.map((point) =>
+    sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth)
+  );
+  if (!isWater && (
+    centerElevation <= SEA_LEVEL_METERS ||
+    boundaryElevations.some((elevation) => elevation <= SEA_LEVEL_METERS)
+  )) return undefined;
   const baseElevation = Math.max(
     centerElevation,
-    ...clipped.map((point) =>
-      sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth),
-    ),
+    ...boundaryElevations,
   );
   if (!isWater) {
     const shape = clipped.map(({ x, z }) => new Vector2(x, z));
@@ -196,18 +201,32 @@ function createRoad(
     options.meshWidth / 2 - halfWidth,
     options.meshDepth / 2 - halfWidth,
   );
-  return paths.map((path) => createRoadMesh(scene, path, terrain, options, halfWidth));
+  const sampleSpacing = Math.min(
+    options.meshWidth / Math.max(1, terrain.width - 1),
+    options.meshDepth / Math.max(1, terrain.height - 1),
+  ) / 2;
+  return paths.flatMap((path) =>
+    createRoadMeshes(scene, resamplePath(path, sampleSpacing), terrain, options, halfWidth)
+  );
 }
 
-function createRoadMesh(
+function createRoadMeshes(
   scene: Scene,
   points: Array<{ x: number; z: number }>,
   terrain: TerrainResult,
   options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
   halfWidth: number,
-): Mesh {
-  const left: Vector3[] = [];
-  const right: Vector3[] = [];
+): Mesh[] {
+  const meshes: Mesh[] = [];
+  let left: Vector3[] = [];
+  let right: Vector3[] = [];
+  const finishPath = (): void => {
+    if (left.length >= 2) {
+      meshes.push(MeshBuilder.CreateRibbon("road", { pathArray: [left, right] }, scene));
+    }
+    left = [];
+    right = [];
+  };
   for (let index = 0; index < points.length; index++) {
     const previous = points[Math.max(0, index - 1)];
     const next = points[Math.min(points.length - 1, index + 1)];
@@ -216,17 +235,58 @@ function createRoadMesh(
     const length = Math.hypot(dx, dz) || 1;
     const offsetX = (-dz / length) * halfWidth;
     const offsetZ = (dx / length) * halfWidth;
-    const elevation = sampleElevation(
+    const leftElevation = sampleElevation(
       terrain,
-      points[index].x,
-      points[index].z,
+      points[index].x + offsetX,
+      points[index].z + offsetZ,
       options.meshWidth,
       options.meshDepth,
-    ) / options.metersPerUnit + 0.025;
-    left.push(new Vector3(points[index].x + offsetX, elevation, points[index].z + offsetZ));
-    right.push(new Vector3(points[index].x - offsetX, elevation, points[index].z - offsetZ));
+    );
+    const rightElevation = sampleElevation(
+      terrain,
+      points[index].x - offsetX,
+      points[index].z - offsetZ,
+      options.meshWidth,
+      options.meshDepth,
+    );
+    if (leftElevation <= SEA_LEVEL_METERS || rightElevation <= SEA_LEVEL_METERS) {
+      finishPath();
+      continue;
+    }
+    left.push(new Vector3(
+      points[index].x + offsetX,
+      leftElevation / options.metersPerUnit + 0.025,
+      points[index].z + offsetZ,
+    ));
+    right.push(new Vector3(
+      points[index].x - offsetX,
+      rightElevation / options.metersPerUnit + 0.025,
+      points[index].z - offsetZ,
+    ));
   }
-  return MeshBuilder.CreateRibbon("road", { pathArray: [left, right] }, scene);
+  finishPath();
+  return meshes;
+}
+
+function resamplePath(
+  points: Array<{ x: number; z: number }>,
+  maximumSpacing: number,
+): Array<{ x: number; z: number }> {
+  if (points.length < 2 || maximumSpacing <= 0) return points;
+  const sampled = [points[0]];
+  for (let index = 1; index < points.length; index++) {
+    const start = points[index - 1];
+    const end = points[index];
+    const steps = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.z - start.z) / maximumSpacing));
+    for (let step = 1; step <= steps; step++) {
+      const amount = step / steps;
+      sampled.push({
+        x: start.x + (end.x - start.x) * amount,
+        z: start.z + (end.z - start.z) * amount,
+      });
+    }
+  }
+  return sampled;
 }
 
 function clipPolygon(

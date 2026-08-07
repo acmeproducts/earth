@@ -66,6 +66,24 @@ bilinearly blends the four nearest frames. `Export ZIP` writes the six face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
+The Earth view also generates a grass clump procedurally at startup, captures
+it through the same six-face impostor pipeline, and thin-instances it across
+vegetated ESA WorldCover classes. Grass uses a horizontally biased 16 by 4,
+80 px capture by default. `grass-impostor-x-samples`,
+`grass-impostor-y-samples`, and `grass-impostor-resolution` query parameters
+can override those values for quality testing.
+
+Bushes are generated from procedural branches and dense curved shoots, captured
+into their own directional atlases, and scattered most densely through
+WorldCover shrubland with lighter placement in other vegetated classes.
+
+The production view can switch trees, grass, and bushes independently between
+their impostors, automatic distance LOD, and original geometry. Auto mode uses
+real models inside the configurable model range (10 m by default) and impostors
+beyond it. Press `V` to cycle all three modes. The top-right counter reports
+live FPS and active triangles; use `?vegetation=models` to force every real
+model or `?vegetation-distance=20` to change the initial Auto range.
+
 
 ## Project Structure
 
@@ -87,9 +105,10 @@ earth/
 
 ## Controls
 
-- **Left Mouse Button + Drag**: Rotate camera
-- **Mouse Wheel**: Zoom in/out
-- **Right Mouse Button + Drag**: Pan camera
+- **W/A/S/D**: Fly forward, left, backward, and right
+- **Q/E**: Fly down and up
+- **Mouse + Drag**: Look around
+- **Mouse Wheel**: Increase or decrease fly speed
 
 ## Deployment
 

@@ -37,6 +37,116 @@
 
     #attribution a { color: inherit; }
 
+    #fpsCounter {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 30;
+      min-width: 154px;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 4px;
+      background: rgba(10, 12, 15, 0.78);
+      color: #f3f5f7;
+      font: 600 12px/26px ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #flySpeed {
+      position: fixed;
+      left: 12px;
+      bottom: 28px;
+      z-index: 30;
+      min-width: 94px;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 4px;
+      background: rgba(10, 12, 15, 0.78);
+      color: #f3f5f7;
+      font: 600 12px/26px ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #vegetationControls {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 30;
+      width: 320px;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      background: rgba(10, 12, 15, 0.88);
+      color: #f3f5f7;
+      font: 12px Arial, sans-serif;
+    }
+
+    #vegetationControls h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .vegetation-control-row {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      align-items: center;
+      gap: 8px;
+      margin-top: 7px;
+    }
+
+    .vegetation-segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      height: 28px;
+      border: 1px solid #505961;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .vegetation-segmented button {
+      min-width: 0;
+      border: 0;
+      border-left: 1px solid #505961;
+      background: #20262b;
+      color: #bfc8ce;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .vegetation-segmented button:first-child { border-left: 0; }
+    .vegetation-segmented button.active { background: #397354; color: #fff; }
+    .vegetation-segmented button:focus-visible { outline: 2px solid #8fc4a4; outline-offset: -2px; }
+
+    .vegetation-distance-row {
+      display: grid;
+      grid-template-columns: 78px 1fr 42px;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      color: #d9dfe3;
+    }
+
+    .vegetation-distance-row input { width: 100%; accent-color: #589a72; }
+    .vegetation-distance-row output {
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    @media (max-width: 520px) {
+      #vegetationControls {
+        top: 52px;
+        width: calc(100% - 24px);
+      }
+    }
+
     #loading {
       position: fixed;
       top: 0;

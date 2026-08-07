@@ -5,19 +5,21 @@ import {
   Scene,
   ShaderMaterial,
   TransformNode,
+  Vector2,
   Vector3,
   VertexData,
 } from "@babylonjs/core";
-import { sceneToLonLat, sampleElevation } from "./Geo";
+import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { TerrainResult } from "./TerrainTiles";
-import { getTreeImpostorAssets, TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
+import { createTreeModels, getTreeImpostorAssets, TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
+import {
+  createVegetationFieldResult,
+  VegetationFieldResult,
+  VegetationRenderMode,
+} from "./VegetationField";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 
-export interface TreeFieldResult {
-  root: TransformNode;
-  meshes: Mesh[];
-  count: number;
-}
+export type TreeFieldResult = VegetationFieldResult;
 
 export interface TreeImpostorPrototype {
   root: TransformNode;
@@ -37,9 +39,10 @@ interface TreeFieldOptions {
   fullDensityDepthMeters?: number;
   waterLineMeters?: number;
   landCover?: WorldCover;
+  renderMode?: VegetationRenderMode;
 }
 
-const vertexShader = `
+export const impostorVertexShader = `
 precision highp float;
 attribute vec3 position;
 uniform mat4 viewProjection;
@@ -67,7 +70,7 @@ void main(void) {
   gl_Position = viewProjection * worldPosition;
 }`;
 
-const fragmentShader = `
+export const impostorFragmentShader = `
 precision highp float;
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
@@ -77,7 +80,7 @@ uniform sampler2D atlas2;
 uniform sampler2D atlas3;
 uniform sampler2D atlas4;
 uniform sampler2D atlas5;
-uniform float gridSize;
+uniform vec2 gridDimensions;
 uniform float tileInset;
 uniform float captureSize;
 uniform float cameraOrthographic;
@@ -93,7 +96,7 @@ vec4 atlasSample(float face, vec2 uv) {
 
 vec4 frame(float face, vec2 tile, vec2 imageUV) {
   vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), imageUV);
-  return atlasSample(face, (tile + localUV) / gridSize);
+  return atlasSample(face, (tile + localUV) / gridDimensions);
 }
 
 float bayer4(vec2 pixel) {
@@ -147,7 +150,7 @@ void main(void) {
 
   float denominator = max(0.0001, dot(direction, faceNormal));
   vec2 projected = vec2(dot(direction, faceRight), dot(direction, faceUp)) / denominator;
-  vec2 samplePosition = clamp((projected + 1.0) * 0.5, 0.0, 1.0) * (gridSize - 1.0);
+  vec2 samplePosition = clamp((projected + 1.0) * 0.5, 0.0, 1.0) * (gridDimensions - 1.0);
   vec3 projectedPosition = vLocalPosition;
   if (cameraOrthographic < 0.5) {
     vec3 cameraOffset = vViewDirection;
@@ -167,7 +170,7 @@ void main(void) {
   if (any(lessThan(imageUV, vec2(0.0))) || any(greaterThan(imageUV, vec2(1.0)))) discard;
 
   vec2 low = floor(samplePosition);
-  vec2 high = min(low + 1.0, vec2(gridSize - 1.0));
+  vec2 high = min(low + 1.0, gridDimensions - 1.0);
   vec2 blend = fract(samplePosition);
   vec4 weights = vec4(
     (1.0 - blend.x) * (1.0 - blend.y),
@@ -187,8 +190,10 @@ void main(void) {
     color = frame(face, vec2(high.x, high.y), imageUV);
   }
 
-  if (color.a < 0.5) discard;
-  gl_FragColor = vec4(color.rgb, 1.0);
+  float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
+  if (color.a <= alphaChoice) discard;
+  vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
+  gl_FragColor = vec4(straightColor, 1.0);
 }`;
 
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
@@ -208,10 +213,17 @@ export async function createTreeField(
     fullDensityDepthMeters = 45,
     waterLineMeters = 0,
     landCover,
+    renderMode = "impostors",
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const prototype = await createTreeImpostorPrototype(scene, treeHeight, "treeField");
-  const { root, mesh: tree } = prototype;
+  const { root, mesh: tree, captureSize } = prototype;
+  const modelMeshes = await createTreeModels(scene, treeHeight);
+  modelMeshes.forEach((mesh) => { mesh.parent = root; });
+  const modelMaterials = new Set(modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null));
+  root.onDisposeObservable.add(() => {
+    modelMaterials.forEach((material) => material.dispose(true, true));
+  });
 
   const random = mulberry32(seed);
   const spacing = spacingMeters / metersPerUnit;
@@ -219,6 +231,7 @@ export async function createTreeField(
   const rows = Math.max(1, Math.floor(meshDepth / spacing));
   const cellWidth = meshWidth / columns;
   const cellDepth = meshDepth / rows;
+  const maximumHalfWidth = captureSize * 0.55;
   const matrices: Matrix[] = [];
 
   if (landCover && terrain.bounds) {
@@ -251,7 +264,16 @@ export async function createTreeField(
         const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
         const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
-        if (elevation <= waterLineMeters) continue;
+        if (!isTerrainFootprintAbove(
+          terrain,
+          x,
+          z,
+          maximumHalfWidth,
+          maximumHalfWidth,
+          meshWidth,
+          meshDepth,
+          waterLineMeters,
+        )) continue;
 
         const depth = Math.min(1, edgeDistances[index] / fullDensityDepthMeters);
         const interiorWeight = depth * depth * (3 - 2 * depth);
@@ -276,15 +298,14 @@ export async function createTreeField(
 
   const matrixData = new Float32Array(matrices.length * 16);
   matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
-  tree.thinInstanceSetBuffer("matrix", matrixData, 16, true);
-  tree.thinInstanceRefreshBoundingInfo(true);
-  // The forest is one cheap draw call. Keep that draw active so Babylon cannot
-  // reject every instance from an aggregate bound that is stale while terrain changes.
-  tree.alwaysSelectAsActiveMesh = true;
-  tree.setEnabled(matrices.length > 0);
-  tree.freezeWorldMatrix();
-
-  return { root, meshes: [tree], count: matrices.length };
+  return createVegetationFieldResult(
+    root,
+    [tree],
+    modelMeshes,
+    matrixData,
+    metersPerUnit,
+    renderMode,
+  );
 }
 
 /** Builds the same fixed cube and material used by every forest instance. */
@@ -300,21 +321,40 @@ export async function createTreeImpostorPrototype(
   tree.parent = root;
   tree.isPickable = false;
 
-  const material = new ShaderMaterial(
-    "treeImpostorMaterial",
+  const material = createImpostorMaterial(
     scene,
-    { vertexSource: vertexShader, fragmentSource: fragmentShader },
+    assets,
+    treeHeight,
+    captureSize,
+    "treeImpostorMaterial",
+  );
+  root.onDisposeObservable.add(() => material.dispose(false, false));
+  tree.material = material;
+  return { root, mesh: tree, assets, captureSize };
+}
+
+export function createImpostorMaterial(
+  scene: Scene,
+  assets: TreeImpostorAssets,
+  renderHeight: number,
+  captureSize: number,
+  name: string,
+): ShaderMaterial {
+  const material = new ShaderMaterial(
+    name,
+    scene,
+    { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureSize", "gridSize", "tileInset", "cameraOrthographic"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureSize", "gridDimensions", "tileInset", "cameraOrthographic"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "atlas5"],
       needAlphaBlending: false,
     },
   );
   material.backFaceCulling = true;
-  material.setFloat("captureCenterY", treeHeight / 2);
+  material.setFloat("captureCenterY", renderHeight / 2);
   material.setFloat("captureSize", captureSize);
-  material.setFloat("gridSize", assets.gridSize);
+  material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));
   material.setFloat("tileInset", 0.5 / assets.resolution);
   material.setFloat("cameraOrthographic", 0);
   assets.textures.forEach((texture, index) => material.setTexture(`atlas${index}`, texture));
@@ -324,12 +364,15 @@ export async function createTreeImpostorPrototype(
       scene.activeCamera?.mode === Camera.ORTHOGRAPHIC_CAMERA ? 1 : 0,
     );
   });
-  root.onDisposeObservable.add(() => material.dispose(false, false));
-  tree.material = material;
-  return { root, mesh: tree, assets, captureSize };
+  return material;
 }
 
-function createImpostorCube(scene: Scene, size: number, centerY: number): Mesh {
+export function createImpostorCube(
+  scene: Scene,
+  size: number,
+  centerY: number,
+  name = "treeImpostors",
+): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
@@ -353,7 +396,7 @@ function createImpostorCube(scene: Scene, size: number, centerY: number): Mesh {
     indices.push(vertex, vertex + 2, vertex + 1, vertex, vertex + 3, vertex + 2);
   });
 
-  const tree = new Mesh("treeImpostors", scene);
+  const tree = new Mesh(name, scene);
   const data = new VertexData();
   data.positions = positions;
   data.normals = normals;

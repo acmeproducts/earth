@@ -11,12 +11,28 @@ import {
   Texture,
   TransformNode,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 
-export interface TreeImpostorAssets {
+export interface ImpostorAssets {
   textures: DynamicTexture[];
+  gridWidth: number;
+  gridHeight: number;
+  /** Square-grid compatibility for the tree capture validation tools. */
   gridSize: number;
+  resolution: number;
+  sourceHeight: number;
+  captureDiameter: number;
+}
+
+export type TreeImpostorAssets = ImpostorAssets;
+
+export interface ImpostorCaptureOptions {
+  name: string;
+  meshes: Mesh[];
+  gridWidth: number;
+  gridHeight: number;
   resolution: number;
   sourceHeight: number;
   captureDiameter: number;
@@ -42,6 +58,14 @@ export const TREE_IMPOSTOR_FACES: CubeFace[] = [
 
 const sceneAssets = new WeakMap<Scene, Promise<TreeImpostorAssets>>();
 
+interface PreparedTreeSource {
+  imported: Awaited<ReturnType<typeof SceneLoader.ImportMeshAsync>>;
+  root: TransformNode;
+  meshes: Mesh[];
+  sourceHeight: number;
+  captureDiameter: number;
+}
+
 /** Captures the high-poly source once and shares the resulting atlases across the scene. */
 export function getTreeImpostorAssets(
   scene: Scene,
@@ -56,17 +80,36 @@ export function getTreeImpostorAssets(
 }
 
 async function captureTree(scene: Scene, gridSize: number, resolution: number): Promise<TreeImpostorAssets> {
-  const atlasSize = gridSize * resolution;
-  const maxTextureSize = scene.getEngine().getCaps().maxTextureSize;
-  if (atlasSize > maxTextureSize) {
-    throw new Error(`Tree impostor atlas ${atlasSize}px exceeds the GPU limit of ${maxTextureSize}px.`);
-  }
+  const source = await prepareTreeSource(scene, "treeImpostorCaptureSource");
+  const { imported, root, meshes, sourceHeight, captureDiameter } = source;
 
-  console.log(`Tree impostor: capturing ${6 * gridSize * gridSize} views at ${resolution}x${resolution}`);
+  const assets = await captureImpostorAtlases(scene, {
+    name: "treeImpostor",
+    meshes,
+    gridWidth: gridSize,
+    gridHeight: gridSize,
+    resolution,
+    sourceHeight,
+    captureDiameter,
+  });
+
+  root.dispose(false, true);
+  imported.meshes.forEach((mesh) => {
+    if (!mesh.isDisposed()) mesh.dispose(false, true);
+  });
+  imported.transformNodes.forEach((node) => {
+    if (!node.isDisposed()) node.dispose();
+  });
+  imported.skeletons.forEach((skeleton) => skeleton.dispose());
+  console.log("Tree impostor: capture complete; high-poly source disposed");
+  return assets;
+}
+
+async function prepareTreeSource(scene: Scene, rootName: string): Promise<PreparedTreeSource> {
   const imported = await SceneLoader.ImportMeshAsync("", "", TREE_URL, scene);
   const meshes = imported.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.getTotalVertices() > 0);
   if (meshes.length === 0) throw new Error("Tree.glb contains no renderable meshes.");
-  const root = new TransformNode("treeImpostorCaptureSource", scene);
+  const root = new TransformNode(rootName, scene);
   imported.meshes.filter((mesh) => !mesh.parent).forEach((mesh) => { mesh.parent = root; });
   // The converted FBX grows along -Y. Put its base at the bottom before capture.
   root.rotation.z = Math.PI;
@@ -96,14 +139,82 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
   for (const mesh of meshes) mesh.computeWorldMatrix(true);
   const sourceHeight = rawSize.y * scale;
   const captureDiameter = rawSize.length() * scale * 1.08;
+  return { imported, root, meshes, sourceHeight, captureDiameter };
+}
+
+/** Loads and bakes the original GLB into thin-instance-ready meshes. */
+export async function createTreeModels(scene: Scene, renderHeight: number): Promise<Mesh[]> {
+  const { imported, root, meshes, sourceHeight } = await prepareTreeSource(scene, "treeModelSource");
+  const renderScale = renderHeight / sourceHeight;
+
+  for (const mesh of meshes) {
+    const world = mesh.computeWorldMatrix(true).clone();
+    mesh.parent = null;
+    mesh.bakeTransformIntoVertices(world);
+    mesh.position.setAll(0);
+    mesh.rotation.setAll(0);
+    mesh.rotationQuaternion = null;
+    mesh.scaling.setAll(1);
+
+    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+    if (!positions) throw new Error(`${mesh.name} has no position data.`);
+    for (let index = 0; index < positions.length; index += 3) {
+      positions[index] *= renderScale;
+      positions[index + 1] = positions[index + 1] * renderScale + renderHeight / 2;
+      positions[index + 2] *= renderScale;
+    }
+    mesh.setVerticesData(VertexBuffer.PositionKind, positions);
+    mesh.refreshBoundingInfo();
+    mesh.name = `treeModels-${mesh.name}`;
+    mesh.isPickable = false;
+  }
+
+  root.dispose(false, false);
+  imported.meshes.forEach((mesh) => {
+    const retained = mesh instanceof Mesh && meshes.includes(mesh);
+    if (!retained && !mesh.isDisposed()) mesh.dispose(false, false);
+  });
+  imported.transformNodes.forEach((node) => {
+    if (!node.isDisposed()) node.dispose();
+  });
+  imported.skeletons.forEach((skeleton) => skeleton.dispose());
+  return meshes;
+}
+
+/** Captures any prepared, origin-centered source into six directional atlases. */
+export async function captureImpostorAtlases(
+  scene: Scene,
+  options: ImpostorCaptureOptions,
+): Promise<ImpostorAssets> {
+  const {
+    name,
+    meshes,
+    gridWidth,
+    gridHeight,
+    resolution,
+    sourceHeight,
+    captureDiameter,
+  } = options;
+  const atlasWidth = gridWidth * resolution;
+  const atlasHeight = gridHeight * resolution;
+  const maxTextureSize = scene.getEngine().getCaps().maxTextureSize;
+  if (atlasWidth > maxTextureSize || atlasHeight > maxTextureSize) {
+    throw new Error(
+      `${name} atlas ${atlasWidth}x${atlasHeight}px exceeds the GPU limit of ${maxTextureSize}px.`,
+    );
+  }
+  console.log(
+    `${name}: capturing ${6 * gridWidth * gridHeight} views ` +
+    `(${gridWidth}x${gridHeight} per face) at ${resolution}x${resolution}`,
+  );
 
   const canvases = TREE_IMPOSTOR_FACES.map(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = atlasSize;
-    canvas.height = atlasSize;
+    canvas.width = atlasWidth;
+    canvas.height = atlasHeight;
     return canvas;
   });
-  const camera = new FreeCamera("treeImpostorCaptureCamera", Vector3.Zero(), scene);
+  const camera = new FreeCamera(`${name}CaptureCamera`, Vector3.Zero(), scene);
   camera.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
   camera.minZ = 0.01;
   camera.maxZ = captureDiameter * 4;
@@ -111,7 +222,7 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
   camera.orthoRight = captureDiameter / 2;
   camera.orthoTop = captureDiameter / 2;
   camera.orthoBottom = -captureDiameter / 2;
-  const target = new RenderTargetTexture("treeImpostorCaptureTarget", resolution, scene, false, false);
+  const target = new RenderTargetTexture(`${name}CaptureTarget`, resolution, scene, false, false);
   target.clearColor = new Color4(0, 0, 0, 0);
   target.renderList = meshes;
   target.activeCamera = camera;
@@ -123,10 +234,10 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
     for (let faceIndex = 0; faceIndex < TREE_IMPOSTOR_FACES.length; faceIndex++) {
       const face = TREE_IMPOSTOR_FACES[faceIndex];
       const context = canvases[faceIndex].getContext("2d", { alpha: true })!;
-      for (let y = 0; y < gridSize; y++) {
-        for (let x = 0; x < gridSize; x++) {
-          const u = gridSize === 1 ? 0 : (x / (gridSize - 1)) * 2 - 1;
-          const v = gridSize === 1 ? 0 : (y / (gridSize - 1)) * 2 - 1;
+      for (let y = 0; y < gridHeight; y++) {
+        for (let x = 0; x < gridWidth; x++) {
+          const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
+          const v = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
           const direction = face.normal.add(face.right.scale(u)).add(face.up.scale(v)).normalize();
           camera.position.copyFrom(direction.scale(captureDiameter));
           camera.upVector.copyFrom(face.up);
@@ -134,7 +245,7 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
           scene.activeCamera = camera;
           target.render(true);
           const pixels = await target.readPixels();
-          if (!pixels) throw new Error("Tree impostor GPU readback failed.");
+          if (!pixels) throw new Error(`${name} GPU readback failed.`);
           context.putImageData(binaryImage(pixels, resolution, context), x * resolution, y * resolution);
           await nextFrame();
         }
@@ -148,8 +259,8 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
 
   const textures = canvases.map((canvas, index) => {
     const texture = new DynamicTexture(
-      `treeImpostorAtlas${index}`,
-      { width: atlasSize, height: atlasSize },
+      `${name}Atlas${index}`,
+      { width: atlasWidth, height: atlasHeight },
       scene,
       false,
       Texture.BILINEAR_SAMPLINGMODE,
@@ -161,16 +272,15 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     return texture;
   });
-  root.dispose(false, true);
-  imported.meshes.forEach((mesh) => {
-    if (!mesh.isDisposed()) mesh.dispose(false, true);
-  });
-  imported.transformNodes.forEach((node) => {
-    if (!node.isDisposed()) node.dispose();
-  });
-  imported.skeletons.forEach((skeleton) => skeleton.dispose());
-  console.log("Tree impostor: capture complete; high-poly source disposed");
-  return { textures, gridSize, resolution, sourceHeight, captureDiameter };
+  return {
+    textures,
+    gridWidth,
+    gridHeight,
+    gridSize: gridWidth,
+    resolution,
+    sourceHeight,
+    captureDiameter,
+  };
 }
 
 async function configureMaterials(meshes: Mesh[], scene: Scene): Promise<void> {
@@ -226,7 +336,7 @@ function binaryImage(pixels: ArrayBufferView, size: number, context: CanvasRende
   return output;
 }
 
-function queryNumber(name: string, fallback: number, minimum: number, maximum: number): number {
+export function queryNumber(name: string, fallback: number, minimum: number, maximum: number): number {
   const value = Number(new URLSearchParams(window.location.search).get(name));
   return Number.isFinite(value) && value >= minimum && value <= maximum ? Math.round(value) : fallback;
 }
