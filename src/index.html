@@ -105,6 +105,18 @@
     .impostor-mode #loading { background: #101419; }
     .impostor-mode .loader { border-color: #34404a; border-top-color: #62a67e; }
     .impostor-mode .loader-text { color: #8fc4a4; letter-spacing: 0; }
+    #impostorValidation { position: fixed; inset: 0; z-index: 20; overflow: auto; padding: 20px; background: #101419; color: #e7edf2; font: 14px/1.4 system-ui, sans-serif; }
+    #impostorValidation h1 { margin: 0 0 8px; font-size: 22px; }
+    #impostorValidation [data-result="pass"] { color: #77d69b; }
+    #impostorValidation [data-result="fail"] { color: #ff8b85; }
+    #validationGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+    #validationGrid article { padding: 10px; border: 1px solid #34404a; border-radius: 4px; background: #171d22; }
+    #validationGrid h2, #validationGrid p { margin: 0 0 6px; font-size: 13px; }
+    #validationGrid article > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #validationGrid figure { margin: 0; }
+    #validationGrid figcaption { margin-bottom: 3px; color: #9eabb5; }
+    #validationGrid canvas { display: block; width: 100%; height: auto; background: #090b0d; image-rendering: pixelated; }
+    #validationReport { white-space: pre-wrap; color: #aeb9c2; }
   </style>
 </head>
 <body>

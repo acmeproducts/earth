@@ -36,3 +36,9 @@ npm-debug.log*
 
 # Coverage
 coverage/
+
+# Local browser validation artifacts
+.chrome-validation/
+earth-impostor*.png
+impostor-example-*.png
+impostor-validation.png

@@ -164,13 +164,18 @@ export class Game {
       landCover,
     });
 
-    const treeField = createTreeField(this.scene, terrainData, {
+    const treeField = await createTreeField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
       metersPerUnit,
       seed: zoom,
       landCover,
     });
+    if (requestId !== this.terrainRequestId) {
+      terrain.dispose(false, true);
+      treeField.root.dispose(false, false);
+      return;
+    }
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
 
     const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, {
@@ -189,7 +194,8 @@ export class Game {
 
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
-    this.treeField?.dispose(false, true);
+    // Impostor atlases are cached and shared by every rebuilt tree field.
+    this.treeField?.dispose(false, false);
     this.mapFeatures?.dispose(false, true);
     this.terrain = terrain;
     this.water = water;
@@ -200,7 +206,6 @@ export class Game {
     this.solarLighting?.setLocation(location.lat, location.lon);
     this.solarLighting?.setShadowCasters([
       terrain,
-      ...treeField.meshes,
       ...mapFeatures.meshes,
     ]);
 

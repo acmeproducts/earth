@@ -344,7 +344,7 @@ export class TreeImpostorDemo {
     panel.id = "impostorControls";
     panel.innerHTML = `
       <h1>Tree impostor capture</h1>
-      <label>Samples per face edge <input id="captureGrid" type="number" min="1" max="8" value="5"></label>
+      <label>Samples per face edge <input id="captureGrid" type="number" min="1" max="16" value="10"></label>
       <label>Capture resolution <input id="captureResolution" type="number" min="64" max="1024" step="64" value="500"></label>
       <div class="impostor-actions"><button id="captureButton">Capture</button><button id="exportButton" disabled>Export ZIP</button></div>
       <canvas id="capturePreview" width="240" height="240"></canvas>

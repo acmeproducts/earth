@@ -45,7 +45,7 @@ const sceneAssets = new WeakMap<Scene, Promise<TreeImpostorAssets>>();
 /** Captures the high-poly source once and shares the resulting atlases across the scene. */
 export function getTreeImpostorAssets(
   scene: Scene,
-  gridSize = queryNumber("impostor-grid", 5, 1, 8),
+  gridSize = queryNumber("impostor-grid", 10, 1, 16),
   resolution = queryNumber("impostor-resolution", 500, 64, 1024),
 ): Promise<TreeImpostorAssets> {
   const existing = sceneAssets.get(scene);
@@ -71,6 +71,13 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
   // The converted FBX grows along -Y. Put its base at the bottom before capture.
   root.rotation.z = Math.PI;
   await configureMaterials(meshes, scene);
+  // ImportMeshAsync can resolve before every material texture is GPU-ready.
+  // The interactive demo gets this delay before Capture is clicked; runtime capture must wait explicitly.
+  await scene.whenReadyAsync();
+  for (let frame = 0; frame < 2; frame++) {
+    scene.render();
+    await nextFrame();
+  }
 
   root.computeWorldMatrix(true);
   let minimum = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
@@ -86,6 +93,7 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
   root.scaling.setAll(scale);
   root.position.copyFrom(minimum.add(maximum).scale(-0.5 * scale));
   root.computeWorldMatrix(true);
+  for (const mesh of meshes) mesh.computeWorldMatrix(true);
   const sourceHeight = rawSize.y * scale;
   const captureDiameter = rawSize.length() * scale * 1.08;
 
@@ -170,7 +178,7 @@ async function configureMaterials(meshes: Mesh[], scene: Scene): Promise<void> {
   for (const mesh of meshes) {
     const material = mesh.material;
     if (!(material instanceof PBRMaterial)) continue;
-    material.unlit = true;
+    material.unlit = false;
     material.metallic = 0;
     material.roughness = 1;
     if (material.name.toLowerCase().includes("leaves")) {

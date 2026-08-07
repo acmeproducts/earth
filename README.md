@@ -57,8 +57,8 @@ The output will be in the `dist/` directory.
 
 Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
 The controls configure the number of samples along each cube-face edge and the
-resolution of each capture. The default produces 150 captures: six faces,
-each with a 5 by 5 grid of 500 by 500 pixel frames.
+resolution of each capture. The default produces 600 captures: six faces,
+each with a 10 by 10 grid of 500 by 500 pixel frames.
 
 After capture, the source mesh is disabled and the scene renders only a
 camera-facing impostor. Its shader selects the dominant cube face and
