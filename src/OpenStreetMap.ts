@@ -20,7 +20,7 @@ import {
 } from "./Geo";
 import { TerrainResult, TileBounds } from "./TerrainTiles";
 
-interface MapTile {
+export interface MapTile {
   x: number;
   y: number;
   zoom: number;
@@ -30,7 +30,7 @@ interface MapTile {
 type LonLat = [number, number];
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
-const LAKE_SHORE_OVERLAP_METERS = 5;
+const LAKE_POLYGON_DILATION_METERS = 20;
 const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
 
 interface MapLayerOptions {
@@ -38,6 +38,14 @@ interface MapLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   lakeElevationSource?: Float32Array;
+  excludeBoundaryWater?: boolean;
+}
+
+export interface MapClipBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
 }
 
 interface RoadSegment {
@@ -98,13 +106,13 @@ export class OpenStreetMap {
   private static readonly TILE_URL = "https://tiles.openfreemap.org/planet/latest";
   private static readonly cache = new Map<string, Promise<VectorTile | undefined>>();
 
-  static async fetch(bounds: TileBounds): Promise<MapTile[]> {
-    const northWest = tileFor(bounds.lonWest, bounds.latNorth, this.ZOOM);
-    const southEast = tileFor(bounds.lonEast, bounds.latSouth, this.ZOOM);
+  static async fetch(bounds: TileBounds, zoom = this.ZOOM): Promise<MapTile[]> {
+    const northWest = tileFor(bounds.lonWest, bounds.latNorth, zoom);
+    const southEast = tileFor(bounds.lonEast, bounds.latSouth, zoom);
     const requests: Array<Promise<MapTile | undefined>> = [];
     for (let x = northWest.x; x <= southEast.x; x++) {
       for (let y = northWest.y; y <= southEast.y; y++) {
-        requests.push(this.fetchTile(x, y, this.ZOOM));
+        requests.push(this.fetchTile(x, y, zoom));
       }
     }
     return (await Promise.all(requests)).filter((tile): tile is MapTile => tile !== undefined);
@@ -139,6 +147,9 @@ export class OpenStreetMap {
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
+          if (options.excludeBoundaryWater && touchesTerrainBoundary(polygon, terrain, options)) {
+            continue;
+          }
           const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
           if (mesh) water.push(mesh);
         }
@@ -148,12 +159,45 @@ export class OpenStreetMap {
     const meshes = [
       merge(buildings, "buildings", new Color3(0.56, 0.53, 0.48), root),
       merge(roads, "roads", new Color3(0.22, 0.22, 0.21), root),
-      merge(water, "inlandWater", new Color3(0.05, 0.32, 0.5), root, 0.82),
+      ...styleWater(water, root),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
     return {
       root,
       meshes,
       counts: { buildings: buildings.length, roads: roads.length, water: water.length },
+    };
+  }
+
+  static createWaterLayer(
+    scene: Scene,
+    tiles: MapTile[],
+    terrain: TerrainResult,
+    options: MapLayerOptions,
+    innerBounds?: MapClipBounds,
+  ): MapFeatureLayer {
+    if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
+    const root = new TransformNode("mapWater", scene);
+    const water: Mesh[] = [];
+
+    for (const tile of tiles) {
+      forEachFeature(tile, "water", (feature) => {
+        if (feature.properties.class === "ocean") return;
+        for (const polygon of polygons(feature, tile)) {
+          const points = polygonScenePoints(polygon, terrain, options);
+          // Lakes wholly owned by the detailed terrain are already rendered there.
+          // A lake touching or crossing its boundary remains one complete vista polygon.
+          if (innerBounds && isStrictlyInsideBounds(points, innerBounds)) continue;
+          const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
+          if (mesh) water.push(mesh);
+        }
+      });
+    }
+
+    const meshes = styleWater(water, root);
+    return {
+      root,
+      meshes,
+      counts: { buildings: 0, roads: 0, water: water.length },
     };
   }
 
@@ -222,6 +266,41 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
   return [];
 }
 
+function polygonScenePoints(
+  coordinates: LonLat[],
+  terrain: TerrainResult,
+  options: MapLayerOptions,
+): Array<{ x: number; z: number }> {
+  return coordinates.map(([lon, lat]) =>
+    lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth)
+  );
+}
+
+function touchesTerrainBoundary(
+  coordinates: LonLat[],
+  terrain: TerrainResult,
+  options: MapLayerOptions,
+): boolean {
+  const halfWidth = options.meshWidth / 2;
+  const halfDepth = options.meshDepth / 2;
+  const epsilon = 1e-5;
+  return polygonScenePoints(coordinates, terrain, options).some((point) =>
+    point.x <= -halfWidth + epsilon || point.x >= halfWidth - epsilon ||
+    point.z <= -halfDepth + epsilon || point.z >= halfDepth - epsilon
+  );
+}
+
+function isStrictlyInsideBounds(
+  points: Array<{ x: number; z: number }>,
+  bounds: MapClipBounds,
+): boolean {
+  const epsilon = 1e-5;
+  return points.length >= 3 && points.every((point) =>
+    point.x > bounds.minX + epsilon && point.x < bounds.maxX - epsilon &&
+    point.z > bounds.minZ + epsilon && point.z < bounds.maxZ - epsilon
+  );
+}
+
 function createPolygon(
   scene: Scene,
   coordinates: LonLat[],
@@ -230,12 +309,17 @@ function createPolygon(
   heightMeters: number,
   isWater = false,
 ): Mesh | undefined {
-  let points = coordinates.map(([lon, lat]) =>
-    lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth),
-  );
+  let points = polygonScenePoints(coordinates, terrain, options);
   if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-  if (isWater) points = offsetPolygon(points, LAKE_SHORE_OVERLAP_METERS / options.metersPerUnit);
-  const clipped = clipPolygon(points, options.meshWidth / 2, options.meshDepth / 2);
+  if (isWater) {
+    points = offsetPolygon(points, LAKE_POLYGON_DILATION_METERS / options.metersPerUnit);
+  }
+  const clipped = clipPolygon(points, {
+    minX: -options.meshWidth / 2,
+    maxX: options.meshWidth / 2,
+    minZ: -options.meshDepth / 2,
+    maxZ: options.meshDepth / 2,
+  });
   if (clipped.length < 3) return undefined;
   if (signedArea(clipped) < 0) clipped.reverse();
   const center = averagePoint(clipped);
@@ -274,8 +358,7 @@ function createPolygon(
   const surfaceElevation = quantile([centerElevation, ...boundaryElevations], 0.25)
     + LAKE_SURFACE_CLEARANCE_METERS;
   const surface = surfaceElevation / options.metersPerUnit;
-  const depth = Math.max(0.1, surface - terrain.minElevation / options.metersPerUnit + 0.1);
-  const mesh = new PolygonMeshBuilder("water", shape, scene, earcut).build(false, depth);
+  const mesh = new PolygonMeshBuilder("water", shape, scene, earcut).build(false);
   mesh.position.y = surface;
   return mesh;
 }
@@ -401,7 +484,7 @@ function pointSegmentDistanceSquared(
   return offsetX * offsetX + offsetZ * offsetZ;
 }
 
-/** Expands a ring so the water overlaps the terrain under the visible shoreline. */
+/** Dilates a polygon ring so lake surfaces overlap shoreline terrain. */
 function offsetPolygon(
   points: Array<{ x: number; z: number }>,
   distance: number,
@@ -444,17 +527,16 @@ function offsetPolygon(
 
 function clipPolygon(
   points: Array<{ x: number; z: number }>,
-  halfWidth: number,
-  halfDepth: number,
+  bounds: MapClipBounds,
 ): Array<{ x: number; z: number }> {
   const edges: Array<{
     inside: (point: { x: number; z: number }) => boolean;
     intersect: (start: { x: number; z: number }, end: { x: number; z: number }) => { x: number; z: number };
   }> = [
-    { inside: (p) => p.x >= -halfWidth, intersect: (a, b) => atX(a, b, -halfWidth) },
-    { inside: (p) => p.x <= halfWidth, intersect: (a, b) => atX(a, b, halfWidth) },
-    { inside: (p) => p.z >= -halfDepth, intersect: (a, b) => atZ(a, b, -halfDepth) },
-    { inside: (p) => p.z <= halfDepth, intersect: (a, b) => atZ(a, b, halfDepth) },
+    { inside: (p) => p.x >= bounds.minX, intersect: (a, b) => atX(a, b, bounds.minX) },
+    { inside: (p) => p.x <= bounds.maxX, intersect: (a, b) => atX(a, b, bounds.maxX) },
+    { inside: (p) => p.z >= bounds.minZ, intersect: (a, b) => atZ(a, b, bounds.minZ) },
+    { inside: (p) => p.z <= bounds.maxZ, intersect: (a, b) => atZ(a, b, bounds.maxZ) },
   ];
   let output = points;
   for (const edge of edges) {
@@ -625,4 +707,18 @@ function merge(
   result.material = meshMaterial;
   result.parent = parent;
   return result;
+}
+
+function styleWater(meshes: Mesh[], parent: TransformNode): Mesh[] {
+  if (meshes.length === 0) return [];
+  const material = new StandardMaterial("inlandWaterMaterial", parent.getScene());
+  material.diffuseColor = new Color3(0.05, 0.32, 0.5);
+  material.specularColor = Color3.Black();
+  material.alpha = 0.82;
+  meshes.forEach((mesh, index) => {
+    mesh.name = `inlandWater-${index}`;
+    mesh.material = material;
+    mesh.parent = parent;
+  });
+  return meshes;
 }

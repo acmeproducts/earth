@@ -57,20 +57,26 @@ The output will be in the `dist/` directory.
 
 Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
 The controls configure the number of samples along each cube-face edge and the
-resolution of each capture. The default produces 600 captures: six faces,
+resolution of each capture. The default produces 500 captures: five faces,
 each with a 10 by 10 grid of 500 by 500 pixel frames.
 
 The source is a deterministic procedural broadleaf built from tapered branches
 and vertex-colored leaf geometry. After capture, that source mesh is disabled and the scene renders only a
 camera-facing impostor. Its shader selects the dominant cube face and
-bilinearly blends the four nearest frames. `Export ZIP` writes the six face
+bilinearly blends the four nearest frames. `Export ZIP` writes the five face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
-The Earth view generates the same tree plus a grass clump procedurally at startup, captures
-it through the same six-face impostor pipeline, and thin-instances it across
-vegetated ESA WorldCover classes. Grass uses a horizontally biased 16 by 4,
-80 px capture by default. `grass-impostor-x-samples`,
+The Earth view generates a tree plus grass and bush clumps procedurally at startup
+and thin-instances them across vegetated ESA WorldCover classes. Trees use the
+five-face impostor pipeline. Grass and bushes are rotationally symmetric, so
+they capture only one side and the top. Tree captures use 10 horizontal
+by 5 vertical samples per face. Each
+tree frame keeps a 500 px height and derives its narrower width from the
+generated tree's bounding box. `tree-impostor-x-samples`,
+`tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
+override those defaults for quality testing. Grass uses an 8 by 8,
+128 px capture by default. `grass-impostor-x-samples`,
 `grass-impostor-y-samples`, and `grass-impostor-resolution` query parameters
 can override those values for quality testing.
 
@@ -80,10 +86,16 @@ WorldCover shrubland with lighter placement in other vegetated classes.
 
 The production view can switch trees, grass, and bushes independently between
 their impostors, automatic distance LOD, and original geometry. Auto mode uses
-a dithered 6 m transition around the configurable model range (10 m by default)
+a dithered 6 m transition around the configurable model range (50 m by default)
 to blend real models into impostors. Press `V` to cycle all three modes. The top-right counter reports
 live FPS and active triangles; use `?vegetation=models` to force every real
 model or `?vegetation-distance=20` to change the initial Auto range.
+
+The landscape extends beyond the detailed player area with a sparse lower-zoom
+terrain ring. The ring uses a coarser WorldCover tint and tree impostors to keep
+the expanded horizon inexpensive while blending into the local terrain.
+The detailed player terrain defaults to slippy-map zoom 14, one wider coverage
+level than the previous zoom 15 default.
 
 
 ## Project Structure
@@ -140,8 +152,10 @@ pnpm build
 
 ### Adding Textures
 
-The normal terrain appearance is isolated in `src/TerrainMaterial.ts`. Place
-texture images in the `public/` folder and assign them in that factory:
+The normal terrain appearance is isolated in `src/TerrainMaterial.ts`. Its
+procedural detail texture is tinted with softly blended ESA WorldCover surface
+colors so vegetated ground visually supports the grass, bush, and tree layers.
+Place texture images in the `public/` folder and assign them in that factory:
 
 ```typescript
 import { Texture } from '@babylonjs/core';
@@ -149,8 +163,8 @@ import { Texture } from '@babylonjs/core';
 material.diffuseTexture = new Texture('/terrain-texture.jpg', scene);
 ```
 
-WorldCover is a debug view toggled with `L`; OpenTopoMap is toggled with `P`.
-Neither debug layer affects the normal terrain material.
+The exact WorldCover classification debug view is toggled with `L`;
+OpenTopoMap is toggled with `P`.
 
 ### Modifying the Scene
 

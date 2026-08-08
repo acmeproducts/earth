@@ -17,13 +17,19 @@ import {
 
 export interface ImpostorAssets {
   textures: DynamicTexture[];
+  rotationallySymmetric: boolean;
+  rotationalSymmetryOrder: number;
   gridWidth: number;
   gridHeight: number;
   /** Square-grid compatibility for the tree capture validation tools. */
   gridSize: number;
   resolution: number;
+  resolutionWidth: number;
+  resolutionHeight: number;
   sourceHeight: number;
   captureDiameter: number;
+  captureWidth: number;
+  captureHeight: number;
 }
 
 export type TreeImpostorAssets = ImpostorAssets;
@@ -34,8 +40,15 @@ export interface ImpostorCaptureOptions {
   gridWidth: number;
   gridHeight: number;
   resolution: number;
+  resolutionWidth?: number;
+  resolutionHeight?: number;
   sourceHeight: number;
   captureDiameter: number;
+  captureWidth?: number;
+  captureHeight?: number;
+  faces?: readonly CubeFace[];
+  rotationallySymmetric?: boolean;
+  rotationalSymmetryOrder?: number;
 }
 
 export interface CubeFace {
@@ -48,39 +61,80 @@ export const TREE_IMPOSTOR_FACES: CubeFace[] = [
   { normal: new Vector3(1, 0, 0), right: new Vector3(0, 0, -1), up: new Vector3(0, 1, 0) },
   { normal: new Vector3(-1, 0, 0), right: new Vector3(0, 0, 1), up: new Vector3(0, 1, 0) },
   { normal: new Vector3(0, 1, 0), right: new Vector3(1, 0, 0), up: new Vector3(0, 0, -1) },
-  { normal: new Vector3(0, -1, 0), right: new Vector3(1, 0, 0), up: new Vector3(0, 0, 1) },
   { normal: new Vector3(0, 0, 1), right: new Vector3(1, 0, 0), up: new Vector3(0, 1, 0) },
   { normal: new Vector3(0, 0, -1), right: new Vector3(-1, 0, 0), up: new Vector3(0, 1, 0) },
 ];
 
-const sceneAssets = new WeakMap<Scene, Promise<TreeImpostorAssets>>();
+/** One side and the top are sufficient for sources symmetric around the Y axis. */
+export const SYMMETRIC_IMPOSTOR_FACES: CubeFace[] = [
+  TREE_IMPOSTOR_FACES[0],
+  TREE_IMPOSTOR_FACES[2],
+];
 
-/** Generates and captures the tree once, then shares its atlases across the scene. */
+const sceneAssets = new WeakMap<Scene, Map<string, Promise<TreeImpostorAssets>>>();
+
+/** Shares one tree atlas capture per scene and capture-attribute combination. */
 export function getTreeImpostorAssets(
   scene: Scene,
-  gridSize = queryNumber("impostor-grid", 10, 1, 16),
-  resolution = queryNumber("impostor-resolution", 500, 64, 1024),
+  horizontalSamples = queryNumber("tree-impostor-x-samples", 10, 1, 16),
+  verticalSamples = queryNumber("tree-impostor-y-samples", 5, 1, 10),
+  resolutionHeight = queryNumber("tree-impostor-resolution", 500, 64, 1024),
 ): Promise<TreeImpostorAssets> {
-  const existing = sceneAssets.get(scene);
+  let cache = sceneAssets.get(scene);
+  if (!cache) {
+    cache = new Map();
+    sceneAssets.set(scene, cache);
+  }
+  const key = impostorAttributeKey(horizontalSamples, verticalSamples, resolutionHeight);
+  const existing = cache.get(key);
   if (existing) return existing;
-  const capture = captureTree(scene, gridSize, resolution);
-  sceneAssets.set(scene, capture);
+  const capture = captureTree(
+    scene,
+    horizontalSamples,
+    verticalSamples,
+    resolutionHeight,
+  );
+  cache.set(key, capture);
+  capture.catch(() => {
+    if (cache.get(key) === capture) cache.delete(key);
+  });
   return capture;
 }
 
-async function captureTree(scene: Scene, gridSize: number, resolution: number): Promise<TreeImpostorAssets> {
+export function impostorAttributeKey(...attributes: number[]): string {
+  return attributes.map((attribute) => `${attribute}`).join(":");
+}
+
+async function captureTree(
+  scene: Scene,
+  horizontalSamples: number,
+  verticalSamples: number,
+  resolutionHeight: number,
+): Promise<TreeImpostorAssets> {
   const source = createProceduralTree(scene);
   await scene.whenReadyAsync();
+  source.refreshBoundingInfo();
+  const bounds = source.getBoundingInfo().boundingBox;
+  const size = bounds.maximumWorld.subtract(bounds.minimumWorld);
+  const captureWidth = Math.max(size.x, size.z) * 1.04;
+  const captureHeight = size.y * 1.04;
+  const resolutionWidth = Math.max(64, Math.round(
+    resolutionHeight * captureWidth / captureHeight,
+  ));
 
   try {
     const assets = await captureImpostorAtlases(scene, {
       name: "treeImpostor",
       meshes: [source],
-      gridWidth: gridSize,
-      gridHeight: gridSize,
-      resolution,
+      gridWidth: horizontalSamples,
+      gridHeight: verticalSamples,
+      resolution: resolutionHeight,
+      resolutionWidth,
+      resolutionHeight,
       sourceHeight: PROCEDURAL_TREE_SOURCE_HEIGHT,
       captureDiameter: PROCEDURAL_TREE_CAPTURE_DIAMETER,
+      captureWidth,
+      captureHeight,
     });
     console.log("Tree impostor: capture complete; procedural source disposed");
     return assets;
@@ -90,8 +144,14 @@ async function captureTree(scene: Scene, gridSize: number, resolution: number): 
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */
-export async function createTreeModels(scene: Scene, renderHeight: number): Promise<Mesh[]> {
-  const tree = createProceduralTree(scene, { name: "treeModels", liveLighting: true });
+export async function createTreeModels(
+  scene: Scene,
+  renderHeight: number,
+): Promise<Mesh[]> {
+  const tree = createProceduralTree(scene, {
+    name: "treeModels",
+    liveLighting: true,
+  });
   const positions = tree.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Procedural tree has no position data.");
 
@@ -106,7 +166,7 @@ export async function createTreeModels(scene: Scene, renderHeight: number): Prom
   return [tree];
 }
 
-/** Captures any prepared, origin-centered source into six directional atlases. */
+/** Captures an origin-centered source into the requested directional atlases. */
 export async function captureImpostorAtlases(
   scene: Scene,
   options: ImpostorCaptureOptions,
@@ -117,11 +177,18 @@ export async function captureImpostorAtlases(
     gridWidth,
     gridHeight,
     resolution,
+    resolutionWidth = resolution,
+    resolutionHeight = resolution,
     sourceHeight,
     captureDiameter,
+    captureWidth = captureDiameter,
+    captureHeight = captureDiameter,
+    faces = TREE_IMPOSTOR_FACES,
+    rotationallySymmetric = false,
+    rotationalSymmetryOrder = 0,
   } = options;
-  const atlasWidth = gridWidth * resolution;
-  const atlasHeight = gridHeight * resolution;
+  const atlasWidth = gridWidth * resolutionWidth;
+  const atlasHeight = gridHeight * resolutionHeight;
   const maxTextureSize = scene.getEngine().getCaps().maxTextureSize;
   if (atlasWidth > maxTextureSize || atlasHeight > maxTextureSize) {
     throw new Error(
@@ -129,11 +196,11 @@ export async function captureImpostorAtlases(
     );
   }
   console.log(
-    `${name}: capturing ${6 * gridWidth * gridHeight} views ` +
-    `(${gridWidth}x${gridHeight} per face) at ${resolution}x${resolution}`,
+    `${name}: capturing ${faces.length * gridWidth * gridHeight} views ` +
+    `(${gridWidth}x${gridHeight} per face) at ${resolutionWidth}x${resolutionHeight}`,
   );
 
-  const canvases = TREE_IMPOSTOR_FACES.map(() => {
+  const canvases = faces.map(() => {
     const canvas = document.createElement("canvas");
     canvas.width = atlasWidth;
     canvas.height = atlasHeight;
@@ -143,11 +210,15 @@ export async function captureImpostorAtlases(
   camera.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
   camera.minZ = 0.01;
   camera.maxZ = captureDiameter * 4;
-  camera.orthoLeft = -captureDiameter / 2;
-  camera.orthoRight = captureDiameter / 2;
-  camera.orthoTop = captureDiameter / 2;
-  camera.orthoBottom = -captureDiameter / 2;
-  const target = new RenderTargetTexture(`${name}CaptureTarget`, resolution, scene, false, false);
+  camera.orthoLeft = -captureWidth / 2;
+  camera.orthoRight = captureWidth / 2;
+  const target = new RenderTargetTexture(
+    `${name}CaptureTarget`,
+    { width: resolutionWidth, height: resolutionHeight },
+    scene,
+    false,
+    false,
+  );
   target.clearColor = new Color4(0, 0, 0, 0);
   target.renderList = meshes;
   target.activeCamera = camera;
@@ -156,9 +227,12 @@ export async function captureImpostorAtlases(
   const activeCamera = scene.activeCamera;
 
   try {
-    for (let faceIndex = 0; faceIndex < TREE_IMPOSTOR_FACES.length; faceIndex++) {
-      const face = TREE_IMPOSTOR_FACES[faceIndex];
+    for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
+      const face = faces[faceIndex];
       const context = canvases[faceIndex].getContext("2d", { alpha: true })!;
+      const verticalSpan = Math.abs(face.normal.y) > 0.5 ? captureWidth : captureHeight;
+      camera.orthoTop = verticalSpan / 2;
+      camera.orthoBottom = -verticalSpan / 2;
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
           const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
@@ -171,7 +245,11 @@ export async function captureImpostorAtlases(
           target.render(true);
           const pixels = await target.readPixels();
           if (!pixels) throw new Error(`${name} GPU readback failed.`);
-          context.putImageData(binaryImage(pixels, resolution, context), x * resolution, y * resolution);
+          context.putImageData(
+            binaryImage(pixels, resolutionWidth, resolutionHeight, context),
+            x * resolutionWidth,
+            y * resolutionHeight,
+          );
           await nextFrame();
         }
       }
@@ -199,23 +277,34 @@ export async function captureImpostorAtlases(
   });
   return {
     textures,
+    rotationallySymmetric,
+    rotationalSymmetryOrder,
     gridWidth,
     gridHeight,
     gridSize: gridWidth,
-    resolution,
+    resolution: resolutionHeight,
+    resolutionWidth,
+    resolutionHeight,
     sourceHeight,
     captureDiameter,
+    captureWidth,
+    captureHeight,
   };
 }
 
-function binaryImage(pixels: ArrayBufferView, size: number, context: CanvasRenderingContext2D): ImageData {
+function binaryImage(
+  pixels: ArrayBufferView,
+  width: number,
+  height: number,
+  context: CanvasRenderingContext2D,
+): ImageData {
   const input = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-  const output = context.createImageData(size, size);
-  for (let y = 0; y < size; y++) {
-    const sourceY = size - 1 - y;
-    for (let x = 0; x < size; x++) {
-      const source = (sourceY * size + x) * 4;
-      const destination = (y * size + x) * 4;
+  const output = context.createImageData(width, height);
+  for (let y = 0; y < height; y++) {
+    const sourceY = height - 1 - y;
+    for (let x = 0; x < width; x++) {
+      const source = (sourceY * width + x) * 4;
+      const destination = (y * width + x) * 4;
       const alpha = input[source + 3] >= 128 ? 255 : 0;
       output.data[destination] = alpha ? input[source] : 0;
       output.data[destination + 1] = alpha ? input[source + 1] : 0;

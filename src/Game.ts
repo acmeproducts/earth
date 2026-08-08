@@ -21,16 +21,20 @@ import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
 import { sceneToLonLat } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
-import { landCoverColor, WorldCover } from "./WorldCover";
+import { landCoverColor, landCoverSurfaceColor, WorldCover } from "./WorldCover";
 import { createTerrainMaterial } from "./TerrainMaterial";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
 import { VegetationFieldResult, VegetationRenderMode } from "./VegetationField";
 import {
+  DEFAULT_MODEL_RANGE_METERS,
+  MAX_MODEL_RANGE_METERS,
+  MIN_MODEL_RANGE_METERS,
   VegetationCategory,
   VegetationControls,
   VegetationModes,
 } from "./VegetationControls";
+import { DistantVista } from "./DistantVista";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 const VEGETATION_LOD_UPDATE_MS = 100;
@@ -38,9 +42,11 @@ const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
 const WHEEL_NOTCH_PIXELS = 100;
+const GROUND_COVER_BLEND_METERS = 12;
 
 interface TerrainMetadata {
   worldCoverColors?: Float32Array;
+  surfaceColors?: Float32Array;
 }
 
 export class Game {
@@ -54,7 +60,9 @@ export class Game {
   private bushField?: VegetationFieldResult;
   private mapFeatures?: TransformNode;
   private terrainData?: TerrainResult;
-  private terrainZoom = 15;
+  // Slippy-map zoom numbers run opposite to ground coverage: 14 is one wider
+  // level than 15 and gives the player a larger detailed area.
+  private terrainZoom = 14;
   private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
   private terrainLocationIndex = 0;
@@ -67,6 +75,7 @@ export class Game {
   private lastVegetationCameraPosition?: Vector3;
   private flyCamera?: UniversalCamera;
   private flySpeedOutput?: HTMLOutputElement;
+  private distantVista?: DistantVista;
 
   private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
     if (!this.flyCamera || event.deltaY === 0) return;
@@ -105,10 +114,11 @@ export class Game {
       ? requestedMode
       : "auto";
     this.vegetationModes = { trees: initialMode, grass: initialMode, bushes: initialMode };
-    const requestedDistance = Number(query.get("vegetation-distance"));
-    this.vegetationLodDistanceMeters = Number.isFinite(requestedDistance)
-      ? Math.max(2, Math.min(50, requestedDistance))
-      : 10;
+    const requestedDistance = query.get("vegetation-distance");
+    const parsedDistance = Number(requestedDistance);
+    this.vegetationLodDistanceMeters = requestedDistance !== null && Number.isFinite(parsedDistance)
+      ? Math.max(MIN_MODEL_RANGE_METERS, Math.min(MAX_MODEL_RANGE_METERS, parsedDistance))
+      : DEFAULT_MODEL_RANGE_METERS;
   }
 
   async initialize(): Promise<void> {
@@ -178,7 +188,32 @@ export class Game {
     if (requestId !== this.terrainRequestId) return;
     if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
 
-    const [landCover, mapWays] = await Promise.all([
+    const distantTerrainPromise = TerrainTiles.fetchTileAtLocation(
+      location.lat,
+      location.lon,
+      Math.max(1, zoom - 3),
+    ).then(async (terrain) => {
+      const lakeElevationSource = terrain.elevations.slice();
+      if (!terrain.bounds) {
+        return { terrain, landCover: undefined, mapWays: [], lakeElevationSource };
+      }
+      const [distantLandCover, distantMapWays] = await Promise.all([
+        WorldCover.fetch(terrain.bounds, 12).catch((error: unknown) => {
+            console.warn("Distant WorldCover unavailable; vista vegetation was skipped.", error);
+            return undefined;
+          }),
+        OpenStreetMap.fetch(terrain.bounds, 12).catch((error: unknown) => {
+            console.warn("Distant OpenStreetMap unavailable; vista lakes were skipped.", error);
+            return [];
+          }),
+      ]);
+      distantLandCover?.constrainElevations(terrain);
+      return { terrain, landCover: distantLandCover, mapWays: distantMapWays, lakeElevationSource };
+    }).catch((error: unknown) => {
+      console.warn("Distant terrain unavailable; the terrain ring was skipped.", error);
+      return undefined;
+    });
+    const [landCover, mapWays, distantScene] = await Promise.all([
       WorldCover.fetch(terrainData.bounds).catch((error: unknown) => {
         console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
         return undefined;
@@ -187,6 +222,7 @@ export class Game {
         console.warn("OpenStreetMap unavailable; map features were skipped.", error);
         return [];
       }),
+      distantTerrainPromise,
     ]);
     if (requestId !== this.terrainRequestId) return;
     const lakeElevationSource = terrainData.elevations.slice();
@@ -202,7 +238,13 @@ export class Game {
     const groundHeight = terrainData.groundHeightMeters ?? 1000;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
-    const mapOptions = { meshWidth, meshDepth, metersPerUnit, lakeElevationSource };
+    const mapOptions = {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+      lakeElevationSource,
+      excludeBoundaryWater: true,
+    };
     const roadExclusionMask = OpenStreetMap.createRoadExclusionMask(
       mapWays,
       terrainData,
@@ -303,6 +345,29 @@ export class Game {
       height: meshDepth,
     });
 
+    const distantVista = distantScene
+      ? await DistantVista.create(this.scene, distantScene.terrain, {
+          localTerrain: terrainData,
+          localMeshWidth: meshWidth,
+          localMeshDepth: meshDepth,
+          metersPerUnit,
+          distantLandCover: distantScene.landCover,
+          localLandCover: landCover,
+          mapTiles: distantScene.mapWays,
+          lakeElevationSource: distantScene.lakeElevationSource,
+          waterMesh: water,
+        })
+      : undefined;
+    if (requestId !== this.terrainRequestId) {
+      terrain.dispose(false, true);
+      water.dispose(false, true);
+      treeField.root.dispose(false, false);
+      grassField.root.dispose(false, false);
+      bushField.root.dispose(false, false);
+      mapFeatures.root.dispose(false, true);
+      distantVista?.dispose();
+      return;
+    }
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
     // Impostor atlases are cached and shared by every rebuilt vegetation field.
@@ -310,12 +375,14 @@ export class Game {
     this.grassField?.root.dispose(false, false);
     this.bushField?.root.dispose(false, false);
     this.mapFeatures?.dispose(false, true);
+    this.distantVista?.dispose();
     this.terrain = terrain;
     this.water = water;
     this.treeField = treeField;
     this.grassField = grassField;
     this.bushField = bushField;
     this.mapFeatures = mapFeatures.root;
+    this.distantVista = distantVista;
     this.terrainData = terrainData;
     this.updateVegetationLod(true);
 
@@ -324,7 +391,6 @@ export class Game {
       terrain,
       ...mapFeatures.meshes,
     ]);
-
     await this.applyTerrainLayer(requestId);
   }
 
@@ -523,6 +589,9 @@ export class Game {
     const worldCoverColors = landCover && terrain.bounds
       ? new Float32Array((positions.length / 3) * 4)
       : undefined;
+    const surfaceColors = landCover && terrain.bounds
+      ? new Float32Array((positions.length / 3) * 4)
+      : undefined;
 
     for (let row = 0; row < vPerRow; row++) {
       for (let col = 0; col < vPerRow; col++) {
@@ -562,14 +631,34 @@ export class Game {
             meshWidth,
             meshDepth,
           );
-          const [red, green, blue] = landCoverColor(landCover.sample(lon, lat));
+          const coverClass = landCover.sample(lon, lat);
+          const [red, green, blue] = landCoverColor(coverClass);
+          const [surfaceRed, surfaceGreen, surfaceBlue] = landCoverSurfaceColor(
+            coverClass,
+          );
           const colorIndex = vertexIndex * 4;
           worldCoverColors[colorIndex] = red;
           worldCoverColors[colorIndex + 1] = green;
           worldCoverColors[colorIndex + 2] = blue;
           worldCoverColors[colorIndex + 3] = 1;
+          surfaceColors![colorIndex] = surfaceRed;
+          surfaceColors![colorIndex + 1] = surfaceGreen;
+          surfaceColors![colorIndex + 2] = surfaceBlue;
+          surfaceColors![colorIndex + 3] = 1;
         }
       }
+    }
+
+    if (surfaceColors) {
+      const metersPerVertex = Math.min(
+        (terrain.groundWidthMeters ?? meshWidth * metersPerUnit) / subdivisions,
+        (terrain.groundHeightMeters ?? meshDepth * metersPerUnit) / subdivisions,
+      );
+      smoothVertexColors(
+        surfaceColors,
+        vPerRow,
+        Math.max(1, Math.round(GROUND_COVER_BLEND_METERS / metersPerVertex)),
+      );
     }
 
     // Recompute normals for correct lighting after modifying heights
@@ -577,7 +666,7 @@ export class Game {
     VertexData.ComputeNormals(positions, indices, normals);
     ground.updateVerticesData(VertexBuffer.PositionKind, positions);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
-    ground.metadata = { worldCoverColors } satisfies TerrainMetadata;
+    ground.metadata = { worldCoverColors, surfaceColors } satisfies TerrainMetadata;
 
     this.applyDefaultTerrainMaterial(ground);
 
@@ -586,8 +675,14 @@ export class Game {
 
   private applyDefaultTerrainMaterial(terrain: Mesh): void {
     terrain.material?.dispose(true, true);
-    terrain.removeVerticesData(VertexBuffer.ColorKind);
-    terrain.material = createTerrainMaterial(this.scene);
+    const colors = (terrain.metadata as TerrainMetadata | null)?.surfaceColors;
+    if (colors) {
+      terrain.setVerticesData(VertexBuffer.ColorKind, colors);
+      terrain.useVertexColors = true;
+    } else {
+      terrain.removeVerticesData(VertexBuffer.ColorKind);
+    }
+    terrain.material = createTerrainMaterial(this.scene, Boolean(colors));
   }
 
   private applyWorldCoverDebugMaterial(terrain: Mesh): void {
@@ -600,9 +695,48 @@ export class Game {
 
     terrain.material?.dispose(true, true);
     terrain.setVerticesData(VertexBuffer.ColorKind, colors);
+    terrain.useVertexColors = true;
     const material = new StandardMaterial("worldCoverDebugMaterial", this.scene);
     material.diffuseColor = Color3.White();
     material.specularColor = new Color3(0.1, 0.1, 0.1);
     terrain.material = material;
+  }
+}
+
+function smoothVertexColors(colors: Float32Array, rowSize: number, radius: number): void {
+  const horizontal = new Float32Array(colors.length);
+  const vertexCount = colors.length / 4;
+
+  for (let row = 0; row < rowSize; row++) {
+    for (let column = 0; column < rowSize; column++) {
+      const target = (row * rowSize + column) * 4;
+      const start = Math.max(0, column - radius);
+      const end = Math.min(rowSize - 1, column + radius);
+      const count = end - start + 1;
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        for (let sample = start; sample <= end; sample++) {
+          sum += colors[(row * rowSize + sample) * 4 + channel];
+        }
+        horizontal[target + channel] = sum / count;
+      }
+      horizontal[target + 3] = 1;
+    }
+  }
+
+  for (let index = 0; index < vertexCount; index++) {
+    const row = Math.floor(index / rowSize);
+    const column = index % rowSize;
+    const start = Math.max(0, row - radius);
+    const end = Math.min(rowSize - 1, row + radius);
+    const count = end - start + 1;
+    for (let channel = 0; channel < 3; channel++) {
+      let sum = 0;
+      for (let sample = start; sample <= end; sample++) {
+        sum += horizontal[(sample * rowSize + column) * 4 + channel];
+      }
+      colors[index * 4 + channel] = sum / count;
+    }
+    colors[index * 4 + 3] = 1;
   }
 }

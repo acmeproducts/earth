@@ -43,7 +43,6 @@ const CUBE_FACES: CubeFace[] = [
   { name: "pos-x", normal: new Vector3(1, 0, 0), right: new Vector3(0, 0, -1), up: new Vector3(0, 1, 0) },
   { name: "neg-x", normal: new Vector3(-1, 0, 0), right: new Vector3(0, 0, 1), up: new Vector3(0, 1, 0) },
   { name: "pos-y", normal: new Vector3(0, 1, 0), right: new Vector3(1, 0, 0), up: new Vector3(0, 0, -1) },
-  { name: "neg-y", normal: new Vector3(0, -1, 0), right: new Vector3(1, 0, 0), up: new Vector3(0, 0, 1) },
   { name: "pos-z", normal: new Vector3(0, 0, 1), right: new Vector3(1, 0, 0), up: new Vector3(0, 1, 0) },
   { name: "neg-z", normal: new Vector3(0, 0, -1), right: new Vector3(-1, 0, 0), up: new Vector3(0, 1, 0) },
 ];
@@ -72,7 +71,6 @@ uniform sampler2D atlas1;
 uniform sampler2D atlas2;
 uniform sampler2D atlas3;
 uniform sampler2D atlas4;
-uniform sampler2D atlas5;
 uniform vec2 samplePosition;
 uniform float gridSize;
 uniform float faceIndex;
@@ -83,8 +81,7 @@ vec4 atlasSample(vec2 uv) {
   if (faceIndex < 1.5) return texture2D(atlas1, uv);
   if (faceIndex < 2.5) return texture2D(atlas2, uv);
   if (faceIndex < 3.5) return texture2D(atlas3, uv);
-  if (faceIndex < 4.5) return texture2D(atlas4, uv);
-  return texture2D(atlas5, uv);
+  return texture2D(atlas4, uv);
 }
 
 vec4 frame(float x, float y) {
@@ -193,7 +190,7 @@ export class TreeImpostorDemo {
     target.samples = 1;
 
     const previousCamera = this.scene.activeCamera;
-    const total = 6 * settings.gridSize * settings.gridSize;
+    const total = CUBE_FACES.length * settings.gridSize * settings.gridSize;
     let completed = 0;
     try {
       for (let faceIndex = 0; faceIndex < CUBE_FACES.length; faceIndex++) {
@@ -237,7 +234,7 @@ export class TreeImpostorDemo {
     this.captureSet = { atlases, textures, settings };
     this.createProxy();
     this.sourceRoot.setEnabled(false);
-    this.drawPreview(atlases[4]);
+    this.drawPreview(atlases[3]);
     this.setStatus(`Done. ${total} binary-alpha captures; source mesh is now disabled.`);
   }
 
@@ -266,7 +263,7 @@ export class TreeImpostorDemo {
     this.proxyMaterial = new ShaderMaterial("treeImpostorMaterial", this.scene, { vertexSource: vertexShader, fragmentSource: fragmentShader }, {
       attributes: ["position", "uv"],
       uniforms: ["worldViewProjection", "viewProjection", "center", "billboardRight", "billboardUp", "diameter", "samplePosition", "gridSize", "faceIndex", "tileInset"],
-      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "atlas5"],
+      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
       needAlphaBlending: true,
     });
     this.proxyMaterial.backFaceCulling = false;
@@ -348,7 +345,7 @@ export class TreeImpostorDemo {
     }
     const manifest = {
       version: 1,
-      layout: "six-face-atlases",
+      layout: "five-face-atlases",
       gridSize: this.captureSet.settings.gridSize,
       resolution: this.captureSet.settings.resolution,
       alpha: "binary",
@@ -376,9 +373,9 @@ function dominantFace(direction: Vector3): number {
   const x = Math.abs(direction.x);
   const y = Math.abs(direction.y);
   const z = Math.abs(direction.z);
-  if (x >= y && x >= z) return direction.x >= 0 ? 0 : 1;
-  if (y >= x && y >= z) return direction.y >= 0 ? 2 : 3;
-  return direction.z >= 0 ? 4 : 5;
+  if (direction.y >= 0 && y >= x && y >= z) return 2;
+  if (x >= z) return direction.x >= 0 ? 0 : 1;
+  return direction.z >= 0 ? 3 : 4;
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {

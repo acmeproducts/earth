@@ -8,7 +8,9 @@ import {
 import {
   captureImpostorAtlases,
   ImpostorAssets,
+  impostorAttributeKey,
   queryNumber,
+  SYMMETRIC_IMPOSTOR_FACES,
 } from "./TreeImpostor";
 import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 
@@ -23,20 +25,29 @@ const GRASS_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.22, 0.4, 0.065), new Color3(0.58, 0.81, 0.18)],
   [new Color3(0.32, 0.3, 0.09), new Color3(0.72, 0.65, 0.22)],
 ];
-const sceneAssets = new WeakMap<Scene, Promise<GrassImpostorAssets>>();
+const sceneAssets = new WeakMap<Scene, Map<string, Promise<GrassImpostorAssets>>>();
 
-/** Generates a grass clump and captures it once for every field in the scene. */
+/** Shares one grass atlas capture per scene and capture-attribute combination. */
 export function getGrassImpostorAssets(
   scene: Scene,
-  horizontalSamples = queryNumber("grass-impostor-x-samples", 16, 1, 24),
-  verticalSamples = queryNumber("grass-impostor-y-samples", 4, 1, 12),
-  resolution = queryNumber("grass-impostor-resolution", 80, 48, 512),
+  horizontalSamples = queryNumber("grass-impostor-x-samples", 8, 1, 24),
+  verticalSamples = queryNumber("grass-impostor-y-samples", 8, 1, 12),
+  resolution = queryNumber("grass-impostor-resolution", 128, 48, 512),
 ): Promise<GrassImpostorAssets> {
-  const existing = sceneAssets.get(scene);
+  let cache = sceneAssets.get(scene);
+  if (!cache) {
+    cache = new Map();
+    sceneAssets.set(scene, cache);
+  }
+  const key = impostorAttributeKey(horizontalSamples, verticalSamples, resolution);
+  const existing = cache.get(key);
   if (existing) return existing;
 
   const capture = captureGrass(scene, horizontalSamples, verticalSamples, resolution);
-  sceneAssets.set(scene, capture);
+  cache.set(key, capture);
+  capture.catch(() => {
+    if (cache.get(key) === capture) cache.delete(key);
+  });
   return capture;
 }
 
@@ -58,6 +69,9 @@ async function captureGrass(
       resolution,
       sourceHeight: SOURCE_HEIGHT,
       captureDiameter: CAPTURE_DIAMETER,
+      faces: SYMMETRIC_IMPOSTOR_FACES,
+      rotationallySymmetric: true,
+      rotationalSymmetryOrder: 4,
     });
     console.log("Grass impostor: capture complete; procedural source disposed");
     return assets;
@@ -75,19 +89,14 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
   const segments = 5;
   // Blade density is baked into the atlas, so it does not increase field draw cost.
   const bladeCount = 2800;
+  const symmetryOrder = 8;
+  const sectorAngle = Math.PI * 2 / symmetryOrder;
 
-  for (let blade = 0; blade < bladeCount; blade++) {
-    const vertexStart = positions.length / 3;
-    const baseAngle = random() * Math.PI * 2;
-    const edgeRadius = 2.5
-      + Math.sin(baseAngle * 3 + 0.7) * 0.26
-      + Math.sin(baseAngle * 7 + 1.9) * 0.14;
+  for (let blade = 0; blade < bladeCount / symmetryOrder; blade++) {
+    const baseAngle = random() * sectorAngle;
+    const edgeRadius = 2.5 + (random() - 0.5) * 0.38;
     const radius = Math.sqrt(random()) * edgeRadius;
-    const baseX = Math.cos(baseAngle) * radius;
-    const baseZ = Math.sin(baseAngle) * radius;
     const bladeAngle = random() * Math.PI * 2;
-    const sideX = Math.cos(bladeAngle);
-    const sideZ = Math.sin(bladeAngle);
     const bendAngle = baseAngle + (random() - 0.5) * 1.8;
     const edgeScale = 1 - 0.24 * Math.pow(radius / edgeRadius, 2);
     const height = (0.18 + Math.pow(random(), 0.7) * 0.42) * edgeScale;
@@ -99,34 +108,47 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
       : Math.floor(random() * (GRASS_PALETTES.length - 1));
     const [baseColor, tipColor] = GRASS_PALETTES[paletteIndex];
     const brightness = 0.86 + random() * 0.34;
+    const colorVariation = Array.from({ length: segments + 1 }, () => random());
 
-    for (let segment = 0; segment <= segments; segment++) {
-      const t = segment / segments;
-      const taper = Math.max(0.04, 1 - t * t);
-      const curve = bend * t * t;
-      const centerX = baseX + Math.cos(bendAngle) * curve;
-      const centerZ = baseZ + Math.sin(bendAngle) * curve;
-      const centerY = -SOURCE_HEIGHT / 2 + height * t;
-      const halfWidth = width * taper;
-      const colorT = t * (0.72 + random() * 0.12);
-      const red = Math.min(1, (baseColor.r + (tipColor.r - baseColor.r) * colorT) * brightness);
-      const green = Math.min(1, (baseColor.g + (tipColor.g - baseColor.g) * colorT) * brightness);
-      const blue = Math.min(1, (baseColor.b + (tipColor.b - baseColor.b) * colorT) * brightness);
+    for (let copy = 0; copy < symmetryOrder; copy++) {
+      const rotation = copy * sectorAngle;
+      const rotatedBaseAngle = baseAngle + rotation;
+      const rotatedBladeAngle = bladeAngle + rotation;
+      const rotatedBendAngle = bendAngle + rotation;
+      const baseX = Math.cos(rotatedBaseAngle) * radius;
+      const baseZ = Math.sin(rotatedBaseAngle) * radius;
+      const sideX = Math.cos(rotatedBladeAngle);
+      const sideZ = Math.sin(rotatedBladeAngle);
+      const vertexStart = positions.length / 3;
 
-      positions.push(
-        centerX - sideX * halfWidth,
-        centerY,
-        centerZ - sideZ * halfWidth,
-        centerX + sideX * halfWidth,
-        centerY,
-        centerZ + sideZ * halfWidth,
-      );
-      colors.push(red, green, blue, 1, red, green, blue, 1);
-    }
+      for (let segment = 0; segment <= segments; segment++) {
+        const t = segment / segments;
+        const taper = Math.max(0.04, 1 - t * t);
+        const curve = bend * t * t;
+        const centerX = baseX + Math.cos(rotatedBendAngle) * curve;
+        const centerZ = baseZ + Math.sin(rotatedBendAngle) * curve;
+        const centerY = -SOURCE_HEIGHT / 2 + height * t;
+        const halfWidth = width * taper;
+        const colorT = t * (0.72 + colorVariation[segment] * 0.12);
+        const red = Math.min(1, (baseColor.r + (tipColor.r - baseColor.r) * colorT) * brightness);
+        const green = Math.min(1, (baseColor.g + (tipColor.g - baseColor.g) * colorT) * brightness);
+        const blue = Math.min(1, (baseColor.b + (tipColor.b - baseColor.b) * colorT) * brightness);
 
-    for (let segment = 0; segment < segments; segment++) {
-      const left = vertexStart + segment * 2;
-      indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
+        positions.push(
+          centerX - sideX * halfWidth,
+          centerY,
+          centerZ - sideZ * halfWidth,
+          centerX + sideX * halfWidth,
+          centerY,
+          centerZ + sideZ * halfWidth,
+        );
+        colors.push(red, green, blue, 1, red, green, blue, 1);
+      }
+
+      for (let segment = 0; segment < segments; segment++) {
+        const left = vertexStart + segment * 2;
+        indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
+      }
     }
   }
 

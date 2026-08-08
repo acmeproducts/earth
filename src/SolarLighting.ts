@@ -12,13 +12,14 @@ import {
 import { SkyMaterial } from "@babylonjs/materials";
 import * as SunCalc from "suncalc";
 
-const SUN_DISTANCE = 500;
+const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
 const UPDATE_INTERVAL_MS = 60_000;
 
 /** Keeps the visible sun and scene lighting aligned with the real sky. */
 export class SolarLighting {
-  readonly sunMesh: Mesh;
+  private readonly skyMesh: Mesh;
+  private readonly sunMesh: Mesh;
 
   private readonly scene: Scene;
   private readonly directLight: DirectionalLight;
@@ -55,13 +56,13 @@ export class SolarLighting {
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
 
-    const sky = MeshBuilder.CreateSphere(
+    this.skyMesh = MeshBuilder.CreateSphere(
       "sky",
       { diameter: SUN_DISTANCE * 1.8, segments: 32 },
       scene,
     );
-    sky.isPickable = false;
-    sky.infiniteDistance = true;
+    this.skyMesh.isPickable = false;
+    this.skyMesh.infiniteDistance = true;
     this.skyMaterial = new SkyMaterial("skyMaterial", scene);
     this.skyMaterial.backFaceCulling = false;
     this.skyMaterial.useSunPosition = true;
@@ -69,7 +70,7 @@ export class SolarLighting {
     this.skyMaterial.rayleigh = 2.2;
     this.skyMaterial.mieCoefficient = 0.008;
     this.skyMaterial.mieDirectionalG = 0.82;
-    sky.material = this.skyMaterial;
+    this.skyMesh.material = this.skyMaterial;
 
     const radius = Math.tan(SUN_ANGULAR_RADIUS) * SUN_DISTANCE;
     this.sunMesh = MeshBuilder.CreateSphere(

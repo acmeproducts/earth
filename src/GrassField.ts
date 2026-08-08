@@ -76,6 +76,7 @@ export async function createGrassField(
     assets,
     grassHeight,
     captureSize,
+    captureSize,
     "grassImpostorMaterial",
   );
   root.onDisposeObservable.add(() => material.dispose(false, false));

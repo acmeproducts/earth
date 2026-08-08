@@ -34,7 +34,7 @@ interface GeometryValidation {
   passed: boolean;
 }
 
-const FACE_NAMES = ["pos-x", "neg-x", "pos-y", "neg-y", "pos-z", "neg-z"];
+const FACE_NAMES = ["pos-x", "neg-x", "pos-y", "pos-z", "neg-z"];
 
 /** Pixel-validates the production cube against the generated atlas center frames. */
 export class TreeImpostorValidation {
@@ -123,7 +123,7 @@ export class TreeImpostorValidation {
         const rendered = await target.readPixels();
         if (!rendered) throw new Error(`GPU readback failed for ${FACE_NAMES[index]}.`);
         const actual = topDownPixels(rendered, resolution);
-        if (index === 4) frontView = actual;
+        if (index === 3) frontView = actual;
         if (index === 2) topView = actual;
         const context = assets.textures[index].getContext() as unknown as CanvasRenderingContext2D;
         const expected = interpolatedAtlasFrame(
@@ -362,7 +362,7 @@ export class TreeImpostorValidation {
     panel.id = "impostorValidation";
     panel.innerHTML = `
       <h1>Tree impostor validation</h1>
-      <p id="validationSummary" data-result="running">Rendering six canonical views...</p>
+      <p id="validationSummary" data-result="running">Rendering five canonical views...</p>
       <section id="validationGrid"></section>
       <pre id="validationReport"></pre>`;
     document.body.appendChild(panel);
@@ -436,7 +436,6 @@ uniform sampler2D atlas1;
 uniform sampler2D atlas2;
 uniform sampler2D atlas3;
 uniform sampler2D atlas4;
-uniform sampler2D atlas5;
 uniform vec2 samplePosition;
 uniform float gridSize;
 uniform float faceIndex;
@@ -446,8 +445,7 @@ vec4 atlasSample(vec2 uv) {
   if (faceIndex < 1.5) return texture2D(atlas1, uv);
   if (faceIndex < 2.5) return texture2D(atlas2, uv);
   if (faceIndex < 3.5) return texture2D(atlas3, uv);
-  if (faceIndex < 4.5) return texture2D(atlas4, uv);
-  return texture2D(atlas5, uv);
+  return texture2D(atlas4, uv);
 }
 vec4 frame(vec2 tile) {
   vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), vUV);
@@ -495,7 +493,7 @@ function createDemoReference(
   }, {
     attributes: ["position", "uv"],
     uniforms: ["viewProjection", "center", "billboardRight", "billboardUp", "diameter", "samplePosition", "gridSize", "faceIndex", "tileInset"],
-    samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "atlas5"],
+    samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
     needAlphaBlending: false,
   });
   material.backFaceCulling = false;
@@ -515,11 +513,11 @@ function configureDemoReference(
   center: Vector3,
 ): void {
   const absolute = new Vector3(Math.abs(direction.x), Math.abs(direction.y), Math.abs(direction.z));
-  const faceIndex = absolute.x >= absolute.y && absolute.x >= absolute.z
-    ? direction.x >= 0 ? 0 : 1
-    : absolute.y >= absolute.z
-      ? direction.y >= 0 ? 2 : 3
-      : direction.z >= 0 ? 4 : 5;
+  const faceIndex = direction.y >= 0 && absolute.y >= absolute.x && absolute.y >= absolute.z
+    ? 2
+    : absolute.x >= absolute.z
+      ? direction.x >= 0 ? 0 : 1
+      : direction.z >= 0 ? 3 : 4;
   const face = TREE_IMPOSTOR_FACES[faceIndex];
   const denominator = Math.max(0.0001, Vector3.Dot(direction, face.normal));
   const maxSample = gridSize - 1;
@@ -551,7 +549,7 @@ function validateCubeGeometry(mesh: import("@babylonjs/core").Mesh): GeometryVal
   for (let index = 0; index < normals.length; index += 3) {
     faceNormals.add(`${Math.round(normals[index])},${Math.round(normals[index + 1])},${Math.round(normals[index + 2])}`);
   }
-  const expectedNormals = ["1,0,0", "-1,0,0", "0,1,0", "0,-1,0", "0,0,1", "0,0,-1"];
+  const expectedNormals = ["1,0,0", "-1,0,0", "0,1,0", "0,0,1", "0,0,-1"];
   let frontFaceWinding = true;
   for (let index = 0; index < indices.length; index += 3) {
     const first = Vector3.FromArray(positions, indices[index] * 3);
@@ -568,8 +566,8 @@ function validateCubeGeometry(mesh: import("@babylonjs/core").Mesh): GeometryVal
     faceNormals: [...faceNormals].sort(),
     frontFaceWinding,
     passed:
-      positions.length / 3 === 24 &&
-      indices.length === 36 &&
+      positions.length / 3 === 20 &&
+      indices.length === 30 &&
       extents.every((extent) => extent > 0) &&
       frontFaceWinding &&
       expectedNormals.every((normal) => faceNormals.has(normal)),

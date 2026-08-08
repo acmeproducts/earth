@@ -64,6 +64,7 @@ export async function createBushField(
     assets,
     bushHeight,
     captureSize,
+    captureSize,
     "bushImpostorMaterial",
   );
   root.onDisposeObservable.add(() => material.dispose(false, false));

@@ -3,6 +3,10 @@ import { VegetationRenderMode } from "./VegetationField";
 export type VegetationCategory = "trees" | "grass" | "bushes";
 export type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
 
+export const MIN_MODEL_RANGE_METERS = 0;
+export const DEFAULT_MODEL_RANGE_METERS = 50;
+export const MAX_MODEL_RANGE_METERS = 200;
+
 const CATEGORIES: ReadonlyArray<readonly [VegetationCategory, string]> = [
   ["trees", "Trees"],
   ["grass", "Grass"],
@@ -63,8 +67,8 @@ export class VegetationControls {
 
     const distanceInput = document.createElement("input");
     distanceInput.type = "range";
-    distanceInput.min = "2";
-    distanceInput.max = "50";
+    distanceInput.min = String(MIN_MODEL_RANGE_METERS);
+    distanceInput.max = String(MAX_MODEL_RANGE_METERS);
     distanceInput.step = "1";
     distanceInput.value = String(initialDistanceMeters);
     distanceInput.setAttribute("aria-label", "Real model range in meters");

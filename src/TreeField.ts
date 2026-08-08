@@ -14,7 +14,12 @@ import {
 } from "@babylonjs/core";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { TerrainResult } from "./TerrainTiles";
-import { createTreeModels, getTreeImpostorAssets, TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
+import {
+  createTreeModels,
+  getTreeImpostorAssets,
+  TREE_IMPOSTOR_FACES,
+  TreeImpostorAssets,
+} from "./TreeImpostor";
 import {
   createVegetationFieldResult,
   VegetationFieldResult,
@@ -29,6 +34,8 @@ export interface TreeImpostorPrototype {
   mesh: Mesh;
   assets: TreeImpostorAssets;
   captureSize: number;
+  captureWidth: number;
+  captureHeight: number;
 }
 
 interface TreeFieldOptions {
@@ -44,6 +51,9 @@ interface TreeFieldOptions {
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
+  includeModels?: boolean;
+  positionOffset?: Vector3;
+  elevationSampler?: (x: number, z: number) => number;
 }
 
 export const impostorVertexShader = `
@@ -92,10 +102,11 @@ uniform sampler2D atlas1;
 uniform sampler2D atlas2;
 uniform sampler2D atlas3;
 uniform sampler2D atlas4;
-uniform sampler2D atlas5;
+uniform float rotationallySymmetric;
+uniform float rotationalSymmetryOrder;
 uniform vec2 gridDimensions;
-uniform float tileInset;
-uniform float captureSize;
+uniform vec2 tileInset;
+uniform vec2 captureDimensions;
 uniform float cameraOrthographic;
 uniform vec3 sunDirection;
 uniform vec3 sunColor;
@@ -107,12 +118,11 @@ vec4 atlasSample(float face, vec2 uv) {
   if (face < 1.5) return texture2D(atlas1, uv);
   if (face < 2.5) return texture2D(atlas2, uv);
   if (face < 3.5) return texture2D(atlas3, uv);
-  if (face < 4.5) return texture2D(atlas4, uv);
-  return texture2D(atlas5, uv);
+  return texture2D(atlas4, uv);
 }
 
 vec4 frame(float face, vec2 tile, vec2 imageUV) {
-  vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), imageUV);
+  vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
   return atlasSample(face, (tile + localUV) / gridDimensions);
 }
 
@@ -140,33 +150,64 @@ float bayer4(vec2 pixel) {
 void main(void) {
   vec3 direction = normalize(vViewDirection);
   vec3 absoluteDirection = abs(direction);
+  vec3 captureDirection = direction;
   vec3 faceNormal;
   float face;
+  float topFacing = 0.0;
   vec3 faceRight;
   vec3 faceUp;
+  vec3 billboardFaceUp;
+  float sectorRotation = 0.0;
 
-  if (absoluteDirection.x >= absoluteDirection.y && absoluteDirection.x >= absoluteDirection.z) {
+  if (rotationallySymmetric > 0.5) {
+    float horizontal = length(direction.xz);
+    if (rotationalSymmetryOrder > 1.5 && horizontal > 0.0001) {
+      float sectorAngle = 6.28318530718 / rotationalSymmetryOrder;
+      float azimuth = atan(direction.z, direction.x);
+      float foldedAzimuth = mod(azimuth + sectorAngle * 0.5, sectorAngle) - sectorAngle * 0.5;
+      sectorRotation = azimuth - foldedAzimuth;
+      captureDirection = normalize(vec3(
+        cos(foldedAzimuth) * horizontal,
+        direction.y,
+        sin(foldedAzimuth) * horizontal
+      ));
+    } else {
+      captureDirection = normalize(vec3(horizontal, direction.y, 0.0));
+    }
+
+    if (direction.y >= abs(captureDirection.x) && direction.y >= abs(captureDirection.z)) {
+      face = 1.0; faceNormal = vec3(0.0, 1.0, 0.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 0.0, -1.0);
+      topFacing = 1.0;
+      if (rotationalSymmetryOrder <= 1.5) {
+        captureDirection = normalize(vec3(0.0, direction.y, -horizontal));
+      }
+    } else {
+      face = 0.0; faceNormal = vec3(1.0, 0.0, 0.0); faceRight = vec3(0.0, 0.0, -1.0); faceUp = vec3(0.0, 1.0, 0.0);
+    }
+  } else if (direction.y >= 0.0 && absoluteDirection.y >= absoluteDirection.x && absoluteDirection.y >= absoluteDirection.z) {
+    face = 2.0; faceNormal = vec3(0.0, 1.0, 0.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 0.0, -1.0);
+    topFacing = 1.0;
+  } else if (absoluteDirection.x >= absoluteDirection.z) {
     if (direction.x >= 0.0) {
       face = 0.0; faceNormal = vec3(1.0, 0.0, 0.0); faceRight = vec3(0.0, 0.0, -1.0); faceUp = vec3(0.0, 1.0, 0.0);
     } else {
       face = 1.0; faceNormal = vec3(-1.0, 0.0, 0.0); faceRight = vec3(0.0, 0.0, 1.0); faceUp = vec3(0.0, 1.0, 0.0);
     }
-  } else if (absoluteDirection.y >= absoluteDirection.z) {
-    if (direction.y >= 0.0) {
-      face = 2.0; faceNormal = vec3(0.0, 1.0, 0.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 0.0, -1.0);
-    } else {
-      face = 3.0; faceNormal = vec3(0.0, -1.0, 0.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 0.0, 1.0);
-    }
   } else {
     if (direction.z >= 0.0) {
-      face = 4.0; faceNormal = vec3(0.0, 0.0, 1.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 1.0, 0.0);
+      face = 3.0; faceNormal = vec3(0.0, 0.0, 1.0); faceRight = vec3(1.0, 0.0, 0.0); faceUp = vec3(0.0, 1.0, 0.0);
     } else {
-      face = 5.0; faceNormal = vec3(0.0, 0.0, -1.0); faceRight = vec3(-1.0, 0.0, 0.0); faceUp = vec3(0.0, 1.0, 0.0);
+      face = 4.0; faceNormal = vec3(0.0, 0.0, -1.0); faceRight = vec3(-1.0, 0.0, 0.0); faceUp = vec3(0.0, 1.0, 0.0);
     }
   }
 
-  float denominator = max(0.0001, dot(direction, faceNormal));
-  vec2 projected = vec2(dot(direction, faceRight), dot(direction, faceUp)) / denominator;
+  billboardFaceUp = faceUp;
+  if (topFacing > 0.5 && rotationalSymmetryOrder > 1.5) {
+    billboardFaceUp = vec3(sin(sectorRotation), 0.0, -cos(sectorRotation));
+  }
+
+  float denominator = max(0.0001, dot(captureDirection, faceNormal));
+  vec2 projected = vec2(dot(captureDirection, faceRight), dot(captureDirection, faceUp)) / denominator;
   vec2 samplePosition = clamp((projected + 1.0) * 0.5, 0.0, 1.0) * (gridDimensions - 1.0);
   vec3 projectedPosition = vLocalPosition;
   if (cameraOrthographic < 0.5) {
@@ -178,11 +219,12 @@ void main(void) {
     projectedPosition = cameraOffset + ray * distanceAlongRay;
   }
 
-  vec3 billboardRight = normalize(cross(direction, faceUp));
+  vec3 billboardRight = normalize(cross(direction, billboardFaceUp));
   vec3 billboardUp = normalize(cross(billboardRight, direction));
-  vec2 imageUV = vec2(
-    0.5 + dot(projectedPosition, billboardRight) / captureSize,
-    0.5 - dot(projectedPosition, billboardUp) / captureSize
+  float verticalDimension = mix(captureDimensions.y, captureDimensions.x, topFacing);
+  vec2 imageUV = vec2(0.5) + vec2(
+    dot(projectedPosition, billboardRight) / captureDimensions.x,
+    -dot(projectedPosition, billboardUp) / verticalDimension
   );
   if (any(lessThan(imageUV, vec2(0.0))) || any(greaterThan(imageUV, vec2(1.0)))) discard;
 
@@ -248,18 +290,21 @@ export async function createTreeField(
     metersPerUnit,
     seed = 0x4f534c4f,
     spacingMeters = 3.5,
-    occupancy = 0.78,
+    occupancy = 0.64,
     edgeOccupancy = 0.12,
     fullDensityDepthMeters = 45,
     waterLineMeters = 0,
     landCover,
     exclusionMask,
     renderMode = "impostors",
+    includeModels = true,
+    positionOffset = Vector3.Zero(),
+    elevationSampler,
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const prototype = await createTreeImpostorPrototype(scene, treeHeight, "treeField");
-  const { root, mesh: tree, captureSize } = prototype;
-  const modelMeshes = await createTreeModels(scene, treeHeight);
+  const { root, mesh: tree, captureWidth } = prototype;
+  const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight) : [];
   modelMeshes.forEach((mesh) => { mesh.parent = root; });
   const modelMaterials = new Set(modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null));
   root.onDisposeObservable.add(() => {
@@ -272,7 +317,7 @@ export async function createTreeField(
   const rows = Math.max(1, Math.floor(meshDepth / spacing));
   const cellWidth = meshWidth / columns;
   const cellDepth = meshDepth / rows;
-  const maximumHalfWidth = captureSize * 0.55;
+  const maximumHalfWidth = captureWidth * 0.55;
   const matrices: Matrix[] = [];
 
   if (landCover && terrain.bounds) {
@@ -304,7 +349,9 @@ export async function createTreeField(
 
         const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
         const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
-        const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        const elevation = elevationSampler
+          ? elevationSampler(x, z)
+          : sampleElevation(terrain, x, z, meshWidth, meshDepth);
         if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
@@ -331,7 +378,11 @@ export async function createTreeField(
           Matrix.Compose(
             new Vector3(widthScale, heightScale, widthScale),
             new Vector3(pitch, yaw, roll).toQuaternion(),
-            new Vector3(x, elevation / metersPerUnit, z),
+            new Vector3(
+              x + positionOffset.x,
+              elevation / metersPerUnit + positionOffset.y,
+              z + positionOffset.z,
+            ),
           ),
         );
       }
@@ -358,8 +409,21 @@ export async function createTreeImpostorPrototype(
 ): Promise<TreeImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
   const assets = await getTreeImpostorAssets(scene);
-  const captureSize = treeHeight * (assets.captureDiameter / assets.sourceHeight);
-  const tree = createImpostorCube(scene, captureSize, treeHeight / 2);
+  return createTreeImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+}
+
+function createTreeImpostorPrototypeFromAssets(
+  scene: Scene,
+  assets: TreeImpostorAssets,
+  treeHeight: number,
+  root: TransformNode,
+  name: string,
+): TreeImpostorPrototype {
+  const scale = treeHeight / assets.sourceHeight;
+  const captureWidth = assets.captureWidth * scale;
+  const captureHeight = assets.captureHeight * scale;
+  const captureSize = Math.max(captureWidth, captureHeight);
+  const tree = createImpostorBox(scene, captureWidth, captureHeight, treeHeight / 2, name);
   tree.parent = root;
   tree.isPickable = false;
 
@@ -367,19 +431,21 @@ export async function createTreeImpostorPrototype(
     scene,
     assets,
     treeHeight,
-    captureSize,
-    "treeImpostorMaterial",
+    captureWidth,
+    captureHeight,
+    `${name}Material`,
   );
   root.onDisposeObservable.add(() => material.dispose(false, false));
   tree.material = material;
-  return { root, mesh: tree, assets, captureSize };
+  return { root, mesh: tree, assets, captureSize, captureWidth, captureHeight };
 }
 
 export function createImpostorMaterial(
   scene: Scene,
   assets: TreeImpostorAssets,
   renderHeight: number,
-  captureSize: number,
+  captureWidth: number,
+  captureHeight: number,
   name: string,
 ): ShaderMaterial {
   const material = new ShaderMaterial(
@@ -388,18 +454,25 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureSize", "gridDimensions", "tileInset", "cameraOrthographic", "sunDirection", "sunColor", "skyColor", "groundColor"],
-      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "atlas5"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunColor", "skyColor", "groundColor"],
+      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
       needAlphaBlending: false,
     },
   );
   material.backFaceCulling = true;
   material.setFloat("captureCenterY", renderHeight / 2);
-  material.setFloat("captureSize", captureSize);
+  material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));
-  material.setFloat("tileInset", 0.5 / assets.resolution);
+  material.setVector2("tileInset", new Vector2(
+    0.5 / assets.resolutionWidth,
+    0.5 / assets.resolutionHeight,
+  ));
   material.setFloat("cameraOrthographic", 0);
-  assets.textures.forEach((texture, index) => material.setTexture(`atlas${index}`, texture));
+  material.setFloat("rotationallySymmetric", assets.rotationallySymmetric ? 1 : 0);
+  material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
+  for (let index = 0; index < 5; index++) {
+    material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
+  }
   const black = Color3.Black();
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
   const fallbackGround = new Color3(0.08, 0.09, 0.07);
@@ -440,19 +513,33 @@ export function createImpostorCube(
   centerY: number,
   name = "treeImpostors",
 ): Mesh {
+  return createImpostorBox(scene, size, size, centerY, name);
+}
+
+function createImpostorBox(
+  scene: Scene,
+  width: number,
+  height: number,
+  centerY: number,
+  name = "treeImpostors",
+): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
-  const half = size / 2;
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
 
   TREE_IMPOSTOR_FACES.forEach((face, faceIndex) => {
-    const faceCenter = face.normal.scale(half).add(new Vector3(0, centerY, 0));
+    const normalExtent = Math.abs(face.normal.y) > 0.5 ? halfHeight : halfWidth;
+    const rightExtent = halfWidth;
+    const upExtent = Math.abs(face.up.y) > 0.5 ? halfHeight : halfWidth;
+    const faceCenter = face.normal.scale(normalExtent).add(new Vector3(0, centerY, 0));
     const corners = [
-      faceCenter.subtract(face.right.scale(half)).subtract(face.up.scale(half)),
-      faceCenter.add(face.right.scale(half)).subtract(face.up.scale(half)),
-      faceCenter.add(face.right.scale(half)).add(face.up.scale(half)),
-      faceCenter.subtract(face.right.scale(half)).add(face.up.scale(half)),
+      faceCenter.subtract(face.right.scale(rightExtent)).subtract(face.up.scale(upExtent)),
+      faceCenter.add(face.right.scale(rightExtent)).subtract(face.up.scale(upExtent)),
+      faceCenter.add(face.right.scale(rightExtent)).add(face.up.scale(upExtent)),
+      faceCenter.subtract(face.right.scale(rightExtent)).add(face.up.scale(upExtent)),
     ];
     for (const corner of corners) {
       positions.push(corner.x, corner.y, corner.z);

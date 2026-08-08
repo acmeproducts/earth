@@ -29,6 +29,22 @@ const TERRAIN_COLORS: Readonly<Record<number, readonly [number, number, number]>
   [LandCoverClass.MossAndLichen]: [0.56, 0.57, 0.42],
 };
 
+// Natural material tints used by the normal terrain renderer. These are kept
+// separate from the brighter diagnostic palette above.
+const SURFACE_COLORS: Readonly<Record<number, readonly [number, number, number]>> = {
+  [LandCoverClass.TreeCover]: [0.42, 0.62, 0.32],
+  [LandCoverClass.Shrubland]: [0.54, 0.66, 0.33],
+  [LandCoverClass.Grassland]: [0.58, 0.76, 0.36],
+  [LandCoverClass.Cropland]: [0.69, 0.68, 0.36],
+  [LandCoverClass.BuiltUp]: [0.66, 0.64, 0.6],
+  [LandCoverClass.Bare]: [0.7, 0.62, 0.5],
+  [LandCoverClass.SnowAndIce]: [0.92, 0.95, 0.96],
+  [LandCoverClass.Water]: [0.2, 0.38, 0.46],
+  [LandCoverClass.Wetland]: [0.4, 0.61, 0.43],
+  [LandCoverClass.Mangrove]: [0.32, 0.55, 0.34],
+  [LandCoverClass.MossAndLichen]: [0.62, 0.68, 0.42],
+};
+
 export class WorldCover {
   private static readonly TILE_URL =
     "https://tiledimageservices.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/" +
@@ -40,27 +56,32 @@ export class WorldCover {
   private static readonly ORIGIN_Y = 18807214.0967;
   private static readonly cache = new Map<string, Promise<Lerc.LercData>>();
 
-  private constructor(private readonly tiles: Map<string, Lerc.LercData>) {}
+  private constructor(
+    private readonly tiles: Map<string, Lerc.LercData>,
+    private readonly resolution: number,
+  ) {}
 
-  static async fetch(bounds: TileBounds): Promise<WorldCover> {
+  static async fetch(bounds: TileBounds, level = this.LEVEL): Promise<WorldCover> {
     await Lerc.load({
       locateFile: () => new URL("lerc-wasm.wasm", document.baseURI).toString(),
     });
-    const northWest = this.tileFor(bounds.lonWest, bounds.latNorth);
-    const southEast = this.tileFor(bounds.lonEast, bounds.latSouth);
+    const clampedLevel = Math.max(0, Math.min(this.LEVEL, Math.round(level)));
+    const resolution = this.RESOLUTION * Math.pow(2, this.LEVEL - clampedLevel);
+    const northWest = this.tileFor(bounds.lonWest, bounds.latNorth, resolution);
+    const southEast = this.tileFor(bounds.lonEast, bounds.latSouth, resolution);
     const requests: Array<Promise<readonly [string, Lerc.LercData]>> = [];
     for (let row = northWest.row; row <= southEast.row; row++) {
       for (let column = northWest.column; column <= southEast.column; column++) {
-        requests.push(this.fetchTile(row, column));
+        requests.push(this.fetchTile(clampedLevel, row, column));
       }
     }
-    return new WorldCover(new Map(await Promise.all(requests)));
+    return new WorldCover(new Map(await Promise.all(requests)), resolution);
   }
 
   sample(longitude: number, latitude: number): LandCoverClass {
     const { x, y } = toWebMercator(longitude, latitude);
-    const pixelX = Math.floor((x - WorldCover.ORIGIN_X) / WorldCover.RESOLUTION);
-    const pixelY = Math.floor((WorldCover.ORIGIN_Y - y) / WorldCover.RESOLUTION);
+    const pixelX = Math.floor((x - WorldCover.ORIGIN_X) / this.resolution);
+    const pixelY = Math.floor((WorldCover.ORIGIN_Y - y) / this.resolution);
     return this.classAtPixel(pixelX, pixelY, LandCoverClass.Bare);
   }
 
@@ -117,8 +138,8 @@ export class WorldCover {
 
   private waterCoverage(longitude: number, latitude: number): number {
     const { x, y } = toWebMercator(longitude, latitude);
-    const pixelX = (x - WorldCover.ORIGIN_X) / WorldCover.RESOLUTION - 0.5;
-    const pixelY = (WorldCover.ORIGIN_Y - y) / WorldCover.RESOLUTION - 0.5;
+    const pixelX = (x - WorldCover.ORIGIN_X) / this.resolution - 0.5;
+    const pixelY = (WorldCover.ORIGIN_Y - y) / this.resolution - 0.5;
     const x0 = Math.floor(pixelX);
     const y0 = Math.floor(pixelY);
     const fx = pixelX - x0;
@@ -142,9 +163,13 @@ export class WorldCover {
     return (!tile.mask || tile.mask[index] ? tile.pixels[0][index] : fallback) as LandCoverClass;
   }
 
-  private static tileFor(longitude: number, latitude: number): { row: number; column: number } {
+  private static tileFor(
+    longitude: number,
+    latitude: number,
+    resolution: number,
+  ): { row: number; column: number } {
     const { x, y } = toWebMercator(longitude, latitude);
-    const span = this.TILE_SIZE * this.RESOLUTION;
+    const span = this.TILE_SIZE * resolution;
     return {
       row: Math.floor((this.ORIGIN_Y - y) / span),
       column: Math.floor((x - this.ORIGIN_X) / span),
@@ -152,29 +177,37 @@ export class WorldCover {
   }
 
   private static async fetchTile(
+    level: number,
     row: number,
     column: number,
   ): Promise<readonly [string, Lerc.LercData]> {
-    const key = `${row}/${column}`;
-    let request = this.cache.get(key);
+    const tileKey = `${row}/${column}`;
+    const cacheKey = `${level}/${tileKey}`;
+    let request = this.cache.get(cacheKey);
     if (!request) {
-      request = fetch(`${this.TILE_URL}/${this.LEVEL}/${key}`, {
+      request = fetch(`${this.TILE_URL}/${cacheKey}`, {
         signal: AbortSignal.timeout(15_000),
       }).then(async (response) => {
         if (!response.ok) throw new Error(`WorldCover tile request failed (${response.status}).`);
         return Lerc.decode(await response.arrayBuffer());
       }).catch((error: unknown) => {
-        this.cache.delete(key);
+        this.cache.delete(cacheKey);
         throw error;
       });
-      this.cache.set(key, request);
+      this.cache.set(cacheKey, request);
     }
-    return [key, await request];
+    return [tileKey, await request];
   }
 }
 
 export function landCoverColor(landCover: LandCoverClass): readonly [number, number, number] {
   return TERRAIN_COLORS[landCover] ?? TERRAIN_COLORS[LandCoverClass.Bare];
+}
+
+export function landCoverSurfaceColor(
+  landCover: LandCoverClass,
+): readonly [number, number, number] {
+  return SURFACE_COLORS[landCover] ?? SURFACE_COLORS[LandCoverClass.Bare];
 }
 
 function toWebMercator(longitude: number, latitude: number): { x: number; y: number } {

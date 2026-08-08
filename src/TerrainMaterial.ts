@@ -18,7 +18,10 @@ interface TerrainTextureData {
 }
 
 /** Owns the normal terrain appearance; debug layers are applied elsewhere. */
-export function createTerrainMaterial(scene: Scene): StandardMaterial {
+export function createTerrainMaterial(
+  scene: Scene,
+  usesLandCoverTint = false,
+): StandardMaterial {
   cachedTextureData ??= createTerrainTextureData(TEXTURE_SIZE);
   const textures = cachedTextureData;
   const albedo = RawTexture.CreateRGBATexture(
@@ -58,7 +61,9 @@ export function createTerrainMaterial(scene: Scene): StandardMaterial {
   const material = new StandardMaterial("terrainMaterial", scene);
   material.diffuseTexture = albedo;
   material.bumpTexture = normal;
-  material.diffuseColor = Color3.White();
+  material.diffuseColor = usesLandCoverTint
+    ? Color3.White()
+    : new Color3(0.7, 0.62, 0.5);
   material.specularColor = new Color3(0.035, 0.04, 0.03);
   material.specularPower = 24;
   return material;
@@ -81,15 +86,17 @@ function createTerrainTextureData(size: number): TerrainTextureData {
       const dry = smoothstep(0.69, 0.88, clumps + (grains - 0.5) * 0.2);
       const stone = smoothstep(0.68, 0.84, grains + (clumps - 0.5) * 0.08);
 
-      let red = mix(105, 78, moss);
-      let green = mix(101, 99, moss);
-      let blue = mix(66, 55, moss);
-      red = mix(red, 126, dry * 0.38);
-      green = mix(green, 116, dry * 0.38);
-      blue = mix(blue, 72, dry * 0.38);
-      red = mix(red, 109, stone * 0.34);
-      green = mix(green, 110, stone * 0.34);
-      blue = mix(blue, 96, stone * 0.34);
+      // Keep the procedural detail close to neutral so land-cover vertex
+      // colors determine the surface type without losing small-scale texture.
+      let red = mix(208, 184, moss);
+      let green = mix(202, 194, moss);
+      let blue = mix(186, 170, moss);
+      red = mix(red, 220, dry * 0.32);
+      green = mix(green, 210, dry * 0.32);
+      blue = mix(blue, 180, dry * 0.32);
+      red = mix(red, 198, stone * 0.28);
+      green = mix(green, 199, stone * 0.28);
+      blue = mix(blue, 194, stone * 0.28);
 
       const grainShade = (grains - 0.5) * 18;
       const index = (y * size + x) * 4;

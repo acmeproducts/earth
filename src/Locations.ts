@@ -24,6 +24,11 @@ export const EXAMPLE_LOCATIONS = [
     lat: 59.58990531228428,
     lon: 13.783101006047959,
   },
+  {
+    name: "Gaustatoppen",
+    lat: 59.85373224178274,
+    lon: 8.649698171043344,
+  },
 ] as const;
 
 export type ExampleLocation = (typeof EXAMPLE_LOCATIONS)[number];

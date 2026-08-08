@@ -100,7 +100,7 @@ export function createProceduralTree(
 
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
   for (let level = 2; level < trunkSegments; level++) {
-    const branchesAtLevel = level < 5 ? 2 : 3;
+    const branchesAtLevel = level < 5 ? 3 : 4;
     const start = trunkPoints[level];
     const crownT = (level - 2) / (trunkSegments - 3);
     const branchLength = lerp(0.82, 0.48, crownT) * (0.88 + random() * 0.22);
@@ -144,7 +144,7 @@ export function createProceduralTree(
   for (const anchor of foliageAnchors) {
     const clusterScale = 0.82 + random() * 0.3;
     const clusterPaletteIndex = Math.floor(random() * LEAF_PALETTES.length);
-    for (let leaf = 0; leaf < 30; leaf++) {
+    for (let leaf = 0; leaf < 36; leaf++) {
       const offset = randomInUnitSphere(random);
       const center = anchor.add(new Vector3(
         offset.x * 0.3 * clusterScale,

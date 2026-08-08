@@ -3,14 +3,16 @@ import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 import {
   captureImpostorAtlases,
   ImpostorAssets,
+  impostorAttributeKey,
   queryNumber,
+  SYMMETRIC_IMPOSTOR_FACES,
 } from "./TreeImpostor";
 
 export type BushImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
-const sceneAssets = new WeakMap<Scene, Promise<BushImpostorAssets>>();
+const sceneAssets = new WeakMap<Scene, Map<string, Promise<BushImpostorAssets>>>();
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
   [new Color3(0.1, 0.27, 0.07), new Color3(0.34, 0.59, 0.15)],
@@ -18,18 +20,27 @@ const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.15, 0.25, 0.065), new Color3(0.48, 0.55, 0.14)],
 ];
 
-/** Generates and captures a shrub once for every scene. */
+/** Shares one shrub atlas capture per scene and capture-attribute combination. */
 export function getBushImpostorAssets(
   scene: Scene,
-  horizontalSamples = queryNumber("bush-impostor-x-samples", 10, 1, 16),
+  horizontalSamples = queryNumber("bush-impostor-x-samples", 1, 1, 16),
   verticalSamples = queryNumber("bush-impostor-y-samples", 5, 1, 10),
   resolution = queryNumber("bush-impostor-resolution", 96, 48, 512),
 ): Promise<BushImpostorAssets> {
-  const existing = sceneAssets.get(scene);
+  let cache = sceneAssets.get(scene);
+  if (!cache) {
+    cache = new Map();
+    sceneAssets.set(scene, cache);
+  }
+  const key = impostorAttributeKey(horizontalSamples, verticalSamples, resolution);
+  const existing = cache.get(key);
   if (existing) return existing;
 
   const capture = captureBush(scene, horizontalSamples, verticalSamples, resolution);
-  sceneAssets.set(scene, capture);
+  cache.set(key, capture);
+  capture.catch(() => {
+    if (cache.get(key) === capture) cache.delete(key);
+  });
   return capture;
 }
 
@@ -51,6 +62,8 @@ async function captureBush(
       resolution,
       sourceHeight: SOURCE_HEIGHT,
       captureDiameter: CAPTURE_DIAMETER,
+      faces: SYMMETRIC_IMPOSTOR_FACES,
+      rotationallySymmetric: true,
     });
     console.log("Bush impostor: capture complete; procedural source disposed");
     return assets;
@@ -64,36 +77,44 @@ function createBushSource(scene: Scene, liveLighting = false): Mesh {
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
+  const symmetryOrder = 12;
+  const sectorAngle = Math.PI * 2 / symmetryOrder;
 
   const branchBase = new Vector3(0, -SOURCE_HEIGHT / 2, 0);
-  for (let branch = 0; branch < 26; branch++) {
-    const angle = random() * Math.PI * 2;
+  for (let branch = 0; branch < 2; branch++) {
+    const angle = random() * sectorAngle;
     const distance = 0.3 + random() * 0.72;
-    const start = branch === 0
-      ? branchBase
-      : new Vector3((random() - 0.5) * 0.16, -1.08, (random() - 0.5) * 0.16);
-    const end = new Vector3(
-      Math.cos(angle) * distance,
-      -0.32 + random() * 1.18,
-      Math.sin(angle) * distance,
-    );
-    addBranch(positions, indices, colors, start, end, 0.022 + random() * 0.028, 5);
+    const startRadius = random() * 0.08;
+    const startAngle = random() * sectorAngle;
+    const endY = -0.32 + random() * 1.18;
+    const radius = 0.022 + random() * 0.028;
+    for (let copy = 0; copy < symmetryOrder; copy++) {
+      const rotation = copy * sectorAngle;
+      const start = branch === 0
+        ? branchBase
+        : new Vector3(
+          Math.cos(startAngle + rotation) * startRadius,
+          -1.08,
+          Math.sin(startAngle + rotation) * startRadius,
+        );
+      const end = new Vector3(
+        Math.cos(angle + rotation) * distance,
+        endY,
+        Math.sin(angle + rotation) * distance,
+      );
+      addBranch(positions, indices, colors, start, end, radius, 5);
+    }
   }
 
   const segments = 5;
   const shootCount = 900;
-  for (let shoot = 0; shoot < shootCount; shoot++) {
-    const vertexStart = positions.length / 3;
-    const baseAngle = random() * Math.PI * 2;
+  for (let shoot = 0; shoot < shootCount / symmetryOrder; shoot++) {
+    const baseAngle = random() * sectorAngle;
     const edgeRadius = 0.96
       + Math.sin(baseAngle * 3 + 0.4) * 0.12
       + Math.sin(baseAngle * 7 + 1.6) * 0.07;
     const radius = Math.sqrt(random()) * edgeRadius;
-    const baseX = Math.cos(baseAngle) * radius;
-    const baseZ = Math.sin(baseAngle) * radius;
     const bladeAngle = random() * Math.PI * 2;
-    const sideX = Math.cos(bladeAngle);
-    const sideZ = Math.sin(bladeAngle);
     const bendAngle = baseAngle + (random() - 0.5) * 1.7;
     const edgeScale = 1 - 0.34 * Math.pow(radius / edgeRadius, 2);
     const height = (0.65 + Math.pow(random(), 0.65) * 1.55) * edgeScale;
@@ -102,34 +123,46 @@ function createBushSource(scene: Scene, liveLighting = false): Mesh {
     const palette = FOLIAGE_PALETTES[Math.floor(random() * FOLIAGE_PALETTES.length)];
     const brightness = 0.84 + random() * 0.3;
 
-    for (let segment = 0; segment <= segments; segment++) {
-      const t = segment / segments;
-      const taper = Math.max(0.035, 1 - t * t);
-      const curve = bend * t * t;
-      const centerX = baseX + Math.cos(bendAngle) * curve;
-      const centerZ = baseZ + Math.sin(bendAngle) * curve;
-      const centerY = -SOURCE_HEIGHT / 2 + height * t;
-      const halfWidth = width * taper;
-      const mix = 0.18 + t * 0.68;
-      const light = brightness * (0.82 + t * 0.18);
-      const red = (palette[0].r + (palette[1].r - palette[0].r) * mix) * light;
-      const green = (palette[0].g + (palette[1].g - palette[0].g) * mix) * light;
-      const blue = (palette[0].b + (palette[1].b - palette[0].b) * mix) * light;
+    for (let copy = 0; copy < symmetryOrder; copy++) {
+      const rotation = copy * sectorAngle;
+      const rotatedBaseAngle = baseAngle + rotation;
+      const rotatedBladeAngle = bladeAngle + rotation;
+      const rotatedBendAngle = bendAngle + rotation;
+      const baseX = Math.cos(rotatedBaseAngle) * radius;
+      const baseZ = Math.sin(rotatedBaseAngle) * radius;
+      const sideX = Math.cos(rotatedBladeAngle);
+      const sideZ = Math.sin(rotatedBladeAngle);
+      const vertexStart = positions.length / 3;
 
-      positions.push(
-        centerX - sideX * halfWidth,
-        centerY,
-        centerZ - sideZ * halfWidth,
-        centerX + sideX * halfWidth,
-        centerY,
-        centerZ + sideZ * halfWidth,
-      );
-      colors.push(red, green, blue, 1, red, green, blue, 1);
-    }
+      for (let segment = 0; segment <= segments; segment++) {
+        const t = segment / segments;
+        const taper = Math.max(0.035, 1 - t * t);
+        const curve = bend * t * t;
+        const centerX = baseX + Math.cos(rotatedBendAngle) * curve;
+        const centerZ = baseZ + Math.sin(rotatedBendAngle) * curve;
+        const centerY = -SOURCE_HEIGHT / 2 + height * t;
+        const halfWidth = width * taper;
+        const mix = 0.18 + t * 0.68;
+        const light = brightness * (0.82 + t * 0.18);
+        const red = (palette[0].r + (palette[1].r - palette[0].r) * mix) * light;
+        const green = (palette[0].g + (palette[1].g - palette[0].g) * mix) * light;
+        const blue = (palette[0].b + (palette[1].b - palette[0].b) * mix) * light;
 
-    for (let segment = 0; segment < segments; segment++) {
-      const left = vertexStart + segment * 2;
-      indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
+        positions.push(
+          centerX - sideX * halfWidth,
+          centerY,
+          centerZ - sideZ * halfWidth,
+          centerX + sideX * halfWidth,
+          centerY,
+          centerZ + sideZ * halfWidth,
+        );
+        colors.push(red, green, blue, 1, red, green, blue, 1);
+      }
+
+      for (let segment = 0; segment < segments; segment++) {
+        const left = vertexStart + segment * 2;
+        indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
+      }
     }
   }
 
