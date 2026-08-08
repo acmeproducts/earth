@@ -107,8 +107,11 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
       ? GRASS_PALETTES.length - 1
       : Math.floor(random() * (GRASS_PALETTES.length - 1));
     const [baseColor, tipColor] = GRASS_PALETTES[paletteIndex];
-    const brightness = 0.86 + random() * 0.34;
-    const colorVariation = Array.from({ length: segments + 1 }, () => random());
+    const brightness = (0.86 + random() * 0.34) * 0.9;
+    const colorMix = 0.58 + random() * 0.28;
+    const red = Math.min(1, (baseColor.r + (tipColor.r - baseColor.r) * colorMix) * brightness);
+    const green = Math.min(1, (baseColor.g + (tipColor.g - baseColor.g) * colorMix) * brightness);
+    const blue = Math.min(1, (baseColor.b + (tipColor.b - baseColor.b) * colorMix) * brightness);
 
     for (let copy = 0; copy < symmetryOrder; copy++) {
       const rotation = copy * sectorAngle;
@@ -129,10 +132,6 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
         const centerZ = baseZ + Math.sin(rotatedBendAngle) * curve;
         const centerY = -SOURCE_HEIGHT / 2 + height * t;
         const halfWidth = width * taper;
-        const colorT = t * (0.72 + colorVariation[segment] * 0.12);
-        const red = Math.min(1, (baseColor.r + (tipColor.r - baseColor.r) * colorT) * brightness);
-        const green = Math.min(1, (baseColor.g + (tipColor.g - baseColor.g) * colorT) * brightness);
-        const blue = Math.min(1, (baseColor.b + (tipColor.b - baseColor.b) * colorT) * brightness);
 
         positions.push(
           centerX - sideX * halfWidth,
