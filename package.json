@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "webpack serve --mode development",
     "build": "webpack --mode production",
+    "test": "node --test tests/*.test.mjs",
     "lint": "eslint src/**/*.ts",
     "clean": "rimraf dist"
   },

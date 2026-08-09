@@ -25,6 +25,7 @@ export function createVertexColorCaptureMaterial(
         attribute vec4 color;
         #ifdef THIN_INSTANCES
         attribute float instanceOcclusion;
+        attribute vec3 vegetationColor;
         #endif
         uniform mat4 viewProjection;
         uniform float modelHeight;
@@ -33,6 +34,7 @@ export function createVertexColorCaptureMaterial(
         varying vec3 vWorldNormal;
         varying float vHeight01;
         varying float vInstanceOcclusion;
+        varying vec3 vInstanceColor;
         void main(void) {
           #include<instancesVertex>
           mat3 rotation = mat3(
@@ -45,8 +47,10 @@ export function createVertexColorCaptureMaterial(
           vHeight01 = clamp(position.y / max(modelHeight, 0.0001), 0.0, 1.0);
           #ifdef THIN_INSTANCES
           vInstanceOcclusion = instanceOcclusion;
+          vInstanceColor = vegetationColor;
           #else
           vInstanceOcclusion = 0.0;
+          vInstanceColor = vec3(1.0);
           #endif
           gl_Position = viewProjection * finalWorld * vec4(position, 1.0);
         }
@@ -57,6 +61,7 @@ export function createVertexColorCaptureMaterial(
         varying vec3 vWorldNormal;
         varying float vHeight01;
         varying float vInstanceOcclusion;
+        varying vec3 vInstanceColor;
         uniform vec3 sunDirection;
         uniform vec3 sunColor;
         uniform vec3 skyColor;
@@ -69,24 +74,28 @@ export function createVertexColorCaptureMaterial(
           normal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), 0.58));
 
           float upward = normal.y * 0.5 + 0.5;
-          float skyEnergy = dot(skyColor, vec3(0.2126, 0.7152, 0.0722));
-          float groundEnergy = dot(groundColor, vec3(0.2126, 0.7152, 0.0722));
-          float sunEnergy = dot(sunColor, vec3(0.2126, 0.7152, 0.0722));
-          float ambient = mix(groundEnergy, skyEnergy, upward);
+          vec3 ambientColor = mix(groundColor, skyColor, upward);
           float direct = max(0.0, (dot(normal, sunDirection) + 0.42) / 1.42);
-          float brightness = clamp(ambient + sunEnergy * (0.16 + direct * 0.62), 0.28, 1.25);
+          vec3 lighting = clamp(
+            ambientColor + sunColor * (0.16 + direct * 0.62),
+            vec3(0.0),
+            vec3(1.25)
+          );
           float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01));
           float lowerTree = 1.0 - smoothstep(0.18, 0.82, vHeight01);
           float neighborShade = 1.0
             - vInstanceOcclusion * ambientOcclusionStrength * mix(0.16, 0.48, lowerTree);
-          brightness = clamp(brightness * crownLight * neighborShade, 0.20, 1.25);
-          brightness = mix(1.0, brightness, lightingEnabled);
-          gl_FragColor = vec4(vColor.rgb * brightness, 1.0);
+          // Keep live vegetation readable when direct sunlight has faded out.
+          lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+          lighting = mix(vec3(1.0), lighting, lightingEnabled);
+          float petalMask = smoothstep(0.68, 0.86, min(vColor.r, min(vColor.g, vColor.b)));
+          vec3 instanceColor = mix(vColor.rgb, vColor.rgb * vInstanceColor, petalMask);
+          gl_FragColor = vec4(instanceColor * lighting, 1.0);
         }
       `,
     },
     {
-      attributes: ["position", "normal", "color", "instanceOcclusion"],
+      attributes: ["position", "normal", "color", "instanceOcclusion", "vegetationColor"],
       uniforms: [
         "world",
         "viewProjection",

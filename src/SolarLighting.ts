@@ -15,6 +15,7 @@ import * as SunCalc from "suncalc";
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
 const UPDATE_INTERVAL_MS = 60_000;
+const MIN_AMBIENT_INTENSITY = 0.24;
 
 /** Keeps the visible sun and scene lighting aligned with the real sky. */
 export class SolarLighting {
@@ -137,9 +138,10 @@ export class SolarLighting {
     this.directLight.setEnabled(daylight);
     this.directLight.intensity = 0.55 + 1.55 * Math.sqrt(elevationFactor);
     this.sunMesh.setEnabled(daylight);
-    this.ambientLight.intensity = daylight
-      ? 0.32 + 0.5 * elevationFactor
-      : 0.06;
+    // Avoid the old horizon discontinuity (0.32 -> 0.06) and retain a soft
+    // ambient floor so vegetation does not collapse into black silhouettes.
+    this.ambientLight.intensity = MIN_AMBIENT_INTENSITY +
+      (0.82 - MIN_AMBIENT_INTENSITY) * elevationFactor;
     this.skyMaterial.luminance = daylight
       ? 0.72 + 0.38 * elevationFactor
       : 0.06;

@@ -29,6 +29,11 @@ export const EXAMPLE_LOCATIONS = [
     lat: 59.85373224178274,
     lon: 8.649698171043344,
   },
+  {
+    name: "New York",
+    lat: 40.70562745934957,
+    lon: -74.01329094009722,
+  },
 ] as const;
 
 export type ExampleLocation = (typeof EXAMPLE_LOCATIONS)[number];

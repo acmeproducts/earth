@@ -15,12 +15,12 @@ import {
 } from "@babylonjs/core";
 import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
-import { createTreeField } from "./TreeField";
+import { createTreeField, DEFAULT_TREE_SPACING_METERS } from "./TreeField";
 import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
-import { sceneToLonLat } from "./Geo";
+import { sampleElevation, sceneToLonLat } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, landCoverSurfaceColor, WorldCover } from "./WorldCover";
 import { createTerrainMaterial } from "./TerrainMaterial";
@@ -36,6 +36,10 @@ import {
   VegetationModes,
 } from "./VegetationControls";
 import { DistantVista } from "./DistantVista";
+import {
+  chooseVistaVegetationSpacing,
+  vegetationDensityScaleAcrossLocalBoundary,
+} from "./VistaVegetation";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 const VEGETATION_LOD_UPDATE_MS = 100;
@@ -44,11 +48,27 @@ const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
 const WHEEL_NOTCH_PIXELS = 100;
 const GROUND_COVER_BLEND_METERS = 12;
+const PLAYER_HEIGHT_METERS = 1.8;
+const PLAYER_RADIUS_METERS = 0.3;
+const WALK_SPEED_METERS_PER_SECOND = 8;
+const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
+const CAMERA_NEAR_CLIP_METERS = 0.1;
+
+type MovementMode = "fly" | "walk";
+
+interface WalkableTerrain {
+  data: TerrainResult;
+  width: number;
+  depth: number;
+  metersPerUnit: number;
+}
 
 interface TerrainMetadata {
   worldCoverColors?: Float32Array;
   surfaceColors?: Float32Array;
 }
+
+export type InitializationProgress = (step: string, progress: number) => void;
 
 export class Game {
   private canvas: HTMLCanvasElement;
@@ -80,10 +100,14 @@ export class Game {
   private lastVegetationCameraPosition?: Vector3;
   private flyCamera?: UniversalCamera;
   private flySpeedOutput?: HTMLOutputElement;
+  private movementMode: MovementMode = "fly";
+  private walkableTerrain?: WalkableTerrain;
+  private readonly heldMovementKeys = new Set<string>();
+  private verticalVelocityMetersPerSecond = 0;
   private distantVista?: DistantVista;
 
   private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
-    if (!this.flyCamera || event.deltaY === 0) return;
+    if (!this.flyCamera || this.movementMode !== "fly" || event.deltaY === 0) return;
 
     event.preventDefault();
     const pixelsPerUnit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
@@ -105,6 +129,10 @@ export class Game {
     this.updateFlySpeedOutput();
   };
 
+  private readonly handleWindowBlur = (): void => {
+    this.heldMovementKeys.clear();
+  };
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.engine = new Engine(canvas, true, {
@@ -113,6 +141,7 @@ export class Game {
       antialias: true,
     });
     this.scene = new Scene(this.engine);
+    this.scene.collisionsEnabled = true;
     const query = new URLSearchParams(window.location.search);
     this.innerSize = queryInteger(query, "inner-size", 1, 1, 4);
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
@@ -126,7 +155,11 @@ export class Game {
     const initialMode: VegetationRenderMode = requestedMode === "models" || requestedMode === "impostors"
       ? requestedMode
       : "auto";
-    this.vegetationModes = { trees: initialMode, grass: "impostors", bushes: "impostors" };
+    this.vegetationModes = {
+      trees: initialMode,
+      grass: initialMode === "impostors" ? "impostors" : "auto",
+      bushes: initialMode === "impostors" ? "impostors" : "auto",
+    };
     const requestedDistance = query.get("vegetation-distance");
     const parsedDistance = Number(requestedDistance);
     this.vegetationLodDistanceMeters = requestedDistance !== null && Number.isFinite(parsedDistance)
@@ -137,7 +170,8 @@ export class Game {
     );
   }
 
-  async initialize(): Promise<void> {
+  async initialize(onProgress?: InitializationProgress): Promise<void> {
+    await reportInitializationProgress(onProgress, "Preparing the scene", 3);
     // Set scene background
     this.scene.clearColor = new Color4(0.02, 0.02, 0.05, 1);
 
@@ -161,17 +195,24 @@ export class Game {
     camera.angularSensibility = 1000;
     this.flyCamera = camera;
     this.setupFlySpeedControl();
+    window.addEventListener("blur", this.handleWindowBlur);
 
     // Add Q/E for vertical movement
     const verticalSpeed = 0.2;
     this.scene.onKeyboardObservable.add((kbInfo) => {
+      const key = kbInfo.event.key.toLowerCase();
       if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
+        if (["w", "a", "s", "d"].includes(key)) this.heldMovementKeys.add(key);
+        if (key === "g" && !(kbInfo.event as KeyboardEvent).repeat) this.toggleMovementMode();
+        if (this.movementMode !== "fly") return;
         if (kbInfo.event.key === "q" || kbInfo.event.key === "Q") {
           camera.position.y -= verticalSpeed;
         }
         if (kbInfo.event.key === "e" || kbInfo.event.key === "E") {
           camera.position.y += verticalSpeed;
         }
+      } else if (kbInfo.type === KeyboardEventTypes.KEYUP) {
+        this.heldMovementKeys.delete(key);
       }
     });
 
@@ -183,7 +224,8 @@ export class Game {
     );
 
     // Load terrain at the active example location.
-    await this.rebuildTerrain(this.terrainZoom);
+    await this.rebuildTerrain(this.terrainZoom, onProgress);
+    await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.vegetationControls = new VegetationControls(
       this.vegetationModes,
       this.vegetationLodDistanceMeters,
@@ -193,11 +235,16 @@ export class Game {
       (enabled) => this.setVegetationAmbientOcclusion(enabled),
     );
     this.setupDebugControls();
+    await reportInitializationProgress(onProgress, "Ready", 100);
   }
 
-  private async rebuildTerrain(zoom: number): Promise<void> {
+  private async rebuildTerrain(
+    zoom: number,
+    onProgress?: InitializationProgress,
+  ): Promise<void> {
     const requestId = ++this.terrainRequestId;
     const location = EXAMPLE_LOCATIONS[this.terrainLocationIndex];
+    await reportInitializationProgress(onProgress, "Loading terrain elevation", 8);
     const terrainData = await TerrainTiles.fetchTileAtLocation(
       location.lat,
       location.lon,
@@ -207,6 +254,7 @@ export class Game {
     if (requestId !== this.terrainRequestId) return;
     if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
 
+    await reportInitializationProgress(onProgress, "Loading maps and land cover", 18);
     const distantTerrainPromise = TerrainTiles.fetchTileAtLocation(
       location.lat,
       location.lon,
@@ -255,6 +303,7 @@ export class Game {
       distantTerrainPromise,
     ]);
     if (requestId !== this.terrainRequestId) return;
+    await reportInitializationProgress(onProgress, "Building terrain mesh", 34);
     const lakeElevationSource = terrainData.elevations.slice();
     landCover?.constrainElevations(terrainData);
 
@@ -308,6 +357,20 @@ export class Game {
       landCover,
     });
 
+    const vistaVegetationSpacingMeters = distantScene
+      ? chooseVistaVegetationSpacing(
+          distantScene.terrain.groundWidthMeters!,
+          distantScene.terrain.groundHeightMeters!,
+        )
+      : DEFAULT_TREE_SPACING_METERS;
+    // Equalize actual trees per square meter at the seam, not merely the
+    // occupancy percentage of two differently spaced candidate grids.
+    const localBorderDensityScale = Math.pow(
+      DEFAULT_TREE_SPACING_METERS / vistaVegetationSpacingMeters,
+      2,
+    );
+
+    await reportInitializationProgress(onProgress, "Planting trees", 44);
     const treeField = await createTreeField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
@@ -316,6 +379,17 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
+      densityScale: (worldX, worldZ) => vegetationDensityScaleAcrossLocalBoundary(
+        worldX,
+        worldZ,
+        meshWidth / 2,
+        meshDepth / 2,
+        {
+          innerScale: 0.88,
+          borderScale: localBorderDensityScale,
+          outerScale: localBorderDensityScale,
+        },
+      ),
     });
     treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
@@ -325,6 +399,7 @@ export class Game {
     }
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
 
+    await reportInitializationProgress(onProgress, "Growing grass", 55);
     const grassField = await createGrassField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
@@ -333,6 +408,14 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
+      renderMode: this.vegetationModes.grass,
+      densityScale: (worldX, worldZ) => vegetationDensityScaleAcrossLocalBoundary(
+        worldX,
+        worldZ,
+        meshWidth / 2,
+        meshDepth / 2,
+        { innerScale: 1, borderScale: 0, outerScale: 0 },
+      ),
     });
     grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
@@ -343,6 +426,7 @@ export class Game {
     }
     console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
 
+    await reportInitializationProgress(onProgress, "Adding flowers", 64);
     const flowerField = await createFlowerField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
@@ -351,6 +435,7 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
+      renderMode: this.vegetationModes.grass,
     });
     flowerField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
@@ -362,6 +447,7 @@ export class Game {
     }
     console.log(`Flowers: ${flowerField.count} simplex-placed grassland patches`);
 
+    await reportInitializationProgress(onProgress, "Adding bushes", 72);
     const bushField = await createBushField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
@@ -370,6 +456,7 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
+      renderMode: this.vegetationModes.bushes,
     });
     bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
@@ -382,11 +469,13 @@ export class Game {
     }
     console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
+    await reportInitializationProgress(onProgress, "Creating map features", 80);
     const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, mapOptions);
     console.log(
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );
 
+    await reportInitializationProgress(onProgress, "Creating water", 86);
     const water = createWaterPlane(this.scene, [
       terrain,
       ...treeField.meshes,
@@ -399,6 +488,7 @@ export class Game {
       height: meshDepth,
     });
 
+    await reportInitializationProgress(onProgress, "Building the distant landscape", 91);
     const distantVista = distantScene
       ? await DistantVista.create(this.scene, distantScene.terrain, {
           localTerrain: terrainData,
@@ -410,6 +500,7 @@ export class Game {
           mapTiles: distantScene.mapWays,
           lakeElevationSource: distantScene.lakeElevationSource,
           waterMesh: water,
+          vegetationSpacingMeters: vistaVegetationSpacingMeters,
         })
       : undefined;
     distantVista?.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
@@ -426,7 +517,7 @@ export class Game {
     }
     this.terrain?.dispose(false, true);
     this.water?.dispose(false, true);
-    // Impostor atlases are cached and shared by every rebuilt vegetation field.
+    // Impostor atlases are generated once per scene and shared by rebuilt vegetation fields.
     this.treeField?.root.dispose(false, false);
     this.grassField?.root.dispose(false, false);
     this.flowerField?.root.dispose(false, false);
@@ -434,6 +525,7 @@ export class Game {
     this.mapFeatures?.dispose(false, true);
     this.distantVista?.dispose();
     this.terrain = terrain;
+    terrain.checkCollisions = true;
     this.water = water;
     this.treeField = treeField;
     this.grassField = grassField;
@@ -442,6 +534,14 @@ export class Game {
     this.mapFeatures = mapFeatures.root;
     this.distantVista = distantVista;
     this.terrainData = terrainData;
+    this.walkableTerrain = {
+      data: terrainData,
+      width: meshWidth,
+      depth: meshDepth,
+      metersPerUnit,
+    };
+    this.configureCameraCollisionBody();
+    this.ensurePlayerAboveGround();
     this.updateVegetationLod(true);
 
     this.solarLighting?.setLocation(location.lat, location.lon);
@@ -449,6 +549,7 @@ export class Game {
       terrain,
       ...mapFeatures.meshes,
     ]);
+    await reportInitializationProgress(onProgress, "Finalizing terrain appearance", 96);
     await this.applyTerrainLayer(requestId);
   }
 
@@ -486,7 +587,9 @@ export class Game {
   }
 
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
-    if (category === "grass" || category === "bushes") mode = "impostors";
+    // Rendering every procedural clump as geometry is prohibitively costly;
+    // Auto still provides real models in the immediate foreground.
+    if ((category === "grass" || category === "bushes") && mode === "models") mode = "auto";
     this.vegetationModes[category] = mode;
     const field = category === "trees"
       ? this.treeField
@@ -537,9 +640,9 @@ export class Game {
     this.lastVegetationLodUpdate = now;
     this.lastVegetationCameraPosition = position.clone();
     this.treeField?.updateLod(position, this.vegetationLodDistanceMeters);
-    this.grassField?.updateLod(position, this.vegetationLodDistanceMeters);
-    this.flowerField?.updateLod(position, this.vegetationLodDistanceMeters);
-    this.bushField?.updateLod(position, this.vegetationLodDistanceMeters);
+    this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
+    this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
+    this.bushField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 16));
   }
 
   private async changeTerrainLocation(locationIndex: number): Promise<void> {
@@ -595,6 +698,7 @@ export class Game {
 
   run(): void {
     this.engine.runRenderLoop(() => {
+      this.updateWalker();
       this.updateVegetationLod();
       this.scene.render();
       this.fpsCounter.update(this.engine, this.scene);
@@ -607,6 +711,7 @@ export class Game {
 
   dispose(): void {
     this.canvas.removeEventListener("wheel", this.handleFlySpeedWheel);
+    window.removeEventListener("blur", this.handleWindowBlur);
     this.flySpeedOutput?.remove();
     this.fpsCounter.dispose();
     this.vegetationControls?.dispose();
@@ -624,9 +729,136 @@ export class Game {
 
   private updateFlySpeedOutput(): void {
     if (!this.flyCamera || !this.flySpeedOutput) return;
+    if (this.movementMode === "walk") {
+      this.flySpeedOutput.value = `Walk · ${WALK_SPEED_METERS_PER_SECOND.toFixed(1)} m/s · G: Fly`;
+      this.flySpeedOutput.setAttribute("aria-label", "Walker mode. Press G for fly mode.");
+      return;
+    }
+
     const speed = this.flyCamera.speed.toFixed(2);
-    this.flySpeedOutput.value = `Speed ${speed}`;
-    this.flySpeedOutput.setAttribute("aria-label", `Fly speed ${speed}`);
+    this.flySpeedOutput.value = `Fly · Speed ${speed} · G: Walk`;
+    this.flySpeedOutput.setAttribute("aria-label", `Fly mode. Speed ${speed}. Press G for walker mode.`);
+  }
+
+  private toggleMovementMode(): void {
+    if (!this.flyCamera) return;
+
+    this.movementMode = this.movementMode === "fly" ? "walk" : "fly";
+    this.verticalVelocityMetersPerSecond = 0;
+    this.flyCamera.cameraDirection.setAll(0);
+    this.heldMovementKeys.clear();
+
+    if (this.movementMode === "walk") {
+      // Babylon's standard free-camera input follows the vertical look angle.
+      // Walker movement is applied separately to remain parallel with the ground.
+      this.flyCamera.keysUp = [];
+      this.flyCamera.keysDown = [];
+      this.flyCamera.keysLeft = [];
+      this.flyCamera.keysRight = [];
+      this.flyCamera.checkCollisions = true;
+      this.configureCameraCollisionBody();
+      this.ensurePlayerAboveGround();
+    } else {
+      this.flyCamera.keysUp = [87];
+      this.flyCamera.keysDown = [83];
+      this.flyCamera.keysLeft = [65];
+      this.flyCamera.keysRight = [68];
+      this.flyCamera.checkCollisions = false;
+    }
+
+    this.updateFlySpeedOutput();
+  }
+
+  private updateWalker(): void {
+    const camera = this.flyCamera;
+    const terrain = this.walkableTerrain;
+    if (this.movementMode !== "walk" || !camera || !terrain) return;
+
+    const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+    const forward = Number(this.heldMovementKeys.has("w")) - Number(this.heldMovementKeys.has("s"));
+    const right = Number(this.heldMovementKeys.has("d")) - Number(this.heldMovementKeys.has("a"));
+    if (forward !== 0 || right !== 0) {
+      const inputLength = Math.hypot(forward, right);
+      const yaw = camera.rotation.y;
+      const distance = WALK_SPEED_METERS_PER_SECOND * deltaSeconds / terrain.metersPerUnit;
+      camera.position.x += (
+        Math.sin(yaw) * forward + Math.cos(yaw) * right
+      ) * distance / inputLength;
+      camera.position.z += (
+        Math.cos(yaw) * forward - Math.sin(yaw) * right
+      ) * distance / inputLength;
+    }
+
+    const groundEyeHeight = this.getGroundEyeHeight(camera.position.x, camera.position.z);
+    this.verticalVelocityMetersPerSecond -= GRAVITY_METERS_PER_SECOND_SQUARED * deltaSeconds;
+    camera.position.y += (
+      this.verticalVelocityMetersPerSecond * deltaSeconds / terrain.metersPerUnit
+    );
+    if (groundEyeHeight !== undefined && camera.position.y <= groundEyeHeight) {
+      camera.position.y = groundEyeHeight;
+      this.verticalVelocityMetersPerSecond = 0;
+    }
+  }
+
+  private ensurePlayerAboveGround(): void {
+    if (!this.flyCamera || this.movementMode !== "walk") return;
+    const groundEyeHeight = this.getGroundEyeHeight(
+      this.flyCamera.position.x,
+      this.flyCamera.position.z,
+    );
+    if (groundEyeHeight !== undefined && this.flyCamera.position.y < groundEyeHeight) {
+      this.flyCamera.position.y = groundEyeHeight;
+      this.verticalVelocityMetersPerSecond = 0;
+    }
+  }
+
+  private getGroundEyeHeight(x: number, z: number): number | undefined {
+    const terrain = this.walkableTerrain;
+    if (!terrain) return undefined;
+    if (Math.abs(x) > terrain.width / 2 || Math.abs(z) > terrain.depth / 2) return undefined;
+
+    // Use the highest point under the player's footprint so the 1.8 m body
+    // cannot intersect a steep triangle beside its center point.
+    const radius = PLAYER_RADIUS_METERS / terrain.metersPerUnit;
+    const offsets: ReadonlyArray<readonly [number, number]> = [
+      [0, 0],
+      [-radius, -radius],
+      [radius, -radius],
+      [-radius, radius],
+      [radius, radius],
+    ];
+    let elevationMeters = -Infinity;
+    for (const [offsetX, offsetZ] of offsets) {
+      elevationMeters = Math.max(
+        elevationMeters,
+        sampleElevation(
+          terrain.data,
+          x + offsetX,
+          z + offsetZ,
+          terrain.width,
+          terrain.depth,
+        ),
+      );
+    }
+    return (elevationMeters + PLAYER_HEIGHT_METERS) / terrain.metersPerUnit;
+  }
+
+  private configureCameraCollisionBody(): void {
+    const camera = this.flyCamera;
+    const terrain = this.walkableTerrain;
+    if (!camera || !terrain) return;
+    camera.ellipsoid.set(
+      PLAYER_RADIUS_METERS / terrain.metersPerUnit,
+      PLAYER_HEIGHT_METERS / (2 * terrain.metersPerUnit),
+      PLAYER_RADIUS_METERS / terrain.metersPerUnit,
+    );
+    // Babylon defaults minZ to one whole scene unit. One unit represents many
+    // meters here, causing that near plane to slice through the ground below
+    // a correctly positioned 1.8 m camera.
+    camera.minZ = CAMERA_NEAR_CLIP_METERS / terrain.metersPerUnit;
+    // FreeCamera positions its collision ellipsoid below the camera, placing
+    // its bottom exactly one full player height below the eye point.
+    camera.ellipsoidOffset.setAll(0);
   }
 
   /**
@@ -798,6 +1030,16 @@ function queryInteger(
   maximum: number,
 ): number {
   return Math.round(queryNumber(query, name, fallback, minimum, maximum));
+}
+
+async function reportInitializationProgress(
+  onProgress: InitializationProgress | undefined,
+  step: string,
+  progress: number,
+): Promise<void> {
+  if (!onProgress) return;
+  onProgress(step, progress);
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function smoothVertexColors(colors: Float32Array, rowSize: number, radius: number): void {

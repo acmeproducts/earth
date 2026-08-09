@@ -129,7 +129,8 @@ export class TreeImpostorDemo {
     ({ panel: this.panel, status: this.status, preview: this.preview } = this.createControls());
   }
 
-  async initialize(): Promise<void> {
+  async initialize(onProgress?: (step: string, progress: number) => void): Promise<void> {
+    onProgress?.("Generating source tree", 25);
     this.setStatus("Generating source tree...");
     const source = createProceduralTree(this.scene, { name: "treeCaptureSource" });
     this.sourceRoot = source;
@@ -137,9 +138,11 @@ export class TreeImpostorDemo {
     this.center = Vector3.Zero();
     this.diameter = PROCEDURAL_TREE_CAPTURE_DIAMETER;
     await this.scene.whenReadyAsync();
+    onProgress?.("Preparing preview", 80);
     this.camera.target.copyFrom(this.center);
     this.camera.radius = this.diameter * 1.35;
     this.setStatus("Procedural source ready. Capture uses the source only; preview uses only atlases.");
+    onProgress?.("Ready", 100);
   }
 
   run(): void {

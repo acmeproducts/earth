@@ -29,6 +29,7 @@ import {
 import { LandCoverClass, WorldCover } from "./WorldCover";
 
 export type TreeFieldResult = VegetationFieldResult;
+export const DEFAULT_TREE_SPACING_METERS = 3.5;
 
 export interface ImpostorPrototype {
   root: TransformNode;
@@ -55,8 +56,10 @@ interface TreeFieldOptions {
   exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
   includeModels?: boolean;
+  forceLowestImpostorLod?: boolean;
   positionOffset?: Vector3;
   elevationSampler?: (x: number, z: number) => number;
+  densityScale?: (worldX: number, worldZ: number) => number;
 }
 
 export const impostorVertexShader = `
@@ -106,7 +109,14 @@ void main(void) {
   vInstanceOcclusion = 0.0;
   vInstanceColor = vec3(1.0);
   #endif
-  gl_Position = viewProjection * worldPosition;
+  vec4 clipPosition = viewProjection * worldPosition;
+  vec4 centerClipPosition = viewProjection * vec4(center, 1.0);
+  // The box is only conservative raster coverage for the camera-facing image.
+  // Using its nearest wall as depth makes the impostor incorrectly cover real
+  // geometry between that wall and the captured object's center. Flatten the
+  // proxy onto the center plane while retaining its screen-space coverage.
+  clipPosition.z = (centerClipPosition.z / centerClipPosition.w) * clipPosition.w;
+  gl_Position = clipPosition;
 }`;
 
 export const impostorFragmentShader = `
@@ -135,11 +145,12 @@ uniform vec2 lowTileInset;
 uniform vec2 captureDimensions;
 uniform float impostorLodNear;
 uniform float impostorLodFar;
+uniform float forceLowestLod;
 uniform float cameraOrthographic;
 uniform float captureCenterY;
-uniform float sunEnergy;
-uniform float skyEnergy;
-uniform float groundEnergy;
+uniform vec3 sunColor;
+uniform vec3 skyColor;
+uniform vec3 groundColor;
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -158,6 +169,15 @@ vec4 lowAtlasSample(float face, vec2 uv) {
 }
 
 vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
+  if (forceLowestLod > 0.5) {
+    vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
+    vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / gridDimensions);
+    // Raw low atlases contain straight RGB. The shared output path below
+    // unpremultiplies its input, so convert to premultiplied color here first.
+    // A binary edge also prevents tiny filtered alpha values from sparkling.
+    lowColor.a = step(0.5, lowColor.a);
+    return vec4(lowColor.rgb * lowColor.a, lowColor.a);
+  }
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
   vec2 atlasUV = (tile + localUV) / gridDimensions;
   if (lodBlend <= 0.0) return atlasSample(face, atlasUV);
@@ -314,9 +334,13 @@ void main(void) {
   );
   localNormal = normalize(mix(localNormal, vLocalWorldUp, 0.58));
   float upward = dot(localNormal, vLocalWorldUp) * 0.5 + 0.5;
-  float ambient = mix(groundEnergy, skyEnergy, upward);
+  vec3 ambientColor = mix(groundColor, skyColor, upward);
   float direct = max(0.0, (dot(localNormal, vLocalSunDirection) + 0.42) / 1.42);
-  float brightness = clamp(ambient + sunEnergy * (0.16 + direct * 0.62), 0.28, 1.25);
+  vec3 lighting = clamp(
+    ambientColor + sunColor * (0.16 + direct * 0.62),
+    vec3(0.0),
+    vec3(1.25)
+  );
 
   // Open sky lights the crown more strongly than the lower foliage. Nearby
   // crowns reduce that sky visibility, most noticeably low in the tree.
@@ -324,8 +348,10 @@ void main(void) {
   float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
   float lowerTree = 1.0 - smoothstep(0.18, 0.82, height01);
   float neighborShade = 1.0 - vInstanceOcclusion * mix(0.16, 0.48, lowerTree);
-  brightness = clamp(brightness * crownLight * neighborShade, 0.20, 1.25);
-  gl_FragColor = vec4(straightColor * brightness, 1.0);
+  // Preserve enough ambient response for foliage to remain readable after
+  // sunset, including shaded lower crowns and densely occluded trees.
+  lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+  gl_FragColor = vec4(straightColor * lighting, 1.0);
 }`;
 
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
@@ -339,7 +365,7 @@ export async function createTreeField(
     meshDepth,
     metersPerUnit,
     seed = 0x4f534c4f,
-    spacingMeters = 3.5,
+    spacingMeters = DEFAULT_TREE_SPACING_METERS,
     occupancy = 0.52,
     edgeOccupancy = 0.12,
     fullDensityDepthMeters = 45,
@@ -348,12 +374,17 @@ export async function createTreeField(
     exclusionMask,
     renderMode = "impostors",
     includeModels = true,
+    forceLowestImpostorLod = false,
     positionOffset = Vector3.Zero(),
     elevationSampler,
+    densityScale,
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const prototype = await createTreeImpostorPrototype(scene, treeHeight, "treeField");
   const { root, mesh: tree, captureWidth } = prototype;
+  if (prototype.mesh.material instanceof ShaderMaterial) {
+    prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
+  }
   const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight) : [];
   modelMeshes.forEach((mesh) => { mesh.parent = root; });
   const modelMaterials = new Set(modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null));
@@ -416,7 +447,13 @@ export async function createTreeField(
 
         const depth = Math.min(1, edgeDistances[index] / fullDensityDepthMeters);
         const interiorWeight = depth * depth * (3 - 2 * depth);
-        const localOccupancy = edgeOccupancy + (occupancy - edgeOccupancy) * interiorWeight;
+        const worldX = x + positionOffset.x;
+        const worldZ = z + positionOffset.z;
+        const localOccupancy = Math.min(
+          1,
+          (edgeOccupancy + (occupancy - edgeOccupancy) * interiorWeight) *
+            Math.max(0, densityScale?.(worldX, worldZ) ?? 1),
+        );
         if (random() > localOccupancy) continue;
 
         const heightScale = 0.75 + random() * 0.5;
@@ -429,9 +466,9 @@ export async function createTreeField(
             new Vector3(widthScale, heightScale, widthScale),
             new Vector3(pitch, yaw, roll).toQuaternion(),
             new Vector3(
-              x + positionOffset.x,
+              worldX,
               elevation / metersPerUnit + positionOffset.y,
-              z + positionOffset.z,
+              worldZ,
             ),
           ),
         );
@@ -507,7 +544,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunEnergy", "skyEnergy", "groundEnergy"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunColor", "skyColor", "groundColor"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
       needAlphaBlending: false,
     },
@@ -528,6 +565,7 @@ export function createImpostorMaterial(
   // (about 10x-25x the rendered impostor height).
   material.setFloat("impostorLodNear", 10);
   material.setFloat("impostorLodFar", 25);
+  material.setFloat("forceLowestLod", 0);
   material.setFloat("cameraOrthographic", 0);
   material.setFloat("rotationallySymmetric", assets.rotationallySymmetric ? 1 : 0);
   material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
@@ -555,21 +593,20 @@ export function createImpostorMaterial(
       "sunDirection",
       sun?.isEnabled() ? sun.direction.scale(-1).normalize() : Vector3.Up(),
     );
-    material.setFloat("sunEnergy", sun?.isEnabled()
-      ? colorEnergy(sun.diffuse) * sun.intensity
-      : 0);
-    material.setFloat("skyEnergy", ambient
-      ? colorEnergy(ambient.diffuse) * ambient.intensity
-      : colorEnergy(fallbackSky));
-    material.setFloat("groundEnergy", ambient
-      ? colorEnergy(ambient.groundColor) * ambient.intensity
-      : colorEnergy(fallbackGround));
+    material.setColor3(
+      "sunColor",
+      sun?.isEnabled() ? sun.diffuse.scale(sun.intensity) : Color3.Black(),
+    );
+    material.setColor3(
+      "skyColor",
+      ambient ? ambient.diffuse.scale(ambient.intensity) : fallbackSky,
+    );
+    material.setColor3(
+      "groundColor",
+      ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
+    );
   });
   return material;
-}
-
-function colorEnergy(color: Color3): number {
-  return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
 }
 
 function createImpostorBox(
@@ -635,15 +672,13 @@ function distanceInsideMask(
 ): Float32Array {
   const distance = new Float32Array(mask.length);
   const diagonalStep = Math.hypot(horizontalStep, verticalStep);
-  const boundaryDistance = Math.min(horizontalStep, verticalStep) / 2;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
+      // A tile boundary is not a forest boundary. Leaving edge cells open lets
+      // adjacent local/vista fields share density without an artificial rim.
       distance[index] = mask[index] ? Infinity : 0;
-      if (mask[index] && (x === 0 || x === width - 1 || y === 0 || y === height - 1)) {
-        distance[index] = boundaryDistance;
-      }
     }
   }
 

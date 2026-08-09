@@ -2,6 +2,8 @@ import {
   Color3,
   Mesh,
   Scene,
+  ShaderMaterial,
+  VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
 import {
@@ -13,8 +15,10 @@ import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 
 export type GrassImpostorAssets = ImpostorAssets;
 
-const SOURCE_HEIGHT = 0.6;
-const CAPTURE_DIAMETER = 7.3;
+const SOURCE_HEIGHT = 0.85;
+// Keeping the patch compact and relatively tall lets its blades use the square
+// capture efficiently instead of collapsing into a thin strip of pixels.
+const CAPTURE_DIAMETER = 3.8;
 // Keep grass in the same cool-green family as the tree canopy, with a small
 // lift so it remains distinguishable at ground level.
 const GRASS_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
@@ -34,7 +38,7 @@ const grassImpostors = createImpostorAssetProvider({
   rotationalSymmetryOrder: 4,
   sampling: {
     horizontalSamples: { default: 8, minimum: 1, maximum: 24 },
-    verticalSamples: { default: 8, minimum: 1, maximum: 12 },
+    verticalSamples: { default: 12, minimum: 1, maximum: 20 },
     resolution: { default: 128, minimum: 48, maximum: 512 },
   },
 });
@@ -54,7 +58,7 @@ export function getGrassImpostorAssets(
 }
 
 /** Builds a dense clump from tapered, curved blade strips without external assets. */
-function createGrassSource(scene: Scene): Mesh {
+function createGrassSource(scene: Scene, liveLighting = false): Mesh {
   const random = mulberry32(0x47524153);
   const positions: number[] = [];
   const indices: number[] = [];
@@ -67,12 +71,12 @@ function createGrassSource(scene: Scene): Mesh {
 
   for (let blade = 0; blade < bladeCount / symmetryOrder; blade++) {
     const baseAngle = random() * sectorAngle;
-    const edgeRadius = 2.5 + (random() - 0.5) * 0.38;
+    const edgeRadius = 1.3 + (random() - 0.5) * 0.22;
     const radius = Math.sqrt(random()) * edgeRadius;
     const bladeAngle = random() * Math.PI * 2;
     const bendAngle = baseAngle + (random() - 0.5) * 1.8;
     const edgeScale = 1 - 0.24 * Math.pow(radius / edgeRadius, 2);
-    const height = (0.18 + Math.pow(random(), 0.7) * 0.42) * edgeScale;
+    const height = (0.28 + Math.pow(random(), 0.7) * 0.57) * edgeScale;
     const bend = (0.035 + random() * 0.3) * height;
     const width = 0.012 + Math.pow(random(), 1.7) * 0.052;
     const paletteRoll = random();
@@ -140,10 +144,35 @@ function createGrassSource(scene: Scene): Mesh {
   const material = createVertexColorCaptureMaterial(
     scene,
     "grassImpostorSourceMaterial",
-    false,
+    liveLighting,
   );
   grass.material = material;
   return grass;
+}
+
+/** Builds the captured procedural clump as live geometry for nearby instances. */
+export function createGrassModel(scene: Scene, renderHeight: number): Mesh {
+  const grass = createGrassSource(scene, true);
+  grass.name = "grassModels";
+  scaleSourceToHeight(grass, renderHeight, SOURCE_HEIGHT);
+  if (grass.material instanceof ShaderMaterial) {
+    grass.material.setFloat("modelHeight", renderHeight);
+  }
+  return grass;
+}
+
+function scaleSourceToHeight(mesh: Mesh, renderHeight: number, sourceHeight: number): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) throw new Error(`${mesh.name} has no position data.`);
+
+  const scale = renderHeight / sourceHeight;
+  for (let index = 0; index < positions.length; index += 3) {
+    positions[index] *= scale;
+    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
+    positions[index + 2] *= scale;
+  }
+  mesh.setVerticesData(VertexBuffer.PositionKind, positions);
+  mesh.refreshBoundingInfo();
 }
 
 function mulberry32(seed: number): () => number {

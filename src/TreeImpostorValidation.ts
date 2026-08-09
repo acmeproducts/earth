@@ -59,10 +59,12 @@ export class TreeImpostorValidation {
     this.scene.activeCamera = this.camera;
   }
 
-  async initialize(): Promise<void> {
+  async initialize(onProgress?: (step: string, progress: number) => void): Promise<void> {
+    onProgress?.("Generating validation assets", 10);
     document.body.classList.add("impostor-mode");
     document.getElementById("attribution")?.remove();
     const prototype = await createTreeImpostorPrototype(this.scene, 2, "validationTree");
+    onProgress?.("Validating cube faces", 50);
     const { mesh, assets, captureSize } = prototype;
     const geometry = validateCubeGeometry(mesh);
     mesh.thinInstanceSetBuffer("matrix", Float32Array.from(Matrix.Identity().asArray()), 16, true);
@@ -346,6 +348,7 @@ export class TreeImpostorValidation {
       "TREE_IMPOSTOR_VALIDATION",
       JSON.stringify({ passed, geometry, viewVariation, topCoverage, aboveVariation, aboveCoverage, demoIou, demoCoverageRatio, opaqueOutput, minimumPerspectiveDemoIou, maximumPerspectiveCoverageError, maximumPerspectiveScaleError, maximumPerspectiveCenterError, minimumOrbitCoverage, maximumOrbitCoverage, maximumOrbitCoverageJump, minimumFaceSeamIou, results }),
     );
+    onProgress?.("Ready", 100);
   }
 
   run(): void {

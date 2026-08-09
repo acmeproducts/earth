@@ -358,6 +358,34 @@ export async function captureImpostorAtlases(
     camera.dispose();
   }
 
+  return createImpostorTextures(scene, name, canvases, {
+    rotationallySymmetric,
+    rotationalSymmetryOrder,
+    gridWidth,
+    gridHeight,
+    resolution: resolutionHeight,
+    resolutionWidth,
+    resolutionHeight,
+    lowResolutionWidth: Math.max(
+      1,
+      Math.round(LOW_RESOLUTION_FRAME_SIZE * resolutionWidth / resolutionHeight),
+    ),
+    lowResolutionHeight: LOW_RESOLUTION_FRAME_SIZE,
+    sourceHeight,
+    captureDiameter,
+    captureWidth,
+    captureHeight,
+  });
+}
+
+function createImpostorTextures(
+  scene: Scene,
+  name: string,
+  canvases: HTMLCanvasElement[],
+  metadata: Omit<ImpostorAssets, "textures" | "lowResolutionTextures" | "gridSize">,
+): ImpostorAssets {
+  const atlasWidth = metadata.gridWidth * metadata.resolutionWidth;
+  const atlasHeight = metadata.gridHeight * metadata.resolutionHeight;
   const textures = canvases.map((canvas, index) => {
     const texture = new DynamicTexture(
       `${name}Atlas${index}`,
@@ -374,20 +402,15 @@ export async function captureImpostorAtlases(
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     return texture;
   });
-  const lowResolutionHeight = LOW_RESOLUTION_FRAME_SIZE;
-  const lowResolutionWidth = Math.max(
-    1,
-    Math.round(lowResolutionHeight * resolutionWidth / resolutionHeight),
-  );
   const lowResolutionTextures = canvases.map((canvas, index) => {
     const lowImage = downsampleAtlasTiles(
       canvas,
-      gridWidth,
-      gridHeight,
-      resolutionWidth,
-      resolutionHeight,
-      lowResolutionWidth,
-      lowResolutionHeight,
+      metadata.gridWidth,
+      metadata.gridHeight,
+      metadata.resolutionWidth,
+      metadata.resolutionHeight,
+      metadata.lowResolutionWidth,
+      metadata.lowResolutionHeight,
     );
     const texture = new RawTexture(
       lowImage.data,
@@ -409,20 +432,8 @@ export async function captureImpostorAtlases(
   return {
     textures,
     lowResolutionTextures,
-    rotationallySymmetric,
-    rotationalSymmetryOrder,
-    gridWidth,
-    gridHeight,
-    gridSize: gridWidth,
-    resolution: resolutionHeight,
-    resolutionWidth,
-    resolutionHeight,
-    lowResolutionWidth,
-    lowResolutionHeight,
-    sourceHeight,
-    captureDiameter,
-    captureWidth,
-    captureHeight,
+    ...metadata,
+    gridSize: metadata.gridWidth,
   };
 }
 

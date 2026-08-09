@@ -9,7 +9,6 @@ import {
 import { WaterMaterial } from "@babylonjs/materials";
 import { lonLatToScene, sampleElevation, sceneToLonLat } from "./Geo";
 import {
-  MapClipBounds,
   MapFeatureLayer,
   MapTile,
   OpenStreetMap,
@@ -17,9 +16,13 @@ import {
 import { createTerrainMaterial } from "./TerrainMaterial";
 import { TerrainResult } from "./TerrainTiles";
 import { createTreeField, TreeFieldResult } from "./TreeField";
+import {
+  estimateVistaVegetationCandidates,
+  vegetationDensityScaleAcrossLocalBoundary,
+} from "./VistaVegetation";
 import { landCoverSurfaceColor, WorldCover } from "./WorldCover";
 
-const TARGET_CELLS_ACROSS_OUTER_TERRAIN = 192;
+const MAX_SOURCE_CELLS_ACROSS_OUTER_TERRAIN = 1024;
 const INNER_OVERLAP = 1.5;
 const SEAM_BLEND_WIDTH = 16;
 
@@ -33,6 +36,7 @@ interface VistaOptions {
   mapTiles: MapTile[];
   lakeElevationSource: Float32Array;
   waterMesh: Mesh;
+  vegetationSpacingMeters: number;
 }
 
 interface Patch {
@@ -47,7 +51,7 @@ export class DistantVista {
   readonly root: TransformNode;
 
   private readonly terrain: Mesh;
-  private readonly lakes: MapFeatureLayer;
+  private readonly mapFeatures: MapFeatureLayer;
   private readonly trees: TreeFieldResult;
 
   static async create(
@@ -85,18 +89,31 @@ export class DistantVista {
           worldZ + radius >= -halfLocalDepth && worldZ - radius <= halfLocalDepth;
       },
     };
+    console.log(
+      `Distant vista source: ${options.vegetationSpacingMeters.toFixed(1)}m tree spacing, ` +
+      `${estimateVistaVegetationCandidates(
+        distantTerrain.groundWidthMeters!,
+        distantTerrain.groundHeightMeters!,
+        options.vegetationSpacingMeters,
+      ).toLocaleString()} candidate positions`,
+    );
     const trees = await createTreeField(scene, distantTerrain, {
       meshWidth: distantWidth,
       meshDepth: distantDepth,
       metersPerUnit: options.metersPerUnit,
-      spacingMeters: 18,
-      occupancy: 0.54,
-      edgeOccupancy: 0.16,
-      fullDensityDepthMeters: 90,
+      spacingMeters: options.vegetationSpacingMeters,
+      densityScale: (worldX, worldZ) => vegetationDensityScaleAcrossLocalBoundary(
+        worldX,
+        worldZ,
+        halfLocalWidth,
+        halfLocalDepth,
+        { innerScale: 1, borderScale: 1, outerScale: 1.12 },
+      ),
       landCover: options.distantLandCover,
       exclusionMask: localTerrainMask,
       renderMode: "impostors",
       includeModels: false,
+      forceLowestImpostorLod: true,
       positionOffset: new Vector3(offset.x, 0, offset.z),
       elevationSampler: (x, z) => sampleVistaElevation(
         distantTerrain,
@@ -125,24 +142,26 @@ export class DistantVista {
     this.terrain = createTerrainRing(scene, distantTerrain, options);
     this.terrain.parent = this.root;
     extendWaterMesh(options.waterMesh, this.terrain, options);
-    this.lakes = createDistantLakes(scene, distantTerrain, options, offset);
-    this.lakes.root.parent = this.root;
+    this.mapFeatures = createDistantMapFeatures(scene, distantTerrain, options, offset);
+    this.mapFeatures.root.parent = this.root;
     trees.root.parent = this.root;
     addWaterRenderMeshes(options.waterMesh, [
       this.terrain,
       ...trees.meshes,
-      ...this.lakes.meshes,
+      ...this.mapFeatures.meshes,
     ]);
     console.log(
       `Distant vista: ${(this.terrain.getTotalIndices() / 3).toLocaleString()} terrain triangles, ` +
       `${trees.count.toLocaleString()} trees, ` +
-      `${this.lakes.counts.water.toLocaleString()} lake polygons`,
+      `${this.mapFeatures.counts.buildings.toLocaleString()} buildings, ` +
+      `${this.mapFeatures.counts.roads.toLocaleString()} roads, ` +
+      `${this.mapFeatures.counts.water.toLocaleString()} water polygons`,
     );
   }
 
   dispose(): void {
     // Impostor atlases are shared with the replacement local scene.
-    this.lakes.root.dispose(false, true);
+    this.mapFeatures.root.dispose(false, true);
     const terrainMaterial = this.terrain.material;
     this.terrain.material = null;
     terrainMaterial?.dispose(true, true);
@@ -152,9 +171,9 @@ export class DistantVista {
   setAmbientOcclusionEnabled(enabled: boolean): void {
     this.trees.setAmbientOcclusionEnabled(enabled);
   }
-}
 
-function createDistantLakes(
+}
+function createDistantMapFeatures(
   scene: Scene,
   distantTerrain: TerrainResult,
   options: VistaOptions,
@@ -162,18 +181,13 @@ function createDistantLakes(
 ): MapFeatureLayer {
   const distantWidth = distantTerrain.groundWidthMeters! / options.metersPerUnit;
   const distantDepth = distantTerrain.groundHeightMeters! / options.metersPerUnit;
-  const inner = {
-    minX: -options.localMeshWidth / 2 - offset.x,
-    maxX: options.localMeshWidth / 2 - offset.x,
-    minZ: -options.localMeshDepth / 2 - offset.z,
-    maxZ: options.localMeshDepth / 2 - offset.z,
-  };
-  const layer = OpenStreetMap.createWaterLayer(scene, options.mapTiles, distantTerrain, {
+  const layer = OpenStreetMap.createLayer(scene, options.mapTiles, distantTerrain, {
     meshWidth: distantWidth,
     meshDepth: distantDepth,
     metersPerUnit: options.metersPerUnit,
     lakeElevationSource: options.lakeElevationSource,
-  }, inner);
+    excludeBoundaryWater: true,
+  });
   layer.root.position.set(offset.x, 0, offset.z);
   return layer;
 }
@@ -222,9 +236,13 @@ function createTerrainRing(
   const uvs: number[] = [];
   const indices: number[] = [];
   const colors = options.distantLandCover ? [] as number[] : undefined;
-  const cellSize = Math.max(
-    (outer.maxX - outer.minX) / TARGET_CELLS_ACROSS_OUTER_TERRAIN,
+  const sourceCellsAcross = Math.max(
     1,
+    Math.min(MAX_SOURCE_CELLS_ACROSS_OUTER_TERRAIN, distantTerrain.width - 1),
+  );
+  const cellSize = Math.max(
+    (outer.maxX - outer.minX) / sourceCellsAcross,
+    0.01,
   );
 
   for (const patch of patches) {
@@ -298,7 +316,12 @@ function appendPatch(
       const seamBlend = smoothstep(0, SEAM_BLEND_WIDTH, Math.hypot(outsideX, outsideZ));
       const elevation = sampleVistaElevation(distantTerrain, options, x, z);
       positions.push(x, elevation / options.metersPerUnit, z);
-      uvs.push(x / options.localMeshWidth, z / options.localMeshWidth);
+      // Match the local terrain's material scale and phase. The texture wraps,
+      // so coordinates outside the local footprint remain continuous.
+      uvs.push(
+        x / options.localMeshWidth + 0.5,
+        z / options.localMeshDepth + 0.5,
+      );
       if (colors && options.distantLandCover) {
         const distantColor = landCoverSurfaceColor(
           options.distantLandCover.sample(lon, lat),

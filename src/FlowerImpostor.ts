@@ -1,10 +1,13 @@
-import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
+import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
   ImpostorAssets,
 } from "./Impostor";
-import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
+import {
+  createVertexColorCaptureMaterial,
+  setVertexColorModelHeight,
+} from "./ProceduralCaptureMaterial";
 
 export type FlowerImpostorAssets = ImpostorAssets;
 
@@ -37,7 +40,7 @@ export function getFlowerImpostorAssets(scene: Scene): Promise<FlowerImpostorAss
 }
 
 /** Builds a neutral daisy patch tinted per instance by the render shader. */
-function createFlowerSource(scene: Scene): Mesh {
+function createFlowerSource(scene: Scene, liveLighting = false): Mesh {
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -126,7 +129,30 @@ function createFlowerSource(scene: Scene): Mesh {
   data.applyToMesh(flowers);
   flowers.isPickable = false;
   flowers.useVertexColors = true;
-  flowers.material = createVertexColorCaptureMaterial(scene, "flowerImpostorSourceMaterial", false);
+  flowers.material = createVertexColorCaptureMaterial(
+    scene,
+    "flowerImpostorSourceMaterial",
+    liveLighting,
+  );
+  return flowers;
+}
+
+/** Builds the flower patch as live geometry for nearby instances. */
+export function createFlowerModel(scene: Scene, renderHeight: number): Mesh {
+  const flowers = createFlowerSource(scene, true);
+  flowers.name = "flowerModels";
+  const positions = flowers.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) throw new Error("Flower model has no position data.");
+
+  const scale = renderHeight / SOURCE_HEIGHT;
+  for (let index = 0; index < positions.length; index += 3) {
+    positions[index] *= scale;
+    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
+    positions[index + 2] *= scale;
+  }
+  flowers.setVerticesData(VertexBuffer.PositionKind, positions);
+  flowers.refreshBoundingInfo();
+  setVertexColorModelHeight(flowers, renderHeight);
   return flowers;
 }
 

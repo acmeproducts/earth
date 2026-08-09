@@ -85,7 +85,7 @@ into their own directional atlases, and scattered in noise-shaped clusters most
 densely through WorldCover shrubland with lighter placement elsewhere.
 
 Impostor capture is model-agnostic. `src/Impostor.ts` owns sampling validation,
-URL overrides, per-scene caching, source disposal, optional bounds fitting, and
+URL overrides, per-scene reuse, source disposal, optional bounds fitting, and
 atlas generation. To add another procedural model, define an
 `ImpostorDefinition` with its geometry factory, capture dimensions, sampling
 limits, faces, and symmetry, then create its provider with
@@ -142,10 +142,13 @@ earth/
 
 ## Controls
 
-- **W/A/S/D**: Fly forward, left, backward, and right
-- **Q/E**: Fly down and up
+- **G**: Switch between fly and walker modes
+- **W/A/S/D**: Move forward, left, backward, and right
+- **Q/E**: Fly down and up (fly mode only)
 - **Mouse + Drag**: Look around
-- **Mouse Wheel**: Increase or decrease fly speed
+- **Mouse Wheel**: Increase or decrease fly speed (fly mode only)
+
+Walker mode uses a 1.8 m player height, terrain collision, and gravity.
 
 ## Deployment
 

@@ -47,8 +47,11 @@ export class VegetationControls {
       group.setAttribute("role", "group");
       group.setAttribute("aria-label", `${label} renderer`);
 
-      const renderModes: ReadonlyArray<readonly [VegetationRenderMode, string]> = category !== "trees"
-        ? [["impostors", "Impostor"]]
+      const renderModes: ReadonlyArray<readonly [VegetationRenderMode, string]> = category === "grass" || category === "bushes"
+        ? [
+          ["impostors", "Impostor"],
+          ["auto", "Auto"],
+        ]
         : [
           ["impostors", "Impostor"],
           ["auto", "Auto"],

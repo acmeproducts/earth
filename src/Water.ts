@@ -3,6 +3,7 @@ import {
   Vector2,
   MeshBuilder,
   Color3,
+  HemisphericLight,
   Mesh,
   Texture,
 } from '@babylonjs/core';
@@ -56,11 +57,36 @@ export function createWaterPlane(
   water.waveLength = 0.1;
   water.windDirection = new Vector2(1, 1);
 
-  // Color & blending — higher blend factors mask the black refraction edge at the shoreline
-  water.waterColor = new Color3(0.05, 0.2, 0.4);
-  water.waterColor2 = new Color3(0.0, 0.1, 0.25);
-  water.colorBlendFactor = 0.55;
-  water.colorBlendFactor2 = 0.55;
+  // Keep one authoritative tint across the local and distant-vista geometry.
+  // Refraction otherwise exposes the differently rendered terrain beneath each
+  // region as a visible color boundary on the sea surface.
+  const seaColor = new Color3(0.05, 0.2, 0.4);
+  const litSeaColor = seaColor.clone();
+  const ambientColor = Color3.White();
+  water.waterColor = litSeaColor;
+  water.waterColor2 = litSeaColor.clone();
+  water.colorBlendFactor = 1;
+  water.colorBlendFactor2 = 1;
+
+  // Babylon's WaterMaterial binds scene lights for highlights, but its diffuse
+  // water tint bypasses the accumulated light color. Apply the upward-facing
+  // hemispheric contribution here so the ocean follows the same changing sky
+  // ambient as the terrain and vegetation.
+  water.onBindObservable.add(() => {
+    const ambient = scene.lights.find((light): light is HemisphericLight => (
+      light instanceof HemisphericLight && light.name === 'skyAmbientLight'
+    ));
+    if (ambient) {
+      ambient.diffuse.scaleToRef(
+        ambient.isEnabled() ? ambient.intensity : 0,
+        ambientColor
+      );
+    } else {
+      ambientColor.setAll(1);
+    }
+    seaColor.multiplyToRef(ambientColor, litSeaColor);
+    water.waterColor2.copyFrom(litSeaColor);
+  });
 
   // Add meshes to the water's render list for reflections/refractions
   for (const mesh of renderListMeshes) {

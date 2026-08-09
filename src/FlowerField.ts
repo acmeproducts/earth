@@ -1,10 +1,15 @@
-import { Matrix, Quaternion, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Matrix, Quaternion, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { getFlowerImpostorAssets } from "./FlowerImpostor";
+import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { TerrainResult } from "./TerrainTiles";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
-import { computeVegetationOcclusion, createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
+import {
+  computeVegetationOcclusion,
+  createVegetationFieldResult,
+  VegetationFieldResult,
+  VegetationRenderMode,
+} from "./VegetationField";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 
 interface FlowerFieldOptions {
@@ -17,6 +22,7 @@ interface FlowerFieldOptions {
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
   ambientOccluders?: readonly Float32Array[];
+  renderMode?: VegetationRenderMode;
 }
 
 const FLOWER_PALETTE: ReadonlyArray<readonly [number, number, number]> = [
@@ -43,16 +49,26 @@ export async function createFlowerField(
     landCover,
     exclusionMask,
     ambientOccluders = [],
+    renderMode = "auto",
   } = options;
+  const flowerHeight = 0.92 / metersPerUnit;
   const root = new TransformNode("flowerField", scene);
   const assets = await getFlowerImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,
     assets,
-    0.92 / metersPerUnit,
+    flowerHeight,
     root,
     "flowerImpostors",
   );
+  if (prototype.mesh.material instanceof ShaderMaterial) {
+    prototype.mesh.material.setFloat("impostorLodNear", 20);
+    prototype.mesh.material.setFloat("impostorLodFar", 50);
+  }
+  const flowerModel = createFlowerModel(scene, flowerHeight);
+  flowerModel.parent = root;
+  flowerModel.isPickable = false;
+  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, true));
   const random = mulberry32(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
@@ -124,10 +140,10 @@ export async function createFlowerField(
   return createVegetationFieldResult(
     root,
     [prototype.mesh],
-    [],
+    [flowerModel],
     matrixData,
     metersPerUnit,
-    "impostors",
+    renderMode,
     instanceOcclusion,
     new Float32Array(colors),
   );

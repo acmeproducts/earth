@@ -3,21 +3,27 @@ import {
   Mesh,
   Quaternion,
   Scene,
+  ShaderMaterial,
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { getGrassImpostorAssets } from "./GrassImpostor";
+import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
 import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
+  VegetationRenderMode,
 } from "./VegetationField";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 
 export type GrassFieldResult = VegetationFieldResult;
+
+/** Keeps the broad grass patch above small terrain interpolation differences. */
+const GRASS_GROUND_OFFSET_METERS = 0.07;
+const GRASS_HEIGHT_METERS = 0.55;
 
 interface GrassFieldOptions {
   meshWidth: number;
@@ -29,6 +35,8 @@ interface GrassFieldOptions {
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
   ambientOccluders?: readonly Float32Array[];
+  densityScale?: (worldX: number, worldZ: number) => number;
+  renderMode?: VegetationRenderMode;
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
@@ -57,8 +65,10 @@ export async function createGrassField(
     landCover,
     exclusionMask,
     ambientOccluders = [],
+    densityScale,
+    renderMode = "auto",
   } = options;
-  const grassHeight = 0.42 / metersPerUnit;
+  const grassHeight = GRASS_HEIGHT_METERS / metersPerUnit;
   const root = new TransformNode("grassField", scene);
   const assets = await getGrassImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
@@ -69,6 +79,20 @@ export async function createGrassField(
     "grassImpostors",
   );
   const grass = prototype.mesh;
+  if (grass.material instanceof ShaderMaterial) {
+    // Grass occupies few pixels much sooner than trees. Retain the detailed
+    // 128 px atlas through the middle distance before blending to 20 px.
+    grass.material.setFloat("impostorLodNear", 40);
+    grass.material.setFloat("impostorLodFar", 80);
+    // The shared impostor shader flattens proxy depth onto the patch center.
+    // Pull grass slightly forward so small terrain variations do not cut it off.
+    grass.material.zOffset = -1;
+    grass.material.zOffsetUnits = -1;
+  }
+  const grassModel = createGrassModel(scene, grassHeight);
+  grassModel.parent = root;
+  grassModel.isPickable = false;
+  root.onDisposeObservable.add(() => grassModel.material?.dispose(true, true));
   const captureSize = prototype.captureSize;
   const random = mulberry32(seed);
   const spacing = spacingMeters / metersPerUnit;
@@ -85,7 +109,11 @@ export async function createGrassField(
         const x = -meshWidth / 2 + (column + 0.15 + random() * 0.7) * cellWidth;
         const z = meshDepth / 2 - (row + 0.15 + random() * 0.7) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
-        const occupancy = OCCUPANCY[landCover.sample(lon, lat)] ?? 0;
+        const occupancy = Math.min(
+          1,
+          (OCCUPANCY[landCover.sample(lon, lat)] ?? 0) *
+            Math.max(0, densityScale?.(x, z) ?? 1),
+        );
         if (random() > occupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
@@ -118,7 +146,11 @@ export async function createGrassField(
           Matrix.Compose(
             new Vector3(widthScale, heightScale, widthScale),
             rotation,
-            new Vector3(x, elevation / metersPerUnit, z),
+            new Vector3(
+              x,
+              (elevation + GRASS_GROUND_OFFSET_METERS) / metersPerUnit,
+              z,
+            ),
           ),
         );
       }
@@ -135,10 +167,10 @@ export async function createGrassField(
   return createVegetationFieldResult(
     root,
     [grass],
-    [],
+    [grassModel],
     matrixData,
     metersPerUnit,
-    "impostors",
+    renderMode,
     instanceOcclusion,
   );
 }

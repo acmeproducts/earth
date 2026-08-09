@@ -69,7 +69,7 @@
       left: 12px;
       bottom: 28px;
       z-index: 30;
-      min-width: 94px;
+      min-width: 180px;
       height: 28px;
       padding: 0 8px;
       border: 1px solid rgba(255, 255, 255, 0.22);
@@ -209,6 +209,39 @@
       font-size: 14px;
       letter-spacing: 3px;
       text-transform: uppercase;
+      text-align: center;
+      min-height: 17px;
+    }
+
+    .loader-progress {
+      width: min(320px, calc(100vw - 48px));
+      height: 4px;
+      margin-top: 16px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #2a2a4a;
+    }
+
+    .loader-progress-bar {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #6366f1, #8b5cf6);
+      box-shadow: 0 0 12px rgba(99, 102, 241, 0.65);
+      transition: width 0.3s ease-out;
+    }
+
+    #loading.error .loader {
+      animation: none;
+      border-color: #ef4444;
+    }
+
+    #loading.error .loader-text {
+      color: #f87171;
+    }
+
+    #loading.error .loader-progress-bar {
+      background: #ef4444;
     }
 
     @keyframes spin {
@@ -258,7 +291,17 @@
 <body>
   <div id="loading">
     <div class="loader"></div>
-    <div class="loader-text">Initializing</div>
+    <div class="loader-text" aria-live="polite">Preparing the scene</div>
+    <div
+      class="loader-progress"
+      role="progressbar"
+      aria-label="World initialization progress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="0"
+    >
+      <div class="loader-progress-bar"></div>
+    </div>
   </div>
   <canvas id="renderCanvas"></canvas>
   <div id="attribution">

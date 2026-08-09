@@ -1,5 +1,5 @@
-import { Matrix, Mesh, Scene, TransformNode, Vector3 } from "@babylonjs/core";
-import { getBushImpostorAssets } from "./BushImpostor";
+import { Matrix, Mesh, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
@@ -9,6 +9,7 @@ import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
+  VegetationRenderMode,
 } from "./VegetationField";
 
 export type BushFieldResult = VegetationFieldResult;
@@ -23,6 +24,7 @@ interface BushFieldOptions {
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
   ambientOccluders?: readonly Float32Array[];
+  renderMode?: VegetationRenderMode;
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
@@ -51,6 +53,7 @@ export async function createBushField(
     landCover,
     exclusionMask,
     ambientOccluders = [],
+    renderMode = "auto",
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
   const root = new TransformNode("bushField", scene);
@@ -63,6 +66,14 @@ export async function createBushField(
     "bushImpostors",
   );
   const bush = prototype.mesh;
+  if (bush.material instanceof ShaderMaterial) {
+    bush.material.setFloat("impostorLodNear", 20);
+    bush.material.setFloat("impostorLodFar", 50);
+  }
+  const bushModel = createBushModel(scene, bushHeight);
+  bushModel.parent = root;
+  bushModel.isPickable = false;
+  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));
   const captureSize = prototype.captureSize;
 
   const random = mulberry32(seed);
@@ -131,10 +142,10 @@ export async function createBushField(
   return createVegetationFieldResult(
     root,
     [bush],
-    [],
+    [bushModel],
     matrixData,
     metersPerUnit,
-    "impostors",
+    renderMode,
     instanceOcclusion,
   );
 }

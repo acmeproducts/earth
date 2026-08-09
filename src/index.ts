@@ -6,6 +6,9 @@ import { TreeImpostorValidation } from './TreeImpostorValidation';
 window.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
   const loading = document.getElementById('loading');
+  const loadingText = loading?.querySelector<HTMLElement>('.loader-text');
+  const loadingProgress = loading?.querySelector<HTMLElement>('.loader-progress');
+  const loadingProgressBar = loading?.querySelector<HTMLElement>('.loader-progress-bar');
 
   if (!canvas) {
     console.error('Canvas element not found!');
@@ -25,7 +28,14 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('attribution')?.remove();
   }
 
-  game.initialize().then(() => {
+  const updateLoadingProgress = (step: string, progress: number): void => {
+    const normalizedProgress = Math.max(0, Math.min(100, progress));
+    if (loadingText) loadingText.textContent = step;
+    if (loadingProgressBar) loadingProgressBar.style.width = `${normalizedProgress}%`;
+    if (loadingProgress) loadingProgress.setAttribute('aria-valuenow', String(normalizedProgress));
+  };
+
+  game.initialize(updateLoadingProgress).then(() => {
     // Hide loading screen
     if (loading) {
       loading.classList.add('hidden');
@@ -38,6 +48,9 @@ window.addEventListener('DOMContentLoaded', () => {
     game.run();
   }).catch((error) => {
     console.error('Failed to initialize game:', error);
+    loading?.classList.add('error');
+    if (loadingText) loadingText.textContent = 'Unable to load the world';
+    loadingProgress?.setAttribute('aria-valuetext', 'Initialization failed');
   });
 
   // Handle window resize
