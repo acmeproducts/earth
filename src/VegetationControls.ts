@@ -16,12 +16,15 @@ const CATEGORIES: ReadonlyArray<readonly [VegetationCategory, string]> = [
 export class VegetationControls {
   private readonly element: HTMLElement;
   private readonly buttons = new Map<string, HTMLButtonElement>();
+  private readonly ambientOcclusionInput: HTMLInputElement;
 
   constructor(
     initialModes: VegetationModes,
     initialDistanceMeters: number,
+    initialAmbientOcclusionEnabled: boolean,
     onChange: (category: VegetationCategory, mode: VegetationRenderMode) => void,
     onDistanceChange: (distanceMeters: number) => void,
+    onAmbientOcclusionChange: (enabled: boolean) => void,
   ) {
     this.element = document.createElement("section");
     this.element.id = "vegetationControls";
@@ -44,11 +47,14 @@ export class VegetationControls {
       group.setAttribute("role", "group");
       group.setAttribute("aria-label", `${label} renderer`);
 
-      for (const [mode, modeLabel] of [
-        ["impostors", "Impostor"],
-        ["auto", "Auto"],
-        ["models", "Model"],
-      ] as const) {
+      const renderModes: ReadonlyArray<readonly [VegetationRenderMode, string]> = category === "grass"
+        ? [["impostors", "Impostor"]]
+        : [
+          ["impostors", "Impostor"],
+          ["auto", "Auto"],
+          ["models", "Model"],
+        ];
+      for (const [mode, modeLabel] of renderModes) {
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = modeLabel;
@@ -60,6 +66,22 @@ export class VegetationControls {
       row.appendChild(group);
       this.element.appendChild(row);
     }
+
+    const ambientOcclusionRow = document.createElement("label");
+    ambientOcclusionRow.className = "vegetation-ao-row";
+
+    const ambientOcclusionLabel = document.createElement("span");
+    ambientOcclusionLabel.textContent = "Ambient occlusion";
+
+    this.ambientOcclusionInput = document.createElement("input");
+    this.ambientOcclusionInput.type = "checkbox";
+    this.ambientOcclusionInput.checked = initialAmbientOcclusionEnabled;
+    this.ambientOcclusionInput.addEventListener("change", () => {
+      onAmbientOcclusionChange(this.ambientOcclusionInput.checked);
+    });
+
+    ambientOcclusionRow.append(ambientOcclusionLabel, this.ambientOcclusionInput);
+    this.element.appendChild(ambientOcclusionRow);
 
     const distanceRow = document.createElement("label");
     distanceRow.className = "vegetation-distance-row";
@@ -99,6 +121,10 @@ export class VegetationControls {
       button?.classList.toggle("active", active);
       button?.setAttribute("aria-pressed", String(active));
     }
+  }
+
+  setAmbientOcclusionEnabled(enabled: boolean): void {
+    this.ambientOcclusionInput.checked = enabled;
   }
 
   dispose(): void {

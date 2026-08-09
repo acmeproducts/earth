@@ -63,14 +63,17 @@ export class Game {
   // Slippy-map zoom numbers run opposite to ground coverage: 14 is one wider
   // level than 15 and gives the player a larger detailed area.
   private terrainZoom = 14;
+  private readonly innerSize: number;
+  private readonly renderScale: number;
   private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
   private terrainLocationIndex = 0;
   private solarLighting?: SolarLighting;
-  private readonly fpsCounter = new FpsCounter();
+  private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
   private vegetationControls?: VegetationControls;
   private vegetationLodDistanceMeters: number;
+  private vegetationAmbientOcclusionEnabled: boolean;
   private lastVegetationLodUpdate = 0;
   private lastVegetationCameraPosition?: Vector3;
   private flyCamera?: UniversalCamera;
@@ -109,16 +112,27 @@ export class Game {
     });
     this.scene = new Scene(this.engine);
     const query = new URLSearchParams(window.location.search);
+    this.innerSize = queryInteger(query, "inner-size", 2, 1, 4);
+    this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
+    this.engine.setHardwareScalingLevel(1 / this.renderScale);
+    this.fpsCounter = new FpsCounter(
+      this.scene,
+      query.has("performance-debug") || query.has("perf"),
+      { renderScale: this.renderScale, innerSize: this.innerSize },
+    );
     const requestedMode = query.get("vegetation");
     const initialMode: VegetationRenderMode = requestedMode === "models" || requestedMode === "impostors"
       ? requestedMode
       : "auto";
-    this.vegetationModes = { trees: initialMode, grass: initialMode, bushes: initialMode };
+    this.vegetationModes = { trees: initialMode, grass: "impostors", bushes: initialMode };
     const requestedDistance = query.get("vegetation-distance");
     const parsedDistance = Number(requestedDistance);
     this.vegetationLodDistanceMeters = requestedDistance !== null && Number.isFinite(parsedDistance)
       ? Math.max(MIN_MODEL_RANGE_METERS, Math.min(MAX_MODEL_RANGE_METERS, parsedDistance))
       : DEFAULT_MODEL_RANGE_METERS;
+    this.vegetationAmbientOcclusionEnabled = !["0", "off", "false"].includes(
+      query.get("vegetation-ao")?.toLowerCase() ?? "",
+    );
   }
 
   async initialize(): Promise<void> {
@@ -171,8 +185,10 @@ export class Game {
     this.vegetationControls = new VegetationControls(
       this.vegetationModes,
       this.vegetationLodDistanceMeters,
+      this.vegetationAmbientOcclusionEnabled,
       (category, mode) => this.setVegetationMode(category, mode),
       (distance) => this.setVegetationLodDistance(distance),
+      (enabled) => this.setVegetationAmbientOcclusion(enabled),
     );
     this.setupDebugControls();
   }
@@ -184,6 +200,7 @@ export class Game {
       location.lat,
       location.lon,
       zoom,
+      this.innerSize,
     );
     if (requestId !== this.terrainRequestId) return;
     if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
@@ -192,10 +209,16 @@ export class Game {
       location.lat,
       location.lon,
       Math.max(1, zoom - 3),
+      this.innerSize,
     ).then(async (terrain) => {
       const lakeElevationSource = terrain.elevations.slice();
       if (!terrain.bounds) {
-        return { terrain, landCover: undefined, mapWays: [], lakeElevationSource };
+        return {
+          terrain,
+          landCover: undefined,
+          mapWays: [],
+          lakeElevationSource,
+        };
       }
       const [distantLandCover, distantMapWays] = await Promise.all([
         WorldCover.fetch(terrain.bounds, 12).catch((error: unknown) => {
@@ -208,7 +231,12 @@ export class Game {
           }),
       ]);
       distantLandCover?.constrainElevations(terrain);
-      return { terrain, landCover: distantLandCover, mapWays: distantMapWays, lakeElevationSource };
+      return {
+        terrain,
+        landCover: distantLandCover,
+        mapWays: distantMapWays,
+        lakeElevationSource,
+      };
     }).catch((error: unknown) => {
       console.warn("Distant terrain unavailable; the terrain ring was skipped.", error);
       return undefined;
@@ -287,6 +315,7 @@ export class Game {
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
     });
+    treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
       terrain.dispose(false, true);
       treeField.root.dispose(false, false);
@@ -301,8 +330,9 @@ export class Game {
       seed: zoom ^ 0x47524153,
       landCover,
       exclusionMask: roadExclusionMask,
-      renderMode: this.vegetationModes.grass,
+      ambientOccluders: [treeField.instanceMatrices],
     });
+    grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
       terrain.dispose(false, true);
       treeField.root.dispose(false, false);
@@ -319,7 +349,9 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.bushes,
+      ambientOccluders: [treeField.instanceMatrices],
     });
+    bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
       terrain.dispose(false, true);
       treeField.root.dispose(false, false);
@@ -358,6 +390,7 @@ export class Game {
           waterMesh: water,
         })
       : undefined;
+    distantVista?.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (requestId !== this.terrainRequestId) {
       terrain.dispose(false, true);
       water.dispose(false, true);
@@ -415,6 +448,10 @@ export class Game {
             ? "impostors"
             : "auto";
         this.setAllVegetationModes(nextMode);
+      } else if (kbInfo.event.key === "f" || kbInfo.event.key === "F") {
+        this.fpsCounter.toggleExpanded();
+      } else if (kbInfo.event.key === "o" || kbInfo.event.key === "O") {
+        this.setVegetationAmbientOcclusion(!this.vegetationAmbientOcclusionEnabled);
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
@@ -425,6 +462,7 @@ export class Game {
   }
 
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
+    if (category === "grass") mode = "impostors";
     this.vegetationModes[category] = mode;
     const field = category === "trees"
       ? this.treeField
@@ -444,6 +482,15 @@ export class Game {
   private setVegetationLodDistance(distanceMeters: number): void {
     this.vegetationLodDistanceMeters = distanceMeters;
     this.updateVegetationLod(true);
+  }
+
+  private setVegetationAmbientOcclusion(enabled: boolean): void {
+    this.vegetationAmbientOcclusionEnabled = enabled;
+    this.treeField?.setAmbientOcclusionEnabled(enabled);
+    this.grassField?.setAmbientOcclusionEnabled(enabled);
+    this.bushField?.setAmbientOcclusionEnabled(enabled);
+    this.distantVista?.setAmbientOcclusionEnabled(enabled);
+    this.vegetationControls?.setAmbientOcclusionEnabled(enabled);
   }
 
   private updateVegetationLod(force = false): void {
@@ -701,6 +748,29 @@ export class Game {
     material.specularColor = new Color3(0.1, 0.1, 0.1);
     terrain.material = material;
   }
+}
+
+function queryNumber(
+  query: URLSearchParams,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = Number(query.get(name));
+  return query.has(name) && Number.isFinite(value)
+    ? Math.max(minimum, Math.min(maximum, value))
+    : fallback;
+}
+
+function queryInteger(
+  query: URLSearchParams,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return Math.round(queryNumber(query, name, fallback, minimum, maximum));
 }
 
 function smoothVertexColors(colors: Float32Array, rowSize: number, radius: number): void {

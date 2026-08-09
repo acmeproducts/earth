@@ -4,21 +4,24 @@ import {
   Color4,
   DynamicTexture,
   Engine,
-  FreeCamera,
   Mesh,
   MeshBuilder,
-  RenderTargetTexture,
   Scene,
   ShaderMaterial,
-  Texture,
   TransformNode,
   Vector2,
   Vector3,
 } from "@babylonjs/core";
 import { FpsCounter } from "./FpsCounter";
 import {
+  captureImpostorAtlases,
+  CubeFace,
+  IMPOSTOR_CUBE_FACES,
+} from "./Impostor";
+import {
   createProceduralTree,
   PROCEDURAL_TREE_CAPTURE_DIAMETER,
+  PROCEDURAL_TREE_SOURCE_HEIGHT,
 } from "./ProceduralTree";
 
 interface CaptureSettings {
@@ -26,11 +29,8 @@ interface CaptureSettings {
   resolution: number;
 }
 
-interface CubeFace {
+interface NamedCubeFace extends CubeFace {
   name: string;
-  normal: Vector3;
-  right: Vector3;
-  up: Vector3;
 }
 
 interface CaptureSet {
@@ -39,13 +39,11 @@ interface CaptureSet {
   settings: CaptureSettings;
 }
 
-const CUBE_FACES: CubeFace[] = [
-  { name: "pos-x", normal: new Vector3(1, 0, 0), right: new Vector3(0, 0, -1), up: new Vector3(0, 1, 0) },
-  { name: "neg-x", normal: new Vector3(-1, 0, 0), right: new Vector3(0, 0, 1), up: new Vector3(0, 1, 0) },
-  { name: "pos-y", normal: new Vector3(0, 1, 0), right: new Vector3(1, 0, 0), up: new Vector3(0, 0, -1) },
-  { name: "pos-z", normal: new Vector3(0, 0, 1), right: new Vector3(1, 0, 0), up: new Vector3(0, 1, 0) },
-  { name: "neg-z", normal: new Vector3(0, 0, -1), right: new Vector3(-1, 0, 0), up: new Vector3(0, 1, 0) },
-];
+const CUBE_FACE_NAMES = ["pos-x", "neg-x", "pos-y", "pos-z", "neg-z"] as const;
+const CUBE_FACES: readonly NamedCubeFace[] = IMPOSTOR_CUBE_FACES.map((face, index) => ({
+  ...face,
+  name: CUBE_FACE_NAMES[index],
+}));
 
 const vertexShader = `
 precision highp float;
@@ -116,11 +114,12 @@ export class TreeImpostorDemo {
   private captureSet?: CaptureSet;
   private proxy?: Mesh;
   private proxyMaterial?: ShaderMaterial;
-  private readonly fpsCounter = new FpsCounter();
+  private readonly fpsCounter: FpsCounter;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: true, antialias: true });
     this.scene = new Scene(this.engine);
+    this.fpsCounter = new FpsCounter(this.scene);
     this.scene.clearColor = new Color4(0.055, 0.065, 0.075, 1);
     this.camera = new ArcRotateCamera("impostorOrbitCamera", -Math.PI / 2, Math.PI / 2.4, 4, Vector3.Zero(), this.scene);
     this.camera.lowerRadiusLimit = 1;
@@ -162,98 +161,31 @@ export class TreeImpostorDemo {
     this.proxy = undefined;
     this.sourceRoot.setEnabled(true);
 
-    const atlasSize = settings.resolution * settings.gridSize;
-    const maxTextureSize = this.engine.getCaps().maxTextureSize;
-    if (atlasSize > maxTextureSize) {
-      throw new Error(`Face atlas is ${atlasSize}px, above this GPU's ${maxTextureSize}px texture limit.`);
-    }
-
-    const atlases = CUBE_FACES.map(() => {
-      const canvas = document.createElement("canvas");
-      canvas.width = atlasSize;
-      canvas.height = atlasSize;
-      return canvas;
-    });
-    const captureCamera = new FreeCamera("captureCamera", Vector3.Zero(), this.scene);
-    captureCamera.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
-    captureCamera.minZ = 0.01;
-    captureCamera.maxZ = this.diameter * 4;
-    captureCamera.orthoLeft = -this.diameter / 2;
-    captureCamera.orthoRight = this.diameter / 2;
-    captureCamera.orthoTop = this.diameter / 2;
-    captureCamera.orthoBottom = -this.diameter / 2;
-    const target = new RenderTargetTexture("treeCapture", settings.resolution, this.scene, false, false);
-    target.clearColor = new Color4(0, 0, 0, 0);
-    target.renderList = this.sourceMeshes;
-    target.activeCamera = captureCamera;
-    target.ignoreCameraViewport = true;
-    target.samples = 1;
-
-    const previousCamera = this.scene.activeCamera;
     const total = CUBE_FACES.length * settings.gridSize * settings.gridSize;
-    let completed = 0;
-    try {
-      for (let faceIndex = 0; faceIndex < CUBE_FACES.length; faceIndex++) {
-        const face = CUBE_FACES[faceIndex];
-        const context = atlases[faceIndex].getContext("2d", { alpha: true })!;
-        for (let y = 0; y < settings.gridSize; y++) {
-          for (let x = 0; x < settings.gridSize; x++) {
-            const u = settings.gridSize === 1 ? 0 : (x / (settings.gridSize - 1)) * 2 - 1;
-            const v = settings.gridSize === 1 ? 0 : (y / (settings.gridSize - 1)) * 2 - 1;
-            const direction = face.normal.add(face.right.scale(u)).add(face.up.scale(v)).normalize();
-            captureCamera.position.copyFrom(this.center.add(direction.scale(this.diameter)));
-            captureCamera.upVector.copyFrom(face.up);
-            captureCamera.setTarget(this.center);
-            this.scene.activeCamera = captureCamera;
-            target.render(true);
-            const pixels = await target.readPixels();
-            if (!pixels) throw new Error("GPU pixel readback failed.");
-            const image = this.makeBinaryImage(pixels, settings.resolution, context);
-            context.putImageData(image, x * settings.resolution, y * settings.resolution);
-            completed++;
-            this.setStatus(`Capturing ${completed}/${total}: ${face.name} ${x + 1},${y + 1}`);
-            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-          }
-        }
-      }
-    } finally {
-      this.scene.activeCamera = previousCamera;
-      target.dispose();
-      captureCamera.dispose();
-    }
-
-    const textures = atlases.map((atlas, index) => {
-      const texture = new DynamicTexture(`treeAtlas${index}`, { width: atlasSize, height: atlasSize }, this.scene, false, Texture.BILINEAR_SAMPLINGMODE);
-      texture.getContext().drawImage(atlas, 0, 0);
-      texture.hasAlpha = true;
-      texture.update(false);
-      texture.wrapU = Texture.CLAMP_ADDRESSMODE;
-      texture.wrapV = Texture.CLAMP_ADDRESSMODE;
-      return texture;
+    const assets = await captureImpostorAtlases(this.scene, {
+      name: "treeImpostorDemo",
+      meshes: this.sourceMeshes,
+      gridWidth: settings.gridSize,
+      gridHeight: settings.gridSize,
+      resolution: settings.resolution,
+      sourceHeight: PROCEDURAL_TREE_SOURCE_HEIGHT,
+      captureDiameter: this.diameter,
+      faces: CUBE_FACES,
+      onProgress: (completed, _total, faceIndex, x, y) => {
+        this.setStatus(
+          `Capturing ${completed}/${total}: ${CUBE_FACES[faceIndex].name} ${x + 1},${y + 1}`,
+        );
+      },
     });
+    const textures = assets.textures;
+    const atlases = textures.map(
+      (texture) => texture.getContext().canvas as HTMLCanvasElement,
+    );
     this.captureSet = { atlases, textures, settings };
     this.createProxy();
     this.sourceRoot.setEnabled(false);
     this.drawPreview(atlases[3]);
     this.setStatus(`Done. ${total} binary-alpha captures; source mesh is now disabled.`);
-  }
-
-  private makeBinaryImage(pixels: ArrayBufferView, size: number, context: CanvasRenderingContext2D): ImageData {
-    const input = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-    const image = context.createImageData(size, size);
-    for (let y = 0; y < size; y++) {
-      const sourceY = size - 1 - y;
-      for (let x = 0; x < size; x++) {
-        const source = (sourceY * size + x) * 4;
-        const destination = (y * size + x) * 4;
-        const alpha = input[source + 3] >= 128 ? 255 : 0;
-        image.data[destination] = alpha ? input[source] : 0;
-        image.data[destination + 1] = alpha ? input[source + 1] : 0;
-        image.data[destination + 2] = alpha ? input[source + 2] : 0;
-        image.data[destination + 3] = alpha;
-      }
-    }
-    return image;
   }
 
   private createProxy(): void {

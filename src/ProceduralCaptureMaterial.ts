@@ -2,6 +2,7 @@ import {
   Color3,
   DirectionalLight,
   HemisphericLight,
+  Mesh,
   Scene,
   ShaderMaterial,
   Vector3,
@@ -22,10 +23,16 @@ export function createVertexColorCaptureMaterial(
         attribute vec3 position;
         attribute vec3 normal;
         attribute vec4 color;
+        #ifdef THIN_INSTANCES
+        attribute float instanceOcclusion;
+        #endif
         uniform mat4 viewProjection;
+        uniform float modelHeight;
         #include<instancesDeclaration>
         varying vec4 vColor;
         varying vec3 vWorldNormal;
+        varying float vHeight01;
+        varying float vInstanceOcclusion;
         void main(void) {
           #include<instancesVertex>
           mat3 rotation = mat3(
@@ -35,6 +42,12 @@ export function createVertexColorCaptureMaterial(
           );
           vColor = color;
           vWorldNormal = normalize(rotation * normal);
+          vHeight01 = clamp(position.y / max(modelHeight, 0.0001), 0.0, 1.0);
+          #ifdef THIN_INSTANCES
+          vInstanceOcclusion = instanceOcclusion;
+          #else
+          vInstanceOcclusion = 0.0;
+          #endif
           gl_Position = viewProjection * finalWorld * vec4(position, 1.0);
         }
       `,
@@ -42,11 +55,14 @@ export function createVertexColorCaptureMaterial(
         precision highp float;
         varying vec4 vColor;
         varying vec3 vWorldNormal;
+        varying float vHeight01;
+        varying float vInstanceOcclusion;
         uniform vec3 sunDirection;
         uniform vec3 sunColor;
         uniform vec3 skyColor;
         uniform vec3 groundColor;
         uniform float lightingEnabled;
+        uniform float ambientOcclusionStrength;
         void main(void) {
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;
@@ -59,13 +75,18 @@ export function createVertexColorCaptureMaterial(
           float ambient = mix(groundEnergy, skyEnergy, upward);
           float direct = max(0.0, (dot(normal, sunDirection) + 0.42) / 1.42);
           float brightness = clamp(ambient + sunEnergy * (0.16 + direct * 0.62), 0.28, 1.25);
+          float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01));
+          float lowerTree = 1.0 - smoothstep(0.18, 0.82, vHeight01);
+          float neighborShade = 1.0
+            - vInstanceOcclusion * ambientOcclusionStrength * mix(0.16, 0.48, lowerTree);
+          brightness = clamp(brightness * crownLight * neighborShade, 0.20, 1.25);
           brightness = mix(1.0, brightness, lightingEnabled);
           gl_FragColor = vec4(vColor.rgb * brightness, 1.0);
         }
       `,
     },
     {
-      attributes: ["position", "normal", "color"],
+      attributes: ["position", "normal", "color", "instanceOcclusion"],
       uniforms: [
         "world",
         "viewProjection",
@@ -74,12 +95,16 @@ export function createVertexColorCaptureMaterial(
         "skyColor",
         "groundColor",
         "lightingEnabled",
+        "modelHeight",
+        "ambientOcclusionStrength",
       ],
       needAlphaBlending: false,
     },
   );
   material.backFaceCulling = false;
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
+  material.setFloat("modelHeight", 1);
+  material.setFloat("ambientOcclusionStrength", 1);
 
   const black = Color3.Black();
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
@@ -110,4 +135,16 @@ export function createVertexColorCaptureMaterial(
     );
   });
   return material;
+}
+
+/** Sets the normalized-height range used by live vegetation model lighting. */
+export function setVertexColorModelHeight(
+  mesh: Mesh,
+  modelHeight: number,
+  ambientOcclusionStrength = 1,
+): void {
+  if (mesh.material instanceof ShaderMaterial) {
+    mesh.material.setFloat("modelHeight", modelHeight);
+    mesh.material.setFloat("ambientOcclusionStrength", ambientOcclusionStrength);
+  }
 }

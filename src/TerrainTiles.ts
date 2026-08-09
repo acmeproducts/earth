@@ -136,14 +136,20 @@ export class TerrainTiles {
 
   /**
    * Fetches terrain centered on a given latitude/longitude.
-   * Loads a 2x2 grid of tiles so the given coordinate ends up
-   * near the center of the stitched output (512×512).
+   * Loads a configurable square grid of tiles centered near the coordinate.
    * @param lat - Latitude in degrees
    * @param lon - Longitude in degrees
    * @param zoom - Zoom level (0-15, higher = more detail, smaller area)
+   * @param tilesAcross - Source tiles per axis (1-4, default 2)
    * @returns Promise that resolves to terrain result centered on the coordinate
    */
-  static async fetchTileAtLocation(lat: number, lon: number, zoom: number): Promise<TerrainResult> {
+  static async fetchTileAtLocation(
+    lat: number,
+    lon: number,
+    zoom: number,
+    tilesAcross = 2,
+  ): Promise<TerrainResult> {
+    const gridSize = Math.max(1, Math.min(4, Math.round(tilesAcross)));
     const n = Math.pow(2, zoom);
 
     // Compute fractional tile coordinates
@@ -153,31 +159,24 @@ export class TerrainTiles {
 
     const tileX = Math.floor(fracX);
     const tileY = Math.floor(fracY);
-    const fx = fracX - tileX; // position within tile [0, 1)
-    const fy = fracY - tileY;
+    // Choose a grid centered as closely as possible on the requested coordinate.
+    const startX = Math.floor(fracX - gridSize / 2 + 0.5);
+    const startY = Math.floor(fracY - gridSize / 2 + 0.5);
+    const requests = [] as Array<Promise<{ elevations: Float32Array; width: number; height: number }>>;
+    for (let row = 0; row < gridSize; row++) {
+      for (let column = 0; column < gridSize; column++) {
+        requests.push(this.loadTileElevations(zoom, startX + column, startY + row));
+      }
+    }
+    const rawTiles = await Promise.all(requests);
+    const tileSize = rawTiles[0].width; // typically 256
+    const stitchedSize = tileSize * gridSize;
 
-    // Pick which 2x2 grid of tiles to fetch so the coordinate
-    // falls near the center of the stitched area
-    const startX = fx >= 0.5 ? tileX : tileX - 1;
-    const startY = fy >= 0.5 ? tileY : tileY - 1;
-
-    // Fetch 4 tiles in parallel
-    const [tl, tr, bl, br] = await Promise.all([
-      this.loadTileElevations(zoom, startX, startY),
-      this.loadTileElevations(zoom, startX + 1, startY),
-      this.loadTileElevations(zoom, startX, startY + 1),
-      this.loadTileElevations(zoom, startX + 1, startY + 1),
-    ]);
-
-    const tileSize = tl.width; // typically 256
-    const stitchedSize = tileSize * 2;
-
-    // Stitch the 4 tiles into a single elevation grid
+    // Stitch the tile grid into a single elevation grid.
     const stitched = new Float32Array(stitchedSize * stitchedSize);
-    const rawTiles = [tl, tr, bl, br];
-    for (let i = 0; i < 4; i++) {
-      const ox = (i % 2) * tileSize;
-      const oy = Math.floor(i / 2) * tileSize;
+    for (let i = 0; i < rawTiles.length; i++) {
+      const ox = (i % gridSize) * tileSize;
+      const oy = Math.floor(i / gridSize) * tileSize;
       for (let row = 0; row < tileSize; row++) {
         for (let col = 0; col < tileSize; col++) {
           stitched[(oy + row) * stitchedSize + (ox + col)] =
@@ -186,9 +185,13 @@ export class TerrainTiles {
       }
     }
 
-    // Compute real-world ground extent of the stitched 2×2 area
+    // Compute the real-world ground extent of the stitched area.
     const topLeftBounds = this.tileBounds(startX, startY, zoom);
-    const bottomRightBounds = this.tileBounds(startX + 1, startY + 1, zoom);
+    const bottomRightBounds = this.tileBounds(
+      startX + gridSize - 1,
+      startY + gridSize - 1,
+      zoom,
+    );
     const stitchedBounds: TileBounds = {
       lonWest: topLeftBounds.lonWest,
       lonEast: bottomRightBounds.lonEast,
@@ -201,12 +204,13 @@ export class TerrainTiles {
     result.groundWidthMeters = widthMeters;
     result.groundHeightMeters = heightMeters;
     result.sourceTileStart = { z: zoom, x: startX, y: startY };
+    result.tilesAcross = gridSize;
     result.bounds = stitchedBounds;
     return result;
   }
 
   /**
-   * Creates a texture from the same 2x2 OpenTopoMap tile area used for terrain.
+   * Creates a texture from the same OpenTopoMap tile grid used for terrain.
    * The result is deliberately kept separate from the normal terrain pipeline.
    */
   static async createOpenTopoMapTexture(
@@ -218,24 +222,31 @@ export class TerrainTiles {
       throw new Error("Terrain result does not include its source tile range.");
     }
 
-    const tileUrls = [
-      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x}/${start.y}.png`,
-      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x + 1}/${start.y}.png`,
-      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x}/${start.y + 1}.png`,
-      `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x + 1}/${start.y + 1}.png`,
-    ];
+    const gridSize = terrain.tilesAcross ?? 2;
+    const tileUrls: string[] = [];
+    for (let row = 0; row < gridSize; row++) {
+      for (let column = 0; column < gridSize; column++) {
+        tileUrls.push(
+          `${this.OPEN_TOPO_MAP_BASE_URL}/${start.z}/${start.x + column}/${start.y + row}.png`,
+        );
+      }
+    }
     const tiles = await Promise.all(tileUrls.map((url) => this.loadImage(url)));
     const tileSize = tiles[0].width;
     const texture = new DynamicTexture(
       "openTopoMapDebugTexture",
-      { width: tileSize * 2, height: tileSize * 2 },
+      { width: tileSize * gridSize, height: tileSize * gridSize },
       scene,
       false,
     );
     const context = texture.getContext();
 
     tiles.forEach((tile, index) => {
-      context.drawImage(tile, (index % 2) * tileSize, Math.floor(index / 2) * tileSize);
+      context.drawImage(
+        tile,
+        (index % gridSize) * tileSize,
+        Math.floor(index / gridSize) * tileSize,
+      );
     });
     texture.update(false);
     // Canvas tiles are drawn north-to-south; ground UVs run in the opposite V direction.
@@ -348,8 +359,10 @@ export interface TerrainResult {
   groundWidthMeters?: number;
   /** Real-world ground height in meters (if available) */
   groundHeightMeters?: number;
-  /** Top-left source tile of the stitched 2x2 terrain area. */
+  /** Top-left source tile of the stitched terrain area. */
   sourceTileStart?: { z: number; x: number; y: number };
+  /** Number of source tiles stitched along each axis. */
+  tilesAcross?: number;
   /** Geographic extent of the stitched terrain. */
   bounds?: TileBounds;
 }

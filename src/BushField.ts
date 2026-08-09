@@ -1,10 +1,11 @@
 import { Matrix, Mesh, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { createImpostorCube, createImpostorMaterial } from "./TreeField";
+import { createImpostorPrototypeFromAssets } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 import {
+  computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
   VegetationRenderMode,
@@ -22,6 +23,7 @@ interface BushFieldOptions {
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
   renderMode?: VegetationRenderMode;
+  ambientOccluders?: readonly Float32Array[];
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
@@ -50,25 +52,20 @@ export async function createBushField(
     landCover,
     exclusionMask,
     renderMode = "impostors",
+    ambientOccluders = [],
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
   const root = new TransformNode("bushField", scene);
   const assets = await getBushImpostorAssets(scene);
-  const captureSize = bushHeight * (assets.captureDiameter / assets.sourceHeight);
-  const bush = createImpostorCube(scene, captureSize, bushHeight / 2, "bushImpostors");
-  bush.parent = root;
-  bush.isPickable = false;
-
-  const material = createImpostorMaterial(
+  const prototype = createImpostorPrototypeFromAssets(
     scene,
     assets,
     bushHeight,
-    captureSize,
-    captureSize,
-    "bushImpostorMaterial",
+    root,
+    "bushImpostors",
   );
-  root.onDisposeObservable.add(() => material.dispose(false, false));
-  bush.material = material;
+  const bush = prototype.mesh;
+  const captureSize = prototype.captureSize;
   const bushModel = createBushModel(scene, bushHeight);
   bushModel.parent = root;
   bushModel.isPickable = false;
@@ -123,6 +120,11 @@ export async function createBushField(
 
   const matrixData = new Float32Array(matrices.length * 16);
   matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const instanceOcclusion = computeVegetationOcclusion(
+    matrixData,
+    10 / metersPerUnit,
+    ambientOccluders,
+  );
   return createVegetationFieldResult(
     root,
     [bush],
@@ -130,6 +132,7 @@ export async function createBushField(
     matrixData,
     metersPerUnit,
     renderMode,
+    instanceOcclusion,
   );
 }
 

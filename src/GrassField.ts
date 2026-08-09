@@ -7,13 +7,13 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
-import { createImpostorCube, createImpostorMaterial } from "./TreeField";
+import { getGrassImpostorAssets } from "./GrassImpostor";
+import { createImpostorPrototypeFromAssets } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
 import {
+  computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationRenderMode,
 } from "./VegetationField";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 
@@ -28,17 +28,17 @@ interface GrassFieldOptions {
   waterLineMeters?: number;
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
-  renderMode?: VegetationRenderMode;
+  ambientOccluders?: readonly Float32Array[];
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
-  [LandCoverClass.TreeCover]: 0.68,
-  [LandCoverClass.Shrubland]: 0.94,
-  [LandCoverClass.Grassland]: 1,
-  [LandCoverClass.Cropland]: 1,
-  [LandCoverClass.Wetland]: 0.94,
-  [LandCoverClass.Mangrove]: 0.58,
-  [LandCoverClass.MossAndLichen]: 0.88,
+  [LandCoverClass.TreeCover]: 0.6,
+  [LandCoverClass.Shrubland]: 0.7,
+  [LandCoverClass.Grassland]: 0.74,
+  [LandCoverClass.Cropland]: 0.74,
+  [LandCoverClass.Wetland]: 0.7,
+  [LandCoverClass.Mangrove]: 0.55,
+  [LandCoverClass.MossAndLichen]: 0.68,
 };
 
 /** Places procedurally captured grass clumps over vegetated WorldCover cells. */
@@ -52,40 +52,24 @@ export async function createGrassField(
     meshDepth,
     metersPerUnit,
     seed = 0x47524153,
-    spacingMeters = 3,
+    spacingMeters = 2,
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    renderMode = "impostors",
+    ambientOccluders = [],
   } = options;
   const grassHeight = 0.42 / metersPerUnit;
   const root = new TransformNode("grassField", scene);
   const assets = await getGrassImpostorAssets(scene);
-  const captureSize = grassHeight * (assets.captureDiameter / assets.sourceHeight);
-  const grass = createImpostorCube(
-    scene,
-    captureSize,
-    grassHeight / 2,
-    "grassImpostors",
-  );
-  grass.parent = root;
-  grass.isPickable = false;
-
-  const material = createImpostorMaterial(
+  const prototype = createImpostorPrototypeFromAssets(
     scene,
     assets,
     grassHeight,
-    captureSize,
-    captureSize,
-    "grassImpostorMaterial",
+    root,
+    "grassImpostors",
   );
-  root.onDisposeObservable.add(() => material.dispose(false, false));
-  grass.material = material;
-  const grassModel = createGrassModel(scene, grassHeight);
-  grassModel.parent = root;
-  grassModel.isPickable = false;
-  root.onDisposeObservable.add(() => grassModel.material?.dispose(true, true));
-
+  const grass = prototype.mesh;
+  const captureSize = prototype.captureSize;
   const random = mulberry32(seed);
   const spacing = spacingMeters / metersPerUnit;
   const columns = Math.max(1, Math.floor(meshWidth / spacing));
@@ -143,13 +127,19 @@ export async function createGrassField(
 
   const matrixData = new Float32Array(matrices.length * 16);
   matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const instanceOcclusion = computeVegetationOcclusion(
+    matrixData,
+    10 / metersPerUnit,
+    ambientOccluders,
+  );
   return createVegetationFieldResult(
     root,
     [grass],
-    [grassModel],
+    [],
     matrixData,
     metersPerUnit,
-    renderMode,
+    "impostors",
+    instanceOcclusion,
   );
 }
 

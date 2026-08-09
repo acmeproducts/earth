@@ -13,7 +13,8 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { createTreeImpostorPrototype } from "./TreeField";
-import { TREE_IMPOSTOR_FACES, TreeImpostorAssets } from "./TreeImpostor";
+import { TreeImpostorAssets } from "./TreeImpostor";
+import { IMPOSTOR_CUBE_FACES as TREE_IMPOSTOR_FACES } from "./Impostor";
 import { FpsCounter } from "./FpsCounter";
 
 interface FaceValidation {
@@ -41,7 +42,7 @@ export class TreeImpostorValidation {
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly camera: FreeCamera;
-  private readonly fpsCounter = new FpsCounter();
+  private readonly fpsCounter: FpsCounter;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, {
@@ -50,6 +51,7 @@ export class TreeImpostorValidation {
       antialias: false,
     });
     this.scene = new Scene(this.engine);
+    this.fpsCounter = new FpsCounter(this.scene);
     this.scene.clearColor = new Color4(0.055, 0.065, 0.075, 1);
     const light = new HemisphericLight("validationAmbient", Vector3.Up(), this.scene);
     light.intensity = 1;

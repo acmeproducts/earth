@@ -18,9 +18,10 @@ import {
   createTreeModels,
   getTreeImpostorAssets,
   TREE_IMPOSTOR_FACES,
-  TreeImpostorAssets,
 } from "./TreeImpostor";
+import { ImpostorAssets } from "./Impostor";
 import {
+  computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
   VegetationRenderMode,
@@ -29,14 +30,16 @@ import { LandCoverClass, WorldCover } from "./WorldCover";
 
 export type TreeFieldResult = VegetationFieldResult;
 
-export interface TreeImpostorPrototype {
+export interface ImpostorPrototype {
   root: TransformNode;
   mesh: Mesh;
-  assets: TreeImpostorAssets;
+  assets: ImpostorAssets;
   captureSize: number;
   captureWidth: number;
   captureHeight: number;
 }
+
+export type TreeImpostorPrototype = ImpostorPrototype;
 
 interface TreeFieldOptions {
   meshWidth: number;
@@ -59,15 +62,19 @@ interface TreeFieldOptions {
 export const impostorVertexShader = `
 precision highp float;
 attribute vec3 position;
+#ifdef THIN_INSTANCES
+attribute float instanceOcclusion;
+#endif
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform float captureCenterY;
+uniform vec3 sunDirection;
 #include<instancesDeclaration>
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
-varying vec3 vWorldAxisX;
-varying vec3 vWorldAxisY;
-varying vec3 vWorldAxisZ;
+varying vec3 vLocalSunDirection;
+varying vec3 vLocalWorldUp;
+varying float vInstanceOcclusion;
 
 void main(void) {
   #include<instancesVertex>
@@ -84,9 +91,17 @@ void main(void) {
     dot(worldViewDirection, axisY),
     dot(worldViewDirection, axisZ)
   );
-  vWorldAxisX = axisX;
-  vWorldAxisY = axisY;
-  vWorldAxisZ = axisZ;
+  vLocalSunDirection = normalize(vec3(
+    dot(sunDirection, axisX),
+    dot(sunDirection, axisY),
+    dot(sunDirection, axisZ)
+  ));
+  vLocalWorldUp = normalize(vec3(axisX.y, axisY.y, axisZ.y));
+  #ifdef THIN_INSTANCES
+  vInstanceOcclusion = instanceOcclusion;
+  #else
+  vInstanceOcclusion = 0.0;
+  #endif
   gl_Position = viewProjection * worldPosition;
 }`;
 
@@ -94,9 +109,9 @@ export const impostorFragmentShader = `
 precision highp float;
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
-varying vec3 vWorldAxisX;
-varying vec3 vWorldAxisY;
-varying vec3 vWorldAxisZ;
+varying vec3 vLocalSunDirection;
+varying vec3 vLocalWorldUp;
+varying float vInstanceOcclusion;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -108,10 +123,10 @@ uniform vec2 gridDimensions;
 uniform vec2 tileInset;
 uniform vec2 captureDimensions;
 uniform float cameraOrthographic;
-uniform vec3 sunDirection;
-uniform vec3 sunColor;
-uniform vec3 skyColor;
-uniform vec3 groundColor;
+uniform float captureCenterY;
+uniform float sunEnergy;
+uniform float skyEnergy;
+uniform float groundEnergy;
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -128,23 +143,11 @@ vec4 frame(float face, vec2 tile, vec2 imageUV) {
 
 float bayer4(vec2 pixel) {
   vec2 p = mod(floor(pixel), 4.0);
-  float index = p.x + p.y * 4.0;
-  if (index < 0.5) return 0.0 / 16.0;
-  if (index < 1.5) return 8.0 / 16.0;
-  if (index < 2.5) return 2.0 / 16.0;
-  if (index < 3.5) return 10.0 / 16.0;
-  if (index < 4.5) return 12.0 / 16.0;
-  if (index < 5.5) return 4.0 / 16.0;
-  if (index < 6.5) return 14.0 / 16.0;
-  if (index < 7.5) return 6.0 / 16.0;
-  if (index < 8.5) return 3.0 / 16.0;
-  if (index < 9.5) return 11.0 / 16.0;
-  if (index < 10.5) return 1.0 / 16.0;
-  if (index < 11.5) return 9.0 / 16.0;
-  if (index < 12.5) return 15.0 / 16.0;
-  if (index < 13.5) return 7.0 / 16.0;
-  if (index < 14.5) return 13.0 / 16.0;
-  return 5.0 / 16.0;
+  vec2 low = mod(p, 2.0);
+  vec2 high = floor(p * 0.5);
+  float lowValue = 2.0 * low.x + low.y * (3.0 - 4.0 * low.x);
+  float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
+  return (4.0 * lowValue + highValue) / 16.0;
 }
 
 void main(void) {
@@ -262,19 +265,19 @@ void main(void) {
     + billboardRight * centered.x * 0.55
     - billboardUp * centered.y * 0.38
   );
-  vec3 worldNormal = normalize(
-    vWorldAxisX * localNormal.x
-    + vWorldAxisY * localNormal.y
-    + vWorldAxisZ * localNormal.z
-  );
-  worldNormal = normalize(mix(worldNormal, vec3(0.0, 1.0, 0.0), 0.58));
-  float upward = worldNormal.y * 0.5 + 0.5;
-  float skyEnergy = dot(skyColor, vec3(0.2126, 0.7152, 0.0722));
-  float groundEnergy = dot(groundColor, vec3(0.2126, 0.7152, 0.0722));
-  float sunEnergy = dot(sunColor, vec3(0.2126, 0.7152, 0.0722));
+  localNormal = normalize(mix(localNormal, vLocalWorldUp, 0.58));
+  float upward = dot(localNormal, vLocalWorldUp) * 0.5 + 0.5;
   float ambient = mix(groundEnergy, skyEnergy, upward);
-  float direct = max(0.0, (dot(worldNormal, sunDirection) + 0.42) / 1.42);
+  float direct = max(0.0, (dot(localNormal, vLocalSunDirection) + 0.42) / 1.42);
   float brightness = clamp(ambient + sunEnergy * (0.16 + direct * 0.62), 0.28, 1.25);
+
+  // Open sky lights the crown more strongly than the lower foliage. Nearby
+  // crowns reduce that sky visibility, most noticeably low in the tree.
+  float height01 = clamp((vLocalPosition.y / captureCenterY + 1.0) * 0.5, 0.0, 1.0);
+  float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
+  float lowerTree = 1.0 - smoothstep(0.18, 0.82, height01);
+  float neighborShade = 1.0 - vInstanceOcclusion * mix(0.16, 0.48, lowerTree);
+  brightness = clamp(brightness * crownLight * neighborShade, 0.20, 1.25);
   gl_FragColor = vec4(straightColor * brightness, 1.0);
 }`;
 
@@ -290,7 +293,7 @@ export async function createTreeField(
     metersPerUnit,
     seed = 0x4f534c4f,
     spacingMeters = 3.5,
-    occupancy = 0.64,
+    occupancy = 0.52,
     edgeOccupancy = 0.12,
     fullDensityDepthMeters = 45,
     waterLineMeters = 0,
@@ -391,6 +394,7 @@ export async function createTreeField(
 
   const matrixData = new Float32Array(matrices.length * 16);
   matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const instanceOcclusion = computeVegetationOcclusion(matrixData, 10 / metersPerUnit);
   return createVegetationFieldResult(
     root,
     [tree],
@@ -398,6 +402,7 @@ export async function createTreeField(
     matrixData,
     metersPerUnit,
     renderMode,
+    instanceOcclusion,
   );
 }
 
@@ -409,40 +414,41 @@ export async function createTreeImpostorPrototype(
 ): Promise<TreeImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
   const assets = await getTreeImpostorAssets(scene);
-  return createTreeImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+  return createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
 }
 
-function createTreeImpostorPrototypeFromAssets(
+/** Creates the render mesh and shader material for any captured source. */
+export function createImpostorPrototypeFromAssets(
   scene: Scene,
-  assets: TreeImpostorAssets,
-  treeHeight: number,
+  assets: ImpostorAssets,
+  renderHeight: number,
   root: TransformNode,
   name: string,
-): TreeImpostorPrototype {
-  const scale = treeHeight / assets.sourceHeight;
+): ImpostorPrototype {
+  const scale = renderHeight / assets.sourceHeight;
   const captureWidth = assets.captureWidth * scale;
   const captureHeight = assets.captureHeight * scale;
   const captureSize = Math.max(captureWidth, captureHeight);
-  const tree = createImpostorBox(scene, captureWidth, captureHeight, treeHeight / 2, name);
-  tree.parent = root;
-  tree.isPickable = false;
+  const mesh = createImpostorBox(scene, captureWidth, captureHeight, renderHeight / 2, name);
+  mesh.parent = root;
+  mesh.isPickable = false;
 
   const material = createImpostorMaterial(
     scene,
     assets,
-    treeHeight,
+    renderHeight,
     captureWidth,
     captureHeight,
     `${name}Material`,
   );
   root.onDisposeObservable.add(() => material.dispose(false, false));
-  tree.material = material;
-  return { root, mesh: tree, assets, captureSize, captureWidth, captureHeight };
+  mesh.material = material;
+  return { root, mesh, assets, captureSize, captureWidth, captureHeight };
 }
 
 export function createImpostorMaterial(
   scene: Scene,
-  assets: TreeImpostorAssets,
+  assets: ImpostorAssets,
   renderHeight: number,
   captureWidth: number,
   captureHeight: number,
@@ -453,8 +459,8 @@ export function createImpostorMaterial(
     scene,
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
-      attributes: ["position"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunColor", "skyColor", "groundColor"],
+      attributes: ["position", "instanceOcclusion"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunEnergy", "skyEnergy", "groundEnergy"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
       needAlphaBlending: false,
     },
@@ -473,7 +479,6 @@ export function createImpostorMaterial(
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
   }
-  const black = Color3.Black();
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
   const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
@@ -491,29 +496,21 @@ export function createImpostorMaterial(
       "sunDirection",
       sun?.isEnabled() ? sun.direction.scale(-1).normalize() : Vector3.Up(),
     );
-    material.setColor3(
-      "sunColor",
-      sun?.isEnabled() ? sun.diffuse.scale(sun.intensity) : black,
-    );
-    material.setColor3(
-      "skyColor",
-      ambient ? ambient.diffuse.scale(ambient.intensity) : fallbackSky,
-    );
-    material.setColor3(
-      "groundColor",
-      ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
-    );
+    material.setFloat("sunEnergy", sun?.isEnabled()
+      ? colorEnergy(sun.diffuse) * sun.intensity
+      : 0);
+    material.setFloat("skyEnergy", ambient
+      ? colorEnergy(ambient.diffuse) * ambient.intensity
+      : colorEnergy(fallbackSky));
+    material.setFloat("groundEnergy", ambient
+      ? colorEnergy(ambient.groundColor) * ambient.intensity
+      : colorEnergy(fallbackGround));
   });
   return material;
 }
 
-export function createImpostorCube(
-  scene: Scene,
-  size: number,
-  centerY: number,
-  name = "treeImpostors",
-): Mesh {
-  return createImpostorBox(scene, size, size, centerY, name);
+function colorEnergy(color: Color3): number {
+  return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
 }
 
 function createImpostorBox(

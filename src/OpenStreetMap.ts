@@ -30,8 +30,8 @@ export interface MapTile {
 type LonLat = [number, number];
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
-const LAKE_POLYGON_DILATION_METERS = 20;
 const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
+const MINIMUM_LAKE_ELEVATION_METERS = SEA_LEVEL_METERS + 1;
 
 interface MapLayerOptions {
   meshWidth: number;
@@ -108,7 +108,10 @@ export class OpenStreetMap {
 
   static async fetch(bounds: TileBounds, zoom = this.ZOOM): Promise<MapTile[]> {
     const northWest = tileFor(bounds.lonWest, bounds.latNorth, zoom);
-    const southEast = tileFor(bounds.lonEast, bounds.latSouth, zoom);
+    // Terrain bounds commonly end exactly on a slippy-tile boundary. Treat the
+    // east and south edges as exclusive so we do not fetch an unused extra row
+    // and column of vector tiles.
+    const southEast = tileFor(bounds.lonEast - 1e-10, bounds.latSouth + 1e-10, zoom);
     const requests: Array<Promise<MapTile | undefined>> = [];
     for (let x = northWest.x; x <= southEast.x; x++) {
       for (let y = northWest.y; y <= southEast.y; y++) {
@@ -309,11 +312,8 @@ function createPolygon(
   heightMeters: number,
   isWater = false,
 ): Mesh | undefined {
-  let points = polygonScenePoints(coordinates, terrain, options);
+  const points = polygonScenePoints(coordinates, terrain, options);
   if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-  if (isWater) {
-    points = offsetPolygon(points, LAKE_POLYGON_DILATION_METERS / options.metersPerUnit);
-  }
   const clipped = clipPolygon(points, {
     minX: -options.meshWidth / 2,
     maxX: options.meshWidth / 2,
@@ -354,9 +354,12 @@ function createPolygon(
     mesh.position.y = roofElevation / options.metersPerUnit;
     return mesh;
   }
+  const lakeElevation = quantile([centerElevation, ...boundaryElevations], 0.25);
+  // Reject coastal/sea-level OSM water polygons. The lower quartile keeps a few
+  // elevated shoreline samples from making a sea-level polygon look inland.
+  if (lakeElevation < MINIMUM_LAKE_ELEVATION_METERS) return undefined;
   const shape = clipped.map(({ x, z }) => new Vector2(x, z));
-  const surfaceElevation = quantile([centerElevation, ...boundaryElevations], 0.25)
-    + LAKE_SURFACE_CLEARANCE_METERS;
+  const surfaceElevation = lakeElevation + LAKE_SURFACE_CLEARANCE_METERS;
   const surface = surfaceElevation / options.metersPerUnit;
   const mesh = new PolygonMeshBuilder("water", shape, scene, earcut).build(false);
   mesh.position.y = surface;
@@ -482,47 +485,6 @@ function pointSegmentDistanceSquared(
   const offsetX = x - (start.x + dx * amount);
   const offsetZ = z - (start.z + dz * amount);
   return offsetX * offsetX + offsetZ * offsetZ;
-}
-
-/** Dilates a polygon ring so lake surfaces overlap shoreline terrain. */
-function offsetPolygon(
-  points: Array<{ x: number; z: number }>,
-  distance: number,
-): Array<{ x: number; z: number }> {
-  if (points.length < 3 || distance <= 0) return points;
-  const orientation = signedArea(points) >= 0 ? 1 : -1;
-  return points.map((point, index) => {
-    const previous = points[(index + points.length - 1) % points.length];
-    const next = points[(index + 1) % points.length];
-    const previousDx = point.x - previous.x;
-    const previousDz = point.z - previous.z;
-    const nextDx = next.x - point.x;
-    const nextDz = next.z - point.z;
-    const previousLength = Math.hypot(previousDx, previousDz) || 1;
-    const nextLength = Math.hypot(nextDx, nextDz) || 1;
-    const previousNormal = {
-      x: orientation * previousDz / previousLength,
-      z: -orientation * previousDx / previousLength,
-    };
-    const nextNormal = {
-      x: orientation * nextDz / nextLength,
-      z: -orientation * nextDx / nextLength,
-    };
-    const combinedX = previousNormal.x + nextNormal.x;
-    const combinedZ = previousNormal.z + nextNormal.z;
-    const combinedLength = Math.hypot(combinedX, combinedZ);
-    if (combinedLength < 1e-6) {
-      return {
-        x: point.x + nextNormal.x * distance,
-        z: point.z + nextNormal.z * distance,
-      };
-    }
-    const miterX = combinedX / combinedLength;
-    const miterZ = combinedZ / combinedLength;
-    const projection = Math.max(1 / 3, miterX * nextNormal.x + miterZ * nextNormal.z);
-    const miterDistance = Math.min(distance / projection, distance * 3);
-    return { x: point.x + miterX * miterDistance, z: point.z + miterZ * miterDistance };
-  });
 }
 
 function clipPolygon(

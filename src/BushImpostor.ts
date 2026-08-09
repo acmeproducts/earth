@@ -1,18 +1,18 @@
 import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
-import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 import {
-  captureImpostorAtlases,
+  createVertexColorCaptureMaterial,
+  setVertexColorModelHeight,
+} from "./ProceduralCaptureMaterial";
+import {
+  AXISYMMETRIC_IMPOSTOR_FACES,
+  createImpostorAssetProvider,
   ImpostorAssets,
-  impostorAttributeKey,
-  queryNumber,
-  SYMMETRIC_IMPOSTOR_FACES,
-} from "./TreeImpostor";
+} from "./Impostor";
 
 export type BushImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
-const sceneAssets = new WeakMap<Scene, Map<string, Promise<BushImpostorAssets>>>();
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
   [new Color3(0.1, 0.27, 0.07), new Color3(0.34, 0.59, 0.15)],
@@ -20,56 +20,33 @@ const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.15, 0.25, 0.065), new Color3(0.48, 0.55, 0.14)],
 ];
 
+const bushImpostors = createImpostorAssetProvider({
+  name: "bushImpostor",
+  queryPrefix: "bush-impostor",
+  createSource: (scene) => createBushSource(scene),
+  sourceHeight: SOURCE_HEIGHT,
+  captureDiameter: CAPTURE_DIAMETER,
+  faces: AXISYMMETRIC_IMPOSTOR_FACES,
+  rotationallySymmetric: true,
+  sampling: {
+    horizontalSamples: { default: 1, minimum: 1, maximum: 16 },
+    verticalSamples: { default: 5, minimum: 1, maximum: 10 },
+    resolution: { default: 96, minimum: 48, maximum: 512 },
+  },
+});
+
 /** Shares one shrub atlas capture per scene and capture-attribute combination. */
 export function getBushImpostorAssets(
   scene: Scene,
-  horizontalSamples = queryNumber("bush-impostor-x-samples", 1, 1, 16),
-  verticalSamples = queryNumber("bush-impostor-y-samples", 5, 1, 10),
-  resolution = queryNumber("bush-impostor-resolution", 96, 48, 512),
+  horizontalSamples = bushImpostors.getDefaultSampling().horizontalSamples,
+  verticalSamples = bushImpostors.getDefaultSampling().verticalSamples,
+  resolution = bushImpostors.getDefaultSampling().resolution,
 ): Promise<BushImpostorAssets> {
-  let cache = sceneAssets.get(scene);
-  if (!cache) {
-    cache = new Map();
-    sceneAssets.set(scene, cache);
-  }
-  const key = impostorAttributeKey(horizontalSamples, verticalSamples, resolution);
-  const existing = cache.get(key);
-  if (existing) return existing;
-
-  const capture = captureBush(scene, horizontalSamples, verticalSamples, resolution);
-  cache.set(key, capture);
-  capture.catch(() => {
-    if (cache.get(key) === capture) cache.delete(key);
+  return bushImpostors.getAssets(scene, {
+    horizontalSamples,
+    verticalSamples,
+    resolution,
   });
-  return capture;
-}
-
-async function captureBush(
-  scene: Scene,
-  horizontalSamples: number,
-  verticalSamples: number,
-  resolution: number,
-): Promise<BushImpostorAssets> {
-  const source = createBushSource(scene);
-  await scene.whenReadyAsync();
-
-  try {
-    const assets = await captureImpostorAtlases(scene, {
-      name: "bushImpostor",
-      meshes: [source],
-      gridWidth: horizontalSamples,
-      gridHeight: verticalSamples,
-      resolution,
-      sourceHeight: SOURCE_HEIGHT,
-      captureDiameter: CAPTURE_DIAMETER,
-      faces: SYMMETRIC_IMPOSTOR_FACES,
-      rotationallySymmetric: true,
-    });
-    console.log("Bush impostor: capture complete; procedural source disposed");
-    return assets;
-  } finally {
-    source.dispose(false, true);
-  }
 }
 
 function createBushSource(scene: Scene, liveLighting = false): Mesh {
@@ -201,6 +178,7 @@ export function createBushModel(scene: Scene, renderHeight: number): Mesh {
   }
   bush.setVerticesData(VertexBuffer.PositionKind, positions);
   bush.refreshBoundingInfo();
+  setVertexColorModelHeight(bush, renderHeight);
   return bush;
 }
 

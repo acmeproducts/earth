@@ -53,6 +53,15 @@
       font-variant-numeric: tabular-nums;
       text-align: center;
       pointer-events: none;
+      white-space: pre;
+    }
+
+    #fpsCounter.expanded {
+      min-width: 238px;
+      height: auto;
+      padding: 7px 9px;
+      line-height: 17px;
+      text-align: left;
     }
 
     #flySpeed {
@@ -138,6 +147,23 @@
       color: #fff;
       font-variant-numeric: tabular-nums;
       text-align: right;
+    }
+
+    .vegetation-ao-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 12px;
+      color: #d9dfe3;
+      cursor: pointer;
+    }
+
+    .vegetation-ao-row input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: #589a72;
+      cursor: pointer;
     }
 
     @media (max-width: 520px) {

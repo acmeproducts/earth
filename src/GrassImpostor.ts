@@ -2,86 +2,59 @@ import {
   Color3,
   Mesh,
   Scene,
-  VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
 import {
-  captureImpostorAtlases,
+  AXISYMMETRIC_IMPOSTOR_FACES,
+  createImpostorAssetProvider,
   ImpostorAssets,
-  impostorAttributeKey,
-  queryNumber,
-  SYMMETRIC_IMPOSTOR_FACES,
-} from "./TreeImpostor";
+} from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 
 export type GrassImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 0.6;
 const CAPTURE_DIAMETER = 7.3;
+// Keep grass in the same cool-green family as the tree canopy, with a small
+// lift so it remains distinguishable at ground level.
 const GRASS_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
-  [new Color3(0.14, 0.31, 0.055), new Color3(0.4, 0.7, 0.14)],
-  [new Color3(0.18, 0.37, 0.065), new Color3(0.5, 0.78, 0.18)],
-  [new Color3(0.12, 0.28, 0.075), new Color3(0.34, 0.63, 0.17)],
-  [new Color3(0.22, 0.4, 0.065), new Color3(0.58, 0.81, 0.18)],
-  [new Color3(0.32, 0.3, 0.09), new Color3(0.72, 0.65, 0.22)],
+  [new Color3(0.05, 0.202, 0.062), new Color3(0.202, 0.493, 0.106)],
+  [new Color3(0.073, 0.258, 0.056), new Color3(0.302, 0.594, 0.118)],
+  [new Color3(0.101, 0.291, 0.062), new Color3(0.392, 0.661, 0.134)],
+  [new Color3(0.134, 0.28, 0.05), new Color3(0.482, 0.627, 0.118)],
 ];
-const sceneAssets = new WeakMap<Scene, Map<string, Promise<GrassImpostorAssets>>>();
+const grassImpostors = createImpostorAssetProvider({
+  name: "grassImpostor",
+  queryPrefix: "grass-impostor",
+  createSource: (scene) => createGrassSource(scene),
+  sourceHeight: SOURCE_HEIGHT,
+  captureDiameter: CAPTURE_DIAMETER,
+  faces: AXISYMMETRIC_IMPOSTOR_FACES,
+  rotationallySymmetric: true,
+  rotationalSymmetryOrder: 4,
+  sampling: {
+    horizontalSamples: { default: 8, minimum: 1, maximum: 24 },
+    verticalSamples: { default: 8, minimum: 1, maximum: 12 },
+    resolution: { default: 128, minimum: 48, maximum: 512 },
+  },
+});
 
 /** Shares one grass atlas capture per scene and capture-attribute combination. */
 export function getGrassImpostorAssets(
   scene: Scene,
-  horizontalSamples = queryNumber("grass-impostor-x-samples", 8, 1, 24),
-  verticalSamples = queryNumber("grass-impostor-y-samples", 8, 1, 12),
-  resolution = queryNumber("grass-impostor-resolution", 128, 48, 512),
+  horizontalSamples = grassImpostors.getDefaultSampling().horizontalSamples,
+  verticalSamples = grassImpostors.getDefaultSampling().verticalSamples,
+  resolution = grassImpostors.getDefaultSampling().resolution,
 ): Promise<GrassImpostorAssets> {
-  let cache = sceneAssets.get(scene);
-  if (!cache) {
-    cache = new Map();
-    sceneAssets.set(scene, cache);
-  }
-  const key = impostorAttributeKey(horizontalSamples, verticalSamples, resolution);
-  const existing = cache.get(key);
-  if (existing) return existing;
-
-  const capture = captureGrass(scene, horizontalSamples, verticalSamples, resolution);
-  cache.set(key, capture);
-  capture.catch(() => {
-    if (cache.get(key) === capture) cache.delete(key);
+  return grassImpostors.getAssets(scene, {
+    horizontalSamples,
+    verticalSamples,
+    resolution,
   });
-  return capture;
-}
-
-async function captureGrass(
-  scene: Scene,
-  horizontalSamples: number,
-  verticalSamples: number,
-  resolution: number,
-): Promise<GrassImpostorAssets> {
-  const source = createGrassSource(scene);
-  await scene.whenReadyAsync();
-
-  try {
-    const assets = await captureImpostorAtlases(scene, {
-      name: "grassImpostor",
-      meshes: [source],
-      gridWidth: horizontalSamples,
-      gridHeight: verticalSamples,
-      resolution,
-      sourceHeight: SOURCE_HEIGHT,
-      captureDiameter: CAPTURE_DIAMETER,
-      faces: SYMMETRIC_IMPOSTOR_FACES,
-      rotationallySymmetric: true,
-      rotationalSymmetryOrder: 4,
-    });
-    console.log("Grass impostor: capture complete; procedural source disposed");
-    return assets;
-  } finally {
-    source.dispose(false, true);
-  }
 }
 
 /** Builds a dense clump from tapered, curved blade strips without external assets. */
-function createGrassSource(scene: Scene, liveLighting = false): Mesh {
+function createGrassSource(scene: Scene): Mesh {
   const random = mulberry32(0x47524153);
   const positions: number[] = [];
   const indices: number[] = [];
@@ -167,32 +140,10 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
   const material = createVertexColorCaptureMaterial(
     scene,
     "grassImpostorSourceMaterial",
-    liveLighting,
+    false,
   );
   grass.material = material;
   return grass;
-}
-
-/** Builds the original procedural geometry at the requested rendered height. */
-export function createGrassModel(scene: Scene, renderHeight: number): Mesh {
-  const grass = createGrassSource(scene, true);
-  grass.name = "grassModels";
-  scaleSourceToHeight(grass, renderHeight, SOURCE_HEIGHT);
-  return grass;
-}
-
-function scaleSourceToHeight(mesh: Mesh, renderHeight: number, sourceHeight: number): void {
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error(`${mesh.name} has no position data.`);
-
-  const scale = renderHeight / sourceHeight;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  mesh.setVerticesData(VertexBuffer.PositionKind, positions);
-  mesh.refreshBoundingInfo();
 }
 
 function mulberry32(seed: number): () => number {

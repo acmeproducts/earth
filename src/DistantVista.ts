@@ -48,6 +48,7 @@ export class DistantVista {
 
   private readonly terrain: Mesh;
   private readonly lakes: MapFeatureLayer;
+  private readonly trees: TreeFieldResult;
 
   static async create(
     scene: Scene,
@@ -89,7 +90,7 @@ export class DistantVista {
       meshDepth: distantDepth,
       metersPerUnit: options.metersPerUnit,
       spacingMeters: 18,
-      occupancy: 0.68,
+      occupancy: 0.54,
       edgeOccupancy: 0.16,
       fullDensityDepthMeters: 90,
       landCover: options.distantLandCover,
@@ -120,6 +121,7 @@ export class DistantVista {
     }
 
     this.root = new TransformNode("distantVistaRoot", scene);
+    this.trees = trees;
     this.terrain = createTerrainRing(scene, distantTerrain, options);
     this.terrain.parent = this.root;
     extendWaterMesh(options.waterMesh, this.terrain, options);
@@ -145,6 +147,10 @@ export class DistantVista {
     this.terrain.material = null;
     terrainMaterial?.dispose(true, true);
     this.root.dispose(false, false);
+  }
+
+  setAmbientOcclusionEnabled(enabled: boolean): void {
+    this.trees.setAmbientOcclusionEnabled(enabled);
   }
 }
 
