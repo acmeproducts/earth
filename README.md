@@ -67,9 +67,9 @@ bilinearly blends the four nearest frames. `Export ZIP` writes the five face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
-The Earth view generates a tree plus grass and bush clumps procedurally at startup
+The Earth view generates a tree plus grass, white/yellow flower, and bush clumps procedurally at startup
 and thin-instances them across vegetated ESA WorldCover classes. Trees use the
-five-face impostor pipeline. Grass and bushes are rotationally symmetric, so
+five-face impostor pipeline. Grass, flowers, and bushes are rotationally symmetric, so
 they capture only one side and the top. Tree captures use 10 horizontal
 by 5 vertical samples per face. Each
 tree frame keeps a 500 px height and derives its narrower width from the
@@ -81,8 +81,8 @@ override those defaults for quality testing. Grass uses an 8 by 8,
 can override those values for quality testing.
 
 Bushes are generated from procedural branches and dense curved shoots, captured
-into their own directional atlases, and scattered most densely through
-WorldCover shrubland with lighter placement in other vegetated classes.
+into their own directional atlases, and scattered in noise-shaped clusters most
+densely through WorldCover shrubland with lighter placement elsewhere.
 
 Impostor capture is model-agnostic. `src/Impostor.ts` owns sampling validation,
 URL overrides, per-scene caching, source disposal, optional bounds fitting, and
@@ -92,13 +92,13 @@ limits, faces, and symmetry, then create its provider with
 `createImpostorAssetProvider`. The tree, bush, and grass files are examples;
 they contain only model-specific geometry and descriptor values.
 
-The production view renders grass exclusively as dense impostor clumps on a
-2 m placement grid. Trees and bushes can switch independently between their
-impostors, automatic distance LOD, and original geometry. Auto mode uses a
+The production view renders grass and bushes exclusively as dense impostor
+clumps. Trees can switch between impostors, automatic distance LOD, and original
+geometry. Auto mode uses a
 dithered 6 m transition around the configurable model range (50 m by default)
-to blend real models into impostors. Press `V` to cycle the tree and bush modes.
+to blend real models into impostors. Press `V` to cycle the tree mode.
 The top-right counter reports live FPS and active triangles; use
-`?vegetation=models` to force tree and bush models or
+`?vegetation=models` to force tree models or
 `?vegetation-distance=20` to change the initial Auto range.
 
 The landscape extends beyond the detailed player area with a sparse lower-zoom
@@ -107,10 +107,10 @@ the expanded horizon inexpensive while blending into the local terrain.
 The detailed player terrain defaults to slippy-map zoom 14, one wider coverage
 level than the previous zoom 15 default.
 
-Performance can be tuned from the URL. `?inner-size=1` reduces the detailed
-terrain from the default 2 by 2 source-tile grid to 1 by 1, cutting terrain
-samples and the detailed vegetation area to roughly one quarter. Values from 1
-through 4 are supported. `?render-scale=0.75` renders at 75% of the canvas
+The detailed terrain defaults to a 1 by 1 source-tile grid, which cuts terrain
+samples and the detailed vegetation area to roughly one quarter of the former
+2 by 2 default. Values from 1 through 4 remain available through
+`?inner-size=2`. `?render-scale=0.75` renders at 75% of the canvas
 resolution (values are clamped from 0.25 through 1), and
 `?vegetation=impostors` avoids the more expensive nearby models. These options
 can be combined, for example:

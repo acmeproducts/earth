@@ -64,6 +64,7 @@ precision highp float;
 attribute vec3 position;
 #ifdef THIN_INSTANCES
 attribute float instanceOcclusion;
+attribute vec3 vegetationColor;
 #endif
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
@@ -75,6 +76,7 @@ varying vec3 vViewDirection;
 varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
+varying vec3 vInstanceColor;
 
 void main(void) {
   #include<instancesVertex>
@@ -99,8 +101,10 @@ void main(void) {
   vLocalWorldUp = normalize(vec3(axisX.y, axisY.y, axisZ.y));
   #ifdef THIN_INSTANCES
   vInstanceOcclusion = instanceOcclusion;
+  vInstanceColor = vegetationColor;
   #else
   vInstanceOcclusion = 0.0;
+  vInstanceColor = vec3(1.0);
   #endif
   gl_Position = viewProjection * worldPosition;
 }`;
@@ -112,16 +116,25 @@ varying vec3 vViewDirection;
 varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
+varying vec3 vInstanceColor;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
 uniform sampler2D atlas3;
 uniform sampler2D atlas4;
+uniform sampler2D lowAtlas0;
+uniform sampler2D lowAtlas1;
+uniform sampler2D lowAtlas2;
+uniform sampler2D lowAtlas3;
+uniform sampler2D lowAtlas4;
 uniform float rotationallySymmetric;
 uniform float rotationalSymmetryOrder;
 uniform vec2 gridDimensions;
 uniform vec2 tileInset;
+uniform vec2 lowTileInset;
 uniform vec2 captureDimensions;
+uniform float impostorLodNear;
+uniform float impostorLodFar;
 uniform float cameraOrthographic;
 uniform float captureCenterY;
 uniform float sunEnergy;
@@ -136,9 +149,39 @@ vec4 atlasSample(float face, vec2 uv) {
   return texture2D(atlas4, uv);
 }
 
-vec4 frame(float face, vec2 tile, vec2 imageUV) {
+vec4 lowAtlasSample(float face, vec2 uv) {
+  if (face < 0.5) return texture2D(lowAtlas0, uv);
+  if (face < 1.5) return texture2D(lowAtlas1, uv);
+  if (face < 2.5) return texture2D(lowAtlas2, uv);
+  if (face < 3.5) return texture2D(lowAtlas3, uv);
+  return texture2D(lowAtlas4, uv);
+}
+
+vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
-  return atlasSample(face, (tile + localUV) / gridDimensions);
+  vec2 atlasUV = (tile + localUV) / gridDimensions;
+  if (lodBlend <= 0.0) return atlasSample(face, atlasUV);
+
+  vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
+  vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / gridDimensions);
+  // The low atlas is color-only. Its coarse coverage is unsuitable for a
+  // stable foliage silhouette, so the original atlas remains the alpha mask.
+  lowColor.a = step(0.5, lowColor.a);
+
+  vec4 highColor = atlasSample(face, atlasUV);
+  vec3 highStraight = highColor.rgb / max(highColor.a, 1.0 / 255.0);
+  // Never cross-fade color against transparent black. When only one atlas
+  // covers this fragment, extend that atlas's color through the other side of
+  // the transition and blend only once both samples contain real color.
+  float highPresent = step(1.0 / 255.0, highColor.a);
+  float lowPresent = step(1.0 / 255.0, lowColor.a);
+  highStraight = mix(lowColor.rgb, highStraight, highPresent);
+  vec3 lowStraight = mix(highStraight, lowColor.rgb, lowPresent);
+  // Preserve the detailed atlas's coverage through and beyond the color LOD.
+  // This avoids both low-resolution holes and an opaque coarse silhouette.
+  float alpha = highColor.a;
+  vec3 straightColor = mix(highStraight, lowStraight, lodBlend);
+  return vec4(straightColor * alpha, alpha);
 }
 
 float bayer4(vec2 pixel) {
@@ -241,20 +284,24 @@ void main(void) {
     blend.x * blend.y
   );
   float choice = bayer4(gl_FragCoord.xy);
+  float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
+  float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
   vec4 color;
   if (choice < weights.x) {
-    color = frame(face, vec2(low.x, low.y), imageUV);
+    color = frame(face, vec2(low.x, low.y), imageUV, lodBlend);
   } else if (choice < weights.x + weights.y) {
-    color = frame(face, vec2(high.x, low.y), imageUV);
+    color = frame(face, vec2(high.x, low.y), imageUV, lodBlend);
   } else if (choice < weights.x + weights.y + weights.z) {
-    color = frame(face, vec2(low.x, high.y), imageUV);
+    color = frame(face, vec2(low.x, high.y), imageUV, lodBlend);
   } else {
-    color = frame(face, vec2(high.x, high.y), imageUV);
+    color = frame(face, vec2(high.x, high.y), imageUV, lodBlend);
   }
 
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
   if (color.a <= alphaChoice) discard;
   vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
+  float petalMask = smoothstep(0.68, 0.86, min(straightColor.r, min(straightColor.g, straightColor.b)));
+  straightColor = mix(straightColor, straightColor * vInstanceColor, petalMask);
 
   // Treat the complete impostor as one softly rounded volume. This keeps
   // lighting coherent instead of exposing every captured leaf normal.
@@ -459,9 +506,9 @@ export function createImpostorMaterial(
     scene,
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
-      attributes: ["position", "instanceOcclusion"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunEnergy", "skyEnergy", "groundEnergy"],
-      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
+      attributes: ["position", "instanceOcclusion", "vegetationColor"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunEnergy", "skyEnergy", "groundEnergy"],
+      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
       needAlphaBlending: false,
     },
   );
@@ -473,11 +520,23 @@ export function createImpostorMaterial(
     0.5 / assets.resolutionWidth,
     0.5 / assets.resolutionHeight,
   ));
+  material.setVector2("lowTileInset", new Vector2(
+    0.5 / assets.lowResolutionWidth,
+    0.5 / assets.lowResolutionHeight,
+  ));
+  // Begin the distant tier close enough to cover most of the local forest
+  // (about 10x-25x the rendered impostor height).
+  material.setFloat("impostorLodNear", 10);
+  material.setFloat("impostorLodFar", 25);
   material.setFloat("cameraOrthographic", 0);
   material.setFloat("rotationallySymmetric", assets.rotationallySymmetric ? 1 : 0);
   material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
+    material.setTexture(
+      `lowAtlas${index}`,
+      assets.lowResolutionTextures[Math.min(index, assets.lowResolutionTextures.length - 1)],
+    );
   }
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
   const fallbackGround = new Color3(0.08, 0.09, 0.07);

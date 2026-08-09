@@ -8,6 +8,9 @@ import {
 } from '@babylonjs/core';
 import { WaterMaterial } from '@babylonjs/materials';
 
+/** Keeps the ocean safely below sea-level terrain and scene objects. */
+export const OCEAN_SURFACE_ELEVATION_METERS = -1;
+
 /**
  * Creates a water plane with realistic reflections and waves.
  * @param scene - The Babylon.js scene

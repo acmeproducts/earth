@@ -1,8 +1,10 @@
 import {
   Color4,
+  Constants,
   DynamicTexture,
   FreeCamera,
   Mesh,
+  RawTexture,
   RenderTargetTexture,
   Scene,
   Texture,
@@ -11,6 +13,8 @@ import {
 
 export interface ImpostorAssets {
   textures: DynamicTexture[];
+  /** Per-frame downsampled atlases used once an impostor is small on screen. */
+  lowResolutionTextures: Texture[];
   rotationallySymmetric: boolean;
   rotationalSymmetryOrder: number;
   gridWidth: number;
@@ -20,11 +24,18 @@ export interface ImpostorAssets {
   resolution: number;
   resolutionWidth: number;
   resolutionHeight: number;
+  lowResolutionWidth: number;
+  lowResolutionHeight: number;
   sourceHeight: number;
   captureDiameter: number;
   captureWidth: number;
   captureHeight: number;
 }
+
+/** Target height of each frame in the distant impostor atlas. */
+const LOW_RESOLUTION_FRAME_SIZE = 20;
+/** Any meaningful source coverage becomes a solid distant texel. */
+const LOW_RESOLUTION_ALPHA_THRESHOLD = 8;
 
 export interface CubeFace {
   normal: Vector3;
@@ -363,8 +374,41 @@ export async function captureImpostorAtlases(
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     return texture;
   });
+  const lowResolutionHeight = LOW_RESOLUTION_FRAME_SIZE;
+  const lowResolutionWidth = Math.max(
+    1,
+    Math.round(lowResolutionHeight * resolutionWidth / resolutionHeight),
+  );
+  const lowResolutionTextures = canvases.map((canvas, index) => {
+    const lowImage = downsampleAtlasTiles(
+      canvas,
+      gridWidth,
+      gridHeight,
+      resolutionWidth,
+      resolutionHeight,
+      lowResolutionWidth,
+      lowResolutionHeight,
+    );
+    const texture = new RawTexture(
+      lowImage.data,
+      lowImage.width,
+      lowImage.height,
+      Constants.TEXTUREFORMAT_RGBA,
+      scene,
+      false,
+      false,
+      Texture.BILINEAR_SAMPLINGMODE,
+    );
+    texture.name = `${name}LowResolutionAtlas${index}`;
+    texture.gammaSpace = false;
+    texture.hasAlpha = true;
+    texture.wrapU = Texture.CLAMP_ADDRESSMODE;
+    texture.wrapV = Texture.CLAMP_ADDRESSMODE;
+    return texture;
+  });
   return {
     textures,
+    lowResolutionTextures,
     rotationallySymmetric,
     rotationalSymmetryOrder,
     gridWidth,
@@ -373,11 +417,151 @@ export async function captureImpostorAtlases(
     resolution: resolutionHeight,
     resolutionWidth,
     resolutionHeight,
+    lowResolutionWidth,
+    lowResolutionHeight,
     sourceHeight,
     captureDiameter,
     captureWidth,
     captureHeight,
   };
+}
+
+/** Downsamples frames independently so neighboring atlas tiles cannot bleed together. */
+function downsampleAtlasTiles(
+  source: HTMLCanvasElement,
+  gridWidth: number,
+  gridHeight: number,
+  sourceTileWidth: number,
+  sourceTileHeight: number,
+  targetTileWidth: number,
+  targetTileHeight: number,
+): ImageData {
+  const target = document.createElement("canvas");
+  target.width = gridWidth * targetTileWidth;
+  target.height = gridHeight * targetTileHeight;
+  const context = target.getContext("2d", { alpha: true })!;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  for (let y = 0; y < gridHeight; y++) {
+    for (let x = 0; x < gridWidth; x++) {
+      context.drawImage(
+        source,
+        x * sourceTileWidth,
+        y * sourceTileHeight,
+        sourceTileWidth,
+        sourceTileHeight,
+        x * targetTileWidth,
+        y * targetTileHeight,
+        targetTileWidth,
+        targetTileHeight,
+      );
+    }
+  }
+  const pixels = context.getImageData(0, 0, target.width, target.height);
+  // The regular impostor shader uses alpha testing, not alpha blending. At
+  // At low resolution, retaining averaged fractional coverage produces a conspicuous Bayer
+  // pattern of holes. Preserve the filtered color but make meaningful distant
+  // coverage solid so sub-pixel leaves merge into a stable canopy.
+  for (let offset = 0; offset < pixels.data.length; offset += 4) {
+    pixels.data[offset + 3] = pixels.data[offset + 3] >= LOW_RESOLUTION_ALPHA_THRESHOLD
+      ? 255
+      : 0;
+  }
+  dilateTransparentTileColors(
+    pixels,
+    gridWidth,
+    gridHeight,
+    targetTileWidth,
+    targetTileHeight,
+  );
+  fillDistantSilhouetteRows(
+    pixels,
+    gridWidth,
+    gridHeight,
+    targetTileWidth,
+    targetTileHeight,
+  );
+  return pixels;
+}
+
+/** Removes distracting foliage holes while retaining each row's outer silhouette. */
+function fillDistantSilhouetteRows(
+  image: ImageData,
+  gridWidth: number,
+  gridHeight: number,
+  tileWidth: number,
+  tileHeight: number,
+): void {
+  for (let tileY = 0; tileY < gridHeight; tileY++) {
+    for (let tileX = 0; tileX < gridWidth; tileX++) {
+      const startX = tileX * tileWidth;
+      const startY = tileY * tileHeight;
+      for (let localY = 0; localY < tileHeight; localY++) {
+        const y = startY + localY;
+        let firstCovered = tileWidth;
+        let lastCovered = -1;
+        for (let localX = 0; localX < tileWidth; localX++) {
+          const alpha = image.data[(y * image.width + startX + localX) * 4 + 3];
+          if (alpha === 0) continue;
+          firstCovered = Math.min(firstCovered, localX);
+          lastCovered = localX;
+        }
+        for (let localX = firstCovered; localX <= lastCovered; localX++) {
+          image.data[(y * image.width + startX + localX) * 4 + 3] = 255;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Supplies hidden edge colors for straight-alpha bilinear sampling. RawTexture
+ * preserves RGB under zero alpha; Canvas textures do not, which causes either
+ * bright fringes or dark quantization spots at this very small resolution.
+ */
+function dilateTransparentTileColors(
+  image: ImageData,
+  gridWidth: number,
+  gridHeight: number,
+  tileWidth: number,
+  tileHeight: number,
+): void {
+  const source = new Uint8ClampedArray(image.data);
+  for (let tileY = 0; tileY < gridHeight; tileY++) {
+    for (let tileX = 0; tileX < gridWidth; tileX++) {
+      const startX = tileX * tileWidth;
+      const startY = tileY * tileHeight;
+      for (let localY = 0; localY < tileHeight; localY++) {
+        for (let localX = 0; localX < tileWidth; localX++) {
+          const x = startX + localX;
+          const y = startY + localY;
+          const destination = (y * image.width + x) * 4;
+          if (source[destination + 3] !== 0) continue;
+
+          let nearest = -1;
+          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+          for (let sampleY = 0; sampleY < tileHeight; sampleY++) {
+            for (let sampleX = 0; sampleX < tileWidth; sampleX++) {
+              const sample = ((startY + sampleY) * image.width + startX + sampleX) * 4;
+              if (source[sample + 3] === 0) continue;
+              const dx = sampleX - localX;
+              const dy = sampleY - localY;
+              const distanceSquared = dx * dx + dy * dy;
+              if (distanceSquared < nearestDistanceSquared) {
+                nearest = sample;
+                nearestDistanceSquared = distanceSquared;
+              }
+            }
+          }
+          if (nearest >= 0) {
+            image.data[destination] = source[nearest];
+            image.data[destination + 1] = source[nearest + 1];
+            image.data[destination + 2] = source[nearest + 2];
+          }
+        }
+      }
+    }
+  }
 }
 
 function binaryImage(

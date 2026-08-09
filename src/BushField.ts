@@ -1,6 +1,7 @@
 import { Matrix, Mesh, Scene, TransformNode, Vector3 } from "@babylonjs/core";
-import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
+import { getBushImpostorAssets } from "./BushImpostor";
 import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
 import { LandCoverClass, WorldCover } from "./WorldCover";
@@ -8,7 +9,6 @@ import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationRenderMode,
 } from "./VegetationField";
 
 export type BushFieldResult = VegetationFieldResult;
@@ -22,7 +22,6 @@ interface BushFieldOptions {
   waterLineMeters?: number;
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
-  renderMode?: VegetationRenderMode;
   ambientOccluders?: readonly Float32Array[];
 }
 
@@ -51,7 +50,6 @@ export async function createBushField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    renderMode = "impostors",
     ambientOccluders = [],
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
@@ -66,17 +64,15 @@ export async function createBushField(
   );
   const bush = prototype.mesh;
   const captureSize = prototype.captureSize;
-  const bushModel = createBushModel(scene, bushHeight);
-  bushModel.parent = root;
-  bushModel.isPickable = false;
-  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));
 
   const random = mulberry32(seed);
+  const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const spacing = spacingMeters / metersPerUnit;
   const columns = Math.max(1, Math.floor(meshWidth / spacing));
   const rows = Math.max(1, Math.floor(meshDepth / spacing));
   const cellWidth = meshWidth / columns;
   const cellDepth = meshDepth / rows;
+  const clusterScale = 26 / metersPerUnit;
   const maximumHalfWidth = captureSize * 0.71;
   const matrices: Matrix[] = [];
 
@@ -87,7 +83,14 @@ export async function createBushField(
         const z = meshDepth / 2 - (row + 0.08 + random() * 0.84) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const occupancy = OCCUPANCY[landCover.sample(lon, lat)] ?? 0;
-        if (random() > occupancy) continue;
+        const broadNoise = clusterNoise.sample(x / clusterScale, z / clusterScale) * 0.5 + 0.5;
+        const detailNoise = clusterNoise.sample(
+          x / (clusterScale * 0.42) + 17.3,
+          z / (clusterScale * 0.42) - 29.1,
+        ) * 0.5 + 0.5;
+        const clusterDensity = smoothstep(0.28, 0.72, broadNoise * 0.82 + detailNoise * 0.18);
+        const clusteredOccupancy = Math.min(1, occupancy * (0.12 + clusterDensity * 1.88));
+        if (random() > clusteredOccupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
         if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
@@ -128,12 +131,17 @@ export async function createBushField(
   return createVegetationFieldResult(
     root,
     [bush],
-    [bushModel],
+    [],
     matrixData,
     metersPerUnit,
-    renderMode,
+    "impostors",
     instanceOcclusion,
   );
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
 }
 
 function mulberry32(seed: number): () => number {

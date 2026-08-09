@@ -17,6 +17,7 @@ import { TerrainTiles, TerrainResult } from "./TerrainTiles";
 import { createWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
 import { createGrassField } from "./GrassField";
+import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
 import { sceneToLonLat } from "./Geo";
@@ -57,6 +58,7 @@ export class Game {
   private water?: Mesh;
   private treeField?: VegetationFieldResult;
   private grassField?: VegetationFieldResult;
+  private flowerField?: VegetationFieldResult;
   private bushField?: VegetationFieldResult;
   private mapFeatures?: TransformNode;
   private terrainData?: TerrainResult;
@@ -112,7 +114,7 @@ export class Game {
     });
     this.scene = new Scene(this.engine);
     const query = new URLSearchParams(window.location.search);
-    this.innerSize = queryInteger(query, "inner-size", 2, 1, 4);
+    this.innerSize = queryInteger(query, "inner-size", 1, 1, 4);
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
     this.engine.setHardwareScalingLevel(1 / this.renderScale);
     this.fpsCounter = new FpsCounter(
@@ -124,7 +126,7 @@ export class Game {
     const initialMode: VegetationRenderMode = requestedMode === "models" || requestedMode === "impostors"
       ? requestedMode
       : "auto";
-    this.vegetationModes = { trees: initialMode, grass: "impostors", bushes: initialMode };
+    this.vegetationModes = { trees: initialMode, grass: "impostors", bushes: "impostors" };
     const requestedDistance = query.get("vegetation-distance");
     const parsedDistance = Number(requestedDistance);
     this.vegetationLodDistanceMeters = requestedDistance !== null && Number.isFinite(parsedDistance)
@@ -341,6 +343,25 @@ export class Game {
     }
     console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
 
+    const flowerField = await createFlowerField(this.scene, terrainData, {
+      meshWidth,
+      meshDepth,
+      metersPerUnit,
+      seed: zoom ^ 0x464c4f57,
+      landCover,
+      exclusionMask: roadExclusionMask,
+      ambientOccluders: [treeField.instanceMatrices],
+    });
+    flowerField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
+    if (requestId !== this.terrainRequestId) {
+      terrain.dispose(false, true);
+      treeField.root.dispose(false, false);
+      grassField.root.dispose(false, false);
+      flowerField.root.dispose(false, false);
+      return;
+    }
+    console.log(`Flowers: ${flowerField.count} simplex-placed grassland patches`);
+
     const bushField = await createBushField(this.scene, terrainData, {
       meshWidth,
       meshDepth,
@@ -348,7 +369,6 @@ export class Game {
       seed: zoom ^ 0x42555348,
       landCover,
       exclusionMask: roadExclusionMask,
-      renderMode: this.vegetationModes.bushes,
       ambientOccluders: [treeField.instanceMatrices],
     });
     bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
@@ -356,6 +376,7 @@ export class Game {
       terrain.dispose(false, true);
       treeField.root.dispose(false, false);
       grassField.root.dispose(false, false);
+      flowerField.root.dispose(false, false);
       bushField.root.dispose(false, false);
       return;
     }
@@ -370,6 +391,7 @@ export class Game {
       terrain,
       ...treeField.meshes,
       ...grassField.meshes,
+      ...flowerField.meshes,
       ...bushField.meshes,
       ...mapFeatures.meshes,
     ], {
@@ -396,6 +418,7 @@ export class Game {
       water.dispose(false, true);
       treeField.root.dispose(false, false);
       grassField.root.dispose(false, false);
+      flowerField.root.dispose(false, false);
       bushField.root.dispose(false, false);
       mapFeatures.root.dispose(false, true);
       distantVista?.dispose();
@@ -406,6 +429,7 @@ export class Game {
     // Impostor atlases are cached and shared by every rebuilt vegetation field.
     this.treeField?.root.dispose(false, false);
     this.grassField?.root.dispose(false, false);
+    this.flowerField?.root.dispose(false, false);
     this.bushField?.root.dispose(false, false);
     this.mapFeatures?.dispose(false, true);
     this.distantVista?.dispose();
@@ -413,6 +437,7 @@ export class Game {
     this.water = water;
     this.treeField = treeField;
     this.grassField = grassField;
+    this.flowerField = flowerField;
     this.bushField = bushField;
     this.mapFeatures = mapFeatures.root;
     this.distantVista = distantVista;
@@ -441,10 +466,9 @@ export class Game {
       } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
         void this.changeTerrainZoom(-1);
       } else if (kbInfo.event.key === "v" || kbInfo.event.key === "V") {
-        const modes = Object.values(this.vegetationModes);
-        const nextMode: VegetationRenderMode = modes.every((mode) => mode === "auto")
+        const nextMode: VegetationRenderMode = this.vegetationModes.trees === "auto"
           ? "models"
-          : modes.every((mode) => mode === "models")
+          : this.vegetationModes.trees === "models"
             ? "impostors"
             : "auto";
         this.setAllVegetationModes(nextMode);
@@ -462,7 +486,7 @@ export class Game {
   }
 
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
-    if (category === "grass") mode = "impostors";
+    if (category === "grass" || category === "bushes") mode = "impostors";
     this.vegetationModes[category] = mode;
     const field = category === "trees"
       ? this.treeField
@@ -470,6 +494,7 @@ export class Game {
         ? this.grassField
         : this.bushField;
     field?.setRenderMode(mode);
+    if (category === "grass") this.flowerField?.setRenderMode(mode);
     this.vegetationControls?.setMode(category, mode);
   }
 
@@ -488,6 +513,7 @@ export class Game {
     this.vegetationAmbientOcclusionEnabled = enabled;
     this.treeField?.setAmbientOcclusionEnabled(enabled);
     this.grassField?.setAmbientOcclusionEnabled(enabled);
+    this.flowerField?.setAmbientOcclusionEnabled(enabled);
     this.bushField?.setAmbientOcclusionEnabled(enabled);
     this.distantVista?.setAmbientOcclusionEnabled(enabled);
     this.vegetationControls?.setAmbientOcclusionEnabled(enabled);
@@ -512,6 +538,7 @@ export class Game {
     this.lastVegetationCameraPosition = position.clone();
     this.treeField?.updateLod(position, this.vegetationLodDistanceMeters);
     this.grassField?.updateLod(position, this.vegetationLodDistanceMeters);
+    this.flowerField?.updateLod(position, this.vegetationLodDistanceMeters);
     this.bushField?.updateLod(position, this.vegetationLodDistanceMeters);
   }
 

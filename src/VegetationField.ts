@@ -25,10 +25,14 @@ export function createVegetationFieldResult(
   metersPerUnit: number,
   initialMode: VegetationRenderMode,
   instanceOcclusion?: Float32Array,
+  instanceColors?: Float32Array,
 ): VegetationFieldResult {
   const count = matrices.length / 16;
   if (instanceOcclusion && instanceOcclusion.length !== count) {
     throw new Error("Instance occlusion count must match the vegetation matrix count.");
+  }
+  if (instanceColors && instanceColors.length !== count * 3) {
+    throw new Error("Instance color count must match the vegetation matrix count.");
   }
   const impostorMatrices = new Float32Array(matrices.length);
   const modelMatrices = new Float32Array(matrices.length);
@@ -36,14 +40,19 @@ export function createVegetationFieldResult(
   const activeSourceOcclusion = new Float32Array(count);
   const impostorOcclusion = new Float32Array(count);
   const modelOcclusion = new Float32Array(count);
+  const sourceColors = instanceColors ?? new Float32Array(count * 3).fill(1);
+  const impostorColors = new Float32Array(sourceColors.length);
+  const modelColors = new Float32Array(sourceColors.length);
   impostorMatrices.set(matrices);
   modelMatrices.set(matrices);
   activeSourceOcclusion.set(sourceOcclusion);
   impostorOcclusion.set(sourceOcclusion);
   modelOcclusion.set(sourceOcclusion);
+  impostorColors.set(sourceColors);
+  modelColors.set(sourceColors);
 
-  initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion);
-  initializeMeshes(modelMeshes, modelMatrices, modelOcclusion);
+  initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion, impostorColors);
+  initializeMeshes(modelMeshes, modelMatrices, modelOcclusion, modelColors);
 
   let mode = initialMode;
   let lastCameraPosition: Vector3 | undefined;
@@ -67,17 +76,21 @@ export function createVegetationFieldResult(
           activeSourceOcclusion,
           allInstanceIndices,
           lastCameraPosition,
+          impostorColors,
+          sourceColors,
         );
         lastImpostorSortPosition = lastCameraPosition.clone();
       } else {
         impostorMatrices.set(matrices);
         impostorOcclusion.set(activeSourceOcclusion);
+        impostorColors.set(sourceColors);
       }
       setCounts(count, 0);
       updateMeshBuffers(impostorMeshes, true);
     } else if (mode === "models") {
       modelMatrices.set(matrices);
       modelOcclusion.set(activeSourceOcclusion);
+      modelColors.set(sourceColors);
       setCounts(0, count);
       updateMeshBuffers(modelMeshes, true);
     } else if (lastCameraPosition) {
@@ -85,6 +98,7 @@ export function createVegetationFieldResult(
     } else {
       impostorMatrices.set(matrices);
       impostorOcclusion.set(activeSourceOcclusion);
+      impostorColors.set(sourceColors);
       setCounts(count, 0);
       updateMeshBuffers(impostorMeshes, true);
     }
@@ -118,6 +132,7 @@ export function createVegetationFieldResult(
       }
       if (useModel) {
         copyMatrix(modelMatrices, modelCount * 16, matrices, matrixOffset);
+        copyColor(modelColors, modelCount * 3, sourceColors, matrixOffset / 16 * 3);
         modelOcclusion[modelCount++] = activeSourceOcclusion[matrixOffset / 16];
       } else {
         impostorIndices.push(matrixOffset / 16);
@@ -132,6 +147,8 @@ export function createVegetationFieldResult(
       activeSourceOcclusion,
       impostorIndices,
       cameraPosition,
+      impostorColors,
+      sourceColors,
     );
     lastImpostorSortPosition = cameraPosition.clone();
 
@@ -159,6 +176,8 @@ export function createVegetationFieldResult(
         activeSourceOcclusion,
         allInstanceIndices,
         cameraPosition,
+        impostorColors,
+        sourceColors,
       );
       lastImpostorSortPosition = cameraPosition.clone();
       updateMeshBuffers(impostorMeshes, true);
@@ -264,6 +283,8 @@ function writeFrontToBackInstances(
   sourceOcclusion: Float32Array,
   instanceIndices: number[],
   cameraPosition: Vector3,
+  destinationColors?: Float32Array,
+  sourceColors?: Float32Array,
 ): void {
   const distances = new Float64Array(sourceMatrices.length / 16);
   for (const instanceIndex of instanceIndices) {
@@ -285,6 +306,9 @@ function writeFrontToBackInstances(
       sourceIndex * 16,
     );
     destinationOcclusion[destinationIndex] = sourceOcclusion[sourceIndex];
+    if (destinationColors && sourceColors) {
+      copyColor(destinationColors, destinationIndex * 3, sourceColors, sourceIndex * 3);
+    }
   }
 }
 
@@ -311,6 +335,17 @@ function copyMatrix(
   }
 }
 
+function copyColor(
+  destination: Float32Array,
+  destinationOffset: number,
+  source: Float32Array,
+  sourceOffset: number,
+): void {
+  destination[destinationOffset] = source[sourceOffset];
+  destination[destinationOffset + 1] = source[sourceOffset + 1];
+  destination[destinationOffset + 2] = source[sourceOffset + 2];
+}
+
 /** Stable per-instance noise turns the distance lerp into a spatial cross-dissolve. */
 function stableLodThreshold(instanceIndex: number): number {
   let hash = Math.imul(instanceIndex + 1, 0x45d9f3b);
@@ -323,11 +358,15 @@ function initializeMeshes(
   meshes: Mesh[],
   matrices: Float32Array,
   instanceOcclusion?: Float32Array,
+  instanceColors?: Float32Array,
 ): void {
   for (const mesh of meshes) {
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
     if (instanceOcclusion) {
       mesh.thinInstanceSetBuffer("instanceOcclusion", instanceOcclusion, 1, false);
+    }
+    if (instanceColors) {
+      mesh.thinInstanceSetBuffer("vegetationColor", instanceColors, 3, false);
     }
     mesh.thinInstanceRefreshBoundingInfo(true);
     mesh.alwaysSelectAsActiveMesh = true;
@@ -338,7 +377,10 @@ function initializeMeshes(
 function updateMeshBuffers(meshes: Mesh[], updateOcclusion = false): void {
   meshes.forEach((mesh) => {
     mesh.thinInstanceBufferUpdated("matrix");
-    if (updateOcclusion) mesh.thinInstanceBufferUpdated("instanceOcclusion");
+    if (updateOcclusion) {
+      mesh.thinInstanceBufferUpdated("instanceOcclusion");
+      mesh.thinInstanceBufferUpdated("vegetationColor");
+    }
   });
 }
 
