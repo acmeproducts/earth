@@ -28,7 +28,7 @@ import {
 } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, landCoverSurfaceColor, WorldCover } from "./WorldCover";
-import { createTerrainMaterial } from "./TerrainMaterial";
+import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
 import { VegetationFieldResult, VegetationRenderMode } from "./VegetationField";
@@ -708,6 +708,7 @@ export class Game {
     const material = new StandardMaterial("openTopoMapDebugMaterial", this.scene);
     material.diffuseTexture = texture;
     material.specularColor = new Color3(0.1, 0.1, 0.1);
+    applyTerrainDepthBias(material);
     terrain.material = material;
   }
 
@@ -1024,6 +1025,7 @@ export class Game {
     const material = new StandardMaterial("worldCoverDebugMaterial", this.scene);
     material.diffuseColor = Color3.White();
     material.specularColor = new Color3(0.1, 0.1, 0.1);
+    applyTerrainDepthBias(material);
     terrain.material = material;
   }
 }

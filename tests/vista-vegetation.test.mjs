@@ -61,8 +61,10 @@ test("fades local grass density to zero at the vista border", () => {
   assert.equal(sampleGrass(50), 0);
 });
 
-test("premultiplies forced-low impostor samples before shared unpremultiplication", () => {
+test("keeps impostor colors straight without edge-brightening unpremultiplication", () => {
   const shaderSource = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
   assert.match(shaderSource, /lowColor\.a = step\(0\.5, lowColor\.a\)/);
-  assert.match(shaderSource, /return vec4\(lowColor\.rgb \* lowColor\.a, lowColor\.a\)/);
+  assert.match(shaderSource, /return lowColor/);
+  assert.match(shaderSource, /vec3 straightColor = color\.rgb;/);
+  assert.doesNotMatch(shaderSource, /color\.rgb \/ max\(color\.a/);
 });

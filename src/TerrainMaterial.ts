@@ -1,5 +1,6 @@
 import {
   Color3,
+  Material,
   RawTexture,
   Scene,
   StandardMaterial,
@@ -11,6 +12,16 @@ const NOISE_SEED = 0x6d2b79f5;
 const ALBEDO_TILING = 24;
 const NORMAL_TILING = 48;
 let cachedTextureData: TerrainTextureData | undefined;
+
+/**
+ * Pushes terrain a tiny distance back in the depth buffer. Vegetation keeps
+ * its real depth, so it wins against the ground without drawing over objects
+ * that genuinely stand in front of it.
+ */
+export function applyTerrainDepthBias(material: Material): void {
+  material.zOffset = 1;
+  material.zOffsetUnits = 1;
+}
 
 interface TerrainTextureData {
   albedo: Uint8Array;
@@ -66,6 +77,7 @@ export function createTerrainMaterial(
     : new Color3(0.7, 0.62, 0.5);
   material.specularColor = new Color3(0.035, 0.04, 0.03);
   material.specularPower = 24;
+  applyTerrainDepthBias(material);
   return material;
 }
 

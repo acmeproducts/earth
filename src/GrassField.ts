@@ -26,6 +26,7 @@ import {
 /** Keeps the broad grass patch above small terrain interpolation differences. */
 const GRASS_GROUND_OFFSET_METERS = 0.07;
 const GRASS_HEIGHT_METERS = 0.55;
+const GRASS_SPACING_METERS = 1.5;
 
 type GrassFieldOptions = VegetationPlacementOptions;
 
@@ -50,7 +51,7 @@ export async function createGrassField(
     meshDepth,
     metersPerUnit,
     seed = 0x47524153,
-    spacingMeters = 2,
+    spacingMeters = GRASS_SPACING_METERS,
     waterLineMeters = 0,
     landCover,
     exclusionMask,
@@ -74,10 +75,6 @@ export async function createGrassField(
     // 128 px atlas through the middle distance before blending to 20 px.
     grass.material.setFloat("impostorLodNear", 40);
     grass.material.setFloat("impostorLodFar", 80);
-    // The shared impostor shader flattens proxy depth onto the patch center.
-    // Pull grass slightly forward so small terrain variations do not cut it off.
-    grass.material.zOffset = -1;
-    grass.material.zOffsetUnits = -1;
   }
   const grassModel = createGrassModel(scene, grassHeight);
   grassModel.parent = root;

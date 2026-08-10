@@ -60,8 +60,10 @@ The controls configure the number of samples along each cube-face edge and the
 resolution of each capture. The default produces 500 captures: five faces,
 each with a 10 by 10 grid of 256 by 256 pixel frames.
 
-The source is a deterministic procedural broadleaf built from tapered branches
-and vertex-colored leaf geometry. After capture, that source mesh is disabled and the scene renders only a
+The source family contains deterministic procedural birch, pine, and spruce trees. Birch uses
+tapered branches with runtime-generated bark and textured leaf cards; pine and spruce use distinct
+procedural conifer silhouettes. Forest placements mix all three species in the scene.
+After capture, that source mesh is disabled and the scene renders only a
 camera-facing impostor. Its shader selects the dominant cube face and
 bilinearly blends the four nearest frames. `Export ZIP` writes the five face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
@@ -78,7 +80,8 @@ by 5 vertical samples per face. Each
 tree frame keeps a 256 px height and derives its narrower width from the
 generated tree's bounding box. `tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
-override those defaults for quality testing. Grass uses an 8 by 8,
+override those defaults for quality testing, up to a maximum resolution of 256
+px. Grass uses an 8 by 8,
 128 px capture by default. `grass-impostor-x-samples`,
 `grass-impostor-y-samples`, and `grass-impostor-resolution` query parameters
 can override those values for quality testing.

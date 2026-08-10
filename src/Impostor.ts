@@ -227,7 +227,11 @@ async function captureDefinition(
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
   } finally {
-    meshes.forEach((mesh) => mesh.dispose(false, true));
+    const materials = new Set(meshes.map((mesh) => mesh.material).filter((material) => material !== null));
+    meshes.forEach((mesh) => mesh.dispose(false, false));
+    // Capture sources may use scene-cached procedural textures that remain
+    // useful to live models after the temporary source material is gone.
+    materials.forEach((material) => material.dispose(true, false));
   }
 }
 

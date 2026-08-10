@@ -27,6 +27,8 @@ import {
 } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
+import { TREE_LOW_LIGHT_BRIGHTNESS, TreeSpecies } from "./ProceduralTree";
+import { SimplexNoise2D } from "./SimplexNoise";
 import {
   createPlacementGrid,
   packInstanceMatrices,
@@ -35,6 +37,12 @@ import {
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
+const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
+const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
+  birch: 1,
+  pine: 1.16,
+  spruce: 0.86,
+};
 
 export interface ImpostorPrototype {
   root: TransformNode;
@@ -150,6 +158,7 @@ uniform float captureCenterY;
 uniform vec3 sunColor;
 uniform vec3 skyColor;
 uniform vec3 groundColor;
+uniform float lowLightAlbedoScale;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -174,11 +183,11 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   if (forceLowestLod > 0.5) {
     vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
     vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / gridDimensions);
-    // Raw low atlases contain straight RGB. The shared output path below
-    // unpremultiplies its input, so convert to premultiplied color here first.
-    // A binary edge also prevents tiny filtered alpha values from sparkling.
+    // Keep the low atlas's straight RGB and make its edge binary. In
+    // particular, do not divide filtered foliage RGB by its small alpha:
+    // that amplifies pale leaf-edge texels into a bright fringe.
     lowColor.a = step(0.5, lowColor.a);
-    return vec4(lowColor.rgb * lowColor.a, lowColor.a);
+    return lowColor;
   }
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
   vec2 atlasUV = (tile + localUV) / gridDimensions;
@@ -191,19 +200,18 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   lowColor.a = step(0.5, lowColor.a);
 
   vec4 highColor = atlasSample(face, atlasUV);
-  vec3 highStraight = highColor.rgb / max(highColor.a, 1.0 / 255.0);
   // Never cross-fade color against transparent black. When only one atlas
   // covers this fragment, extend that atlas's color through the other side of
   // the transition and blend only once both samples contain real color.
   float highPresent = step(1.0 / 255.0, highColor.a);
   float lowPresent = step(1.0 / 255.0, lowColor.a);
-  highStraight = mix(lowColor.rgb, highStraight, highPresent);
+  vec3 highStraight = mix(lowColor.rgb, highColor.rgb, highPresent);
   vec3 lowStraight = mix(highStraight, lowColor.rgb, lowPresent);
   // Preserve the detailed atlas's coverage through and beyond the color LOD.
   // This avoids both low-resolution holes and an opaque coarse silhouette.
   float alpha = highColor.a;
   vec3 straightColor = mix(highStraight, lowStraight, lodBlend);
-  return vec4(straightColor * alpha, alpha);
+  return vec4(straightColor, alpha);
 }
 
 float bayer4(vec2 pixel) {
@@ -328,7 +336,13 @@ void main(void) {
 
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
   if (color.a <= alphaChoice) discard;
-  vec3 straightColor = color.rgb / max(color.a, 1.0 / 255.0);
+  vec3 straightColor = color.rgb;
+  float sceneBrightness = max(
+    max(skyColor.r, max(skyColor.g, skyColor.b)),
+    max(sunColor.r, max(sunColor.g, sunColor.b))
+  );
+  float lowLightBlend = 1.0 - smoothstep(0.22, 0.58, sceneBrightness);
+  straightColor *= mix(1.0, lowLightAlbedoScale, lowLightBlend);
   float petalMask = smoothstep(0.68, 0.86, min(straightColor.r, min(straightColor.g, straightColor.b)));
   straightColor = mix(straightColor, straightColor * vInstanceColor, petalMask);
 
@@ -390,27 +404,50 @@ export async function createTreeField(
     densityScale,
   } = options;
   const treeHeight = 11 / metersPerUnit;
-  const prototype = await createTreeImpostorPrototype(scene, treeHeight, "treeField");
-  const { root, mesh: tree, captureWidth } = prototype;
-  if (prototype.mesh.material instanceof ShaderMaterial) {
-    prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
+  const root = new TransformNode("treeField", scene);
+  const speciesList: TreeSpecies[] = ["birch", "pine", "spruce"];
+  const speciesResources: Array<{
+    prototype: ImpostorPrototype;
+    modelMeshes: Mesh[];
+  }> = [];
+  // Impostor capture temporarily installs an orthographic scene camera. Capture
+  // species one at a time so each pass restores the real gameplay camera.
+  for (const species of speciesList) {
+    const prototype = await createTreeImpostorPrototype(
+      scene,
+      treeHeight,
+      `treeField-${species}`,
+      species,
+    );
+    prototype.root.parent = root;
+    if (prototype.mesh.material instanceof ShaderMaterial) {
+      prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
+    }
+    const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight, species) : [];
+    modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
+    const modelMaterials = new Set(
+      modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null),
+    );
+    prototype.root.onDisposeObservable.add(() => {
+      modelMaterials.forEach((material) => material.dispose(true, false));
+    });
+    speciesResources.push({ prototype, modelMeshes });
   }
-  const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight) : [];
-  modelMeshes.forEach((mesh) => { mesh.parent = root; });
-  const modelMaterials = new Set(modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null));
-  root.onDisposeObservable.add(() => {
-    modelMaterials.forEach((material) => material.dispose(true, true));
-  });
 
   const random = createSeededRandom(seed);
+  const speciesNoise = new SimplexNoise2D(seed ^ 0x54524545);
+  const speciesDetailNoise = new SimplexNoise2D(seed ^ 0x434c5553);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
     spacingMeters,
     metersPerUnit,
   );
-  const maximumHalfWidth = captureWidth * 0.55;
+  const maximumHalfWidth = Math.max(
+    ...speciesResources.map(({ prototype }) => prototype.captureWidth),
+  ) * 0.55;
   const matrices: Matrix[] = [];
+  const speciesMatrices: Record<TreeSpecies, Matrix[]> = { birch: [], pine: [], spruce: [] };
 
   if (landCover && terrain.bounds) {
     const forestMask = new Uint8Array(rows * columns);
@@ -467,37 +504,71 @@ export async function createTreeField(
         );
         if (random() > localOccupancy) continue;
 
-        const heightScale = 0.75 + random() * 0.5;
-        const widthScale = 0.75 + random() * 0.35;
+        const species = sampleTreeSpecies(
+          speciesNoise,
+          speciesDetailNoise,
+          worldX * metersPerUnit,
+          worldZ * metersPerUnit,
+        );
+        const speciesScale = TREE_SPECIES_SCALE[species];
+        const heightScale = (0.75 + random() * 0.5) * speciesScale;
+        const widthScale = (0.75 + random() * 0.35) * speciesScale;
         const yaw = (random() - 0.5) * Math.PI * 2;
         const pitch = (random() - 0.5) * 0.08;
         const roll = (random() - 0.5) * 0.08;
-        matrices.push(
-          Matrix.Compose(
-            new Vector3(widthScale, heightScale, widthScale),
-            new Vector3(pitch, yaw, roll).toQuaternion(),
-            new Vector3(
-              worldX,
-              elevation / metersPerUnit + positionOffset.y,
-              worldZ,
-            ),
+        const matrix = Matrix.Compose(
+          new Vector3(widthScale, heightScale, widthScale),
+          new Vector3(pitch, yaw, roll).toQuaternion(),
+          new Vector3(
+            worldX,
+            elevation / metersPerUnit + positionOffset.y,
+            worldZ,
           ),
         );
+        matrices.push(matrix);
+        speciesMatrices[species].push(matrix);
       }
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(matrixData, 10 / metersPerUnit);
-  return createVegetationFieldResult(
-    root,
-    [tree],
-    modelMeshes,
-    matrixData,
-    metersPerUnit,
-    renderMode,
-    instanceOcclusion,
+  const packedSpeciesMatrices = speciesList.map(
+    (species) => packInstanceMatrices(speciesMatrices[species]),
   );
+  const fields = speciesResources.map(({ prototype, modelMeshes }, index) => {
+    const ownMatrices = packedSpeciesMatrices[index];
+    const instanceOcclusion = computeVegetationOcclusion(
+      ownMatrices,
+      10 / metersPerUnit,
+      packedSpeciesMatrices.filter((_, otherIndex) => otherIndex !== index),
+    );
+    return createVegetationFieldResult(
+      prototype.root,
+      [prototype.mesh],
+      modelMeshes,
+      ownMatrices,
+      metersPerUnit,
+      renderMode,
+      instanceOcclusion,
+    );
+  });
+  const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
+  const modelMeshes = fields.flatMap((field) => field.modelMeshes);
+  return {
+    root,
+    meshes: [...impostorMeshes, ...modelMeshes],
+    impostorMeshes,
+    modelMeshes,
+    instanceMatrices: matrixData,
+    count: matrices.length,
+    setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
+    setAmbientOcclusionEnabled: (enabled) => {
+      fields.forEach((field) => field.setAmbientOcclusionEnabled(enabled));
+    },
+    updateLod: (cameraPosition, distanceMeters) => {
+      fields.forEach((field) => field.updateLod(cameraPosition, distanceMeters));
+    },
+  };
 }
 
 /** Builds the same fixed cube and material used by every forest instance. */
@@ -505,10 +576,39 @@ export async function createTreeImpostorPrototype(
   scene: Scene,
   treeHeight: number,
   rootName = "treeImpostorPrototype",
+  species: TreeSpecies = "birch",
 ): Promise<ImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
-  const assets = await getTreeImpostorAssets(scene);
-  return createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+  const assets = await getTreeImpostorAssets(scene, undefined, undefined, undefined, species);
+  const prototype = createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+  if (prototype.mesh.material instanceof ShaderMaterial) {
+    prototype.mesh.material.setFloat(
+      "lowLightAlbedoScale",
+      TREE_LOW_LIGHT_BRIGHTNESS[species],
+    );
+  }
+  return prototype;
+}
+
+/** Uses broad simplex regions with a finer octave to form soft-edged species groves. */
+function sampleTreeSpecies(
+  regionalNoise: SimplexNoise2D,
+  detailNoise: SimplexNoise2D,
+  xMeters: number,
+  zMeters: number,
+): TreeSpecies {
+  const regional = regionalNoise.sample(
+    xMeters / TREE_SPECIES_CLUSTER_SIZE_METERS,
+    zMeters / TREE_SPECIES_CLUSTER_SIZE_METERS,
+  );
+  const detail = detailNoise.sample(
+    xMeters / (TREE_SPECIES_CLUSTER_SIZE_METERS * 0.38),
+    zMeters / (TREE_SPECIES_CLUSTER_SIZE_METERS * 0.38),
+  );
+  const speciesValue = regional * 0.82 + detail * 0.18;
+  if (speciesValue < -0.18) return "spruce";
+  if (speciesValue > 0.18) return "pine";
+  return "birch";
 }
 
 /** Creates the render mesh and shader material for any captured source. */
@@ -554,7 +654,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "fogColor", "fogStart", "fogEnd"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "fogColor", "fogStart", "fogEnd"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
       needAlphaBlending: false,
     },
@@ -580,6 +680,7 @@ export function createImpostorMaterial(
   material.setFloat("rotationallySymmetric", assets.rotationallySymmetric ? 1 : 0);
   material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
   material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
+  material.setFloat("lowLightAlbedoScale", 1);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(
