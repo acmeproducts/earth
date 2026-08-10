@@ -20,7 +20,12 @@ import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
-import { sampleElevation, sceneToLonLat } from "./Geo";
+import {
+  sampleElevation,
+  sceneToLonLat,
+  sinkSubmergedElevation,
+  sinkSubmergedTerrain,
+} from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import { landCoverColor, landCoverSurfaceColor, WorldCover } from "./WorldCover";
 import { createTerrainMaterial } from "./TerrainMaterial";
@@ -42,7 +47,9 @@ import {
 } from "./VistaVegetation";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
-const VEGETATION_LOD_UPDATE_MS = 100;
+// OpenFreeMap starts including building footprints at zoom 13. The elevation
+// can stay coarse while this independent vector zoom supplies vista geometry.
+const DISTANT_OSM_ZOOM = 13;
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
@@ -66,6 +73,17 @@ interface WalkableTerrain {
 interface TerrainMetadata {
   worldCoverColors?: Float32Array;
   surfaceColors?: Float32Array;
+}
+
+interface TerrainSceneResources {
+  terrain?: Mesh;
+  water?: Mesh;
+  treeField?: VegetationFieldResult;
+  grassField?: VegetationFieldResult;
+  flowerField?: VegetationFieldResult;
+  bushField?: VegetationFieldResult;
+  mapFeatures?: TransformNode;
+  distantVista?: DistantVista;
 }
 
 export type InitializationProgress = (step: string, progress: number) => void;
@@ -96,8 +114,6 @@ export class Game {
   private vegetationControls?: VegetationControls;
   private vegetationLodDistanceMeters: number;
   private vegetationAmbientOcclusionEnabled: boolean;
-  private lastVegetationLodUpdate = 0;
-  private lastVegetationCameraPosition?: Vector3;
   private flyCamera?: UniversalCamera;
   private flySpeedOutput?: HTMLOutputElement;
   private movementMode: MovementMode = "fly";
@@ -136,11 +152,19 @@ export class Game {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.engine = new Engine(canvas, true, {
-      preserveDrawingBuffer: true,
-      stencil: true,
+      preserveDrawingBuffer: false,
+      stencil: false,
       antialias: true,
     });
+    // The vista spans a much larger depth range than the local terrain. A
+    // reversed depth buffer preserves precision at that distance and prevents
+    // distant terrain, water, and mapped surfaces from collapsing onto the
+    // same depth values on lower-precision GPUs.
+    this.engine.useReverseDepthBuffer = true;
     this.scene = new Scene(this.engine);
+    // The app does not use hover picking. Skipping the implicit ray cast keeps
+    // pointer movement from competing with rendering on slower CPUs.
+    this.scene.skipPointerMovePicking = true;
     this.scene.collisionsEnabled = true;
     const query = new URLSearchParams(window.location.search);
     this.innerSize = queryInteger(query, "inner-size", 1, 1, 4);
@@ -253,13 +277,20 @@ export class Game {
     );
     if (requestId !== this.terrainRequestId) return;
     if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
+    const localCenter = sceneToLonLat(
+      0,
+      0,
+      terrainData.bounds,
+      terrainData.groundWidthMeters!,
+      terrainData.groundHeightMeters!,
+    );
 
     await reportInitializationProgress(onProgress, "Loading maps and land cover", 18);
     const distantTerrainPromise = TerrainTiles.fetchTileAtLocation(
-      location.lat,
-      location.lon,
-      Math.max(1, zoom - 3),
-      this.innerSize,
+      localCenter.lat,
+      localCenter.lon,
+      Math.max(1, zoom - 2),
+      3,
     ).then(async (terrain) => {
       const lakeElevationSource = terrain.elevations.slice();
       if (!terrain.bounds) {
@@ -275,12 +306,13 @@ export class Game {
             console.warn("Distant WorldCover unavailable; vista vegetation was skipped.", error);
             return undefined;
           }),
-        OpenStreetMap.fetch(terrain.bounds, 12).catch((error: unknown) => {
-            console.warn("Distant OpenStreetMap unavailable; vista lakes were skipped.", error);
+        OpenStreetMap.fetch(terrain.bounds, DISTANT_OSM_ZOOM).catch((error: unknown) => {
+            console.warn("Distant OpenStreetMap unavailable; vista map geometry was skipped.", error);
             return [];
           }),
       ]);
       distantLandCover?.constrainElevations(terrain);
+      sinkSubmergedTerrain(terrain);
       return {
         terrain,
         landCover: distantLandCover,
@@ -306,9 +338,7 @@ export class Game {
     await reportInitializationProgress(onProgress, "Building terrain mesh", 34);
     const lakeElevationSource = terrainData.elevations.slice();
     landCover?.constrainElevations(terrainData);
-
-    // Download the heightmap to disk
-    //TerrainTiles.downloadHeightmap(terrainData, 'oslo_heightmap.png');
+    sinkSubmergedTerrain(terrainData);
 
     // Derive meters-per-unit from the real ground extent so
     // horizontal and vertical scales match 1:1 (absolute height).
@@ -317,6 +347,17 @@ export class Game {
     const groundHeight = terrainData.groundHeightMeters ?? 1000;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
+    if (distantScene) {
+      const vistaRadius = Math.min(
+        distantScene.terrain.groundWidthMeters!,
+        distantScene.terrain.groundHeightMeters!,
+      ) / (2 * metersPerUnit);
+      this.scene.fogMode = Scene.FOGMODE_LINEAR;
+      this.scene.fogStart = vistaRadius * 0.65;
+      this.scene.fogEnd = vistaRadius * 0.95;
+    } else {
+      this.scene.fogMode = Scene.FOGMODE_NONE;
+    }
     const mapOptions = {
       meshWidth,
       meshDepth,
@@ -356,6 +397,7 @@ export class Game {
       metersPerUnit,
       landCover,
     });
+    const resources: TerrainSceneResources = { terrain };
 
     const vistaVegetationSpacingMeters = distantScene
       ? chooseVistaVegetationSpacing(
@@ -391,12 +433,9 @@ export class Game {
         },
       ),
     });
+    resources.treeField = treeField;
     treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
-    if (requestId !== this.terrainRequestId) {
-      terrain.dispose(false, true);
-      treeField.root.dispose(false, false);
-      return;
-    }
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Growing grass", 55);
@@ -417,13 +456,9 @@ export class Game {
         { innerScale: 1, borderScale: 0, outerScale: 0 },
       ),
     });
+    resources.grassField = grassField;
     grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
-    if (requestId !== this.terrainRequestId) {
-      terrain.dispose(false, true);
-      treeField.root.dispose(false, false);
-      grassField.root.dispose(false, false);
-      return;
-    }
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Adding flowers", 64);
@@ -437,14 +472,9 @@ export class Game {
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
     });
+    resources.flowerField = flowerField;
     flowerField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
-    if (requestId !== this.terrainRequestId) {
-      terrain.dispose(false, true);
-      treeField.root.dispose(false, false);
-      grassField.root.dispose(false, false);
-      flowerField.root.dispose(false, false);
-      return;
-    }
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Flowers: ${flowerField.count} simplex-placed grassland patches`);
 
     await reportInitializationProgress(onProgress, "Adding bushes", 72);
@@ -458,19 +488,14 @@ export class Game {
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.bushes,
     });
+    resources.bushField = bushField;
     bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
-    if (requestId !== this.terrainRequestId) {
-      terrain.dispose(false, true);
-      treeField.root.dispose(false, false);
-      grassField.root.dispose(false, false);
-      flowerField.root.dispose(false, false);
-      bushField.root.dispose(false, false);
-      return;
-    }
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Creating map features", 80);
     const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, mapOptions);
+    resources.mapFeatures = mapFeatures.root;
     console.log(
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );
@@ -487,6 +512,7 @@ export class Game {
       width: meshWidth,
       height: meshDepth,
     });
+    resources.water = water;
 
     await reportInitializationProgress(onProgress, "Building the distant landscape", 91);
     const distantVista = distantScene
@@ -503,27 +529,19 @@ export class Game {
           vegetationSpacingMeters: vistaVegetationSpacingMeters,
         })
       : undefined;
+    resources.distantVista = distantVista;
     distantVista?.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
-    if (requestId !== this.terrainRequestId) {
-      terrain.dispose(false, true);
-      water.dispose(false, true);
-      treeField.root.dispose(false, false);
-      grassField.root.dispose(false, false);
-      flowerField.root.dispose(false, false);
-      bushField.root.dispose(false, false);
-      mapFeatures.root.dispose(false, true);
-      distantVista?.dispose();
-      return;
-    }
-    this.terrain?.dispose(false, true);
-    this.water?.dispose(false, true);
-    // Impostor atlases are generated once per scene and shared by rebuilt vegetation fields.
-    this.treeField?.root.dispose(false, false);
-    this.grassField?.root.dispose(false, false);
-    this.flowerField?.root.dispose(false, false);
-    this.bushField?.root.dispose(false, false);
-    this.mapFeatures?.dispose(false, true);
-    this.distantVista?.dispose();
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    disposeTerrainSceneResources({
+      terrain: this.terrain,
+      water: this.water,
+      treeField: this.treeField,
+      grassField: this.grassField,
+      flowerField: this.flowerField,
+      bushField: this.bushField,
+      mapFeatures: this.mapFeatures,
+      distantVista: this.distantVista,
+    });
     this.terrain = terrain;
     terrain.checkCollisions = true;
     this.water = water;
@@ -542,7 +560,7 @@ export class Game {
     };
     this.configureCameraCollisionBody();
     this.ensurePlayerAboveGround();
-    this.updateVegetationLod(true);
+    this.updateVegetationLod();
 
     this.solarLighting?.setLocation(location.lat, location.lon);
     this.solarLighting?.setShadowCasters([
@@ -551,6 +569,15 @@ export class Game {
     ]);
     await reportInitializationProgress(onProgress, "Finalizing terrain appearance", 96);
     await this.applyTerrainLayer(requestId);
+  }
+
+  private discardStaleTerrainBuild(
+    requestId: number,
+    resources: TerrainSceneResources,
+  ): boolean {
+    if (requestId === this.terrainRequestId) return false;
+    disposeTerrainSceneResources(resources);
+    return true;
   }
 
   /** Debug-only keyboard actions are isolated from camera input. */
@@ -609,7 +636,7 @@ export class Game {
 
   private setVegetationLodDistance(distanceMeters: number): void {
     this.vegetationLodDistanceMeters = distanceMeters;
-    this.updateVegetationLod(true);
+    this.updateVegetationLod();
   }
 
   private setVegetationAmbientOcclusion(enabled: boolean): void {
@@ -622,23 +649,11 @@ export class Game {
     this.vegetationControls?.setAmbientOcclusionEnabled(enabled);
   }
 
-  private updateVegetationLod(force = false): void {
-    const now = performance.now();
-    if (!force && now - this.lastVegetationLodUpdate < VEGETATION_LOD_UPDATE_MS) return;
+  private updateVegetationLod(): void {
     const camera = this.scene.activeCamera;
     if (!camera) return;
 
     const position = camera.globalPosition;
-    if (
-      !force &&
-      this.lastVegetationCameraPosition &&
-      Vector3.DistanceSquared(position, this.lastVegetationCameraPosition) < 0.000001
-    ) {
-      return;
-    }
-
-    this.lastVegetationLodUpdate = now;
-    this.lastVegetationCameraPosition = position.clone();
     this.treeField?.updateLod(position, this.vegetationLodDistanceMeters);
     this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
     this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
@@ -920,11 +935,14 @@ export class Game {
         const e01 = elevations[y1 * elevW + x0];
         const e11 = elevations[y1 * elevW + x1];
 
-        const elevation =
+        const interpolatedElevation =
           e00 * (1 - fx) * (1 - fy) +
           e10 * fx * (1 - fy) +
           e01 * (1 - fx) * fy +
           e11 * fx * fy;
+        // Interpolation across a shoreline can recreate shallow negative
+        // heights after the source samples were sunk. Clamp the final vertex.
+        const elevation = sinkSubmergedElevation(interpolatedElevation);
 
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
@@ -973,6 +991,7 @@ export class Game {
     ground.updateVerticesData(VertexBuffer.PositionKind, positions);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
     ground.metadata = { worldCoverColors, surfaceColors } satisfies TerrainMetadata;
+    ground.freezeWorldMatrix();
 
     this.applyDefaultTerrainMaterial(ground);
 
@@ -1020,6 +1039,18 @@ function queryNumber(
   return query.has(name) && Number.isFinite(value)
     ? Math.max(minimum, Math.min(maximum, value))
     : fallback;
+}
+
+function disposeTerrainSceneResources(resources: TerrainSceneResources): void {
+  resources.terrain?.dispose(false, true);
+  resources.water?.dispose(false, true);
+  // Impostor atlases are cached per scene and intentionally outlive rebuilt fields.
+  resources.treeField?.root.dispose(false, false);
+  resources.grassField?.root.dispose(false, false);
+  resources.flowerField?.root.dispose(false, false);
+  resources.bushField?.root.dispose(false, false);
+  resources.mapFeatures?.dispose(false, true);
+  resources.distantVista?.dispose();
 }
 
 function queryInteger(

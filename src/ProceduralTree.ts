@@ -1,5 +1,6 @@
 import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
 import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
+import { createSeededRandom } from "./Random";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 4.25;
@@ -37,7 +38,7 @@ export function createProceduralTree(
     name = "treeImpostorProceduralSource",
     liveLighting = false,
   } = options;
-  const random = mulberry32(seed);
+  const random = createSeededRandom(seed);
   const buffers: GeometryBuffers = { positions: [], indices: [], colors: [] };
   const foliageAnchors: Vector3[] = [];
   const trunkPoints: Vector3[] = [];
@@ -354,14 +355,4 @@ function pushColor(target: number[], color: Color3, alpha: number): void {
 
 function lerp(from: number, to: number, amount: number): number {
   return from + (to - from) * amount;
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

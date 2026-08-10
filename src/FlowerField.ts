@@ -1,5 +1,5 @@
 import { Matrix, Quaternion, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
-import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { TerrainResult } from "./TerrainTiles";
@@ -8,22 +8,16 @@ import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationRenderMode,
 } from "./VegetationField";
-import { LandCoverClass, WorldCover } from "./WorldCover";
+import { LandCoverClass } from "./WorldCover";
+import { createSeededRandom } from "./Random";
+import {
+  createPlacementGrid,
+  packInstanceMatrices,
+  VegetationPlacementOptions,
+} from "./VegetationPlacement";
 
-interface FlowerFieldOptions {
-  meshWidth: number;
-  meshDepth: number;
-  metersPerUnit: number;
-  seed?: number;
-  spacingMeters?: number;
-  waterLineMeters?: number;
-  landCover?: WorldCover;
-  exclusionMask?: HorizontalExclusionMask;
-  ambientOccluders?: readonly Float32Array[];
-  renderMode?: VegetationRenderMode;
-}
+type FlowerFieldOptions = VegetationPlacementOptions;
 
 const FLOWER_PALETTE: ReadonlyArray<readonly [number, number, number]> = [
   [1, 0.96, 0.84],
@@ -69,15 +63,16 @@ export async function createFlowerField(
   flowerModel.parent = root;
   flowerModel.isPickable = false;
   root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, true));
-  const random = mulberry32(seed);
+  const random = createSeededRandom(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
   const colorNoise = new SimplexNoise2D(seed ^ 0xb7e15162);
-  const spacing = spacingMeters / metersPerUnit;
-  const columns = Math.max(1, Math.floor(meshWidth / spacing));
-  const rows = Math.max(1, Math.floor(meshDepth / spacing));
-  const cellWidth = meshWidth / columns;
-  const cellDepth = meshDepth / rows;
+  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
+    meshWidth,
+    meshDepth,
+    spacingMeters,
+    metersPerUnit,
+  );
   const patchScale = 28 / metersPerUnit;
   const regionScale = 180 / metersPerUnit;
   const colorScale = 1.25 / metersPerUnit;
@@ -130,8 +125,7 @@ export async function createFlowerField(
     }
   }
 
-  const matrixData = new Float32Array(matrices.length * 16);
-  matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const matrixData = packInstanceMatrices(matrices);
   const instanceOcclusion = computeVegetationOcclusion(
     matrixData,
     8 / metersPerUnit,
@@ -173,14 +167,4 @@ function fract(value: number): number {
 function smoothstep(edge0: number, edge1: number, value: number): number {
   const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

@@ -12,7 +12,7 @@ import {
   Vector3,
   VertexData,
 } from "@babylonjs/core";
-import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { TerrainResult } from "./TerrainTiles";
 import {
   createTreeModels,
@@ -24,9 +24,14 @@ import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationRenderMode,
 } from "./VegetationField";
-import { LandCoverClass, WorldCover } from "./WorldCover";
+import { LandCoverClass } from "./WorldCover";
+import { createSeededRandom } from "./Random";
+import {
+  createPlacementGrid,
+  packInstanceMatrices,
+  VegetationPlacementOptions,
+} from "./VegetationPlacement";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -40,26 +45,14 @@ export interface ImpostorPrototype {
   captureHeight: number;
 }
 
-export type TreeImpostorPrototype = ImpostorPrototype;
-
-interface TreeFieldOptions {
-  meshWidth: number;
-  meshDepth: number;
-  metersPerUnit: number;
-  seed?: number;
-  spacingMeters?: number;
+interface TreeFieldOptions extends VegetationPlacementOptions {
   occupancy?: number;
   edgeOccupancy?: number;
   fullDensityDepthMeters?: number;
-  waterLineMeters?: number;
-  landCover?: WorldCover;
-  exclusionMask?: HorizontalExclusionMask;
-  renderMode?: VegetationRenderMode;
   includeModels?: boolean;
   forceLowestImpostorLod?: boolean;
   positionOffset?: Vector3;
   elevationSampler?: (x: number, z: number) => number;
-  densityScale?: (worldX: number, worldZ: number) => number;
 }
 
 export const impostorVertexShader = `
@@ -68,6 +61,7 @@ attribute vec3 position;
 #ifdef THIN_INSTANCES
 attribute float instanceOcclusion;
 attribute vec3 vegetationColor;
+attribute float instanceLodBlend;
 #endif
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
@@ -80,6 +74,7 @@ varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
+varying float vInstanceLodBlend;
 
 void main(void) {
   #include<instancesVertex>
@@ -105,9 +100,11 @@ void main(void) {
   #ifdef THIN_INSTANCES
   vInstanceOcclusion = instanceOcclusion;
   vInstanceColor = vegetationColor;
+  vInstanceLodBlend = instanceLodBlend;
   #else
   vInstanceOcclusion = 0.0;
   vInstanceColor = vec3(1.0);
+  vInstanceLodBlend = 0.0;
   #endif
   vec4 clipPosition = viewProjection * worldPosition;
   vec4 centerClipPosition = viewProjection * vec4(center, 1.0);
@@ -127,6 +124,7 @@ varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
+varying float vInstanceLodBlend;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -139,6 +137,7 @@ uniform sampler2D lowAtlas3;
 uniform sampler2D lowAtlas4;
 uniform float rotationallySymmetric;
 uniform float rotationalSymmetryOrder;
+uniform float upperHemisphereOnly;
 uniform vec2 gridDimensions;
 uniform vec2 tileInset;
 uniform vec2 lowTileInset;
@@ -151,6 +150,9 @@ uniform float captureCenterY;
 uniform vec3 sunColor;
 uniform vec3 skyColor;
 uniform vec3 groundColor;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogEnd;
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -214,6 +216,9 @@ float bayer4(vec2 pixel) {
 }
 
 void main(void) {
+  // Complement the model shader's screen-door mask so the two LODs blend
+  // without the depth-sorting problems of translucent vegetation.
+  if (vInstanceLodBlend > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
   vec3 direction = normalize(vViewDirection);
   vec3 absoluteDirection = abs(direction);
   vec3 captureDirection = direction;
@@ -274,7 +279,11 @@ void main(void) {
 
   float denominator = max(0.0001, dot(captureDirection, faceNormal));
   vec2 projected = vec2(dot(captureDirection, faceRight), dot(captureDirection, faceUp)) / denominator;
-  vec2 samplePosition = clamp((projected + 1.0) * 0.5, 0.0, 1.0) * (gridDimensions - 1.0);
+  vec2 normalizedSamplePosition = (projected + 1.0) * 0.5;
+  if (upperHemisphereOnly > 0.5 && topFacing < 0.5) {
+    normalizedSamplePosition.y = projected.y;
+  }
+  vec2 samplePosition = clamp(normalizedSamplePosition, 0.0, 1.0) * (gridDimensions - 1.0);
   vec3 projectedPosition = vLocalPosition;
   if (cameraOrthographic < 0.5) {
     vec3 cameraOffset = vViewDirection;
@@ -351,7 +360,8 @@ void main(void) {
   // Preserve enough ambient response for foliage to remain readable after
   // sunset, including shaded lower crowns and densely occluded trees.
   lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
-  gl_FragColor = vec4(straightColor * lighting, 1.0);
+  float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
+  gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
 }`;
 
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
@@ -392,12 +402,13 @@ export async function createTreeField(
     modelMaterials.forEach((material) => material.dispose(true, true));
   });
 
-  const random = mulberry32(seed);
-  const spacing = spacingMeters / metersPerUnit;
-  const columns = Math.max(1, Math.floor(meshWidth / spacing));
-  const rows = Math.max(1, Math.floor(meshDepth / spacing));
-  const cellWidth = meshWidth / columns;
-  const cellDepth = meshDepth / rows;
+  const random = createSeededRandom(seed);
+  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
+    meshWidth,
+    meshDepth,
+    spacingMeters,
+    metersPerUnit,
+  );
   const maximumHalfWidth = captureWidth * 0.55;
   const matrices: Matrix[] = [];
 
@@ -476,8 +487,7 @@ export async function createTreeField(
     }
   }
 
-  const matrixData = new Float32Array(matrices.length * 16);
-  matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const matrixData = packInstanceMatrices(matrices);
   const instanceOcclusion = computeVegetationOcclusion(matrixData, 10 / metersPerUnit);
   return createVegetationFieldResult(
     root,
@@ -495,7 +505,7 @@ export async function createTreeImpostorPrototype(
   scene: Scene,
   treeHeight: number,
   rootName = "treeImpostorPrototype",
-): Promise<TreeImpostorPrototype> {
+): Promise<ImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
   const assets = await getTreeImpostorAssets(scene);
   return createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
@@ -543,8 +553,8 @@ export function createImpostorMaterial(
     scene,
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
-      attributes: ["position", "instanceOcclusion", "vegetationColor"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "sunDirection", "sunColor", "skyColor", "groundColor"],
+      attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "fogColor", "fogStart", "fogEnd"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
       needAlphaBlending: false,
     },
@@ -569,6 +579,7 @@ export function createImpostorMaterial(
   material.setFloat("cameraOrthographic", 0);
   material.setFloat("rotationallySymmetric", assets.rotationallySymmetric ? 1 : 0);
   material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
+  material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(
@@ -605,6 +616,10 @@ export function createImpostorMaterial(
       "groundColor",
       ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
     );
+    const fogEnabled = scene.fogMode === Scene.FOGMODE_LINEAR;
+    material.setColor3("fogColor", scene.fogColor);
+    material.setFloat("fogStart", fogEnabled ? scene.fogStart : 1e19);
+    material.setFloat("fogEnd", fogEnabled ? scene.fogEnd : 2e19);
   });
   return material;
 }
@@ -651,16 +666,6 @@ function createImpostorBox(
   data.indices = indices;
   data.applyToMesh(tree);
   return tree;
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 function distanceInsideMask(

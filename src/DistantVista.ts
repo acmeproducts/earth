@@ -7,7 +7,12 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import { WaterMaterial } from "@babylonjs/materials";
-import { lonLatToScene, sampleElevation, sceneToLonLat } from "./Geo";
+import {
+  lonLatToScene,
+  sampleElevation,
+  sceneToLonLat,
+  sinkSubmergedElevation,
+} from "./Geo";
 import {
   MapFeatureLayer,
   MapTile,
@@ -408,7 +413,11 @@ function sampleVistaElevation(
   const outsideX = Math.max(0, Math.abs(x) - options.localMeshWidth / 2);
   const outsideZ = Math.max(0, Math.abs(z) - options.localMeshDepth / 2);
   const blend = smoothstep(0, SEAM_BLEND_WIDTH, Math.hypot(outsideX, outsideZ));
-  return localElevation + (distantElevation - localElevation) * blend;
+  // The local/distant seam blend can recreate shallow submerged elevations
+  // after both source grids were sunk, so clamp the final rendered sample too.
+  return sinkSubmergedElevation(
+    localElevation + (distantElevation - localElevation) * blend,
+  );
 }
 
 function smoothstep(edge0: number, edge1: number, value: number): number {

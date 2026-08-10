@@ -8,6 +8,7 @@ import {
   createImpostorAssetProvider,
   ImpostorAssets,
 } from "./Impostor";
+import { createSeededRandom } from "./Random";
 
 export type BushImpostorAssets = ImpostorAssets;
 
@@ -28,6 +29,7 @@ const bushImpostors = createImpostorAssetProvider({
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
   rotationallySymmetric: true,
+  upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 1, minimum: 1, maximum: 16 },
     verticalSamples: { default: 5, minimum: 1, maximum: 10 },
@@ -50,7 +52,7 @@ export function getBushImpostorAssets(
 }
 
 function createBushSource(scene: Scene, liveLighting = false): Mesh {
-  const random = mulberry32(0x42555348);
+  const random = createSeededRandom(0x42555348);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -217,14 +219,4 @@ function addBranch(
     const top = vertexStart + sides + side;
     indices.push(bottom, top, vertexStart + nextSide, vertexStart + nextSide, top, vertexStart + sides + nextSide);
   }
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

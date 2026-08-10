@@ -58,7 +58,7 @@ The output will be in the `dist/` directory.
 Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
 The controls configure the number of samples along each cube-face edge and the
 resolution of each capture. The default produces 500 captures: five faces,
-each with a 10 by 10 grid of 500 by 500 pixel frames.
+each with a 10 by 10 grid of 256 by 256 pixel frames.
 
 The source is a deterministic procedural broadleaf built from tapered branches
 and vertex-colored leaf geometry. After capture, that source mesh is disabled and the scene renders only a
@@ -70,9 +70,12 @@ black wherever alpha is zero.
 The Earth view generates a tree plus grass, white/yellow flower, and bush clumps procedurally at startup
 and thin-instances them across vegetated ESA WorldCover classes. Trees use the
 five-face impostor pipeline. Grass, flowers, and bushes are rotationally symmetric, so
-they capture only one side and the top. Tree captures use 10 horizontal
+they capture only one side and the top. Their side atlases use the optional
+upper-hemisphere mode, spending every vertical row on level-to-overhead views
+because these low vegetation types are not normally seen from below. Tree captures
+retain the full below-to-above range and use 10 horizontal
 by 5 vertical samples per face. Each
-tree frame keeps a 500 px height and derives its narrower width from the
+tree frame keeps a 256 px height and derives its narrower width from the
 generated tree's bounding box. `tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
 override those defaults for quality testing. Grass uses an 8 by 8,
@@ -103,7 +106,9 @@ The top-right counter reports live FPS and active triangles; use
 
 The landscape extends beyond the detailed player area with a sparse lower-zoom
 terrain ring. The ring uses a coarser WorldCover tint and tree impostors to keep
-the expanded horizon inexpensive while blending into the local terrain.
+the expanded horizon inexpensive while blending into the local terrain. Its OSM
+vector data is fetched at zoom 13 so the vista also retains simple building and
+road geometry even though its elevation data is substantially coarser.
 The detailed player terrain defaults to slippy-map zoom 14, one wider coverage
 level than the previous zoom 15 default.
 

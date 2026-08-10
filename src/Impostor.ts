@@ -17,6 +17,8 @@ export interface ImpostorAssets {
   lowResolutionTextures: Texture[];
   rotationallySymmetric: boolean;
   rotationalSymmetryOrder: number;
+  /** Side-face rows start at a level view instead of including views from below. */
+  upperHemisphereOnly: boolean;
   gridWidth: number;
   gridHeight: number;
   /** Kept for the square-grid validation tools. */
@@ -72,6 +74,8 @@ export interface ImpostorCaptureOptions {
   faces?: readonly CubeFace[];
   rotationallySymmetric?: boolean;
   rotationalSymmetryOrder?: number;
+  /** Captures side faces from level through overhead; top faces retain their full range. */
+  upperHemisphereOnly?: boolean;
   onProgress?: (
     completed: number,
     total: number,
@@ -110,6 +114,8 @@ export interface ImpostorDefinition {
   faces?: readonly CubeFace[];
   rotationallySymmetric?: boolean;
   rotationalSymmetryOrder?: number;
+  /** Omits below-object angles from side-face atlas rows. Defaults to false. */
+  upperHemisphereOnly?: boolean;
   sampling: {
     horizontalSamples: ImpostorParameter;
     verticalSamples: ImpostorParameter;
@@ -216,6 +222,7 @@ async function captureDefinition(
       faces: definition.faces,
       rotationallySymmetric: definition.rotationallySymmetric,
       rotationalSymmetryOrder: definition.rotationalSymmetryOrder,
+      upperHemisphereOnly: definition.upperHemisphereOnly,
     });
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
@@ -279,6 +286,7 @@ export async function captureImpostorAtlases(
     faces = IMPOSTOR_CUBE_FACES,
     rotationallySymmetric = false,
     rotationalSymmetryOrder = 0,
+    upperHemisphereOnly = false,
     onProgress,
   } = options;
   const atlasWidth = gridWidth * resolutionWidth;
@@ -332,7 +340,11 @@ export async function captureImpostorAtlases(
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
           const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
-          const v = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
+          const fullRangeV = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
+          const isSideFace = Math.abs(face.normal.y) <= 0.5;
+          const v = upperHemisphereOnly && isSideFace
+            ? (fullRangeV + 1) * 0.5
+            : fullRangeV;
           const direction = face.normal.add(face.right.scale(u)).add(face.up.scale(v)).normalize();
           camera.position.copyFrom(direction.scale(captureDiameter));
           camera.upVector.copyFrom(face.up);
@@ -361,6 +373,7 @@ export async function captureImpostorAtlases(
   return createImpostorTextures(scene, name, canvases, {
     rotationallySymmetric,
     rotationalSymmetryOrder,
+    upperHemisphereOnly,
     gridWidth,
     gridHeight,
     resolution: resolutionHeight,

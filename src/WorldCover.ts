@@ -1,4 +1,5 @@
 import { TerrainResult, TileBounds } from "./TerrainTiles";
+import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
 import * as Lerc from "lerc";
 
 export enum LandCoverClass {
@@ -119,15 +120,20 @@ export class WorldCover {
 
     const distance = distanceFromShore(water, width, height);
     const blendWidth = Math.max(1, shorelineWidthMeters / metersPerPixel);
-    const clearance = 0.25;
+    const landClearance = 0.25;
 
     terrain.minElevation = Infinity;
     terrain.maxElevation = -Infinity;
     for (let index = 0; index < elevations.length; index++) {
-      const shorelineElevation = clearance * (1 - 2 * coverage[index]);
+      // Push water-classified terrain well below the water plane. The old
+      // -0.25 m clamp could become coplanar with the water's -0.01 scene-unit
+      // offset depending on map scale, exposing depth-buffer z-fighting.
+      const shorelineElevation = water[index]
+        ? SUBMERGED_TERRAIN_CEILING_METERS
+        : landClearance * (1 - 2 * coverage[index]);
       const corrected = water[index]
-        ? Math.min(elevations[index], -clearance)
-        : Math.max(elevations[index], clearance);
+        ? Math.min(elevations[index], SUBMERGED_TERRAIN_CEILING_METERS)
+        : Math.max(elevations[index], landClearance);
       const amount = Math.min(1, distance[index] / blendWidth);
       const blend = amount * amount * (3 - 2 * amount);
       elevations[index] = shorelineElevation + (corrected - shorelineElevation) * blend;

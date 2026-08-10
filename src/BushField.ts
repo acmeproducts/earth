@@ -1,31 +1,23 @@
-import { Matrix, Mesh, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
-import { HorizontalExclusionMask, isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import { TerrainResult } from "./TerrainTiles";
-import { LandCoverClass, WorldCover } from "./WorldCover";
+import { LandCoverClass } from "./WorldCover";
 import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationRenderMode,
 } from "./VegetationField";
+import { createSeededRandom } from "./Random";
+import {
+  createPlacementGrid,
+  packInstanceMatrices,
+  VegetationPlacementOptions,
+} from "./VegetationPlacement";
 
-export type BushFieldResult = VegetationFieldResult;
-
-interface BushFieldOptions {
-  meshWidth: number;
-  meshDepth: number;
-  metersPerUnit: number;
-  seed?: number;
-  spacingMeters?: number;
-  waterLineMeters?: number;
-  landCover?: WorldCover;
-  exclusionMask?: HorizontalExclusionMask;
-  ambientOccluders?: readonly Float32Array[];
-  renderMode?: VegetationRenderMode;
-}
+type BushFieldOptions = VegetationPlacementOptions;
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.18,
@@ -42,7 +34,7 @@ export async function createBushField(
   scene: Scene,
   terrain: TerrainResult,
   options: BushFieldOptions,
-): Promise<BushFieldResult> {
+): Promise<VegetationFieldResult> {
   const {
     meshWidth,
     meshDepth,
@@ -76,13 +68,14 @@ export async function createBushField(
   root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));
   const captureSize = prototype.captureSize;
 
-  const random = mulberry32(seed);
+  const random = createSeededRandom(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
-  const spacing = spacingMeters / metersPerUnit;
-  const columns = Math.max(1, Math.floor(meshWidth / spacing));
-  const rows = Math.max(1, Math.floor(meshDepth / spacing));
-  const cellWidth = meshWidth / columns;
-  const cellDepth = meshDepth / rows;
+  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
+    meshWidth,
+    meshDepth,
+    spacingMeters,
+    metersPerUnit,
+  );
   const clusterScale = 26 / metersPerUnit;
   const maximumHalfWidth = captureSize * 0.71;
   const matrices: Matrix[] = [];
@@ -132,8 +125,7 @@ export async function createBushField(
     }
   }
 
-  const matrixData = new Float32Array(matrices.length * 16);
-  matrices.forEach((matrix, index) => matrix.copyToArray(matrixData, index * 16));
+  const matrixData = packInstanceMatrices(matrices);
   const instanceOcclusion = computeVegetationOcclusion(
     matrixData,
     10 / metersPerUnit,
@@ -153,14 +145,4 @@ export async function createBushField(
 function smoothstep(edge0: number, edge1: number, value: number): number {
   const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

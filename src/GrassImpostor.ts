@@ -12,6 +12,7 @@ import {
   ImpostorAssets,
 } from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
+import { createSeededRandom } from "./Random";
 
 export type GrassImpostorAssets = ImpostorAssets;
 
@@ -36,6 +37,7 @@ const grassImpostors = createImpostorAssetProvider({
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
   rotationallySymmetric: true,
   rotationalSymmetryOrder: 4,
+  upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 8, minimum: 1, maximum: 24 },
     verticalSamples: { default: 12, minimum: 1, maximum: 20 },
@@ -59,7 +61,7 @@ export function getGrassImpostorAssets(
 
 /** Builds a dense clump from tapered, curved blade strips without external assets. */
 function createGrassSource(scene: Scene, liveLighting = false): Mesh {
-  const random = mulberry32(0x47524153);
+  const random = createSeededRandom(0x47524153);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -173,14 +175,4 @@ function scaleSourceToHeight(mesh: Mesh, renderHeight: number, sourceHeight: num
   }
   mesh.setVerticesData(VertexBuffer.PositionKind, positions);
   mesh.refreshBoundingInfo();
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

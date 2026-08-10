@@ -26,6 +26,7 @@ export function createVertexColorCaptureMaterial(
         #ifdef THIN_INSTANCES
         attribute float instanceOcclusion;
         attribute vec3 vegetationColor;
+        attribute float instanceLodBlend;
         #endif
         uniform mat4 viewProjection;
         uniform float modelHeight;
@@ -35,6 +36,7 @@ export function createVertexColorCaptureMaterial(
         varying float vHeight01;
         varying float vInstanceOcclusion;
         varying vec3 vInstanceColor;
+        varying float vInstanceLodBlend;
         void main(void) {
           #include<instancesVertex>
           mat3 rotation = mat3(
@@ -48,9 +50,11 @@ export function createVertexColorCaptureMaterial(
           #ifdef THIN_INSTANCES
           vInstanceOcclusion = instanceOcclusion;
           vInstanceColor = vegetationColor;
+          vInstanceLodBlend = instanceLodBlend;
           #else
           vInstanceOcclusion = 0.0;
           vInstanceColor = vec3(1.0);
+          vInstanceLodBlend = 1.0;
           #endif
           gl_Position = viewProjection * finalWorld * vec4(position, 1.0);
         }
@@ -62,13 +66,23 @@ export function createVertexColorCaptureMaterial(
         varying float vHeight01;
         varying float vInstanceOcclusion;
         varying vec3 vInstanceColor;
+        varying float vInstanceLodBlend;
         uniform vec3 sunDirection;
         uniform vec3 sunColor;
         uniform vec3 skyColor;
         uniform vec3 groundColor;
         uniform float lightingEnabled;
         uniform float ambientOcclusionStrength;
+        float bayer4(vec2 pixel) {
+          vec2 p = mod(floor(pixel), 4.0);
+          vec2 low = mod(p, 2.0);
+          vec2 high = floor(p * 0.5);
+          float lowValue = 2.0 * low.x + low.y * (3.0 - 4.0 * low.x);
+          float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
+          return (4.0 * lowValue + highValue) / 16.0;
+        }
         void main(void) {
+          if (vInstanceLodBlend <= bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;
           normal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), 0.58));
@@ -95,7 +109,7 @@ export function createVertexColorCaptureMaterial(
       `,
     },
     {
-      attributes: ["position", "normal", "color", "instanceOcclusion", "vegetationColor"],
+      attributes: ["position", "normal", "color", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
       uniforms: [
         "world",
         "viewProjection",

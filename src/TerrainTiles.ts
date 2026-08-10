@@ -266,63 +266,6 @@ export class TerrainTiles {
     return image;
   }
 
-  /**
-   * Downloads the terrain as a grayscale PNG heightmap file.
-   * Generates the image on-demand from the raw elevation data.
-   * @param result - The terrain result from fetchTile
-   * @param filename - Optional filename (defaults to tile coordinates)
-   */
-  static downloadHeightmap(result: TerrainResult, filename?: string): void {
-    const name = filename || `heightmap_${result.tile.z}_${result.tile.x}_${result.tile.y}.png`;
-
-    const { elevations, width, height, minElevation, maxElevation } = result;
-    const range = maxElevation - minElevation || 1;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    const outputData = ctx.createImageData(width, height);
-
-    for (let i = 0; i < elevations.length; i++) {
-      const normalized = Math.floor(((elevations[i] - minElevation) / range) * 255);
-      const pi = i * 4;
-      outputData.data[pi] = normalized;
-      outputData.data[pi + 1] = normalized;
-      outputData.data[pi + 2] = normalized;
-      outputData.data[pi + 3] = 255;
-    }
-
-    ctx.putImageData(outputData, 0, 0);
-    const dataUrl = canvas.toDataURL('image/png');
-
-    const link = document.createElement('a');
-    link.download = name;
-    link.href = dataUrl;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    console.log(`Downloaded heightmap: ${name}`);
-  }
-
-  /**
-   * Fetches a tile and automatically saves it to disk.
-   * @param lat - Latitude in degrees
-   * @param lon - Longitude in degrees
-   * @param zoom - Zoom level
-   * @param filename - Optional filename
-   * @returns Promise that resolves to terrain result
-   */
-  static async fetchAndDownload(
-    lat: number,
-    lon: number,
-    zoom: number,
-    filename?: string
-  ): Promise<TerrainResult> {
-    const result = await this.fetchTileAtLocation(lat, lon, zoom);
-    this.downloadHeightmap(result, filename);
-    return result;
-  }
 }
 
 /**

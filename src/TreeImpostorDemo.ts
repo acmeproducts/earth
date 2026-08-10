@@ -1,6 +1,5 @@
 import {
   ArcRotateCamera,
-  Color3,
   Color4,
   DynamicTexture,
   Engine,
@@ -104,7 +103,6 @@ export class TreeImpostorDemo {
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly camera: ArcRotateCamera;
-  private readonly panel: HTMLElement;
   private readonly status: HTMLElement;
   private readonly preview: HTMLCanvasElement;
   private sourceRoot?: TransformNode;
@@ -116,7 +114,7 @@ export class TreeImpostorDemo {
   private proxyMaterial?: ShaderMaterial;
   private readonly fpsCounter: FpsCounter;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: true, antialias: true });
     this.scene = new Scene(this.engine);
     this.fpsCounter = new FpsCounter(this.scene);
@@ -126,7 +124,7 @@ export class TreeImpostorDemo {
     this.camera.upperRadiusLimit = 20;
     this.camera.wheelPrecision = 40;
     this.camera.attachControl(canvas, true);
-    ({ panel: this.panel, status: this.status, preview: this.preview } = this.createControls());
+    ({ status: this.status, preview: this.preview } = this.createControls());
   }
 
   async initialize(onProgress?: (step: string, progress: number) => void): Promise<void> {
@@ -237,7 +235,7 @@ export class TreeImpostorDemo {
     panel.innerHTML = `
       <h1>Tree impostor capture</h1>
       <label>Samples per face edge <input id="captureGrid" type="number" min="1" max="16" value="10"></label>
-      <label>Capture resolution <input id="captureResolution" type="number" min="64" max="1024" step="64" value="500"></label>
+      <label>Capture resolution <input id="captureResolution" type="number" min="64" max="1024" step="64" value="256"></label>
       <div class="impostor-actions"><button id="captureButton">Capture</button><button id="exportButton" disabled>Export ZIP</button></div>
       <canvas id="capturePreview" width="240" height="240"></canvas>
       <output id="captureStatus">Preparing...</output>`;

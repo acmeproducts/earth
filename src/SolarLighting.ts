@@ -4,7 +4,9 @@ import {
   HemisphericLight,
   Mesh,
   MeshBuilder,
+  RenderTargetTexture,
   Scene,
+  ShaderMaterial,
   ShadowGenerator,
   StandardMaterial,
   Vector3,
@@ -27,6 +29,7 @@ export class SolarLighting {
   private readonly ambientLight: HemisphericLight;
   private readonly shadows: ShadowGenerator;
   private readonly skyMaterial: SkyMaterial;
+  private readonly horizonMaterial: ShaderMaterial;
   private latitude: number;
   private longitude: number;
   private lastUpdate = 0;
@@ -71,7 +74,49 @@ export class SolarLighting {
     this.skyMaterial.rayleigh = 2.2;
     this.skyMaterial.mieCoefficient = 0.008;
     this.skyMaterial.mieDirectionalG = 0.82;
+    this.skyMaterial.fogEnabled = false;
     this.skyMesh.material = this.skyMaterial;
+
+    const horizonMesh = MeshBuilder.CreateSphere(
+      "fogHorizon",
+      { diameter: SUN_DISTANCE * 1.7, segments: 32 },
+      scene,
+    );
+    horizonMesh.isPickable = false;
+    horizonMesh.infiniteDistance = true;
+    this.horizonMaterial = new ShaderMaterial(
+      "fogHorizonMaterial",
+      scene,
+      {
+        vertexSource: `
+          precision highp float;
+          attribute vec3 position;
+          uniform mat4 worldViewProjection;
+          varying vec3 direction;
+          void main(void) {
+            direction = position;
+            gl_Position = worldViewProjection * vec4(position, 1.0);
+          }
+        `,
+        fragmentSource: `
+          precision highp float;
+          varying vec3 direction;
+          uniform vec3 horizonColor;
+          void main(void) {
+            float alpha = 1.0 - smoothstep(0.0, 0.22, abs(normalize(direction).y));
+            gl_FragColor = vec4(horizonColor, alpha);
+          }
+        `,
+      },
+      {
+        attributes: ["position"],
+        uniforms: ["worldViewProjection", "horizonColor"],
+        needAlphaBlending: true,
+      },
+    );
+    this.horizonMaterial.backFaceCulling = false;
+    this.horizonMaterial.disableDepthWrite = true;
+    horizonMesh.material = this.horizonMaterial;
 
     const radius = Math.tan(SUN_ANGULAR_RADIUS) * SUN_DISTANCE;
     this.sunMesh = MeshBuilder.CreateSphere(
@@ -84,6 +129,7 @@ export class SolarLighting {
 
     const material = new StandardMaterial("sunMaterial", scene);
     material.disableLighting = true;
+    material.fogEnabled = false;
     material.emissiveColor = new Color3(1, 0.78, 0.36);
     this.sunMesh.material = material;
 
@@ -105,6 +151,7 @@ export class SolarLighting {
       mesh.receiveShadows = true;
       this.shadows.addShadowCaster(mesh);
     }
+    this.refreshStaticShadows();
   }
 
   private update(date: Date, force = false): void {
@@ -142,11 +189,28 @@ export class SolarLighting {
     // ambient floor so vegetation does not collapse into black silhouettes.
     this.ambientLight.intensity = MIN_AMBIENT_INTENSITY +
       (0.82 - MIN_AMBIENT_INTENSITY) * elevationFactor;
-    this.skyMaterial.luminance = daylight
-      ? 0.72 + 0.38 * elevationFactor
-      : 0.06;
+    const twilight = Math.max(0, Math.min(1, (elevationDegrees + 6) / 12));
+    this.skyMaterial.luminance = 0.06 +
+      (0.72 + 0.38 * elevationFactor - 0.06) * twilight;
+    this.scene.fogColor = Color3.Lerp(
+      new Color3(0.012, 0.025, 0.065),
+      new Color3(0.3, 0.52, 0.86),
+      twilight,
+    ).scale(0.75 + this.skyMaterial.luminance * 0.25);
+    this.horizonMaterial.setColor3("horizonColor", this.scene.fogColor);
     this.scene.environmentIntensity = daylight
       ? 0.7 + 0.3 * elevationFactor
       : 0.12;
+    this.refreshStaticShadows();
+  }
+
+  /** The terrain and map geometry are static, so one shadow render is enough
+   * until the once-per-minute sun update changes the light direction. */
+  private refreshStaticShadows(): void {
+    const shadowMap = this.shadows.getShadowMap();
+    if (shadowMap) {
+      shadowMap.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+      shadowMap.resetRefreshCounter();
+    }
   }
 }

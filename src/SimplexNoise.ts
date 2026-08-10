@@ -1,10 +1,12 @@
+import { createSeededRandom } from "./Random";
+
 /** Deterministic seeded 2D simplex noise with output approximately in [-1, 1]. */
 export class SimplexNoise2D {
   private readonly permutation = new Uint8Array(512);
 
   constructor(seed: number) {
     const values = Array.from({ length: 256 }, (_, index) => index);
-    const random = mulberry32(seed);
+    const random = createSeededRandom(seed);
     for (let index = values.length - 1; index > 0; index--) {
       const swapIndex = Math.floor(random() * (index + 1));
       [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
@@ -55,14 +57,4 @@ function contribution(gradientIndex: number, x: number, y: number): number {
   attenuation *= attenuation;
   const gradient = GRADIENTS[gradientIndex];
   return attenuation * attenuation * (gradient[0] * x + gradient[1] * y);
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

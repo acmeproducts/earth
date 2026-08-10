@@ -31,7 +31,7 @@ const treeImpostors = createImpostorAssetProvider({
   sampling: {
     horizontalSamples: { default: 10, minimum: 1, maximum: 16 },
     verticalSamples: { default: 5, minimum: 1, maximum: 10 },
-    resolution: { default: 500, minimum: 64, maximum: 1024 },
+    resolution: { default: 1000, minimum: 64, maximum: 1024 },
   },
 });
 

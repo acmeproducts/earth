@@ -9,9 +9,6 @@ import {
 } from '@babylonjs/core';
 import { WaterMaterial } from '@babylonjs/materials';
 
-/** Keeps the ocean safely below sea-level terrain and scene objects. */
-export const OCEAN_SURFACE_ELEVATION_METERS = -1;
-
 /**
  * Creates a water plane with realistic reflections and waves.
  * @param scene - The Babylon.js scene
@@ -68,6 +65,11 @@ export function createWaterPlane(
   water.colorBlendFactor = 1;
   water.colorBlendFactor2 = 1;
 
+  // At a blend factor of 1 the reflection/refraction render targets have no
+  // effect on the final water color. Avoid rendering the whole scene two extra
+  // times per frame while retaining animated normals and light highlights.
+  water.enableRenderTargets(false);
+
   // Babylon's WaterMaterial binds scene lights for highlights, but its diffuse
   // water tint bypasses the accumulated light color. Apply the upward-facing
   // hemispheric contribution here so the ocean follows the same changing sky
@@ -94,5 +96,7 @@ export function createWaterPlane(
   }
 
   waterMesh.material = water;
+  waterMesh.isPickable = false;
+  waterMesh.freezeWorldMatrix();
   return waterMesh;
 }

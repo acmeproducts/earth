@@ -1,6 +1,57 @@
-import { TerrainResult, TileBounds } from "./TerrainTiles";
+interface GeographicBounds {
+  lonWest: number;
+  lonEast: number;
+  latNorth: number;
+  latSouth: number;
+}
+
+interface ElevationGrid {
+  elevations: Float32Array;
+  width: number;
+  height: number;
+  minElevation: number;
+  maxElevation: number;
+}
 
 export const SEA_LEVEL_METERS = 0;
+
+/** Highest allowed terrain elevation beneath the ocean surface. */
+export const SUBMERGED_TERRAIN_CEILING_METERS = -50;
+
+/** Applies the submerged-terrain ceiling to one interpolated elevation. */
+export function sinkSubmergedElevation(
+  elevationMeters: number,
+  waterLevelMeters = SEA_LEVEL_METERS,
+  ceilingMeters = SUBMERGED_TERRAIN_CEILING_METERS,
+): number {
+  return elevationMeters <= waterLevelMeters
+    ? Math.min(elevationMeters, ceilingMeters)
+    : elevationMeters;
+}
+
+/**
+ * Keeps every sea-level or submerged height sample safely below the rendered
+ * water, even when no land-cover classification is available.
+ */
+export function sinkSubmergedTerrain(
+  terrain: ElevationGrid,
+  waterLevelMeters = SEA_LEVEL_METERS,
+  ceilingMeters = SUBMERGED_TERRAIN_CEILING_METERS,
+): void {
+  terrain.minElevation = Infinity;
+  terrain.maxElevation = -Infinity;
+  for (let index = 0; index < terrain.elevations.length; index++) {
+    const elevation = terrain.elevations[index];
+    const corrected = sinkSubmergedElevation(
+      elevation,
+      waterLevelMeters,
+      ceilingMeters,
+    );
+    terrain.elevations[index] = corrected;
+    terrain.minElevation = Math.min(terrain.minElevation, corrected);
+    terrain.maxElevation = Math.max(terrain.maxElevation, corrected);
+  }
+}
 
 /** Horizontal feature mask used to keep scene objects clear of mapped surfaces. */
 export interface HorizontalExclusionMask {
@@ -13,7 +64,7 @@ const mercatorY = (latitude: number): number =>
 export function lonLatToScene(
   longitude: number,
   latitude: number,
-  bounds: TileBounds,
+  bounds: GeographicBounds,
   meshWidth: number,
   meshDepth: number,
 ): { x: number; z: number } {
@@ -26,7 +77,7 @@ export function lonLatToScene(
 export function sceneToLonLat(
   x: number,
   z: number,
-  bounds: TileBounds,
+  bounds: GeographicBounds,
   meshWidth: number,
   meshDepth: number,
 ): { lon: number; lat: number } {
@@ -41,7 +92,7 @@ export function sceneToLonLat(
 }
 
 export function sampleElevation(
-  terrain: TerrainResult,
+  terrain: ElevationGrid,
   x: number,
   z: number,
   meshWidth: number,
@@ -70,7 +121,7 @@ export function sampleElevation(
 
 /** Returns true when the center and full rectangular footprint are above an elevation. */
 export function isTerrainFootprintAbove(
-  terrain: TerrainResult,
+  terrain: ElevationGrid,
   x: number,
   z: number,
   halfWidth: number,

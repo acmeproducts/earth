@@ -8,6 +8,7 @@ import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
 } from "./ProceduralCaptureMaterial";
+import { createSeededRandom } from "./Random";
 
 export type FlowerImpostorAssets = ImpostorAssets;
 
@@ -28,6 +29,7 @@ const flowerImpostors = createImpostorAssetProvider({
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
   rotationallySymmetric: true,
   rotationalSymmetryOrder: 4,
+  upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 8, minimum: 1, maximum: 24 },
     verticalSamples: { default: 8, minimum: 1, maximum: 12 },
@@ -44,7 +46,7 @@ function createFlowerSource(scene: Scene, liveLighting = false): Mesh {
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
-  const random = mulberry32(0x464c4f57);
+  const random = createSeededRandom(0x464c4f57);
 
   const addVertex = (position: Vector3, color: Color3): number => {
     positions.push(position.x, position.y, position.z);
@@ -154,14 +156,4 @@ export function createFlowerModel(scene: Scene, renderHeight: number): Mesh {
   flowers.refreshBoundingInfo();
   setVertexColorModelHeight(flowers, renderHeight);
   return flowers;
-}
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
 }

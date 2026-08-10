@@ -1,6 +1,5 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
-const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = (env, argv) => {
   const isProduction = argv.mode === 'production';
@@ -18,6 +17,13 @@ module.exports = (env, argv) => {
     module: {
       rules: [
         {
+          test: /lerc-wasm\.wasm$/,
+          type: 'asset/resource',
+          generator: {
+            filename: 'lerc-wasm.wasm',
+          },
+        },
+        {
           test: /\.tsx?$/,
           use: 'ts-loader',
           exclude: /node_modules/,
@@ -30,33 +36,8 @@ module.exports = (env, argv) => {
         title: 'Babylon.js Earth',
         inject: 'body',
       }),
-      new CopyWebpackPlugin({
-        patterns: [
-          {
-            from: 'public',
-            to: '',
-            noErrorOnMissing: true,
-          },
-          {
-            from: 'assets',
-            to: 'assets',
-            noErrorOnMissing: true,
-            globOptions: {
-              ignore: ['**/realistic-high-poly-tree/**'],
-            },
-          },
-          {
-            from: require.resolve('lerc/lerc-wasm.wasm'),
-            to: 'lerc-wasm.wasm',
-          },
-        ],
-      }),
     ],
     devServer: {
-      static: [
-        { directory: path.join(__dirname, 'public') },
-        { directory: path.join(__dirname, 'assets'), publicPath: '/assets' },
-      ],
       compress: true,
       port: 3000,
       hot: true,
