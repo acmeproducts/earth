@@ -3,7 +3,7 @@ import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
-import { TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
 import { LandCoverClass } from "./WorldCover";
 import {
   computeVegetationOcclusion,
@@ -32,7 +32,7 @@ const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
 /** Places procedurally captured shrubs over suitable WorldCover cells. */
 export async function createBushField(
   scene: Scene,
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: BushFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
@@ -80,7 +80,7 @@ export async function createBushField(
   const maximumHalfWidth = captureSize * 0.71;
   const matrices: Matrix[] = [];
 
-  if (landCover && terrain.bounds) {
+  if (landCover) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
         const x = -meshWidth / 2 + (column + 0.08 + random() * 0.84) * cellWidth;

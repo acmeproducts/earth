@@ -33,6 +33,7 @@ export class SolarLighting {
   private latitude: number;
   private longitude: number;
   private lastUpdate = 0;
+  private timeOfDayHours?: number;
 
   constructor(scene: Scene, latitude: number, longitude: number) {
     this.scene = scene;
@@ -134,13 +135,19 @@ export class SolarLighting {
     this.sunMesh.material = material;
 
     this.update(new Date(), true);
-    scene.onBeforeRenderObservable.add(() => this.update(new Date()));
+    scene.onBeforeRenderObservable.add(() => this.update(this.currentLightingDate()));
   }
 
   setLocation(latitude: number, longitude: number): void {
     this.latitude = latitude;
     this.longitude = longitude;
-    this.update(new Date(), true);
+    this.update(this.currentLightingDate(), true);
+  }
+
+  /** Fixes the sun to a clock time, or resumes the live clock when omitted. */
+  setTimeOfDay(hours?: number): void {
+    this.timeOfDayHours = hours;
+    this.update(this.currentLightingDate(), true);
   }
 
   setShadowCasters(meshes: Mesh[]): void {
@@ -152,6 +159,16 @@ export class SolarLighting {
       this.shadows.addShadowCaster(mesh);
     }
     this.refreshStaticShadows();
+  }
+
+  private currentLightingDate(): Date {
+    const date = new Date();
+    if (this.timeOfDayHours === undefined) return date;
+
+    const hours = Math.floor(this.timeOfDayHours);
+    const minutes = Math.round((this.timeOfDayHours - hours) * 60);
+    date.setHours(hours, minutes, 0, 0);
+    return date;
   }
 
   private update(date: Date, force = false): void {

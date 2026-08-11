@@ -2,7 +2,7 @@ import { Matrix, Quaternion, Scene, ShaderMaterial, TransformNode, Vector3 } fro
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
 import { SimplexNoise2D } from "./SimplexNoise";
-import { TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import {
   computeVegetationOcclusion,
@@ -30,7 +30,7 @@ const FLOWER_PALETTE: ReadonlyArray<readonly [number, number, number]> = [
 /** Places rare flower colonies in grassland and tints each actor in the shader. */
 export async function createFlowerField(
   scene: Scene,
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: FlowerFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
@@ -80,7 +80,7 @@ export async function createFlowerField(
   const matrices: Matrix[] = [];
   const colors: number[] = [];
 
-  if (landCover && terrain.bounds) {
+  if (landCover) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
         const x = -meshWidth / 2 + (column + 0.12 + random() * 0.76) * cellWidth;

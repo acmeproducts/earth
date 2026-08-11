@@ -13,7 +13,7 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
 import {
   createTreeModels,
   getTreeImpostorAssets,
@@ -27,8 +27,18 @@ import {
 } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
-import { TREE_LOW_LIGHT_BRIGHTNESS, TreeSpecies } from "./ProceduralTree";
+import {
+  TREE_LOW_LIGHT_BRIGHTNESS,
+  TREE_SPECIES,
+  TREE_SPECIES_LIST,
+  TreeSpecies,
+} from "./ProceduralTree";
 import { SimplexNoise2D } from "./SimplexNoise";
+import {
+  sampleWorldTreeSpecies,
+  treeDistributionAt,
+  TreeDistribution,
+} from "./TreeDistribution";
 import {
   createPlacementGrid,
   packInstanceMatrices,
@@ -39,7 +49,15 @@ export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
 const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
 const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
+  acacia: 0.92,
+  beech: 1.02,
   birch: 1,
+  eucalyptus: 1.14,
+  fir: 0.93,
+  mangrove: 0.88,
+  maple: 1.02,
+  oak: 1.08,
+  palm: 1.12,
   pine: 1.16,
   spruce: 0.86,
 };
@@ -381,7 +399,7 @@ void main(void) {
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
 export async function createTreeField(
   scene: Scene,
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: TreeFieldOptions,
 ): Promise<TreeFieldResult> {
   const {
@@ -405,35 +423,6 @@ export async function createTreeField(
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const root = new TransformNode("treeField", scene);
-  const speciesList: TreeSpecies[] = ["birch", "pine", "spruce"];
-  const speciesResources: Array<{
-    prototype: ImpostorPrototype;
-    modelMeshes: Mesh[];
-  }> = [];
-  // Impostor capture temporarily installs an orthographic scene camera. Capture
-  // species one at a time so each pass restores the real gameplay camera.
-  for (const species of speciesList) {
-    const prototype = await createTreeImpostorPrototype(
-      scene,
-      treeHeight,
-      `treeField-${species}`,
-      species,
-    );
-    prototype.root.parent = root;
-    if (prototype.mesh.material instanceof ShaderMaterial) {
-      prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
-    }
-    const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight, species) : [];
-    modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
-    const modelMaterials = new Set(
-      modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null),
-    );
-    prototype.root.onDisposeObservable.add(() => {
-      modelMaterials.forEach((material) => material.dispose(true, false));
-    });
-    speciesResources.push({ prototype, modelMeshes });
-  }
-
   const random = createSeededRandom(seed);
   const speciesNoise = new SimplexNoise2D(seed ^ 0x54524545);
   const speciesDetailNoise = new SimplexNoise2D(seed ^ 0x434c5553);
@@ -443,13 +432,16 @@ export async function createTreeField(
     spacingMeters,
     metersPerUnit,
   );
-  const maximumHalfWidth = Math.max(
-    ...speciesResources.map(({ prototype }) => prototype.captureWidth),
-  ) * 0.55;
+  const maximumHalfWidth = Math.max(...TREE_SPECIES_LIST.map((species) => {
+    const definition = TREE_SPECIES[species];
+    return definition.captureDiameter * treeHeight / definition.sourceHeight;
+  })) * 0.55;
   const matrices: Matrix[] = [];
-  const speciesMatrices: Record<TreeSpecies, Matrix[]> = { birch: [], pine: [], spruce: [] };
+  const speciesMatrices = Object.fromEntries(
+    TREE_SPECIES_LIST.map((species) => [species, [] as Matrix[]]),
+  ) as Record<TreeSpecies, Matrix[]>;
 
-  if (landCover && terrain.bounds) {
+  if (landCover) {
     const forestMask = new Uint8Array(rows * columns);
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
@@ -504,12 +496,17 @@ export async function createTreeField(
         );
         if (random() > localOccupancy) continue;
 
+        const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+        const treeDistribution = treeDistributionAt(location.lon, location.lat);
         const species = sampleTreeSpecies(
           speciesNoise,
           speciesDetailNoise,
           worldX * metersPerUnit,
           worldZ * metersPerUnit,
+          treeDistribution,
+          random(),
         );
+        if (!species) continue;
         const speciesScale = TREE_SPECIES_SCALE[species];
         const heightScale = (0.75 + random() * 0.5) * speciesScale;
         const widthScale = (0.75 + random() * 0.35) * speciesScale;
@@ -529,6 +526,37 @@ export async function createTreeField(
         speciesMatrices[species].push(matrix);
       }
     }
+  }
+
+  // Only species that placement actually encountered in this lon/lat tile get
+  // model geometry and an impostor capture. This avoids global up-front atlases.
+  const speciesList = TREE_SPECIES_LIST.filter((species) => speciesMatrices[species].length > 0);
+  const speciesResources: Array<{
+    prototype: ImpostorPrototype;
+    modelMeshes: Mesh[];
+  }> = [];
+  // Impostor capture temporarily installs an orthographic scene camera. Capture
+  // species one at a time so each pass restores the real gameplay camera.
+  for (const species of speciesList) {
+    const prototype = await createTreeImpostorPrototype(
+      scene,
+      treeHeight,
+      `treeField-${species}`,
+      species,
+    );
+    prototype.root.parent = root;
+    if (prototype.mesh.material instanceof ShaderMaterial) {
+      prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
+    }
+    const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight, species) : [];
+    modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
+    const modelMaterials = new Set(
+      modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null),
+    );
+    prototype.root.onDisposeObservable.add(() => {
+      modelMaterials.forEach((material) => material.dispose(true, false));
+    });
+    speciesResources.push({ prototype, modelMeshes });
   }
 
   const matrixData = packInstanceMatrices(matrices);
@@ -596,7 +624,9 @@ function sampleTreeSpecies(
   detailNoise: SimplexNoise2D,
   xMeters: number,
   zMeters: number,
-): TreeSpecies {
+  distribution: TreeDistribution,
+  randomValue: number,
+): TreeSpecies | undefined {
   const regional = regionalNoise.sample(
     xMeters / TREE_SPECIES_CLUSTER_SIZE_METERS,
     zMeters / TREE_SPECIES_CLUSTER_SIZE_METERS,
@@ -606,9 +636,13 @@ function sampleTreeSpecies(
     zMeters / (TREE_SPECIES_CLUSTER_SIZE_METERS * 0.38),
   );
   const speciesValue = regional * 0.82 + detail * 0.18;
-  if (speciesValue < -0.18) return "spruce";
-  if (speciesValue > 0.18) return "pine";
-  return "birch";
+  // Adding a spatially smooth offset modulo one preserves the requested
+  // distribution statistically while encouraging neighboring trees to agree.
+  const clusteredRandom = (randomValue + speciesValue * 0.22 + 1) % 1;
+  const worldSpecies = sampleWorldTreeSpecies(distribution, clusteredRandom);
+  return worldSpecies
+    ? distribution.trees.find((tree) => tree.species === worldSpecies)?.proceduralArchetype
+    : undefined;
 }
 
 /** Creates the render mesh and shader material for any captured source. */

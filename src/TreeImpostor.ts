@@ -5,6 +5,7 @@ import {
 } from "@babylonjs/core";
 import {
   TREE_SPECIES,
+  TREE_SPECIES_LIST,
   TreeSpecies,
 } from "./ProceduralTree";
 import { setVertexColorModelHeight } from "./ProceduralCaptureMaterial";
@@ -37,11 +38,9 @@ function createTreeProvider(species: TreeSpecies) {
   });
 }
 
-const treeImpostors = {
-  birch: createTreeProvider("birch"),
-  pine: createTreeProvider("pine"),
-  spruce: createTreeProvider("spruce"),
-};
+const treeImpostors = Object.fromEntries(
+  TREE_SPECIES_LIST.map((species) => [species, createTreeProvider(species)]),
+) as Record<TreeSpecies, ReturnType<typeof createTreeProvider>>;
 
 /** Shares one tree atlas capture per scene and capture-attribute combination. */
 export function getTreeImpostorAssets(

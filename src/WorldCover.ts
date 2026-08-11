@@ -1,4 +1,5 @@
-import { TerrainResult, TileBounds } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
+import type { TileBounds } from "./WorldGrid";
 import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
 import * as Lerc from "lerc";
 
@@ -87,19 +88,18 @@ export class WorldCover {
   }
 
   constrainElevations(
-    terrain: TerrainResult,
+    terrain: TerrainData,
     shorelineWidthMeters = 30,
     coastlineSmoothingMeters = 20,
   ): void {
-    if (!terrain.bounds) return;
     const { bounds, elevations, width, height } = terrain;
     let coverage: Float32Array = new Float32Array(elevations.length);
     const water = new Uint8Array(elevations.length);
     const north = toWebMercator(0, bounds.latNorth).y;
     const south = toWebMercator(0, bounds.latSouth).y;
     const metersPerPixel = (
-      (terrain.groundWidthMeters ?? shorelineWidthMeters * width / 8) / width +
-      (terrain.groundHeightMeters ?? shorelineWidthMeters * height / 8) / height
+      terrain.groundWidthMeters / width +
+      terrain.groundHeightMeters / height
     ) / 2;
 
     for (let y = 0; y < height; y++) {

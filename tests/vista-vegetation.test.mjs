@@ -68,3 +68,10 @@ test("keeps impostor colors straight without edge-brightening unpremultiplicatio
   assert.match(shaderSource, /vec3 straightColor = color\.rgb;/);
   assert.doesNotMatch(shaderSource, /color\.rgb \/ max\(color\.a/);
 });
+
+test("preserves hidden full-resolution atlas colors to prevent dark vegetation fringes", () => {
+  const source = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
+  assert.match(source, /dilateTransparentTileEdgeColors\(/);
+  assert.match(source, /const texture = new RawTexture\(\s*image\.data,/);
+  assert.doesNotMatch(source, /texture\.getContext\(\)\.drawImage\(canvas/);
+});

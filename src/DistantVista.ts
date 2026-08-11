@@ -19,7 +19,8 @@ import {
   OpenStreetMap,
 } from "./OpenStreetMap";
 import { createTerrainMaterial } from "./TerrainMaterial";
-import { TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
+import { layerSeed } from "./WorldGrid";
 import { createTreeField, TreeFieldResult } from "./TreeField";
 import {
   estimateVistaVegetationCandidates,
@@ -32,7 +33,7 @@ const INNER_OVERLAP = 1.5;
 const SEAM_BLEND_WIDTH = 16;
 
 interface VistaOptions {
-  localTerrain: TerrainResult;
+  localTerrain: TerrainData;
   localMeshWidth: number;
   localMeshDepth: number;
   metersPerUnit: number;
@@ -61,15 +62,11 @@ export class DistantVista {
 
   static async create(
     scene: Scene,
-    distantTerrain: TerrainResult,
+    distantTerrain: TerrainData,
     options: VistaOptions,
   ): Promise<DistantVista> {
-    if (!distantTerrain.bounds || !options.localTerrain.bounds) {
-      throw new Error("Distant vista terrain bounds are unavailable.");
-    }
-
-    const distantWidth = distantTerrain.groundWidthMeters! / options.metersPerUnit;
-    const distantDepth = distantTerrain.groundHeightMeters! / options.metersPerUnit;
+    const distantWidth = distantTerrain.groundWidthMeters / options.metersPerUnit;
+    const distantDepth = distantTerrain.groundHeightMeters / options.metersPerUnit;
     const distantCenter = sceneToLonLat(
       0,
       0,
@@ -97,8 +94,8 @@ export class DistantVista {
     console.log(
       `Distant vista source: ${options.vegetationSpacingMeters.toFixed(1)}m tree spacing, ` +
       `${estimateVistaVegetationCandidates(
-        distantTerrain.groundWidthMeters!,
-        distantTerrain.groundHeightMeters!,
+        distantTerrain.groundWidthMeters,
+        distantTerrain.groundHeightMeters,
         options.vegetationSpacingMeters,
       ).toLocaleString()} candidate positions`,
     );
@@ -126,22 +123,18 @@ export class DistantVista {
         x + offset.x,
         z + offset.z,
       ),
-      seed: distantTerrain.tile.z ^ distantTerrain.tile.x ^ (distantTerrain.tile.y << 8),
+      seed: layerSeed(distantTerrain.generationSeed, "vista-trees"),
     });
     return new DistantVista(scene, distantTerrain, options, trees, offset);
   }
 
   private constructor(
     scene: Scene,
-    distantTerrain: TerrainResult,
+    distantTerrain: TerrainData,
     options: VistaOptions,
     trees: TreeFieldResult,
     offset: { x: number; z: number },
   ) {
-    if (!distantTerrain.bounds || !options.localTerrain.bounds) {
-      throw new Error("Distant vista terrain bounds are unavailable.");
-    }
-
     this.root = new TransformNode("distantVistaRoot", scene);
     this.trees = trees;
     this.terrain = createTerrainRing(scene, distantTerrain, options);
@@ -180,12 +173,12 @@ export class DistantVista {
 }
 function createDistantMapFeatures(
   scene: Scene,
-  distantTerrain: TerrainResult,
+  distantTerrain: TerrainData,
   options: VistaOptions,
   offset: { x: number; z: number },
 ): MapFeatureLayer {
-  const distantWidth = distantTerrain.groundWidthMeters! / options.metersPerUnit;
-  const distantDepth = distantTerrain.groundHeightMeters! / options.metersPerUnit;
+  const distantWidth = distantTerrain.groundWidthMeters / options.metersPerUnit;
+  const distantDepth = distantTerrain.groundHeightMeters / options.metersPerUnit;
   const layer = OpenStreetMap.createLayer(scene, options.mapTiles, distantTerrain, {
     meshWidth: distantWidth,
     meshDepth: distantDepth,
@@ -199,11 +192,11 @@ function createDistantMapFeatures(
 
 function createTerrainRing(
   scene: Scene,
-  distantTerrain: TerrainResult,
+  distantTerrain: TerrainData,
   options: VistaOptions,
 ): Mesh {
-  const localBounds = options.localTerrain.bounds!;
-  const distantBounds = distantTerrain.bounds!;
+  const localBounds = options.localTerrain.bounds;
+  const distantBounds = distantTerrain.bounds;
   const northWest = lonLatToScene(
     distantBounds.lonWest,
     distantBounds.latNorth,
@@ -293,7 +286,7 @@ function appendPatch(
   uvs: number[],
   indices: number[],
   colors: number[] | undefined,
-  distantTerrain: TerrainResult,
+  distantTerrain: TerrainData,
   options: VistaOptions,
 ): void {
   const vertexOffset = positions.length / 3;
@@ -304,7 +297,7 @@ function appendPatch(
       const { lon, lat } = sceneToLonLat(
         x,
         z,
-        options.localTerrain.bounds!,
+        options.localTerrain.bounds,
         options.localMeshWidth,
         options.localMeshDepth,
       );
@@ -338,7 +331,7 @@ function appendPatch(
           const localCoordinates = sceneToLonLat(
             clampedX,
             clampedZ,
-            options.localTerrain.bounds!,
+            options.localTerrain.bounds,
             options.localMeshWidth,
             options.localMeshDepth,
           );
@@ -367,24 +360,24 @@ function appendPatch(
 }
 
 function sampleVistaElevation(
-  distantTerrain: TerrainResult,
+  distantTerrain: TerrainData,
   options: VistaOptions,
   x: number,
   z: number,
 ): number {
-  const distantWidth = distantTerrain.groundWidthMeters! / options.metersPerUnit;
-  const distantDepth = distantTerrain.groundHeightMeters! / options.metersPerUnit;
+  const distantWidth = distantTerrain.groundWidthMeters / options.metersPerUnit;
+  const distantDepth = distantTerrain.groundHeightMeters / options.metersPerUnit;
   const { lon, lat } = sceneToLonLat(
     x,
     z,
-    options.localTerrain.bounds!,
+    options.localTerrain.bounds,
     options.localMeshWidth,
     options.localMeshDepth,
   );
   const distantPoint = lonLatToScene(
     lon,
     lat,
-    distantTerrain.bounds!,
+    distantTerrain.bounds,
     distantWidth,
     distantDepth,
   );

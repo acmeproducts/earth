@@ -186,6 +186,7 @@ export function createVertexColorCaptureMaterial(
         uniform float lightingEnabled;
         uniform float ambientOcclusionStrength;
         uniform float leafTextureEnabled;
+        uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
@@ -200,20 +201,14 @@ export function createVertexColorCaptureMaterial(
         void main(void) {
           if (vInstanceLodBlend <= bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
           vec3 surfaceColor = vColor.rgb;
-          if (leafTextureEnabled > 0.5 && vUv.x >= 1.5) {
-            surfaceColor *= texture2D(barkTexture, vec2(vUv.x - 2.0, vUv.y)).rgb;
+          if (vUv.x >= 1.5) {
+            if (barkTextureEnabled > 0.5) {
+              surfaceColor *= texture2D(barkTexture, vec2(vUv.x - 2.0, vUv.y)).rgb;
+            }
           } else if (leafTextureEnabled > 0.5 && vUv.x >= 0.0) {
-            vec3 leafColor = texture2D(leafTexture, vUv).rgb;
-            // The source photograph is composited over white. Reject that matte
-            // firmly and darken its remaining antialiased edge contamination.
-            float distanceFromWhite = max(
-              1.0 - leafColor.r,
-              max(1.0 - leafColor.g, 1.0 - leafColor.b)
-            );
-            float leafCoverage = smoothstep(0.10, 0.24, distanceFromWhite);
-            if (leafCoverage < 0.5) discard;
-            leafColor *= mix(0.62, 1.0, leafCoverage);
-            surfaceColor *= leafColor;
+            vec4 leafSample = texture2D(leafTexture, vUv);
+            if (leafSample.a < 0.5) discard;
+            surfaceColor *= leafSample.rgb;
           }
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;
@@ -260,6 +255,7 @@ export function createVertexColorCaptureMaterial(
         "modelHeight",
         "ambientOcclusionStrength",
         "leafTextureEnabled",
+        "barkTextureEnabled",
         "lowLightAlbedoScale",
       ],
       samplers: ["leafTexture", "barkTexture"],
@@ -270,10 +266,22 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
   material.setFloat("modelHeight", 1);
   material.setFloat("ambientOcclusionStrength", 1);
-  material.setFloat("leafTextureEnabled", leafTextureUrl ? 1 : 0);
+  material.setFloat("leafTextureEnabled", 0);
+  material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   if (leafTextureUrl) {
-    const leafTexture = new Texture(leafTextureUrl, scene, false, false);
+    const leafTexture = new Texture(
+      leafTextureUrl,
+      scene,
+      false,
+      false,
+      Texture.TRILINEAR_SAMPLINGMODE,
+      () => { material.setFloat("leafTextureEnabled", 1); },
+      () => {
+        material.setFloat("leafTextureEnabled", 0);
+        leafTexture.dispose();
+      },
+    );
     leafTexture.wrapU = Texture.CLAMP_ADDRESSMODE;
     leafTexture.wrapV = Texture.CLAMP_ADDRESSMODE;
     material.setTexture("leafTexture", leafTexture);

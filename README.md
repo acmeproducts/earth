@@ -63,6 +63,14 @@ each with a 10 by 10 grid of 256 by 256 pixel frames.
 The source family contains deterministic procedural birch, pine, and spruce trees. Birch uses
 tapered branches with runtime-generated bark and textured leaf cards; pine and spruce use distinct
 procedural conifer silhouettes. Forest placements mix all three species in the scene.
+
+`treeDistributionAt(longitude, latitude)` in `src/TreeDistribution.ts` supplies the next-stage
+geographic species mix. It returns a broad biome, coarse tree-cover potential, and normalized ratios
+for eleven common visual tree groups. Exact forest presence should continue to come from ESA
+WorldCover; the coordinate-only distribution is an offline approximation, not a botanical survey.
+Every group now has its own deterministic procedural source. Tree placement samples the geographic
+ratios from each tile's longitude/latitude coordinates first, then captures impostors only for the
+species that were actually encountered in that tile.
 After capture, that source mesh is disabled and the scene renders only a
 camera-facing impostor. Its shader selects the dominant cube face and
 bilinearly blends the four nearest frames. `Export ZIP` writes the five face
@@ -107,15 +115,21 @@ The top-right counter reports live FPS and active triangles; use
 `?vegetation=models` to force tree models or
 `?vegetation-distance=20` to change the initial Auto range.
 
-The landscape extends beyond the detailed player area with a sparse lower-zoom
+The landscape extends beyond the detailed player area with a sparse lower-detail
 terrain ring. The ring uses a coarser WorldCover tint and tree impostors to keep
 the expanded horizon inexpensive while blending into the local terrain. Its OSM
 vector data is fetched at zoom 13 so the vista also retains simple building and
 road geometry even though its elevation data is substantially coarser.
-The detailed player terrain defaults to slippy-map zoom 14, one wider coverage
-level than the previous zoom 15 default.
 
-The detailed terrain defaults to a 1 by 1 source-tile grid, which cuts terrain
+The world uses an application-owned Web Mercator grid at fixed level 14. A tile
+is identified by the app's level/x/y coordinates and receives a stable seed from
+the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
+coordinates are source implementation details used only to populate the app
+tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
+with latitude (a detailed tile is about 1.2 km wide around Oslo). Use `?seed=123`
+to select another deterministic world seed.
+
+The detailed terrain defaults to a 1 by 1 application-tile grid, which cuts terrain
 samples and the detailed vegetation area to roughly one quarter of the former
 2 by 2 default. Values from 1 through 4 remain available through
 `?inner-size=2`. `?render-scale=0.75` renders at 75% of the canvas

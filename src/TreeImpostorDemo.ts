@@ -1,13 +1,13 @@
 import {
   ArcRotateCamera,
   Color4,
-  DynamicTexture,
   Engine,
   Mesh,
   MeshBuilder,
   Scene,
   ShaderMaterial,
   TransformNode,
+  Texture,
   Vector2,
   Vector3,
 } from "@babylonjs/core";
@@ -34,7 +34,7 @@ interface NamedCubeFace extends CubeFace {
 
 interface CaptureSet {
   atlases: HTMLCanvasElement[];
-  textures: DynamicTexture[];
+  textures: Texture[];
   settings: CaptureSettings;
 }
 
@@ -179,9 +179,7 @@ export class TreeImpostorDemo {
       },
     });
     const textures = assets.textures;
-    const atlases = textures.map(
-      (texture) => texture.getContext().canvas as HTMLCanvasElement,
-    );
+    const atlases = assets.atlasCanvases;
     this.captureSet = { atlases, textures, settings };
     this.createProxy();
     this.sourceRoot.setEnabled(false);

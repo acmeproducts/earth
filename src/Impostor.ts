@@ -1,7 +1,6 @@
 import {
   Color4,
   Constants,
-  DynamicTexture,
   FreeCamera,
   Mesh,
   RawTexture,
@@ -12,7 +11,10 @@ import {
 } from "@babylonjs/core";
 
 export interface ImpostorAssets {
-  textures: DynamicTexture[];
+  /** Raw RGBA atlases preserve hidden edge colors used by bilinear filtering. */
+  textures: Texture[];
+  /** Source canvases retained for the capture preview and validation tools. */
+  atlasCanvases: HTMLCanvasElement[];
   /** Per-frame downsampled atlases used once an impostor is small on screen. */
   lowResolutionTextures: Texture[];
   rotationallySymmetric: boolean;
@@ -191,6 +193,10 @@ async function captureDefinition(
   const meshes = Array.isArray(created) ? created : [created];
   if (meshes.length === 0) throw new Error(`${definition.name} created no source meshes.`);
 
+  // A lazily discovered source belongs only to its render target. Keep it out
+  // of gameplay frames while textures become ready and between capture views.
+  meshes.forEach((mesh) => { mesh.isVisible = false; });
+
   try {
     await scene.whenReadyAsync();
     let captureWidth = definition.captureWidth ?? definition.captureDiameter;
@@ -330,7 +336,7 @@ export async function captureImpostorAtlases(
   target.activeCamera = camera;
   target.ignoreCameraViewport = true;
   target.samples = 1;
-  const activeCamera = scene.activeCamera;
+  const sourceVisibility = meshes.map((mesh) => mesh.isVisible);
   const total = faces.length * gridWidth * gridHeight;
   let completed = 0;
 
@@ -353,8 +359,12 @@ export async function captureImpostorAtlases(
           camera.position.copyFrom(direction.scale(captureDiameter));
           camera.upVector.copyFrom(face.up);
           camera.setTarget(Vector3.Zero());
-          scene.activeCamera = camera;
-          target.render(true);
+          meshes.forEach((mesh) => { mesh.isVisible = true; });
+          try {
+            target.render(true);
+          } finally {
+            meshes.forEach((mesh) => { mesh.isVisible = false; });
+          }
           const pixels = await target.readPixels();
           if (!pixels) throw new Error(`${name} GPU readback failed.`);
           context.putImageData(
@@ -369,7 +379,7 @@ export async function captureImpostorAtlases(
       }
     }
   } finally {
-    scene.activeCamera = activeCamera;
+    meshes.forEach((mesh, index) => { mesh.isVisible = sourceVisibility[index]; });
     target.dispose();
     camera.dispose();
   }
@@ -399,22 +409,45 @@ function createImpostorTextures(
   scene: Scene,
   name: string,
   canvases: HTMLCanvasElement[],
-  metadata: Omit<ImpostorAssets, "textures" | "lowResolutionTextures" | "gridSize">,
+  metadata: Omit<
+    ImpostorAssets,
+    "textures" | "atlasCanvases" | "lowResolutionTextures" | "gridSize"
+  >,
 ): ImpostorAssets {
   const atlasWidth = metadata.gridWidth * metadata.resolutionWidth;
   const atlasHeight = metadata.gridHeight * metadata.resolutionHeight;
   const textures = canvases.map((canvas, index) => {
-    const texture = new DynamicTexture(
-      `${name}Atlas${index}`,
-      { width: atlasWidth, height: atlasHeight },
+    const image = canvas.getContext("2d", { alpha: true })!.getImageData(
+      0,
+      0,
+      atlasWidth,
+      atlasHeight,
+    );
+    // A canvas texture is uploaded through a premultiplied backing store, which
+    // commonly turns RGB under zero alpha black. Thin grass silhouettes then
+    // acquire a dark line when bilinear filtering reaches across their edge.
+    // RawTexture keeps this two-pixel, per-frame color gutter intact.
+    dilateTransparentTileEdgeColors(
+      image,
+      metadata.gridWidth,
+      metadata.gridHeight,
+      metadata.resolutionWidth,
+      metadata.resolutionHeight,
+      2,
+    );
+    const texture = new RawTexture(
+      image.data,
+      atlasWidth,
+      atlasHeight,
+      Constants.TEXTUREFORMAT_RGBA,
       scene,
+      false,
       false,
       Texture.BILINEAR_SAMPLINGMODE,
     );
+    texture.name = `${name}Atlas${index}`;
     texture.gammaSpace = false;
-    texture.getContext().drawImage(canvas, 0, 0);
     texture.hasAlpha = true;
-    texture.update(false);
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     return texture;
@@ -448,10 +481,63 @@ function createImpostorTextures(
   });
   return {
     textures,
+    atlasCanvases: canvases,
     lowResolutionTextures,
     ...metadata,
     gridSize: metadata.gridWidth,
   };
+}
+
+/** Extends opaque RGB just far enough to cover the bilinear footprint. */
+function dilateTransparentTileEdgeColors(
+  image: ImageData,
+  gridWidth: number,
+  gridHeight: number,
+  tileWidth: number,
+  tileHeight: number,
+  radius: number,
+): void {
+  const source = new Uint8ClampedArray(image.data);
+  for (let tileY = 0; tileY < gridHeight; tileY++) {
+    for (let tileX = 0; tileX < gridWidth; tileX++) {
+      const startX = tileX * tileWidth;
+      const startY = tileY * tileHeight;
+      for (let localY = 0; localY < tileHeight; localY++) {
+        for (let localX = 0; localX < tileWidth; localX++) {
+          const x = startX + localX;
+          const y = startY + localY;
+          const destination = (y * image.width + x) * 4;
+          if (source[destination + 3] !== 0) continue;
+
+          let nearest = -1;
+          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+          for (let offsetY = -radius; offsetY <= radius; offsetY++) {
+            const sampleY = localY + offsetY;
+            if (sampleY < 0 || sampleY >= tileHeight) continue;
+            for (let offsetX = -radius; offsetX <= radius; offsetX++) {
+              const sampleX = localX + offsetX;
+              if (sampleX < 0 || sampleX >= tileWidth) continue;
+              const distanceSquared = offsetX * offsetX + offsetY * offsetY;
+              if (distanceSquared > radius * radius || distanceSquared >= nearestDistanceSquared) {
+                continue;
+              }
+              const sample = (
+                (startY + sampleY) * image.width + startX + sampleX
+              ) * 4;
+              if (source[sample + 3] === 0) continue;
+              nearest = sample;
+              nearestDistanceSquared = distanceSquared;
+            }
+          }
+          if (nearest >= 0) {
+            image.data[destination] = source[nearest];
+            image.data[destination + 1] = source[nearest + 1];
+            image.data[destination + 2] = source[nearest + 2];
+          }
+        }
+      }
+    }
+  }
 }
 
 /** Downsamples frames independently so neighboring atlas tiles cannot bleed together. */

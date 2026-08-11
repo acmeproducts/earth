@@ -24,6 +24,13 @@ module.exports = (env, argv) => {
           },
         },
         {
+          test: /assets[\\/]vegetation[\\/].*\.png$/i,
+          type: 'asset/resource',
+          generator: {
+            filename: 'vegetation/[name].[contenthash][ext]',
+          },
+        },
+        {
           test: /\.tsx?$/,
           use: 'ts-loader',
           exclude: /node_modules/,

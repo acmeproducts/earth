@@ -13,7 +13,8 @@ import {
   VertexData,
   TransformNode,
 } from "@babylonjs/core";
-import { TerrainTiles, TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
+import { TerrainElevationSource } from "./TerrainElevationSource";
 import { createWaterPlane } from "./Water";
 import { createTreeField, DEFAULT_TREE_SPACING_METERS } from "./TreeField";
 import { createGrassField } from "./GrassField";
@@ -36,17 +37,23 @@ import {
   DEFAULT_MODEL_RANGE_METERS,
   MAX_MODEL_RANGE_METERS,
   MIN_MODEL_RANGE_METERS,
-  VegetationCategory,
-  VegetationControls,
-  VegetationModes,
-} from "./VegetationControls";
+  SceneControls,
+} from "./SceneControls";
 import { DistantVista } from "./DistantVista";
+import {
+  DEFAULT_WORLD_SEED,
+  layerSeed,
+  WORLD_GRID_LEVEL,
+  worldTileAreaAtLocation,
+} from "./WorldGrid";
 import {
   chooseVistaVegetationSpacing,
   vegetationDensityScaleAcrossLocalBoundary,
 } from "./VistaVegetation";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
+type VegetationCategory = "trees" | "grass" | "bushes";
+type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
 // OpenFreeMap starts including building footprints at zoom 13. The elevation
 // can stay coarse while this independent vector zoom supplies vista geometry.
 const DISTANT_OSM_ZOOM = 13;
@@ -64,7 +71,7 @@ const CAMERA_NEAR_CLIP_METERS = 0.1;
 type MovementMode = "fly" | "walk";
 
 interface WalkableTerrain {
-  data: TerrainResult;
+  data: TerrainData;
   width: number;
   depth: number;
   metersPerUnit: number;
@@ -99,10 +106,9 @@ export class Game {
   private flowerField?: VegetationFieldResult;
   private bushField?: VegetationFieldResult;
   private mapFeatures?: TransformNode;
-  private terrainData?: TerrainResult;
-  // Slippy-map zoom numbers run opposite to ground coverage: 14 is one wider
-  // level than 15 and gives the player a larger detailed area.
-  private terrainZoom = 14;
+  private terrainData?: TerrainData;
+  private readonly gridLevel = WORLD_GRID_LEVEL;
+  private readonly worldSeed: number;
   private readonly innerSize: number;
   private readonly renderScale: number;
   private debugTerrainLayer: DebugTerrainLayer = "none";
@@ -111,7 +117,7 @@ export class Game {
   private solarLighting?: SolarLighting;
   private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
-  private vegetationControls?: VegetationControls;
+  private sceneControls?: SceneControls;
   private vegetationLodDistanceMeters: number;
   private vegetationAmbientOcclusionEnabled: boolean;
   private flyCamera?: UniversalCamera;
@@ -167,6 +173,13 @@ export class Game {
     this.scene.skipPointerMovePicking = true;
     this.scene.collisionsEnabled = true;
     const query = new URLSearchParams(window.location.search);
+    this.worldSeed = queryInteger(
+      query,
+      "seed",
+      DEFAULT_WORLD_SEED,
+      -2_147_483_648,
+      2_147_483_647,
+    );
     this.innerSize = queryInteger(query, "inner-size", 1, 1, 4);
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
     this.engine.setHardwareScalingLevel(1 / this.renderScale);
@@ -248,59 +261,48 @@ export class Game {
     );
 
     // Load terrain at the active example location.
-    await this.rebuildTerrain(this.terrainZoom, onProgress);
+    await this.rebuildTerrain(onProgress);
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
-    this.vegetationControls = new VegetationControls(
-      this.vegetationModes,
+    this.sceneControls = new SceneControls(
       this.vegetationLodDistanceMeters,
-      this.vegetationAmbientOcclusionEnabled,
-      (category, mode) => this.setVegetationMode(category, mode),
       (distance) => this.setVegetationLodDistance(distance),
-      (enabled) => this.setVegetationAmbientOcclusion(enabled),
+      (hours) => this.solarLighting?.setTimeOfDay(hours),
     );
     this.setupDebugControls();
     await reportInitializationProgress(onProgress, "Ready", 100);
   }
 
-  private async rebuildTerrain(
-    zoom: number,
-    onProgress?: InitializationProgress,
-  ): Promise<void> {
+  private async rebuildTerrain(onProgress?: InitializationProgress): Promise<void> {
     const requestId = ++this.terrainRequestId;
     const location = EXAMPLE_LOCATIONS[this.terrainLocationIndex];
     await reportInitializationProgress(onProgress, "Loading terrain elevation", 8);
-    const terrainData = await TerrainTiles.fetchTileAtLocation(
+    const terrainArea = worldTileAreaAtLocation(
       location.lat,
       location.lon,
-      zoom,
       this.innerSize,
+      this.worldSeed,
+      this.gridLevel,
     );
+    const terrainData = await TerrainElevationSource.fetchWorldArea(terrainArea);
     if (requestId !== this.terrainRequestId) return;
-    if (!terrainData.bounds) throw new Error("Terrain bounds were not calculated.");
     const localCenter = sceneToLonLat(
       0,
       0,
       terrainData.bounds,
-      terrainData.groundWidthMeters!,
-      terrainData.groundHeightMeters!,
+      terrainData.groundWidthMeters,
+      terrainData.groundHeightMeters,
     );
 
     await reportInitializationProgress(onProgress, "Loading maps and land cover", 18);
-    const distantTerrainPromise = TerrainTiles.fetchTileAtLocation(
+    const distantArea = worldTileAreaAtLocation(
       localCenter.lat,
       localCenter.lon,
-      Math.max(1, zoom - 2),
       3,
-    ).then(async (terrain) => {
+      this.worldSeed,
+      Math.max(1, this.gridLevel - 2),
+    );
+    const distantTerrainPromise = TerrainElevationSource.fetchWorldArea(distantArea).then(async (terrain) => {
       const lakeElevationSource = terrain.elevations.slice();
-      if (!terrain.bounds) {
-        return {
-          terrain,
-          landCover: undefined,
-          mapWays: [],
-          lakeElevationSource,
-        };
-      }
       const [distantLandCover, distantMapWays] = await Promise.all([
         WorldCover.fetch(terrain.bounds, 12).catch((error: unknown) => {
             console.warn("Distant WorldCover unavailable; vista vegetation was skipped.", error);
@@ -343,14 +345,14 @@ export class Game {
     // Derive meters-per-unit from the real ground extent so
     // horizontal and vertical scales match 1:1 (absolute height).
     const meshWidth = 100; // scene units for the ground plane
-    const groundWidth = terrainData.groundWidthMeters ?? 1000;
-    const groundHeight = terrainData.groundHeightMeters ?? 1000;
+    const groundWidth = terrainData.groundWidthMeters;
+    const groundHeight = terrainData.groundHeightMeters;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
     if (distantScene) {
       const vistaRadius = Math.min(
-        distantScene.terrain.groundWidthMeters!,
-        distantScene.terrain.groundHeightMeters!,
+        distantScene.terrain.groundWidthMeters,
+        distantScene.terrain.groundHeightMeters,
       ) / (2 * metersPerUnit);
       this.scene.fogMode = Scene.FOGMODE_LINEAR;
       this.scene.fogStart = vistaRadius * 0.65;
@@ -401,8 +403,8 @@ export class Game {
 
     const vistaVegetationSpacingMeters = distantScene
       ? chooseVistaVegetationSpacing(
-          distantScene.terrain.groundWidthMeters!,
-          distantScene.terrain.groundHeightMeters!,
+          distantScene.terrain.groundWidthMeters,
+          distantScene.terrain.groundHeightMeters,
         )
       : DEFAULT_TREE_SPACING_METERS;
     // Equalize actual trees per square meter at the seam, not merely the
@@ -417,7 +419,7 @@ export class Game {
       meshWidth,
       meshDepth,
       metersPerUnit,
-      seed: zoom,
+      seed: layerSeed(terrainData.generationSeed, "trees"),
       landCover,
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
@@ -443,7 +445,7 @@ export class Game {
       meshWidth,
       meshDepth,
       metersPerUnit,
-      seed: zoom ^ 0x47524153,
+      seed: layerSeed(terrainData.generationSeed, "grass"),
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
@@ -466,7 +468,7 @@ export class Game {
       meshWidth,
       meshDepth,
       metersPerUnit,
-      seed: zoom ^ 0x464c4f57,
+      seed: layerSeed(terrainData.generationSeed, "flowers"),
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
@@ -482,7 +484,7 @@ export class Game {
       meshWidth,
       meshDepth,
       metersPerUnit,
-      seed: zoom ^ 0x42555348,
+      seed: layerSeed(terrainData.generationSeed, "bushes"),
       landCover,
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
@@ -589,10 +591,6 @@ export class Game {
         void this.toggleDebugTerrainLayer("openTopoMap");
       } else if (kbInfo.event.key === "l" || kbInfo.event.key === "L") {
         void this.toggleDebugTerrainLayer("worldCover");
-      } else if (kbInfo.event.key === "+" || kbInfo.event.code === "NumpadAdd") {
-        void this.changeTerrainZoom(1);
-      } else if (kbInfo.event.key === "-" || kbInfo.event.code === "NumpadSubtract") {
-        void this.changeTerrainZoom(-1);
       } else if (kbInfo.event.key === "v" || kbInfo.event.key === "V") {
         const nextMode: VegetationRenderMode = this.vegetationModes.trees === "auto"
           ? "models"
@@ -625,7 +623,6 @@ export class Game {
         : this.bushField;
     field?.setRenderMode(mode);
     if (category === "grass") this.flowerField?.setRenderMode(mode);
-    this.vegetationControls?.setMode(category, mode);
   }
 
   private setAllVegetationModes(mode: VegetationRenderMode): void {
@@ -646,7 +643,6 @@ export class Game {
     this.flowerField?.setAmbientOcclusionEnabled(enabled);
     this.bushField?.setAmbientOcclusionEnabled(enabled);
     this.distantVista?.setAmbientOcclusionEnabled(enabled);
-    this.vegetationControls?.setAmbientOcclusionEnabled(enabled);
   }
 
   private updateVegetationLod(): void {
@@ -664,19 +660,12 @@ export class Game {
     if (locationIndex === this.terrainLocationIndex) return;
     this.terrainLocationIndex = locationIndex;
     console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
-    await this.rebuildTerrain(this.terrainZoom);
+    await this.rebuildTerrain();
   }
 
   private async toggleDebugTerrainLayer(layer: Exclude<DebugTerrainLayer, "none">): Promise<void> {
     this.debugTerrainLayer = this.debugTerrainLayer === layer ? "none" : layer;
     await this.applyTerrainLayer(this.terrainRequestId);
-  }
-
-  private async changeTerrainZoom(delta: number): Promise<void> {
-    const nextZoom = Math.max(1, Math.min(15, this.terrainZoom + delta));
-    if (nextZoom === this.terrainZoom) return;
-    this.terrainZoom = nextZoom;
-    await this.rebuildTerrain(nextZoom);
   }
 
   private async applyTerrainLayer(requestId: number): Promise<void> {
@@ -693,7 +682,7 @@ export class Game {
       return;
     }
 
-    const texture = await TerrainTiles.createOpenTopoMapTexture(this.scene, this.terrainData);
+    const texture = await TerrainElevationSource.createOpenTopoMapTexture(this.scene, this.terrainData);
     if (
       this.debugTerrainLayer !== "openTopoMap" ||
       requestId !== this.terrainRequestId ||
@@ -730,7 +719,7 @@ export class Game {
     window.removeEventListener("blur", this.handleWindowBlur);
     this.flySpeedOutput?.remove();
     this.fpsCounter.dispose();
-    this.vegetationControls?.dispose();
+    this.sceneControls?.dispose();
     this.scene.dispose();
     this.engine.dispose();
   }
@@ -887,7 +876,7 @@ export class Game {
    */
   createTerrainMesh(
     name: string,
-    terrain: TerrainResult,
+    terrain: TerrainData,
     options: {
       meshWidth: number;
       meshDepth: number;
@@ -908,10 +897,10 @@ export class Game {
     const indices = ground.getIndices()!;
     const { elevations, width: elevW, height: elevH } = terrain;
     const vPerRow = subdivisions + 1;
-    const worldCoverColors = landCover && terrain.bounds
+    const worldCoverColors = landCover
       ? new Float32Array((positions.length / 3) * 4)
       : undefined;
-    const surfaceColors = landCover && terrain.bounds
+    const surfaceColors = landCover
       ? new Float32Array((positions.length / 3) * 4)
       : undefined;
 
@@ -948,7 +937,7 @@ export class Game {
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
 
-        if (worldCoverColors && landCover && terrain.bounds) {
+        if (worldCoverColors && landCover) {
           const { lon, lat } = sceneToLonLat(
             positions[vertexIndex * 3],
             positions[vertexIndex * 3 + 2],
@@ -976,8 +965,8 @@ export class Game {
 
     if (surfaceColors) {
       const metersPerVertex = Math.min(
-        (terrain.groundWidthMeters ?? meshWidth * metersPerUnit) / subdivisions,
-        (terrain.groundHeightMeters ?? meshDepth * metersPerUnit) / subdivisions,
+        terrain.groundWidthMeters / subdivisions,
+        terrain.groundHeightMeters / subdivisions,
       );
       smoothVertexColors(
         surfaceColors,

@@ -129,7 +129,7 @@ export class TreeImpostorValidation {
         const actual = topDownPixels(rendered, resolution);
         if (index === 3) frontView = actual;
         if (index === 2) topView = actual;
-        const context = assets.textures[index].getContext() as unknown as CanvasRenderingContext2D;
+        const context = assets.atlasCanvases[index].getContext("2d", { alpha: true })!;
         const expected = interpolatedAtlasFrame(
           context,
           resolution,

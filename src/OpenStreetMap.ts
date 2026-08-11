@@ -18,7 +18,8 @@ import {
   sampleElevation,
   SEA_LEVEL_METERS,
 } from "./Geo";
-import { TerrainResult, TileBounds } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
+import type { TileBounds } from "./WorldGrid";
 
 export interface MapTile {
   x: number;
@@ -124,10 +125,9 @@ export class OpenStreetMap {
   static createLayer(
     scene: Scene,
     tiles: MapTile[],
-    terrain: TerrainResult,
+    terrain: TerrainData,
     options: MapLayerOptions,
   ): MapFeatureLayer {
-    if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
     const root = new TransformNode("mapFeatures", scene);
     const buildings: Mesh[] = [];
     const roads: Mesh[] = [];
@@ -174,11 +174,10 @@ export class OpenStreetMap {
   static createWaterLayer(
     scene: Scene,
     tiles: MapTile[],
-    terrain: TerrainResult,
+    terrain: TerrainData,
     options: MapLayerOptions,
     innerBounds?: MapClipBounds,
   ): MapFeatureLayer {
-    if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
     const root = new TransformNode("mapWater", scene);
     const water: Mesh[] = [];
 
@@ -206,17 +205,16 @@ export class OpenStreetMap {
 
   static createRoadExclusionMask(
     tiles: MapTile[],
-    terrain: TerrainResult,
+    terrain: TerrainData,
     options: MapLayerOptions,
   ): HorizontalExclusionMask {
-    if (!terrain.bounds) throw new Error("Terrain bounds are required for map features.");
     const segments: RoadSegment[] = [];
     for (const tile of tiles) {
       forEachFeature(tile, "transportation", (feature) => {
         const halfWidth = roadWidth(String(feature.properties.class ?? "")) / options.metersPerUnit / 2;
         for (const coordinates of lines(feature, tile)) {
           const points = coordinates.map(([lon, lat]) =>
-            lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth)
+            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
           );
           for (let index = 1; index < points.length; index++) {
             segments.push({ start: points[index - 1], end: points[index], halfWidth });
@@ -271,17 +269,17 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
 
 function polygonScenePoints(
   coordinates: LonLat[],
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: MapLayerOptions,
 ): Array<{ x: number; z: number }> {
   return coordinates.map(([lon, lat]) =>
-    lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth)
+    lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
   );
 }
 
 function touchesTerrainBoundary(
   coordinates: LonLat[],
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: MapLayerOptions,
 ): boolean {
   const halfWidth = options.meshWidth / 2;
@@ -307,7 +305,7 @@ function isStrictlyInsideBounds(
 function createPolygon(
   scene: Scene,
   coordinates: LonLat[],
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: MapLayerOptions,
   heightMeters: number,
   isWater = false,
@@ -369,12 +367,12 @@ function createPolygon(
 function createRoad(
   scene: Scene,
   coordinates: LonLat[],
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: MapLayerOptions,
   widthMeters: number,
 ): Mesh[] {
   const points = coordinates.map(([lon, lat]) =>
-    lonLatToScene(lon, lat, terrain.bounds!, options.meshWidth, options.meshDepth),
+    lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
   );
   const halfWidth = widthMeters / options.metersPerUnit / 2;
   const paths = clipPolyline(
@@ -394,7 +392,7 @@ function createRoad(
 function createRoadMeshes(
   scene: Scene,
   points: Array<{ x: number; z: number }>,
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: MapLayerOptions,
   halfWidth: number,
 ): Mesh[] {

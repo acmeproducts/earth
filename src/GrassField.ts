@@ -9,7 +9,7 @@ import {
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
-import { TerrainResult } from "./TerrainTiles";
+import type { TerrainData } from "./TerrainData";
 import {
   computeVegetationOcclusion,
   createVegetationFieldResult,
@@ -43,7 +43,7 @@ const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
 /** Places procedurally captured grass clumps over vegetated WorldCover cells. */
 export async function createGrassField(
   scene: Scene,
-  terrain: TerrainResult,
+  terrain: TerrainData,
   options: GrassFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
@@ -91,7 +91,7 @@ export async function createGrassField(
   const maximumHalfWidth = captureSize * 0.72;
   const matrices: Matrix[] = [];
 
-  if (landCover && terrain.bounds) {
+  if (landCover) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
         const x = -meshWidth / 2 + (column + 0.15 + random() * 0.7) * cellWidth;
@@ -163,7 +163,7 @@ export async function createGrassField(
 }
 
 function sampleTerrainNormal(
-  terrain: TerrainResult,
+  terrain: TerrainData,
   x: number,
   z: number,
   meshWidth: number,

@@ -82,7 +82,7 @@
       pointer-events: none;
     }
 
-    #vegetationControls {
+    #sceneControls {
       position: fixed;
       top: 12px;
       left: 12px;
@@ -96,78 +96,37 @@
       font: 12px Arial, sans-serif;
     }
 
-    #vegetationControls h2 {
-      margin: 0 0 10px;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    .vegetation-control-row {
+    .scene-control-row {
       display: grid;
-      grid-template-columns: 64px 1fr;
+      grid-template-columns: 78px 1fr 42px auto;
       align-items: center;
       gap: 8px;
-      margin-top: 7px;
+      color: #d9dfe3;
     }
 
-    .vegetation-segmented {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      height: 28px;
+    .scene-control-row + .scene-control-row { margin-top: 12px; }
+    .scene-control-row input { width: 100%; accent-color: #589a72; }
+    .scene-control-row output {
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .scene-control-row button {
+      padding: 4px 7px;
       border: 1px solid #505961;
       border-radius: 4px;
-      overflow: hidden;
-    }
-
-    .vegetation-segmented button {
-      min-width: 0;
-      border: 0;
-      border-left: 1px solid #505961;
       background: #20262b;
       color: #bfc8ce;
       font: inherit;
       cursor: pointer;
     }
 
-    .vegetation-segmented button:first-child { border-left: 0; }
-    .vegetation-segmented button.active { background: #397354; color: #fff; }
-    .vegetation-segmented button:focus-visible { outline: 2px solid #8fc4a4; outline-offset: -2px; }
-
-    .vegetation-distance-row {
-      display: grid;
-      grid-template-columns: 78px 1fr 42px;
-      align-items: center;
-      gap: 8px;
-      margin-top: 12px;
-      color: #d9dfe3;
-    }
-
-    .vegetation-distance-row input { width: 100%; accent-color: #589a72; }
-    .vegetation-distance-row output {
-      color: #fff;
-      font-variant-numeric: tabular-nums;
-      text-align: right;
-    }
-
-    .vegetation-ao-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-top: 12px;
-      color: #d9dfe3;
-      cursor: pointer;
-    }
-
-    .vegetation-ao-row input {
-      width: 16px;
-      height: 16px;
-      margin: 0;
-      accent-color: #589a72;
-      cursor: pointer;
-    }
+    .scene-control-row button.active { background: #397354; color: #fff; }
+    .scene-control-row button:focus-visible { outline: 2px solid #8fc4a4; outline-offset: 2px; }
 
     @media (max-width: 520px) {
-      #vegetationControls {
+      #sceneControls {
         top: 52px;
         width: calc(100% - 24px);
       }
