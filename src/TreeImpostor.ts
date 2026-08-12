@@ -31,7 +31,7 @@ function createTreeProvider(species: TreeSpecies) {
     minimumResolutionWidth: 64,
     faces: IMPOSTOR_CUBE_FACES,
     sampling: {
-      horizontalSamples: { default: 10, minimum: 1, maximum: 16 },
+      horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
       verticalSamples: { default: 5, minimum: 1, maximum: 10 },
       resolution: { default: 256, minimum: 64, maximum: 256 },
     },

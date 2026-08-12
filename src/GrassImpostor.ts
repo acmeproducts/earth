@@ -39,8 +39,8 @@ const grassImpostors = createImpostorAssetProvider({
   rotationalSymmetryOrder: 4,
   upperHemisphereOnly: true,
   sampling: {
-    horizontalSamples: { default: 8, minimum: 1, maximum: 24 },
-    verticalSamples: { default: 12, minimum: 1, maximum: 20 },
+    horizontalSamples: { default: 5, minimum: 1, maximum: 24 },
+    verticalSamples: { default: 5, minimum: 1, maximum: 20 },
     resolution: { default: 128, minimum: 48, maximum: 512 },
   },
 });
