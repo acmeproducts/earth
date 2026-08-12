@@ -60,9 +60,9 @@ import {
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 type VegetationCategory = "trees" | "grass" | "bushes";
 type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
-// OpenFreeMap starts including building footprints at zoom 13. The elevation
-// can stay coarse while this independent vector zoom supplies vista geometry.
-const DISTANT_OSM_ZOOM = 13;
+// Zoom 14 retains OpenFreeMap's per-building render heights. At zoom 13 the
+// footprints are generalized and their height attributes are omitted.
+const DISTANT_OSM_ZOOM = 14;
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
@@ -305,7 +305,7 @@ export class Game {
       localCenter.lon,
       3,
       this.worldSeed,
-      Math.max(1, this.gridLevel - 2),
+      Math.max(1, this.gridLevel - 1),
     );
     const distantTerrainPromise = TerrainElevationSource.fetchWorldArea(distantArea).then(async (terrain) => {
       const lakeElevationSource = terrain.elevations.slice();

@@ -64,9 +64,20 @@ test("uses optional species textures with procedural-color fallback", () => {
   assert.match(captureMaterial, /setFloat\("leafTextureEnabled", 1\)/);
 });
 
-test("broadens pine branching and converges species brightness in low light", () => {
+test("gives every tree species its own procedural bark texture", () => {
+  assert.match(captureMaterial, /export function getTreeBarkTexture/);
+  assert.match(captureMaterial, /Record<TreeBarkStyle, number>/);
+  assert.match(captureMaterial, /species === "eucalyptus"/);
+  assert.match(captureMaterial, /species === "palm"/);
+  assert.match(captureMaterial, /species === "oak" \|\| species === "mangrove"/);
+  assert.match(proceduralTrees, /getTreeBarkTexture\(scene, species\)/);
+});
+
+test("gives pine an open, twigged crown and converges species brightness in low light", () => {
   assert.match(proceduralTrees, /firstLevel = species === "pine" \? 5 : 2/);
-  assert.match(proceduralTrees, /const sprays = species === "pine" \? 5 : 6/);
+  assert.match(proceduralTrees, /const branches = species === "pine" \? 4 \+ \(level % 3 === 0 \? 1 : 0\) : 6/);
+  assert.match(proceduralTrees, /const branchletCount = species === "pine" \? 3 : 1/);
+  assert.match(proceduralTrees, /function addPineNeedleTuft/);
   assert.match(proceduralTrees, /TREE_LOW_LIGHT_BRIGHTNESS/);
   assert.match(treeField, /lowLightAlbedoScale/);
 });

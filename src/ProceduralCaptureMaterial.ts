@@ -11,17 +11,69 @@ import {
 } from "@babylonjs/core";
 import { createSeededRandom } from "./Random";
 
-const BIRCH_BARK_TEXTURE_SIZE = 512;
-const birchBarkTextures = new WeakMap<Scene, DynamicTexture>();
+const BARK_TEXTURE_SIZE = 512;
+
+export type TreeBarkStyle =
+  | "acacia"
+  | "beech"
+  | "birch"
+  | "eucalyptus"
+  | "fir"
+  | "mangrove"
+  | "maple"
+  | "oak"
+  | "palm"
+  | "pine"
+  | "spruce";
+
+const barkTextures = new WeakMap<Scene, Map<TreeBarkStyle, DynamicTexture>>();
+
+const BARK_SEEDS: Record<TreeBarkStyle, number> = {
+  acacia: 0x41434143,
+  beech: 0x42454543,
+  birch: 0x42495243,
+  eucalyptus: 0x45554341,
+  fir: 0x46495221,
+  mangrove: 0x4d414e47,
+  maple: 0x4d41504c,
+  oak: 0x4f414b21,
+  palm: 0x50414c4d,
+  pine: 0x50494e45,
+  spruce: 0x53505255,
+};
+
+const BARK_BASE: Record<TreeBarkStyle, readonly [number, number, number]> = {
+  acacia: [216, 202, 180],
+  beech: [229, 226, 214],
+  birch: [229, 226, 216],
+  eucalyptus: [232, 220, 193],
+  fir: [207, 199, 184],
+  mangrove: [205, 192, 171],
+  maple: [218, 211, 197],
+  oak: [202, 190, 170],
+  palm: [221, 203, 174],
+  pine: [224, 190, 154],
+  spruce: [211, 205, 192],
+};
 
 /** Builds and caches one seamless, deterministic birch-bark texture per scene. */
 export function getBirchBarkTexture(scene: Scene): DynamicTexture {
-  const cached = birchBarkTextures.get(scene);
+  return getTreeBarkTexture(scene, "birch");
+}
+
+/** Builds and caches a seamless, deterministic bark texture for each species. */
+export function getTreeBarkTexture(scene: Scene, species: TreeBarkStyle): DynamicTexture {
+  let sceneTextures = barkTextures.get(scene);
+  if (!sceneTextures) {
+    sceneTextures = new Map();
+    barkTextures.set(scene, sceneTextures);
+  }
+  const cached = sceneTextures.get(species);
   if (cached) return cached;
 
-  const size = BIRCH_BARK_TEXTURE_SIZE;
+  const size = BARK_TEXTURE_SIZE;
   const texture = new DynamicTexture(
-    "proceduralBirchBark",
+    `procedural${species[0].toUpperCase()}${species.slice(1)}Bark`,
     { width: size, height: size },
     scene,
     true,
@@ -30,25 +82,34 @@ export function getBirchBarkTexture(scene: Scene): DynamicTexture {
   const context = texture.getContext() as unknown as CanvasRenderingContext2D;
   const pixels = context.createImageData(size, size);
 
-  // Periodic fibers keep both tile boundaries continuous without copying an asset.
+  const base = BARK_BASE[species];
+  const verticalSpecies = species !== "birch" && species !== "beech" && species !== "palm";
+  // Periodic grain keeps both tile boundaries continuous without copying an asset.
   for (let y = 0; y < size; y++) {
     const vertical = Math.PI * 2 * y / size;
     for (let x = 0; x < size; x++) {
       const horizontal = Math.PI * 2 * x / size;
-      const paperFiber = Math.sin(vertical * 31 + Math.sin(horizontal * 3) * 0.8) * 2.2;
-      const broadMottle = Math.sin(horizontal * 4 + vertical * 2) * 2.5
-        + Math.cos(horizontal * 9 - vertical * 5) * 1.4;
+      const grain = verticalSpecies
+        ? Math.sin(horizontal * 23 + Math.sin(vertical * 3) * 1.2) * 4.2
+        : Math.sin(vertical * 31 + Math.sin(horizontal * 3) * 0.8) * 2.5;
+      const broadMottle = Math.sin(horizontal * 4 + vertical * 2) * 3.2
+        + Math.cos(horizontal * 9 - vertical * 5) * 1.8;
       const offset = (y * size + x) * 4;
-      pixels.data[offset] = 229 + paperFiber + broadMottle;
-      pixels.data[offset + 1] = 226 + paperFiber + broadMottle;
-      pixels.data[offset + 2] = 216 + paperFiber + broadMottle * 0.7;
+      pixels.data[offset] = base[0] + grain + broadMottle;
+      pixels.data[offset + 1] = base[1] + grain + broadMottle;
+      pixels.data[offset + 2] = base[2] + grain + broadMottle * 0.7;
       pixels.data[offset + 3] = 255;
     }
   }
   context.putImageData(pixels, 0, 0);
 
-  const random = createSeededRandom(0x42495243);
-  const strokeWrapped = (
+  const random = createSeededRandom(BARK_SEEDS[species]);
+  const wrapped = (draw: (xShift: number, yShift: number) => void): void => {
+    for (const yShift of [-size, 0, size]) {
+      for (const xShift of [-size, 0, size]) draw(xShift, yShift);
+    }
+  };
+  const strokeHorizontal = (
     x: number,
     y: number,
     width: number,
@@ -59,57 +120,95 @@ export function getBirchBarkTexture(scene: Scene): DynamicTexture {
     context.strokeStyle = color;
     context.lineWidth = lineWidth;
     context.lineCap = "round";
-    for (const shift of [-size, 0, size]) {
+    wrapped((xShift, yShift) => {
       context.beginPath();
-      context.moveTo(x + shift - width / 2, y);
+      context.moveTo(x + xShift - width / 2, y + yShift);
       context.bezierCurveTo(
-        x + shift - width * 0.18,
-        y + bend,
-        x + shift + width * 0.2,
-        y - bend * 0.35,
-        x + shift + width / 2,
-        y + bend * 0.15,
+        x + xShift - width * 0.18, y + yShift + bend,
+        x + xShift + width * 0.2, y + yShift - bend * 0.35,
+        x + xShift + width / 2, y + yShift + bend * 0.15,
       );
       context.stroke();
-    }
+    });
   };
 
-  // Fine lenticels establish scale; the sparse layered scars give the bark character.
-  for (let index = 0; index < 190; index++) {
-    strokeWrapped(
-      random() * size,
-      7 + random() * (size - 14),
-      5 + random() * 24,
-      (random() - 0.5) * 2.2,
-      0.45 + random() * 1.1,
-      `rgba(72, 67, 58, ${0.2 + random() * 0.32})`,
-    );
-  }
-  for (let index = 0; index < 24; index++) {
-    const x = random() * size;
-    const y = 12 + random() * (size - 24);
-    const width = 25 + random() * 72;
-    const bend = (random() - 0.5) * 5;
-    strokeWrapped(x, y + 1.4, width, bend, 4 + random() * 4, "rgba(70, 64, 55, 0.16)");
-    strokeWrapped(x, y, width, bend, 1.2 + random() * 2.2, "rgba(48, 45, 40, 0.68)");
-    strokeWrapped(x, y - 1.2, width * 0.76, -bend * 0.5, 0.8, "rgba(250, 247, 237, 0.72)");
-  }
-  for (let index = 0; index < 70; index++) {
-    strokeWrapped(
-      random() * size,
-      6 + random() * (size - 12),
-      18 + random() * 85,
-      (random() - 0.5) * 1.5,
-      0.35 + random() * 0.6,
-      `rgba(255, 253, 244, ${0.12 + random() * 0.22})`,
-    );
+  if (species === "birch" || species === "beech") {
+    const contrast = species === "birch" ? 1 : 0.48;
+    // Birch has papery scars; beech keeps the same horizontal grain much quieter.
+    for (let index = 0; index < (species === "birch" ? 190 : 95); index++) {
+      strokeHorizontal(random() * size, random() * size, 5 + random() * 25,
+        (random() - 0.5) * 2.2, 0.45 + random() * 1.1,
+        `rgba(58, 54, 48, ${(0.16 + random() * 0.3) * contrast})`);
+    }
+    for (let index = 0; index < (species === "birch" ? 24 : 8); index++) {
+      const x = random() * size;
+      const y = random() * size;
+      const width = 25 + random() * 72;
+      const bend = (random() - 0.5) * 5;
+      strokeHorizontal(x, y + 1.4, width, bend, 4 + random() * 4, `rgba(65,60,52,${0.13 * contrast})`);
+      strokeHorizontal(x, y, width, bend, 1.2 + random() * 2.2, `rgba(42,40,36,${0.68 * contrast})`);
+      strokeHorizontal(x, y - 1.2, width * 0.76, -bend * 0.5, 0.8, `rgba(255,252,240,${0.7 * contrast})`);
+    }
+  } else if (species === "palm") {
+    // Stacked old frond scars form irregular, fibrous rings around the stem.
+    for (let band = 0; band < 22; band++) {
+      const y = (band + random() * 0.45) * size / 22;
+      strokeHorizontal(size * 0.5, y, size * 1.12, (random() - 0.5) * 8,
+        3 + random() * 5, "rgba(86,55,31,0.42)");
+      strokeHorizontal(size * 0.5, y - 2, size * 1.08, 0,
+        1 + random() * 2, "rgba(247,225,185,0.46)");
+    }
+  } else if (species === "eucalyptus") {
+    // Long peeling ribbons alternate fresh cream bark and weathered cinnamon strips.
+    for (let strip = 0; strip < 32; strip++) {
+      const x = random() * size;
+      const width = 7 + random() * 26;
+      context.lineCap = "round";
+      context.lineWidth = width;
+      context.strokeStyle = random() < 0.55 ? "rgba(255,242,207,0.48)" : "rgba(139,91,52,0.34)";
+      wrapped((xShift, yShift) => {
+        context.beginPath();
+        context.moveTo(x + xShift, yShift - 10);
+        context.bezierCurveTo(x + xShift + 18, yShift + size * 0.3,
+          x + xShift - 16, yShift + size * 0.7, x + xShift + 8, yShift + size + 10);
+        context.stroke();
+      });
+    }
+  } else {
+    const deep = species === "oak" || species === "mangrove" || species === "fir";
+    const warm = species === "pine" || species === "acacia";
+    // Furrows split into staggered plates: broad and deep on oak/mangrove/fir,
+    // smaller and warmer on pine/acacia, and fine on maple/spruce.
+    const furrows = deep ? 34 : 46;
+    for (let groove = 0; groove < furrows; groove++) {
+      const x = (groove + random() * 0.8) * size / furrows;
+      const sway = 5 + random() * (deep ? 20 : 11);
+      context.lineCap = "round";
+      context.lineWidth = (deep ? 3.5 : 1.7) + random() * (deep ? 5 : 3);
+      context.strokeStyle = warm ? "rgba(91,52,29,0.5)" : "rgba(61,54,44,0.48)";
+      wrapped((xShift, yShift) => {
+        context.beginPath();
+        context.moveTo(x + xShift, yShift - 8);
+        context.bezierCurveTo(x + xShift + sway, yShift + size * 0.28,
+          x + xShift - sway, yShift + size * 0.72, x + xShift + sway * 0.25, yShift + size + 8);
+        context.stroke();
+      });
+    }
+    const plateCount = deep ? 85 : 125;
+    for (let plate = 0; plate < plateCount; plate++) {
+      const x = random() * size;
+      const y = random() * size;
+      const width = 7 + random() * (deep ? 24 : 15);
+      strokeHorizontal(x, y, width, (random() - 0.5) * 5,
+        0.8 + random() * 2.1, warm ? "rgba(246,204,151,0.32)" : "rgba(241,230,207,0.25)");
+    }
   }
 
   texture.gammaSpace = false;
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   texture.update(false);
-  birchBarkTextures.set(scene, texture);
+  sceneTextures.set(species, texture);
   return texture;
 }
 

@@ -115,11 +115,13 @@ The top-right counter reports live FPS and active triangles; use
 `?vegetation=models` to force tree models or
 `?vegetation-distance=20` to change the initial Auto range.
 
-The landscape extends beyond the detailed player area with a sparse lower-detail
-terrain ring. The ring uses a coarser WorldCover tint and tree impostors to keep
-the expanded horizon inexpensive while blending into the local terrain. Its OSM
-vector data is fetched at zoom 13 so the vista also retains simple building and
-road geometry even though its elevation data is substantially coarser.
+The landscape extends beyond the detailed player area with a lower-detail terrain
+ring. Its compact 3 by 3 level-13 footprint keeps the horizon focused while the
+fixed vegetation budget produces roughly four times the former tree density. The
+ring uses a coarser WorldCover tint and tree impostors to keep the expanded horizon
+inexpensive while blending into the local terrain. Its OSM vector data is fetched
+at zoom 14 so the vista retains per-building heights even though its elevation
+data is coarser.
 
 The world uses an application-owned Web Mercator grid at fixed level 14. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
