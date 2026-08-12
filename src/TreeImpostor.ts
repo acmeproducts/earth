@@ -4,6 +4,7 @@ import {
   VertexBuffer,
 } from "@babylonjs/core";
 import {
+  measureFoliageTextures,
   TREE_SPECIES,
   TREE_SPECIES_LIST,
   TreeSpecies,
@@ -43,13 +44,16 @@ const treeImpostors = Object.fromEntries(
 ) as Record<TreeSpecies, ReturnType<typeof createTreeProvider>>;
 
 /** Shares one tree atlas capture per scene and capture-attribute combination. */
-export function getTreeImpostorAssets(
+export async function getTreeImpostorAssets(
   scene: Scene,
   horizontalSamples = treeImpostors.birch.getDefaultSampling().horizontalSamples,
   verticalSamples = treeImpostors.birch.getDefaultSampling().verticalSamples,
   resolution = treeImpostors.birch.getDefaultSampling().resolution,
   species: TreeSpecies = "birch",
 ): Promise<TreeImpostorAssets> {
+  // The capture source is foliage geometry, so its cards need the leaf image's
+  // proportions before this species is built and baked into an atlas.
+  await measureFoliageTextures();
   return treeImpostors[species].getAssets(scene, {
     horizontalSamples,
     verticalSamples,
@@ -63,6 +67,7 @@ export async function createTreeModels(
   renderHeight: number,
   species: TreeSpecies = "birch",
 ): Promise<Mesh[]> {
+  await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
   const tree = treeDefinition.create(scene, {
     name: `${species}TreeModels`,

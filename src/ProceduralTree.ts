@@ -54,6 +54,83 @@ const FOLIAGE_TEXTURE_URLS: Readonly<Partial<Record<TreeSpecies, string>>> =
       : [];
   }));
 
+/**
+ * A leaf image is one upright leaf on transparency: stem at the bottom, tip at
+ * the top, which is the axis a card's own up direction already follows. Only
+ * about half of such a card survives the alpha cut, so the card count the
+ * flat-colored crown was tuned for leaves a see-through canopy behind it. More
+ * cards fill it back in.
+ */
+const FOLIAGE_CARD_DENSITY = 2.6;
+/** Leaves are taller than wide, so an unmeasured image is assumed to be too. */
+const DEFAULT_FOLIAGE_CARD_ASPECT = 0.72;
+const foliageCardAspects = new Map<TreeSpecies, number>();
+let foliageMeasurement: Promise<void> | undefined;
+
+/**
+ * A card shaped unlike its image stretches the leaf drawn on it, so cards take
+ * the image's own proportions. Measuring beats a table of numbers while the art
+ * is still being iterated on: replacing a leaf reshapes its cards with it.
+ * Geometry is built synchronously, so the async tree entry points resolve this
+ * first; anything that builds a tree before it lands keeps the assumed shape.
+ */
+export function measureFoliageTextures(): Promise<void> {
+  if (!foliageMeasurement) foliageMeasurement = measureEveryFoliageTexture();
+  return foliageMeasurement;
+}
+
+function measureEveryFoliageTexture(): Promise<void> {
+  if (typeof Image === "undefined") return Promise.resolve();
+  const measurements = TREE_SPECIES_LIST.map((species) => {
+    const url = FOLIAGE_TEXTURE_URLS[species];
+    if (!url) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const image = new Image();
+      // An unreadable image is one the material also drops, leaving cards flat
+      // colored: their shape stops mattering, so measuring it does too.
+      image.onerror = () => resolve();
+      image.onload = () => {
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+          foliageCardAspects.set(species, image.naturalWidth / image.naturalHeight);
+        }
+        resolve();
+      };
+      image.src = url;
+    });
+  });
+  return Promise.all(measurements).then(() => undefined);
+}
+
+interface FoliageCardShape {
+  /** Card width / length, matching the leaf image. */
+  aspect: number;
+  /** Card count multiplier that fills the crown back in after the alpha cut. */
+  density: number;
+}
+
+/** Describes foliage cards only for species actually drawn with a leaf image. */
+function foliageCardShape(species: TreeSpecies): FoliageCardShape | undefined {
+  if (!FOLIAGE_TEXTURE_URLS[species]) return undefined;
+  return {
+    aspect: foliageCardAspects.get(species) ?? DEFAULT_FOLIAGE_CARD_ASPECT,
+    density: FOLIAGE_CARD_DENSITY,
+  };
+}
+
+/**
+ * Reshapes a card to the leaf image's proportions without changing its area, so
+ * a textured species keeps the crown volume its own sizing was tuned for.
+ */
+function shapeFoliageCard(
+  halfWidth: number,
+  halfLength: number,
+  aspect?: number,
+): { halfWidth: number; halfLength: number } {
+  if (aspect === undefined) return { halfWidth, halfLength };
+  const shapedHalfLength = Math.sqrt((halfWidth * halfLength) / aspect);
+  return { halfWidth: shapedHalfLength * aspect, halfLength: shapedHalfLength };
+}
+
 /** Species albedo correction applied only as the scene approaches night. */
 export const TREE_LOW_LIGHT_BRIGHTNESS: Readonly<Record<TreeSpecies, number>> = {
   acacia: 0.98,
@@ -311,17 +388,23 @@ function createBirchTree(
   }
 
   foliageAnchors.push(trunkPoints[trunkSegments].add(new Vector3(0, 0.2, 0)));
+  const cards = foliageCardShape("birch");
+  const leavesPerAnchor = Math.round(18 * (cards?.density ?? 1));
   for (const anchor of foliageAnchors) {
     const clusterScale = 0.82 + random() * 0.28;
-    for (let leaf = 0; leaf < 18; leaf++) {
+    for (let leaf = 0; leaf < leavesPerAnchor; leaf++) {
       const offset = randomInUnitSphere(random);
       const center = anchor.add(new Vector3(
         offset.x * 0.22 * clusterScale,
         offset.y * 0.28 * clusterScale,
         offset.z * 0.22 * clusterScale,
       ));
-      const halfWidth = 0.052 + random() * 0.025;
-      const halfLength = halfWidth * (0.76 + random() * 0.12);
+      const cardWidth = 0.052 + random() * 0.025;
+      const { halfWidth, halfLength } = shapeFoliageCard(
+        cardWidth,
+        cardWidth * (0.76 + random() * 0.12),
+        cards?.aspect,
+      );
       center.y = Math.min(PROCEDURAL_TREE_SOURCE_HEIGHT / 2 - halfLength, center.y);
       const tint = LEAF_TINTS[Math.floor(random() * LEAF_TINTS.length)];
       const brightness = 0.82 + random() * 0.22 + Math.max(0, center.y) * 0.025;
@@ -507,8 +590,11 @@ function createBroadleafTree(
   }
   tips.push(trunkPoints[trunkSegments]);
 
+  const cards = foliageCardShape(species);
   for (const tip of tips) {
-    const leafCount = profile.leavesPerTip + Math.floor(random() * 5);
+    const leafCount = Math.round(
+      (profile.leavesPerTip + Math.floor(random() * 5)) * (cards?.density ?? 1),
+    );
     for (let leaf = 0; leaf < leafCount; leaf++) {
       const offset = randomInUnitSphere(random);
       const flatness = species === "acacia" ? 0.22 : profile.crownDepth * 0.42;
@@ -519,13 +605,14 @@ function createBroadleafTree(
       ));
       center.y = Math.min(PROCEDURAL_TREE_SOURCE_HEIGHT / 2 - 0.04, center.y);
       const narrow = species === "eucalyptus" ? 1.75 : species === "acacia" ? 0.58 : 0.9;
-      const halfWidth = (species === "eucalyptus" ? 0.035 : 0.052) * (0.82 + random() * 0.35);
+      const cardWidth = (species === "eucalyptus" ? 0.035 : 0.052) * (0.82 + random() * 0.35);
+      const card = shapeFoliageCard(cardWidth, cardWidth * narrow, cards?.aspect);
       addLeaf(
         buffers,
         center,
         offset,
-        halfWidth,
-        halfWidth * narrow,
+        card.halfWidth,
+        card.halfLength,
         random,
         profile.foliage[Math.floor(random() * profile.foliage.length)],
         0.82 + random() * 0.22,
@@ -637,6 +724,7 @@ function createConiferTree(
     );
   }
 
+  const cards = foliageCardShape(species);
   const firstLevel = species === "pine" ? 5 : 2;
   for (let level = firstLevel; level < trunkSegments; level++) {
     const heightT = level / trunkSegments;
@@ -674,6 +762,7 @@ function createConiferTree(
           species === "pine" ? 0.055 : 0.07,
           needles[Math.floor(random() * needles.length)],
           random,
+          cards,
         );
       }
     }
@@ -687,6 +776,7 @@ function createConiferTree(
     0.075,
     needles[1],
     random,
+    cards,
   );
 
   const data = new VertexData();
@@ -750,15 +840,22 @@ function addNeedleSpray(
   halfWidth: number,
   tint: Color3,
   random: () => number,
+  cards?: FoliageCardShape,
 ): void {
-  for (let card = 0; card < 3; card++) {
+  const cardCount = Math.round(3 * (cards?.density ?? 1));
+  for (let card = 0; card < cardCount; card++) {
     const direction = growthDirection.add(randomUnitVector(random).scale(0.45)).normalize();
+    const size = shapeFoliageCard(
+      halfWidth * (0.8 + random() * 0.35),
+      halfLength * (0.82 + random() * 0.3),
+      cards?.aspect,
+    );
     addLeaf(
       buffers,
       center.add(randomUnitVector(random).scale(halfWidth * 0.35)),
       direction,
-      halfWidth * (0.8 + random() * 0.35),
-      halfLength * (0.82 + random() * 0.3),
+      size.halfWidth,
+      size.halfLength,
       random,
       tint,
       0.82 + random() * 0.24,

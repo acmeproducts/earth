@@ -19,6 +19,7 @@ import {
 } from "./Impostor";
 import {
   createProceduralTree,
+  measureFoliageTextures,
   PROCEDURAL_TREE_CAPTURE_DIAMETER,
   PROCEDURAL_TREE_SOURCE_HEIGHT,
 } from "./ProceduralTree";
@@ -130,6 +131,7 @@ export class TreeImpostorDemo {
   async initialize(onProgress?: (step: string, progress: number) => void): Promise<void> {
     onProgress?.("Generating source tree", 25);
     this.setStatus("Generating source tree...");
+    await measureFoliageTextures();
     const source = createProceduralTree(this.scene, { name: "treeCaptureSource" });
     this.sourceRoot = source;
     this.sourceMeshes = [source];
