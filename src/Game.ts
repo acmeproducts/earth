@@ -28,8 +28,14 @@ import {
   sinkSubmergedTerrain,
 } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
-import { landCoverColor, landCoverSurfaceColor, WorldCover } from "./WorldCover";
+import {
+  landCoverColor,
+  LandCoverClass,
+  landCoverSurfaceColor,
+  WorldCover,
+} from "./WorldCover";
 import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial";
+import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
 import { VegetationFieldResult, VegetationRenderMode } from "./VegetationField";
@@ -673,12 +679,12 @@ export class Game {
     const terrain = this.terrain;
 
     if (this.debugTerrainLayer === "none") {
-      this.applyDefaultTerrainMaterial(terrain);
+      this.applyDefaultTerrainMaterial(terrain, this.terrainData);
       return;
     }
 
     if (this.debugTerrainLayer === "worldCover") {
-      this.applyWorldCoverDebugMaterial(terrain);
+      this.applyWorldCoverDebugMaterial(terrain, this.terrainData);
       return;
     }
 
@@ -903,6 +909,11 @@ export class Game {
     const surfaceColors = landCover
       ? new Float32Array((positions.length / 3) * 4)
       : undefined;
+    // Kept so the variation pass below can weight itself by surface type
+    // without resampling the land cover raster.
+    const coverClasses = landCover
+      ? new Uint8Array(positions.length / 3)
+      : undefined;
 
     for (let row = 0; row < vPerRow; row++) {
       for (let col = 0; col < vPerRow; col++) {
@@ -959,11 +970,12 @@ export class Game {
           surfaceColors![colorIndex + 1] = surfaceGreen;
           surfaceColors![colorIndex + 2] = surfaceBlue;
           surfaceColors![colorIndex + 3] = 1;
+          coverClasses![vertexIndex] = coverClass;
         }
       }
     }
 
-    if (surfaceColors) {
+    if (surfaceColors && coverClasses) {
       const metersPerVertex = Math.min(
         terrain.groundWidthMeters / subdivisions,
         terrain.groundHeightMeters / subdivisions,
@@ -973,6 +985,14 @@ export class Game {
         vPerRow,
         Math.max(1, Math.round(GROUND_COVER_BLEND_METERS / metersPerVertex)),
       );
+      // Applied after the blend on purpose: smoothing exists to soften
+      // land-cover class edges, and running it over the variation would erase
+      // the finer bands this pass contributes.
+      applyGroundVariation(surfaceColors, coverClasses, positions, terrain, {
+        meshWidth,
+        meshDepth,
+        metersPerVertex,
+      });
     }
 
     // Recompute normals for correct lighting after modifying heights
@@ -983,12 +1003,12 @@ export class Game {
     ground.metadata = { worldCoverColors, surfaceColors } satisfies TerrainMetadata;
     ground.freezeWorldMatrix();
 
-    this.applyDefaultTerrainMaterial(ground);
+    this.applyDefaultTerrainMaterial(ground, terrain);
 
     return ground;
   }
 
-  private applyDefaultTerrainMaterial(terrain: Mesh): void {
+  private applyDefaultTerrainMaterial(terrain: Mesh, data: TerrainData): void {
     terrain.material?.dispose(true, true);
     const colors = (terrain.metadata as TerrainMetadata | null)?.surfaceColors;
     if (colors) {
@@ -997,14 +1017,20 @@ export class Game {
     } else {
       terrain.removeVerticesData(VertexBuffer.ColorKind);
     }
-    terrain.material = createTerrainMaterial(this.scene, Boolean(colors));
+    // The mesh spans the whole tile across one UV repeat, so the ground extent
+    // is what turns the material's real-world detail scales into tiling.
+    terrain.material = createTerrainMaterial(this.scene, {
+      usesLandCoverTint: Boolean(colors),
+      uvWidthMeters: data.groundWidthMeters,
+      uvHeightMeters: data.groundHeightMeters,
+    });
   }
 
-  private applyWorldCoverDebugMaterial(terrain: Mesh): void {
+  private applyWorldCoverDebugMaterial(terrain: Mesh, data: TerrainData): void {
     const colors = (terrain.metadata as TerrainMetadata | null)?.worldCoverColors;
     if (!colors) {
       console.warn("WorldCover debug layer is unavailable for this terrain.");
-      this.applyDefaultTerrainMaterial(terrain);
+      this.applyDefaultTerrainMaterial(terrain, data);
       return;
     }
 
@@ -1062,6 +1088,41 @@ async function reportInitializationProgress(
   if (!onProgress) return;
   onProgress(step, progress);
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Adds world-anchored ground variation on top of the blended land-cover colors.
+ * The terrain textures repeat every few metres and must stay near-neutral, so
+ * this pass owns the coarser variation that keeps mid and far ground from
+ * reading as flat fields of one color per land-cover class.
+ */
+function applyGroundVariation(
+  colors: Float32Array,
+  coverClasses: Uint8Array,
+  positions: Float32Array | number[],
+  terrain: TerrainData,
+  options: { meshWidth: number; meshDepth: number; metersPerVertex: number },
+): void {
+  for (let index = 0; index < coverClasses.length; index++) {
+    const { lon, lat } = sceneToLonLat(
+      positions[index * 3],
+      positions[index * 3 + 2],
+      terrain.bounds,
+      options.meshWidth,
+      options.meshDepth,
+    );
+    const target = index * 4;
+    const [red, green, blue] = varyGroundColor(
+      [colors[target], colors[target + 1], colors[target + 2]],
+      lon,
+      lat,
+      coverClasses[index] as LandCoverClass,
+      options.metersPerVertex,
+    );
+    colors[target] = red;
+    colors[target + 1] = green;
+    colors[target + 2] = blue;
+  }
 }
 
 function smoothVertexColors(colors: Float32Array, rowSize: number, radius: number): void {

@@ -452,7 +452,10 @@ interface BroadleafProfile {
   crownRadius: number;
   crownDepth: number;
   branchCount: number;
-  leavesPerTip: number;
+  /** Rising leaders the trunk forks into; limbs grow from these, not the trunk. */
+  leaderCount: number;
+  /** Leaf cards for the whole crown, before any leaf-image multiplier. */
+  foliageCards: number;
   bark: Color3;
   foliage: readonly Color3[];
 }
@@ -460,37 +463,40 @@ interface BroadleafProfile {
 const BROADLEAF_PROFILES: Readonly<Record<BroadleafSpecies, BroadleafProfile>> = {
   acacia: {
     seed: 0x41434143, trunkFraction: 0.54, trunkRadius: 0.14, crownRadius: 1.28,
-    crownDepth: 0.34, branchCount: 11, leavesPerTip: 11,
+    crownDepth: 0.34, branchCount: 11, leaderCount: 3, foliageCards: 460,
     bark: new Color3(0.3, 0.2, 0.1),
     foliage: [new Color3(0.3, 0.43, 0.12), new Color3(0.39, 0.5, 0.16)],
   },
   beech: {
     seed: 0x42454543, trunkFraction: 0.62, trunkRadius: 0.12, crownRadius: 0.95,
-    crownDepth: 0.78, branchCount: 12, leavesPerTip: 15,
+    crownDepth: 0.78, branchCount: 12, leaderCount: 2, foliageCards: 660,
     bark: new Color3(0.42, 0.4, 0.34),
     foliage: [new Color3(0.18, 0.42, 0.13), new Color3(0.28, 0.52, 0.18)],
   },
   eucalyptus: {
     seed: 0x45554341, trunkFraction: 0.76, trunkRadius: 0.095, crownRadius: 0.72,
-    crownDepth: 0.82, branchCount: 9, leavesPerTip: 9,
+    crownDepth: 0.82, branchCount: 9, leaderCount: 2, foliageCards: 330,
     bark: new Color3(0.56, 0.49, 0.37),
     foliage: [new Color3(0.25, 0.42, 0.3), new Color3(0.34, 0.5, 0.36)],
   },
   mangrove: {
     seed: 0x4d414e47, trunkFraction: 0.46, trunkRadius: 0.14, crownRadius: 1.02,
-    crownDepth: 0.62, branchCount: 12, leavesPerTip: 14,
+    crownDepth: 0.62, branchCount: 12, leaderCount: 3, foliageCards: 620,
     bark: new Color3(0.29, 0.2, 0.12),
     foliage: [new Color3(0.12, 0.36, 0.15), new Color3(0.2, 0.46, 0.2)],
   },
   maple: {
     seed: 0x4d41504c, trunkFraction: 0.57, trunkRadius: 0.13, crownRadius: 1.02,
-    crownDepth: 0.82, branchCount: 13, leavesPerTip: 16,
+    crownDepth: 0.82, branchCount: 13, leaderCount: 2, foliageCards: 760,
     bark: new Color3(0.3, 0.24, 0.17),
     foliage: [new Color3(0.2, 0.45, 0.12), new Color3(0.34, 0.56, 0.14)],
   },
+  // The oak carries by far the heaviest crown of the family: a low fork into
+  // three gnarled leaders, and enough cards that the canopy reads as solid mass
+  // rather than as separate clumps hanging on the limb ends.
   oak: {
     seed: 0x4f414b21, trunkFraction: 0.5, trunkRadius: 0.18, crownRadius: 1.16,
-    crownDepth: 0.72, branchCount: 14, leavesPerTip: 17,
+    crownDepth: 0.72, branchCount: 17, leaderCount: 3, foliageCards: 2200,
     bark: new Color3(0.27, 0.19, 0.105),
     foliage: [new Color3(0.14, 0.36, 0.09), new Color3(0.25, 0.48, 0.12)],
   },
@@ -510,91 +516,185 @@ function createBroadleafTree(
   } = options;
   const random = createSeededRandom(seed);
   const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
+  const bark = profile.bark;
+  const barkCut = scaleColor(profile.bark, 0.72);
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
+  const crownTop = PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
   const trunkHeight = PROCEDURAL_TREE_SOURCE_HEIGHT * profile.trunkFraction;
   const trunkPoints: Vector3[] = [];
-  const trunkSegments = 9;
+  const trunkSegments = 12;
+  const trunkRadiusAt = (index: number): number => {
+    const t = index / trunkSegments;
+    // The butt swell is what separates a grown trunk from an extruded cylinder.
+    return lerp(profile.trunkRadius, 0.038, Math.pow(t, 0.8)) * (1 + Math.pow(1 - t, 3) * 0.4);
+  };
 
+  // A trunk that leans one way the whole climb reads as a bent pole, so the sway
+  // reverses on the way up with a finer wobble riding on it.
   for (let segment = 0; segment <= trunkSegments; segment++) {
     const t = segment / trunkSegments;
-    const lean = species === "eucalyptus" ? 0.07 : 0.035;
+    const sway = species === "eucalyptus" ? 0.085 : 0.05;
     trunkPoints.push(new Vector3(
-      Math.sin(t * 3.8 + 0.5) * lean * t,
+      (Math.sin(t * 3.8 + 0.5) + Math.sin(t * 9.4 + 1.1) * 0.3) * sway * t,
       baseY + trunkHeight * t,
-      Math.sin(t * 3.1 + 1.8) * lean * 0.75 * t,
+      (Math.sin(t * 3.1 + 1.8) * 0.75 + Math.cos(t * 7.9) * 0.26) * sway * t,
     ));
   }
   for (let segment = 0; segment < trunkSegments; segment++) {
-    const t = segment / trunkSegments;
     addBranchSegment(
       buffers,
       trunkPoints[segment],
       trunkPoints[segment + 1],
-      lerp(profile.trunkRadius, 0.035, Math.pow(t, 0.8)),
-      lerp(profile.trunkRadius * 0.9, 0.022, Math.pow((segment + 1) / trunkSegments, 0.8)),
-      8,
-      t,
+      trunkRadiusAt(segment),
+      trunkRadiusAt(segment + 1),
+      9,
+      segment / trunkSegments,
       false,
-      profile.bark,
-      scaleColor(profile.bark, 0.72),
+      bark,
+      barkCut,
     );
   }
 
+  // Mangroves stand on stilt roots instead of buttresses; everything else spreads
+  // into the ground and carries the scars of limbs it has already shed.
   if (species === "mangrove") {
+    const stiltLevel = Math.round(trunkSegments / 3);
     for (let root = 0; root < 9; root++) {
       const angle = root * Math.PI * 2 / 9 + random() * 0.2;
       const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
-      const start = trunkPoints[3].add(direction.scale(profile.trunkRadius * 0.5));
+      const start = trunkPoints[stiltLevel].add(direction.scale(profile.trunkRadius * 0.5));
       const middle = new Vector3(
         start.x + direction.x * (0.38 + random() * 0.15),
         baseY + 0.2 + random() * 0.08,
         start.z + direction.z * (0.38 + random() * 0.15),
       );
       const end = middle.add(direction.scale(0.18)).add(new Vector3(0, -0.2, 0));
-      addBranchSegment(buffers, start, middle, 0.045, 0.027, 6, 0.1, false, profile.bark);
-      addBranchSegment(buffers, middle, end, 0.027, 0.01, 5, 0.02, true, profile.bark);
+      // Arch through the old knee rather than cornering at it.
+      const stilt = curvePath(start, end, middle.subtract(Vector3.Lerp(start, end, 0.5)), 4);
+      addLimbAlongPath(buffers, stilt, 0.05, 0.011, 6, 0.1, bark, barkCut);
     }
+  } else {
+    addRootFlares(
+      buffers,
+      trunkPoints[0],
+      species === "eucalyptus" ? 5 : 6,
+      profile.trunkRadius,
+      profile.trunkRadius * (species === "eucalyptus" ? 1.7 : 2.5),
+      bark,
+      barkCut,
+      random,
+    );
+  }
+  addTrunkKnots(buffers, trunkPoints, trunkRadiusAt, [2, 5, 8], bark, barkCut, random);
+
+  // Broadleaf crowns fork: the trunk divides into a few rising leaders and the
+  // limbs come off those. Hanging every limb on one pole is what made these
+  // crowns read as a mast with spars.
+  const forkIndex = Math.floor(trunkSegments * 0.72);
+  const forkBase = trunkPoints[forkIndex];
+  const forkRadius = trunkRadiusAt(forkIndex);
+  const leaderPaths: Vector3[][] = [];
+  for (let leader = 0; leader < profile.leaderCount; leader++) {
+    const angle = leader * Math.PI * 2 / profile.leaderCount + random() * 0.8;
+    const reach = profile.crownRadius * (species === "acacia" ? 0.52 : 0.32)
+      * (0.7 + random() * 0.55);
+    const rise = (crownTop - forkBase.y)
+      * (species === "acacia" ? 0.44 : 0.74) * (0.78 + random() * 0.3);
+    const tip = forkBase.add(new Vector3(Math.cos(angle) * reach, rise, Math.sin(angle) * reach));
+    // Pulling the mid-span back toward the trunk leaves the leader rising steeply
+    // out of the fork before it swings outward, the way a real crotch grows.
+    const path = curvePath(
+      forkBase,
+      tip,
+      new Vector3(Math.cos(angle) * reach * -0.34, rise * 0.14, Math.sin(angle) * reach * -0.34),
+      4,
+    );
+    addLimbAlongPath(
+      buffers,
+      path,
+      forkRadius * (0.8 - leader * 0.07),
+      0.026,
+      8,
+      0.5,
+      bark,
+      barkCut,
+    );
+    leaderPaths.push(path);
   }
 
-  const crownBase = trunkPoints[Math.floor(trunkSegments * 0.48)];
-  const tips: Vector3[] = [];
+  const tips: Vector3[] = leaderPaths.map((path) => path[path.length - 1]);
   for (let branch = 0; branch < profile.branchCount; branch++) {
     const ring = branch / profile.branchCount;
+    const leaderPath = leaderPaths[branch % leaderPaths.length];
+    const start = pointAlongPath(leaderPath, 0.22 + (branch * 0.37 + random() * 0.16) % 0.72);
     const angle = branch * Math.PI * (3 - Math.sqrt(5)) + random() * 0.25;
     const horizontal = new Vector3(Math.cos(angle), 0, Math.sin(angle));
-    const start = Vector3.Lerp(crownBase, trunkPoints[trunkSegments], 0.18 + ring * 0.65);
     const radiusShape = species === "acacia"
       ? 0.78 + ring * 0.22
       : Math.sin((0.18 + ring * 0.72) * Math.PI) * 0.42 + 0.58;
-    const length = profile.crownRadius * radiusShape * (0.72 + random() * 0.26);
+    // A limb starting part way out a leaning leader is already partly there, so
+    // spend the rest of the reach. Otherwise the crown grows past the width the
+    // species declares for its capture frame and its terrain footprint.
+    const startOffset = Math.hypot(start.x, start.z);
+    const length = Math.max(
+      profile.crownRadius * 0.2,
+      profile.crownRadius * radiusShape * (0.72 + random() * 0.26) - startOffset * 0.85,
+    );
     const vertical = species === "acacia"
       ? 0.12 + random() * 0.12
       : (random() - 0.2) * profile.crownDepth;
-    const middle = start.add(horizontal.scale(length * 0.48)).add(new Vector3(0, vertical * 0.5, 0));
     const end = start.add(horizontal.scale(length)).add(new Vector3(0, vertical, 0));
-    const branchRadius = lerp(profile.trunkRadius * 0.42, 0.024, ring);
-    addBranchSegment(buffers, start, middle, branchRadius, branchRadius * 0.62, 6, 0.55, false, profile.bark);
-    addBranchSegment(buffers, middle, end, branchRadius * 0.62, 0.012, 5, 0.72, true, profile.bark);
+    // Limbs leave the leader steeply, then level off under their own weight.
+    const limbPath = curvePath(
+      start,
+      end,
+      new Vector3(0, length * (species === "acacia" ? 0.12 : 0.24), 0)
+        .add(horizontal.scale(length * -0.1)),
+      3,
+    );
+    const branchRadius = lerp(forkRadius * 0.56, 0.024, ring);
+    addLimbAlongPath(buffers, limbPath, branchRadius, 0.012, 6, 0.6, bark, barkCut);
     tips.push(end);
 
     for (const side of [-1, 1]) {
-      const twigDirection = new Vector3(
-        Math.cos(angle + side * (0.38 + random() * 0.35)), 0,
-        Math.sin(angle + side * (0.38 + random() * 0.35)),
-      );
-      const twigEnd = middle.add(twigDirection.scale(length * (0.34 + random() * 0.15)))
+      const twigAngle = angle + side * (0.4 + random() * 0.36);
+      const twigDirection = new Vector3(Math.cos(twigAngle), 0, Math.sin(twigAngle));
+      const twigStart = pointAlongPath(limbPath, 0.48 + random() * 0.22);
+      const twigLength = length * (0.34 + random() * 0.17);
+      const twigEnd = twigStart.add(twigDirection.scale(twigLength))
         .add(new Vector3(0, vertical * 0.45 + (random() - 0.4) * 0.22, 0));
-      addBranchSegment(buffers, middle, twigEnd, branchRadius * 0.42, 0.009, 5, 0.78, true, profile.bark);
+      const twigPath = curvePath(
+        twigStart,
+        twigEnd,
+        new Vector3(0, twigLength * 0.18, 0),
+        2,
+      );
+      addLimbAlongPath(buffers, twigPath, branchRadius * 0.46, 0.009, 5, 0.78, bark, barkCut);
       tips.push(twigEnd);
+
+      // One more division at the ends. It costs little and it is what the eye
+      // reads as branching rather than as bare spokes carrying leaf blobs.
+      const spurDirection = new Vector3(
+        Math.cos(twigAngle + side * (0.5 + random() * 0.4)),
+        0,
+        Math.sin(twigAngle + side * (0.5 + random() * 0.4)),
+      );
+      const spurEnd = twigEnd.add(spurDirection.scale(twigLength * (0.4 + random() * 0.24)))
+        .add(new Vector3(0, (random() - 0.3) * 0.2, 0));
+      addBranchSegment(
+        buffers, twigEnd, spurEnd, branchRadius * 0.3, 0.007, 5, 0.86, true, bark, barkCut,
+      );
+      tips.push(spurEnd);
     }
   }
-  tips.push(trunkPoints[trunkSegments]);
 
+  // Spreading one crown-wide budget over however many tips the branching
+  // produced keeps foliage a property of the species, not of the twig count.
   const cards = foliageCardShape(species);
+  const cardBudget = Math.round(profile.foliageCards * (cards?.density ?? 1));
+  const cardsPerTip = Math.max(4, Math.round(cardBudget / tips.length));
   for (const tip of tips) {
-    const leafCount = Math.round(
-      (profile.leavesPerTip + Math.floor(random() * 5)) * (cards?.density ?? 1),
-    );
+    const leafCount = cardsPerTip + Math.floor(random() * 5);
     for (let leaf = 0; leaf < leafCount; leaf++) {
       const offset = randomInUnitSphere(random);
       const flatness = species === "acacia" ? 0.22 : profile.crownDepth * 0.42;
@@ -634,20 +734,42 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
   const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
   const trunkTop = new Vector3(0.14, 1.16, -0.04);
-  const trunkSegments = 13;
-  let previous = new Vector3(0, baseY, 0);
+  const trunkSegments = 15;
+  const trunkBase = new Vector3(0, baseY, 0);
+  let previous = trunkBase;
   const bark = new Color3(0.45, 0.29, 0.13);
+  const barkCut = scaleColor(bark, 0.7);
+  // A palm stem is not a taper: it swells into a root boss at the ground, holds
+  // an almost constant width, then narrows into the crownshaft under the fronds.
+  const stemRadiusAt = (t: number): number => lerp(0.115, 0.072, Math.pow(t, 0.55))
+    * (1 + Math.pow(1 - t, 4) * 0.7)
+    * (1 - Math.pow(t, 6) * 0.22);
   for (let segment = 0; segment < trunkSegments; segment++) {
     const t = (segment + 1) / trunkSegments;
+    const from = segment / trunkSegments;
     const next = new Vector3(
       trunkTop.x * t + Math.sin(t * 5) * 0.018,
       lerp(baseY, trunkTop.y, t),
       trunkTop.z * t + Math.sin(t * 4 + 1.2) * 0.014,
     );
+    // Old frond scars ring the stem, so the profile steps rather than sliding.
     const ring = 1 + Math.sin(t * trunkSegments * Math.PI) * 0.09;
-    addBranchSegment(buffers, previous, next, lerp(0.13, 0.075, t) * ring,
-      lerp(0.125, 0.068, t) * ring, 9, t, false, bark, scaleColor(bark, 0.7));
+    addBranchSegment(buffers, previous, next, stemRadiusAt(from) * ring,
+      stemRadiusAt(t) * ring, 9, t, false, bark, barkCut);
     previous = next;
+  }
+  addRootFlares(buffers, trunkBase, 7, 0.115, 0.2, bark, barkCut, random);
+
+  // Stubs of shed fronds hang below the living crown on most palms.
+  for (let scar = 0; scar < 5; scar++) {
+    const angle = scar * Math.PI * 2 / 5 + random() * 0.4;
+    const direction = new Vector3(Math.cos(angle), -0.85 - random() * 0.5, Math.sin(angle))
+      .normalize();
+    const start = trunkTop.add(new Vector3(0, -0.1 - random() * 0.12, 0));
+    addBranchSegment(
+      buffers, start, start.add(direction.scale(0.12 + random() * 0.1)),
+      0.022, 0.008, 5, 0.92, true, barkCut, barkCut,
+    );
   }
 
   const frondColors = [new Color3(0.16, 0.4, 0.11), new Color3(0.25, 0.5, 0.13)];
@@ -655,17 +777,15 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
     const angle = frond * Math.PI * 2 / 13 + random() * 0.16;
     const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
     const length = 0.82 + random() * 0.22;
-    const middle = trunkTop.add(direction.scale(length * 0.48)).add(new Vector3(0, 0.13, 0));
     const end = trunkTop.add(direction.scale(length)).add(new Vector3(0, -0.12 - random() * 0.18, 0));
-    addBranchSegment(buffers, trunkTop, middle, 0.025, 0.014, 5, 0.9, false,
-      new Color3(0.23, 0.39, 0.08));
-    addBranchSegment(buffers, middle, end, 0.014, 0.004, 4, 0.96, true,
-      new Color3(0.23, 0.39, 0.08));
-    for (let leaflet = 1; leaflet <= 9; leaflet++) {
-      const along = leaflet / 10;
-      const anchor = along < 0.5
-        ? Vector3.Lerp(trunkTop, middle, along * 2)
-        : Vector3.Lerp(middle, end, (along - 0.5) * 2);
+    // A frond arches: it leaves the crown steeply and the tip hangs below the
+    // chord. Two straight segments can only corner where the arch should be.
+    const rachis = curvePath(trunkTop, end, new Vector3(0, 0.21 + random() * 0.07, 0), 5);
+    const frondSpine = new Color3(0.23, 0.39, 0.08);
+    addLimbAlongPath(buffers, rachis, 0.026, 0.004, 5, 0.9, frondSpine, frondSpine);
+    for (let leaflet = 1; leaflet <= 11; leaflet++) {
+      const along = leaflet / 12;
+      const anchor = pointAlongPath(rachis, along);
       for (const side of [-1, 1]) {
         const lateral = new Vector3(-direction.z * side, -0.18, direction.x * side).normalize();
         addLeaf(buffers, anchor.add(lateral.scale(0.08)), lateral, 0.045,
@@ -700,24 +820,28 @@ function createConiferTree(
     ? [new Color3(0.11, 0.29, 0.12), new Color3(0.16, 0.37, 0.16), new Color3(0.2, 0.42, 0.18)]
     : [new Color3(0.055, 0.2, 0.12), new Color3(0.075, 0.27, 0.16), new Color3(0.1, 0.32, 0.18)];
 
+  const trunkRadiusAt = (index: number): number => {
+    const t = index / trunkSegments;
+    return lerp(0.13, 0.014, Math.pow(t, 0.78)) * (1 + Math.pow(1 - t, 3) * 0.45);
+  };
+
   for (let segment = 0; segment <= trunkSegments; segment++) {
     const t = segment / trunkSegments;
     trunkPoints.push(new Vector3(
-      Math.sin(t * 4.7 + 0.8) * 0.018 * t,
+      (Math.sin(t * 4.7 + 0.8) + Math.sin(t * 11.3) * 0.32) * 0.022 * t,
       baseY + t * PROCEDURAL_TREE_SOURCE_HEIGHT,
-      Math.sin(t * 3.9 + 2.1) * 0.015 * t,
+      (Math.sin(t * 3.9 + 2.1) + Math.cos(t * 9.7) * 0.28) * 0.019 * t,
     ));
   }
   for (let segment = 0; segment < trunkSegments; segment++) {
-    const t = segment / trunkSegments;
     addBranchSegment(
       buffers,
       trunkPoints[segment],
       trunkPoints[segment + 1],
-      lerp(0.13, 0.018, Math.pow(t, 0.78)),
-      lerp(0.12, 0.009, Math.pow((segment + 1) / trunkSegments, 0.78)),
+      trunkRadiusAt(segment),
+      trunkRadiusAt(segment + 1),
       7,
-      t,
+      segment / trunkSegments,
       false,
       bark,
       barkCut,
@@ -726,6 +850,23 @@ function createConiferTree(
 
   const cards = foliageCardShape(species);
   const firstLevel = species === "pine" ? 5 : 2;
+  addRootFlares(buffers, trunkPoints[0], 6, 0.13, 0.3, bark, barkCut, random);
+  // Conifers shade out their own lower limbs and keep the dead stubs for years.
+  // Below the first live whorl that bare stretch of trunk is all silhouette.
+  for (let level = 1; level < firstLevel; level++) {
+    const radius = trunkRadiusAt(level);
+    for (let stub = 0; stub < 4; stub++) {
+      const angle = level * 1.71 + stub * Math.PI * 0.5 + random() * 0.5;
+      const direction = new Vector3(Math.cos(angle), -0.34 - random() * 0.3, Math.sin(angle))
+        .normalize();
+      const start = trunkPoints[level].add(direction.scale(radius * 0.6));
+      const end = trunkPoints[level].add(direction.scale(radius + 0.07 + random() * 0.13));
+      addBranchSegment(
+        buffers, start, end, radius * 0.34, radius * 0.1, 5, level / trunkSegments,
+        true, barkCut, barkCut,
+      );
+    }
+  }
   for (let level = firstLevel; level < trunkSegments; level++) {
     const heightT = level / trunkSegments;
     const branches = 6;
@@ -740,16 +881,22 @@ function createConiferTree(
       const start = trunkPoints[level];
       const length = tierRadius * (0.84 + random() * 0.24);
       const droop = species === "spruce" ? -0.11 - length * 0.08 : 0.04 + random() * 0.08;
-      const middle = start.add(horizontal.scale(length * 0.52)).add(new Vector3(0, droop * 0.35, 0));
       const end = start.add(horizontal.scale(length)).add(new Vector3(0, droop, 0));
       const radius = lerp(0.036, 0.012, heightT);
-      addBranchSegment(buffers, start, middle, radius, radius * 0.62, 5, heightT, false, bark, barkCut);
-      addBranchSegment(buffers, middle, end, radius * 0.62, radius * 0.16, 5, heightT, true, bark, barkCut);
+      // A conifer limb leaves the trunk nearly level and turns near its tip: it
+      // rises before hanging on a spruce, and sweeps up on a fir or pine.
+      const limbPath = curvePath(
+        start,
+        end,
+        new Vector3(0, species === "spruce" ? length * 0.16 : -length * 0.1, 0),
+        3,
+      );
+      addLimbAlongPath(buffers, limbPath, radius, radius * 0.14, 5, heightT, bark, barkCut);
 
       const sprays = species === "pine" ? 5 : 6;
       for (let spray = 0; spray < sprays; spray++) {
         const along = species === "pine" ? 0.7 + random() * 0.3 : 0.2 + random() * 0.8;
-        const anchor = Vector3.Lerp(middle, end, along).add(new Vector3(
+        const anchor = pointAlongPath(limbPath, along).add(new Vector3(
           (random() - 0.5) * 0.08,
           (random() - 0.5) * 0.07,
           (random() - 0.5) * 0.08,
@@ -760,6 +907,33 @@ function createConiferTree(
           horizontal,
           species === "pine" ? 0.15 : 0.12,
           species === "pine" ? 0.055 : 0.07,
+          needles[Math.floor(random() * needles.length)],
+          random,
+          cards,
+        );
+      }
+
+      // A branchlet off each limb. Six bare spokes per whorl is what made these
+      // tiers read as an umbrella frame.
+      const branchletAngle = angle + (random() - 0.5) * 1.2;
+      const branchletStart = pointAlongPath(limbPath, 0.38 + random() * 0.22);
+      const branchletLength = length * (0.34 + random() * 0.2);
+      const branchletEnd = branchletStart.add(new Vector3(
+        Math.cos(branchletAngle) * branchletLength,
+        droop * 0.55,
+        Math.sin(branchletAngle) * branchletLength,
+      ));
+      addBranchSegment(
+        buffers, branchletStart, branchletEnd, radius * 0.44, radius * 0.11, 5, heightT,
+        true, bark, barkCut,
+      );
+      for (let spray = 0; spray < 2; spray++) {
+        addNeedleSpray(
+          buffers,
+          Vector3.Lerp(branchletStart, branchletEnd, 0.45 + random() * 0.55),
+          horizontal,
+          species === "pine" ? 0.13 : 0.1,
+          species === "pine" ? 0.05 : 0.062,
           needles[Math.floor(random() * needles.length)],
           random,
           cards,
@@ -917,6 +1091,140 @@ function addBranchSegment(
     for (let side = 0; side < sides; side++) {
       buffers.indices.push(endRing + side, endRing + side + 1, capCenter);
     }
+  }
+}
+
+/** Samples a quadratic curve whose mid-span is displaced by `bend`. */
+function curvePath(start: Vector3, end: Vector3, bend: Vector3, spans: number): Vector3[] {
+  const control = Vector3.Lerp(start, end, 0.5).add(bend);
+  const path: Vector3[] = [];
+  for (let span = 0; span <= spans; span++) {
+    const t = span / spans;
+    const inverse = 1 - t;
+    path.push(
+      start.scale(inverse * inverse)
+        .add(control.scale(2 * inverse * t))
+        .add(end.scale(t * t)),
+    );
+  }
+  return path;
+}
+
+/** Position at a normalized distance along a sampled path. */
+function pointAlongPath(path: Vector3[], t: number): Vector3 {
+  const scaled = Math.min(1, Math.max(0, t)) * (path.length - 1);
+  const span = Math.min(path.length - 2, Math.floor(scaled));
+  return Vector3.Lerp(path[span], path[span + 1], scaled - span);
+}
+
+/**
+ * Grows a limb along a path, thickened into a collar where it leaves its parent
+ * and tapering to a tip. A straight cylinder of constant radius reads as a stick
+ * glued on; the bend of the path, the collar and the taper are what make the
+ * join look grown.
+ */
+function addLimbAlongPath(
+  buffers: GeometryBuffers,
+  path: Vector3[],
+  startRadius: number,
+  endRadius: number,
+  sides: number,
+  heightT: number,
+  bark: Color3,
+  barkCut: Color3,
+): void {
+  const spans = path.length - 1;
+  for (let span = 0; span < spans; span++) {
+    const from = span / spans;
+    const to = (span + 1) / spans;
+    const collar = span === 0 ? 1.34 : 1;
+    addBranchSegment(
+      buffers,
+      path[span],
+      path[span + 1],
+      lerp(startRadius, endRadius, Math.pow(from, 0.7)) * collar,
+      lerp(startRadius, endRadius, Math.pow(to, 0.7)),
+      sides,
+      heightT + to * 0.12,
+      span === spans - 1,
+      bark,
+      barkCut,
+    );
+  }
+}
+
+/**
+ * Buttress flares that spread into the ground. Without them a trunk ends in a
+ * cut cylinder floating on the terrain, which is the single clearest tell that
+ * the tree was extruded rather than grown.
+ */
+function addRootFlares(
+  buffers: GeometryBuffers,
+  base: Vector3,
+  count: number,
+  trunkRadius: number,
+  reach: number,
+  bark: Color3,
+  barkCut: Color3,
+  random: () => number,
+): void {
+  for (let root = 0; root < count; root++) {
+    const angle = root * Math.PI * 2 / count + (random() - 0.5) * 0.5;
+    const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const rise = trunkRadius * (1.1 + random() * 0.8);
+    const start = base.add(new Vector3(0, rise, 0));
+    const end = start.add(direction.scale(reach * (0.85 + random() * 0.35)))
+      .add(new Vector3(0, -rise * 1.05, 0));
+    const flare = curvePath(start, end, direction.scale(reach * 0.22), 3);
+    addLimbAlongPath(
+      buffers,
+      flare,
+      trunkRadius * (0.52 + random() * 0.16),
+      trunkRadius * 0.1,
+      7,
+      0.02,
+      bark,
+      barkCut,
+    );
+  }
+}
+
+/**
+ * Stubs left where limbs were shed. A bare trunk between the roots and the crown
+ * is the emptiest part of the silhouette, and these break it up.
+ */
+function addTrunkKnots(
+  buffers: GeometryBuffers,
+  trunkPoints: Vector3[],
+  radiusAt: (index: number) => number,
+  levels: readonly number[],
+  bark: Color3,
+  barkCut: Color3,
+  random: () => number,
+): void {
+  for (const level of levels) {
+    if (level >= trunkPoints.length) continue;
+    const radius = radiusAt(level);
+    const angle = random() * Math.PI * 2;
+    const direction = new Vector3(
+      Math.cos(angle),
+      0.14 + random() * 0.34,
+      Math.sin(angle),
+    ).normalize();
+    const start = trunkPoints[level].add(direction.scale(radius * 0.7));
+    const end = trunkPoints[level].add(direction.scale(radius + radius * (0.5 + random() * 1.1)));
+    addBranchSegment(
+      buffers,
+      start,
+      end,
+      radius * 0.44,
+      radius * 0.19,
+      7,
+      level / trunkPoints.length,
+      true,
+      bark,
+      barkCut,
+    );
   }
 }
 

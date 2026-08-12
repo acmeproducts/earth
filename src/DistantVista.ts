@@ -27,6 +27,7 @@ import {
   vegetationDensityScaleAcrossLocalBoundary,
 } from "./VistaVegetation";
 import { landCoverSurfaceColor, WorldCover } from "./WorldCover";
+import { varyGroundColor } from "./GroundVariation";
 
 const MAX_SOURCE_CELLS_ACROSS_OUTER_TERRAIN = 1024;
 const INNER_OVERLAP = 1.5;
@@ -243,6 +244,10 @@ function createTerrainRing(
     0.01,
   );
 
+  // Ground variation finer than one vista cell cannot be reconstructed by these
+  // vertices, so the color pass is told how coarse this mesh is.
+  const cellMeters = cellSize * options.metersPerUnit;
+
   for (const patch of patches) {
     appendPatch(
       patch,
@@ -254,6 +259,7 @@ function createTerrainRing(
       colors,
       distantTerrain,
       options,
+      cellMeters,
     );
   }
 
@@ -270,7 +276,13 @@ function createTerrainRing(
   terrain.isPickable = false;
   terrain.alwaysSelectAsActiveMesh = true;
   terrain.useVertexColors = Boolean(colors);
-  const material = createTerrainMaterial(scene, Boolean(colors));
+  // The ring's UVs continue the local terrain's scale and phase, so the local
+  // ground extent is what sets the material's tiling here too.
+  const material = createTerrainMaterial(scene, {
+    usesLandCoverTint: Boolean(colors),
+    uvWidthMeters: options.localTerrain.groundWidthMeters,
+    uvHeightMeters: options.localTerrain.groundHeightMeters,
+  });
   material.name = "distantTerrainMaterial";
   if (!colors) material.diffuseColor = new Color3(0.72, 0.76, 0.69);
   terrain.material = material;
@@ -288,6 +300,7 @@ function appendPatch(
   colors: number[] | undefined,
   distantTerrain: TerrainData,
   options: VistaOptions,
+  cellMeters: number,
 ): void {
   const vertexOffset = positions.length / 3;
   for (let row = 0; row <= zCells; row++) {
@@ -321,8 +334,15 @@ function appendPatch(
         z / options.localMeshDepth + 0.5,
       );
       if (colors && options.distantLandCover) {
-        const distantColor = landCoverSurfaceColor(
-          options.distantLandCover.sample(lon, lat),
+        // The same world-anchored variation the local terrain uses, so the two
+        // meshes agree wherever they meet.
+        const distantCover = options.distantLandCover.sample(lon, lat);
+        const distantColor = varyGroundColor(
+          landCoverSurfaceColor(distantCover),
+          lon,
+          lat,
+          distantCover,
+          cellMeters,
         );
         let red = distantColor[0];
         let green = distantColor[1];
@@ -335,8 +355,16 @@ function appendPatch(
             options.localMeshWidth,
             options.localMeshDepth,
           );
-          const localColor = landCoverSurfaceColor(
-            options.localLandCover.sample(localCoordinates.lon, localCoordinates.lat),
+          const localCover = options.localLandCover.sample(
+            localCoordinates.lon,
+            localCoordinates.lat,
+          );
+          const localColor = varyGroundColor(
+            landCoverSurfaceColor(localCover),
+            localCoordinates.lon,
+            localCoordinates.lat,
+            localCover,
+            cellMeters,
           );
           red = localColor[0] + (red - localColor[0]) * seamBlend;
           green = localColor[1] + (green - localColor[1]) * seamBlend;
