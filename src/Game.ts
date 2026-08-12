@@ -38,7 +38,11 @@ import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial"
 import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
-import { VegetationFieldResult, VegetationRenderMode } from "./VegetationField";
+import {
+  VegetationFieldResult,
+  VegetationLodDebugStats,
+  VegetationRenderMode,
+} from "./VegetationField";
 import {
   DEFAULT_MODEL_RANGE_METERS,
   MAX_MODEL_RANGE_METERS,
@@ -133,6 +137,7 @@ export class Game {
   private readonly heldMovementKeys = new Set<string>();
   private verticalVelocityMetersPerSecond = 0;
   private distantVista?: DistantVista;
+  private lastVegetationLodDebugLogMilliseconds = 0;
 
   private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
     if (!this.flyCamera || this.movementMode !== "fly" || event.deltaY === 0) return;
@@ -660,6 +665,30 @@ export class Game {
     this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
     this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
     this.bushField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 16));
+    this.logVegetationLodStats();
+  }
+
+  private logVegetationLodStats(): void {
+    const now = performance.now();
+    if (now - this.lastVegetationLodDebugLogMilliseconds < 2_000) return;
+    this.lastVegetationLodDebugLogMilliseconds = now;
+    const fields = [this.treeField, this.grassField, this.flowerField, this.bushField]
+      .filter((field): field is VegetationFieldResult => field !== undefined);
+    const stats = fields.reduce<VegetationLodDebugStats>(
+      (total, field) => addVegetationLodStats(total, field.consumeLodDebugStats()),
+      emptyVegetationLodStats(),
+    );
+    if (stats.updates === 0) return;
+    const averageProcessed = Math.round(stats.processedInstances / stats.updates);
+    console.log(
+      `[Vegetation LOD / 2s] total=${stats.totalInstances.toLocaleString()} ` +
+      `grid-now=${stats.currentGridCandidates.toLocaleString()} ` +
+      `transition-now=${stats.currentTransitionInstances.toLocaleString()} ` +
+      `processed-avg=${averageProcessed.toLocaleString()}/update ` +
+      `processed-peak=${stats.peakProcessedInstances.toLocaleString()} ` +
+      `slot-crossings=${stats.membershipChanges.toLocaleString()} ` +
+      `full-rebuilds=${stats.fullRebuilds}`,
+    );
   }
 
   private async changeTerrainLocation(locationIndex: number): Promise<void> {
@@ -1068,6 +1097,34 @@ function disposeTerrainSceneResources(resources: TerrainSceneResources): void {
   resources.bushField?.root.dispose(false, false);
   resources.mapFeatures?.dispose(false, true);
   resources.distantVista?.dispose();
+}
+
+function emptyVegetationLodStats(): VegetationLodDebugStats {
+  return {
+    totalInstances: 0,
+    updates: 0,
+    processedInstances: 0,
+    peakProcessedInstances: 0,
+    currentGridCandidates: 0,
+    currentTransitionInstances: 0,
+    membershipChanges: 0,
+    fullRebuilds: 0,
+  };
+}
+
+function addVegetationLodStats(
+  total: VegetationLodDebugStats,
+  stats: VegetationLodDebugStats,
+): VegetationLodDebugStats {
+  total.totalInstances += stats.totalInstances;
+  total.updates += stats.updates;
+  total.processedInstances += stats.processedInstances;
+  total.peakProcessedInstances += stats.peakProcessedInstances;
+  total.currentGridCandidates += stats.currentGridCandidates;
+  total.currentTransitionInstances += stats.currentTransitionInstances;
+  total.membershipChanges += stats.membershipChanges;
+  total.fullRebuilds += stats.fullRebuilds;
+  return total;
 }
 
 function queryInteger(

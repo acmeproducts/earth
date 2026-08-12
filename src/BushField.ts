@@ -139,6 +139,11 @@ export async function createBushField(
     metersPerUnit,
     renderMode,
     instanceOcclusion,
+    undefined,
+    {
+      nearDistance: prototype.captureHeight * 31.25,
+      farDistance: prototype.captureHeight * 38.75,
+    },
   );
 }
 

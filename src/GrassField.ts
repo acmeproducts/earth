@@ -159,6 +159,11 @@ export async function createGrassField(
     metersPerUnit,
     renderMode,
     instanceOcclusion,
+    undefined,
+    {
+      nearDistance: prototype.captureHeight * 55,
+      farDistance: prototype.captureHeight * 65,
+    },
   );
 }
 

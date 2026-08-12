@@ -14,6 +14,7 @@ export type BushImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
+const ROTATIONAL_SYMMETRY_ORDER = 12;
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
   [new Color3(0.1, 0.27, 0.07), new Color3(0.34, 0.59, 0.15)],
@@ -29,9 +30,10 @@ const bushImpostors = createImpostorAssetProvider({
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
   rotationallySymmetric: true,
+  rotationalSymmetryOrder: ROTATIONAL_SYMMETRY_ORDER,
   upperHemisphereOnly: true,
   sampling: {
-    horizontalSamples: { default: 1, minimum: 1, maximum: 16 },
+    horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
     verticalSamples: { default: 5, minimum: 1, maximum: 10 },
     resolution: { default: 96, minimum: 48, maximum: 512 },
   },
@@ -56,7 +58,7 @@ function createBushSource(scene: Scene, liveLighting = false): Mesh {
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
-  const symmetryOrder = 12;
+  const symmetryOrder = ROTATIONAL_SYMMETRY_ORDER;
   const sectorAngle = Math.PI * 2 / symmetryOrder;
 
   const branchBase = new Vector3(0, -SOURCE_HEIGHT / 2, 0);

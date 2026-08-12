@@ -1,9 +1,29 @@
 import { Mesh, TransformNode, Vector3 } from "@babylonjs/core";
+import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
 
-const LOD_TRANSITION_WIDTH_METERS = 40;
-const IMPOSTOR_SORT_DISTANCE_METERS = 2;
+/** Narrow enough to keep the movement-time transition working set small. */
+const LOD_TRANSITION_WIDTH_METERS = 20;
+
+export interface ImpostorLodRange {
+  /** Full-to-reduced impostor transition start, in scene units. */
+  nearDistance: number;
+  /** Full-to-reduced impostor transition end, in scene units. */
+  farDistance: number;
+  forceLowest?: boolean;
+}
+
+export interface VegetationLodDebugStats {
+  totalInstances: number;
+  updates: number;
+  processedInstances: number;
+  peakProcessedInstances: number;
+  currentGridCandidates: number;
+  currentTransitionInstances: number;
+  membershipChanges: number;
+  fullRebuilds: number;
+}
 
 export interface VegetationFieldResult {
   root: TransformNode;
@@ -15,6 +35,7 @@ export interface VegetationFieldResult {
   setRenderMode(mode: VegetationRenderMode): void;
   setAmbientOcclusionEnabled(enabled: boolean): void;
   updateLod(cameraPosition: Vector3, distanceMeters: number): void;
+  consumeLodDebugStats(): VegetationLodDebugStats;
 }
 
 export function createVegetationFieldResult(
@@ -26,6 +47,7 @@ export function createVegetationFieldResult(
   initialMode: VegetationRenderMode,
   instanceOcclusion?: Float32Array,
   instanceColors?: Float32Array,
+  impostorLodRange?: ImpostorLodRange,
 ): VegetationFieldResult {
   const count = matrices.length / 16;
   if (instanceOcclusion && instanceOcclusion.length !== count) {
@@ -46,6 +68,8 @@ export function createVegetationFieldResult(
   const impostorLodBlend = new Float32Array(count);
   const modelLodBlend = new Float32Array(count);
   const sourceLodBlend = new Float32Array(count);
+  const sourceImpostorLodBlend = new Float32Array(count);
+  const impostorDetailLodBlend = new Float32Array(count);
   impostorMatrices.set(matrices);
   modelMatrices.set(matrices);
   activeSourceOcclusion.set(sourceOcclusion);
@@ -55,15 +79,49 @@ export function createVegetationFieldResult(
   modelColors.set(sourceColors);
   modelLodBlend.fill(1);
 
-  initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion, impostorColors, impostorLodBlend);
+  if (impostorLodRange?.forceLowest) sourceImpostorLodBlend.fill(1);
+  impostorDetailLodBlend.set(sourceImpostorLodBlend);
+  initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion, impostorColors, impostorLodBlend, impostorDetailLodBlend);
   initializeMeshes(modelMeshes, modelMatrices, modelOcclusion, modelColors, modelLodBlend);
 
   let mode = initialMode;
   let lastCameraPosition: Vector3 | undefined;
-  let lastImpostorSortPosition: Vector3 | undefined;
   let lastDistanceMeters = 10;
   let ambientOcclusionEnabled = true;
   const allInstanceIndices = Array.from({ length: count }, (_, index) => index);
+  let minimumInstanceY = Number.POSITIVE_INFINITY;
+  let maximumInstanceY = Number.NEGATIVE_INFINITY;
+  for (const index of allInstanceIndices) {
+    minimumInstanceY = Math.min(minimumInstanceY, matrices[index * 16 + 13]);
+    maximumInstanceY = Math.max(maximumInstanceY, matrices[index * 16 + 13]);
+  }
+  const spatialGrid = new SpatialReferenceGrid(
+    allInstanceIndices.map((index) => ({
+      x: matrices[index * 16 + 12],
+      z: matrices[index * 16 + 14],
+      value: index,
+    })),
+    Math.max(1 / metersPerUnit, Math.min(LOD_TRANSITION_WIDTH_METERS / metersPerUnit, 16 / metersPerUnit)),
+  );
+  let previousTransitionIndices = new Set<number>();
+  let previousImpostorTransitionIndices = new Set<number>();
+  const modelSlotBySource = new Int32Array(count).fill(-1);
+  const impostorSlotBySource = new Int32Array(count).fill(-1);
+  const modelSourceBySlot: number[] = [];
+  const impostorSourceBySlot: number[] = [];
+  let autoModelCount = 0;
+  let autoImpostorCount = 0;
+  let autoSlotsValid = false;
+  const lodDebugStats: VegetationLodDebugStats = {
+    totalInstances: count,
+    updates: 0,
+    processedInstances: 0,
+    peakProcessedInstances: 0,
+    currentGridCandidates: 0,
+    currentTransitionInstances: 0,
+    membershipChanges: 0,
+    fullRebuilds: 0,
+  };
 
   const setCounts = (impostorCount: number, modelCount: number): void => {
     setMeshCount(impostorMeshes, impostorCount);
@@ -72,6 +130,7 @@ export function createVegetationFieldResult(
 
   const setRenderMode = (mode: VegetationRenderMode): void => {
     if (mode === "impostors") {
+      autoSlotsValid = false;
       impostorLodBlend.fill(0);
       if (lastCameraPosition) {
         writeFrontToBackInstances(
@@ -85,8 +144,10 @@ export function createVegetationFieldResult(
           sourceColors,
           impostorLodBlend,
           impostorLodBlend,
+          impostorDetailLodBlend,
+          sourceImpostorLodBlend,
+          false,
         );
-        lastImpostorSortPosition = lastCameraPosition.clone();
       } else {
         impostorMatrices.set(matrices);
         impostorOcclusion.set(activeSourceOcclusion);
@@ -95,6 +156,7 @@ export function createVegetationFieldResult(
       setCounts(count, 0);
       updateMeshBuffers(impostorMeshes, true);
     } else if (mode === "models") {
+      autoSlotsValid = false;
       modelMatrices.set(matrices);
       modelOcclusion.set(activeSourceOcclusion);
       modelColors.set(sourceColors);
@@ -102,31 +164,76 @@ export function createVegetationFieldResult(
       setCounts(0, count);
       updateMeshBuffers(modelMeshes, true);
     } else if (lastCameraPosition) {
-      updateAutoLod(lastCameraPosition, lastDistanceMeters);
+      updateAutoLod(lastCameraPosition, lastDistanceMeters, true);
     } else {
       impostorMatrices.set(matrices);
       impostorOcclusion.set(activeSourceOcclusion);
       impostorColors.set(sourceColors);
       setCounts(count, 0);
       updateMeshBuffers(impostorMeshes, true);
+      autoSlotsValid = false;
     }
   };
 
-  const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number): void => {
+  const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number, forceFullUpdate = false): void => {
+    const rebuildSlots = forceFullUpdate || !autoSlotsValid;
+    if (rebuildSlots) lodDebugStats.fullRebuilds++;
+    if (rebuildSlots) {
+      modelSlotBySource.fill(-1);
+      impostorSlotBySource.fill(-1);
+      modelSourceBySlot.length = 0;
+      impostorSourceBySlot.length = 0;
+      autoModelCount = 0;
+      autoImpostorCount = 0;
+      autoSlotsValid = true;
+    }
     const transitionWidthMeters = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters);
     const innerDistance = (distanceMeters - transitionWidthMeters / 2) / metersPerUnit;
     const outerDistance = (distanceMeters + transitionWidthMeters / 2) / metersPerUnit;
     const innerDistanceSquared = innerDistance * innerDistance;
     const outerDistanceSquared = outerDistance * outerDistance;
-    let impostorCount = 0;
-    let modelCount = 0;
-    const impostorIndices: number[] = [];
+    const currentTransitionIndices = new Set<number>();
+    const addBounds = (near: number, far: number): void => {
+      const maximumVerticalOffset = Math.max(
+        Math.abs(minimumInstanceY - cameraPosition.y),
+        Math.abs(maximumInstanceY - cameraPosition.y),
+      );
+      const conservativeInnerRadius = Math.sqrt(Math.max(
+        0,
+        near * near - maximumVerticalOffset * maximumVerticalOffset,
+      ));
+      for (const index of spatialGrid.queryAnnulusBounds(
+        cameraPosition.x,
+        cameraPosition.z,
+        conservativeInnerRadius,
+        far,
+      )) currentTransitionIndices.add(index);
+    };
+    addBounds(innerDistance, outerDistance);
+    if (impostorLodRange && !impostorLodRange.forceLowest) {
+      addBounds(impostorLodRange.nearDistance, impostorLodRange.farDistance);
+    }
+    const transitionIndices = forceFullUpdate
+      ? new Set(allInstanceIndices)
+      : new Set(currentTransitionIndices);
+    if (!forceFullUpdate) {
+      previousTransitionIndices.forEach((index) => transitionIndices.add(index));
+    }
+    let exactTransitionCount = 0;
 
-    for (let matrixOffset = 0; matrixOffset < matrices.length; matrixOffset += 16) {
+    for (const instanceIndex of transitionIndices) {
+      const matrixOffset = instanceIndex * 16;
       const dx = matrices[matrixOffset + 12] - cameraPosition.x;
       const dy = matrices[matrixOffset + 13] - cameraPosition.y;
       const dz = matrices[matrixOffset + 14] - cameraPosition.z;
       const distanceSquared = dx * dx + dy * dy + dz * dz;
+      const inModelTransition = distanceSquared > innerDistanceSquared &&
+        distanceSquared < outerDistanceSquared;
+      const inImpostorTransition = impostorLodRange !== undefined &&
+        !impostorLodRange.forceLowest &&
+        distanceSquared > impostorLodRange.nearDistance ** 2 &&
+        distanceSquared < impostorLodRange.farDistance ** 2;
+      if (inModelTransition || inImpostorTransition) exactTransitionCount++;
       let modelWeight: number;
       if (distanceSquared <= innerDistanceSquared) {
         modelWeight = 1;
@@ -137,47 +244,133 @@ export function createVegetationFieldResult(
         const linearBlend = (outerDistance - distance) / (outerDistance - innerDistance);
         modelWeight = linearBlend * linearBlend * (3 - 2 * linearBlend);
       }
-      const instanceIndex = matrixOffset / 16;
+      const previousModelWeight = sourceLodBlend[instanceIndex];
+      const previousImpostorWeight = sourceImpostorLodBlend[instanceIndex];
       sourceLodBlend[instanceIndex] = modelWeight;
-      if (modelWeight > 0) {
-        copyMatrix(modelMatrices, modelCount * 16, matrices, matrixOffset);
-        copyColor(modelColors, modelCount * 3, sourceColors, matrixOffset / 16 * 3);
-        modelOcclusion[modelCount] = activeSourceOcclusion[instanceIndex];
-        modelLodBlend[modelCount++] = modelWeight;
+      if (impostorLodRange && !impostorLodRange.forceLowest) {
+        sourceImpostorLodBlend[instanceIndex] = smoothstepDistance(
+          Math.sqrt(distanceSquared),
+          impostorLodRange.nearDistance,
+          impostorLodRange.farDistance,
+        );
+      }
+
+      updatePackedMembership(
+        instanceIndex,
+        modelWeight > 0,
+        true,
+        rebuildSlots,
+      );
+      updatePackedMembership(
+        instanceIndex,
+        modelWeight < 1,
+        false,
+        rebuildSlots,
+      );
+      const modelSlot = modelSlotBySource[instanceIndex];
+      if (modelSlot >= 0 && (rebuildSlots || modelWeight !== previousModelWeight)) {
+        modelLodBlend[modelSlot] = modelWeight;
+        if (!rebuildSlots) {
+          partialUpdateArray(modelMeshes, "instanceLodBlend", modelLodBlend, modelSlot, 1);
+        }
+      }
+      const impostorSlot = impostorSlotBySource[instanceIndex];
+      if (impostorSlot >= 0) {
+        impostorLodBlend[impostorSlot] = modelWeight;
+        impostorDetailLodBlend[impostorSlot] = sourceImpostorLodBlend[instanceIndex];
+        if (!rebuildSlots) {
+          if (modelWeight !== previousModelWeight) {
+            partialUpdateArray(
+              impostorMeshes,
+              "instanceLodBlend",
+              impostorLodBlend,
+              impostorSlot,
+              1,
+            );
+          }
+          if (sourceImpostorLodBlend[instanceIndex] !== previousImpostorWeight) {
+            partialUpdateArray(
+              impostorMeshes,
+              "impostorDetailLodBlend",
+              impostorDetailLodBlend,
+              impostorSlot,
+              1,
+            );
+          }
+        }
       }
     }
-
-    const sortDistanceSquared = (IMPOSTOR_SORT_DISTANCE_METERS / metersPerUnit) ** 2;
-    if (!lastImpostorSortPosition || Vector3.DistanceSquared(
-      cameraPosition,
-      lastImpostorSortPosition,
-    ) >= sortDistanceSquared) {
-      sortInstanceIndicesFrontToBack(allInstanceIndices, matrices, cameraPosition);
-      lastImpostorSortPosition = cameraPosition.clone();
-    }
-    for (const instanceIndex of allInstanceIndices) {
-      if (sourceLodBlend[instanceIndex] >= 1) continue;
-      impostorIndices.push(instanceIndex);
-      impostorCount++;
-    }
-
-    writeFrontToBackInstances(
-      impostorMatrices,
-      impostorOcclusion,
-      matrices,
-      activeSourceOcclusion,
-      impostorIndices,
-      cameraPosition,
-      impostorColors,
-      sourceColors,
-      impostorLodBlend,
-      sourceLodBlend,
-      false,
+    recordLodDebugUpdate(
+      transitionIndices.size,
+      currentTransitionIndices.size,
+      exactTransitionCount,
     );
+    previousTransitionIndices = currentTransitionIndices;
+    setCounts(autoImpostorCount, autoModelCount);
+    if (rebuildSlots) {
+      updateMeshBuffers(impostorMeshes, true);
+      updateMeshBuffers(modelMeshes, true);
+    }
+  };
 
-    setCounts(impostorCount, modelCount);
-    updateMeshBuffers(impostorMeshes, true);
-    updateMeshBuffers(modelMeshes, true);
+  const updatePackedMembership = (
+    sourceIndex: number,
+    shouldBePresent: boolean,
+    model: boolean,
+    rebuilding: boolean,
+  ): void => {
+    const slotBySource = model ? modelSlotBySource : impostorSlotBySource;
+    const sourceBySlot = model ? modelSourceBySlot : impostorSourceBySlot;
+    const currentSlot = slotBySource[sourceIndex];
+    if (shouldBePresent === (currentSlot >= 0)) return;
+    lodDebugStats.membershipChanges++;
+
+    if (shouldBePresent) {
+      const slot = model ? autoModelCount++ : autoImpostorCount++;
+      slotBySource[sourceIndex] = slot;
+      sourceBySlot[slot] = sourceIndex;
+      writePackedSlot(model, slot, sourceIndex, rebuilding);
+      return;
+    }
+
+    const lastSlot = (model ? autoModelCount : autoImpostorCount) - 1;
+    const movedSourceIndex = sourceBySlot[lastSlot];
+    if (currentSlot !== lastSlot) {
+      sourceBySlot[currentSlot] = movedSourceIndex;
+      slotBySource[movedSourceIndex] = currentSlot;
+      writePackedSlot(model, currentSlot, movedSourceIndex, rebuilding);
+    }
+    sourceBySlot.pop();
+    slotBySource[sourceIndex] = -1;
+    if (model) autoModelCount--;
+    else autoImpostorCount--;
+  };
+
+  const writePackedSlot = (
+    model: boolean,
+    slot: number,
+    sourceIndex: number,
+    rebuilding: boolean,
+  ): void => {
+    const destinationMatrices = model ? modelMatrices : impostorMatrices;
+    const destinationOcclusion = model ? modelOcclusion : impostorOcclusion;
+    const destinationColors = model ? modelColors : impostorColors;
+    const destinationLod = model ? modelLodBlend : impostorLodBlend;
+    copyMatrix(destinationMatrices, slot * 16, matrices, sourceIndex * 16);
+    copyColor(destinationColors, slot * 3, sourceColors, sourceIndex * 3);
+    destinationOcclusion[slot] = activeSourceOcclusion[sourceIndex];
+    destinationLod[slot] = sourceLodBlend[sourceIndex];
+    if (!model) impostorDetailLodBlend[slot] = sourceImpostorLodBlend[sourceIndex];
+    if (rebuilding) return;
+
+    const meshes = model ? modelMeshes : impostorMeshes;
+    partialUpdateArray(meshes, "matrix", destinationMatrices, slot * 16, 16);
+    partialUpdateArray(meshes, "instanceOcclusion", destinationOcclusion, slot, 1);
+    partialUpdateArray(meshes, "vegetationColor", destinationColors, slot * 3, 3);
+    partialUpdateArray(meshes, "instanceLodBlend", destinationLod, slot, 1);
+    if (!model) {
+      partialUpdateArray(meshes, "impostorDetailLodBlend", impostorDetailLodBlend, slot, 1);
+    }
   };
 
   const updateLod = (cameraPosition: Vector3, distanceMeters: number): void => {
@@ -186,32 +379,104 @@ export function createVegetationFieldResult(
       Vector3.DistanceSquared(cameraPosition, lastCameraPosition) < 1e-12 &&
       distanceMeters === lastDistanceMeters
     ) return;
+    const previousCameraPosition = lastCameraPosition;
+    const distanceChanged = distanceMeters !== lastDistanceMeters;
+    const transitionWidth = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters) / metersPerUnit;
+    const impostorTransitionWidth = impostorLodRange
+      ? impostorLodRange.farDistance - impostorLodRange.nearDistance
+      : Number.POSITIVE_INFINITY;
+    const maximumIncrementalMovement = Math.min(transitionWidth, impostorTransitionWidth);
+    const forceFullUpdate = !previousCameraPosition || distanceChanged || Vector3.Distance(
+      cameraPosition,
+      previousCameraPosition,
+    ) >= maximumIncrementalMovement;
     lastCameraPosition = cameraPosition.clone();
     lastDistanceMeters = distanceMeters;
     if (mode === "auto") {
-      updateAutoLod(cameraPosition, distanceMeters);
-    } else if (
-      mode === "impostors" &&
-      (!lastImpostorSortPosition || Vector3.DistanceSquared(
-        cameraPosition,
-        lastImpostorSortPosition,
-      ) >= (IMPOSTOR_SORT_DISTANCE_METERS / metersPerUnit) ** 2)
-    ) {
-      writeFrontToBackInstances(
-        impostorMatrices,
-        impostorOcclusion,
-        matrices,
-        activeSourceOcclusion,
-        allInstanceIndices,
-        cameraPosition,
-        impostorColors,
-        sourceColors,
-        impostorLodBlend,
-        impostorLodBlend,
-      );
-      lastImpostorSortPosition = cameraPosition.clone();
-      updateMeshBuffers(impostorMeshes, true);
+      updateAutoLod(cameraPosition, distanceMeters, forceFullUpdate);
+    } else if (mode === "impostors") {
+      updateImpostorOnlyLod(cameraPosition, forceFullUpdate);
     }
+  };
+
+  const updateImpostorOnlyLod = (cameraPosition: Vector3, forceFullUpdate: boolean): void => {
+    if (!impostorLodRange || impostorLodRange.forceLowest) return;
+    const maximumVerticalOffset = Math.max(
+      Math.abs(minimumInstanceY - cameraPosition.y),
+      Math.abs(maximumInstanceY - cameraPosition.y),
+    );
+    const innerRadius = Math.sqrt(Math.max(
+      0,
+      impostorLodRange.nearDistance ** 2 - maximumVerticalOffset ** 2,
+    ));
+    const currentIndices = new Set(spatialGrid.queryAnnulusBounds(
+      cameraPosition.x,
+      cameraPosition.z,
+      innerRadius,
+      impostorLodRange.farDistance,
+    ));
+    const updateIndices = forceFullUpdate ? new Set(allInstanceIndices) : new Set(currentIndices);
+    if (!forceFullUpdate) {
+      previousImpostorTransitionIndices.forEach((index) => updateIndices.add(index));
+    }
+    if (forceFullUpdate) lodDebugStats.fullRebuilds++;
+    let exactTransitionCount = 0;
+
+    for (const sourceIndex of updateIndices) {
+      const distance = Math.sqrt(instanceDistanceSquared(matrices, sourceIndex, cameraPosition));
+      if (
+        distance > impostorLodRange.nearDistance &&
+        distance < impostorLodRange.farDistance
+      ) exactTransitionCount++;
+      const blend = smoothstepDistance(
+        distance,
+        impostorLodRange.nearDistance,
+        impostorLodRange.farDistance,
+      );
+      sourceImpostorLodBlend[sourceIndex] = blend;
+      impostorDetailLodBlend[sourceIndex] = blend;
+      if (!forceFullUpdate) {
+        partialUpdateArray(
+          impostorMeshes,
+          "impostorDetailLodBlend",
+          impostorDetailLodBlend,
+          sourceIndex,
+          1,
+        );
+      }
+    }
+    recordLodDebugUpdate(updateIndices.size, currentIndices.size, exactTransitionCount);
+    previousImpostorTransitionIndices = currentIndices;
+    if (forceFullUpdate) {
+      for (const mesh of impostorMeshes) {
+        mesh.thinInstanceBufferUpdated("impostorDetailLodBlend");
+      }
+    }
+  };
+
+  const recordLodDebugUpdate = (
+    processed: number,
+    currentCandidates: number,
+    currentTransitions: number,
+  ): void => {
+    lodDebugStats.updates++;
+    lodDebugStats.processedInstances += processed;
+    lodDebugStats.peakProcessedInstances = Math.max(
+      lodDebugStats.peakProcessedInstances,
+      processed,
+    );
+    lodDebugStats.currentGridCandidates = currentCandidates;
+    lodDebugStats.currentTransitionInstances = currentTransitions;
+  };
+
+  const consumeLodDebugStats = (): VegetationLodDebugStats => {
+    const snapshot = { ...lodDebugStats };
+    lodDebugStats.updates = 0;
+    lodDebugStats.processedInstances = 0;
+    lodDebugStats.peakProcessedInstances = 0;
+    lodDebugStats.membershipChanges = 0;
+    lodDebugStats.fullRebuilds = 0;
+    return snapshot;
   };
 
   const applyRenderMode = (nextMode: VegetationRenderMode): void => {
@@ -238,6 +503,7 @@ export function createVegetationFieldResult(
     setRenderMode: applyRenderMode,
     setAmbientOcclusionEnabled,
     updateLod,
+    consumeLodDebugStats,
   };
 }
 
@@ -317,6 +583,8 @@ function writeFrontToBackInstances(
   sourceColors?: Float32Array,
   destinationLodBlend?: Float32Array,
   sourceLodBlend?: Float32Array,
+  destinationImpostorLodBlend?: Float32Array,
+  sourceImpostorLodBlend?: Float32Array,
   sortInstances = true,
 ): void {
   if (sortInstances) {
@@ -336,6 +604,9 @@ function writeFrontToBackInstances(
     }
     if (destinationLodBlend && sourceLodBlend) {
       destinationLodBlend[destinationIndex] = sourceLodBlend[sourceIndex];
+    }
+    if (destinationImpostorLodBlend && sourceImpostorLodBlend) {
+      destinationImpostorLodBlend[destinationIndex] = sourceImpostorLodBlend[sourceIndex];
     }
   }
 }
@@ -392,6 +663,7 @@ function initializeMeshes(
   instanceOcclusion?: Float32Array,
   instanceColors?: Float32Array,
   instanceLodBlend?: Float32Array,
+  impostorDetailLodBlend?: Float32Array,
 ): void {
   for (const mesh of meshes) {
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
@@ -403,6 +675,9 @@ function initializeMeshes(
     }
     if (instanceLodBlend) {
       mesh.thinInstanceSetBuffer("instanceLodBlend", instanceLodBlend, 1, false);
+    }
+    if (impostorDetailLodBlend) {
+      mesh.thinInstanceSetBuffer("impostorDetailLodBlend", impostorDetailLodBlend, 1, false);
     }
     mesh.thinInstanceRefreshBoundingInfo(true);
     mesh.alwaysSelectAsActiveMesh = true;
@@ -417,8 +692,27 @@ function updateMeshBuffers(meshes: Mesh[], updateOcclusion = false): void {
       mesh.thinInstanceBufferUpdated("instanceOcclusion");
       mesh.thinInstanceBufferUpdated("vegetationColor");
       mesh.thinInstanceBufferUpdated("instanceLodBlend");
+      mesh.thinInstanceBufferUpdated("impostorDetailLodBlend");
     }
   });
+}
+
+function partialUpdateArray(
+  meshes: Mesh[],
+  kind: string,
+  source: Float32Array,
+  offset: number,
+  length: number,
+): void {
+  const data = source.subarray(offset, offset + length);
+  for (const mesh of meshes) mesh.thinInstancePartialBufferUpdate(kind, data, offset);
+}
+
+function smoothstepDistance(distance: number, nearDistance: number, farDistance: number): number {
+  if (distance <= nearDistance) return 0;
+  if (distance >= farDistance) return 1;
+  const linear = (distance - nearDistance) / (farDistance - nearDistance);
+  return linear * linear * (3 - 2 * linear);
 }
 
 function setMeshCount(meshes: Mesh[], count: number): void {
