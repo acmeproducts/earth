@@ -85,7 +85,7 @@ upper-hemisphere mode, spending every vertical row on level-to-overhead views
 because these low vegetation types are not normally seen from below. Tree captures
 retain the full below-to-above range and use 5 horizontal
 by 5 vertical samples per face. Each
-tree frame keeps a 256 px height and derives its narrower width from the
+tree frame keeps a 192 px height and derives its narrower width from the
 generated tree's bounding box. `tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
 override those defaults for quality testing, up to a maximum resolution of 256

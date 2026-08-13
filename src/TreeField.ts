@@ -183,6 +183,7 @@ uniform vec3 sunColor;
 uniform vec3 skyColor;
 uniform vec3 groundColor;
 uniform float lowLightAlbedoScale;
+uniform float instanceColorCoverage;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -367,7 +368,8 @@ void main(void) {
   float lowLightBlend = 1.0 - smoothstep(0.22, 0.58, sceneBrightness);
   straightColor *= mix(1.0, lowLightAlbedoScale, lowLightBlend);
   float petalMask = smoothstep(0.68, 0.86, min(straightColor.r, min(straightColor.g, straightColor.b)));
-  straightColor = mix(straightColor, straightColor * vInstanceColor, petalMask);
+  float instanceColorMask = max(petalMask, instanceColorCoverage);
+  straightColor = mix(straightColor, straightColor * vInstanceColor, instanceColorMask);
 
   // Treat the complete impostor as one softly rounded volume. This keeps
   // lighting coherent instead of exposing every captured leaf normal.
@@ -723,7 +725,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend", "impostorDetailLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "fogColor", "fogStart", "fogEnd"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
       needAlphaBlending: false,
     },
@@ -750,6 +752,7 @@ export function createImpostorMaterial(
   material.setFloat("rotationalSymmetryOrder", assets.rotationalSymmetryOrder);
   material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", 1);
+  material.setFloat("instanceColorCoverage", 0);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(

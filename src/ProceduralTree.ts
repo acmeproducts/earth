@@ -849,7 +849,7 @@ function createConiferTree(
   }
 
   const cards = foliageCardShape(species);
-  const firstLevel = species === "pine" ? 5 : 2;
+  const firstLevel = species === "pine" ? 4 : 2;
   addRootFlares(buffers, trunkPoints[0], 6, 0.13, 0.3, bark, barkCut, random);
   // Conifers shade out their own lower limbs and keep the dead stubs for years.
   // Below the first live whorl that bare stretch of trunk is all silhouette.
@@ -873,7 +873,11 @@ function createConiferTree(
     // whorl looks manufactured once it is flattened into an impostor. Missing
     // limbs and alternating ring sizes keep the trunk visible and the crown
     // irregular without losing the species' characteristic tiering.
-    const branches = species === "pine" ? 4 + (level % 3 === 0 ? 1 : 0) : 6;
+    const branches = species === "pine"
+      ? 5 + (level % 3 === 0 ? 1 : 0)
+      : species === "spruce"
+        ? 7
+        : 6;
     const crownT = (level - firstLevel) / (trunkSegments - firstLevel);
     const tierRadius = species === "pine"
       ? Math.sin(Math.min(1, crownT * 1.08) * Math.PI) * 0.55 + 0.32
@@ -901,11 +905,13 @@ function createConiferTree(
       );
       addLimbAlongPath(buffers, limbPath, radius, radius * 0.14, 5, heightT, bark, barkCut);
 
-      const sprays = species === "pine" ? 3 : 6;
+      const sprays = species === "pine" ? 5 : species === "spruce" ? 8 : 6;
       for (let spray = 0; spray < sprays; spray++) {
         const along = species === "pine"
-          ? 0.66 + spray * 0.16 + random() * 0.04
-          : 0.2 + random() * 0.8;
+          ? 0.48 + spray * 0.115 + random() * 0.035
+          : species === "spruce"
+            ? 0.14 + spray * 0.095 + random() * 0.04
+            : 0.2 + random() * 0.8;
         const anchor = pointAlongPath(limbPath, along).add(new Vector3(
           (random() - 0.5) * (species === "pine" ? 0.025 : 0.08),
           (random() - 0.5) * (species === "pine" ? 0.025 : 0.07),
@@ -924,31 +930,55 @@ function createConiferTree(
         }
       }
 
-      // Pine foliage belongs at the ends of a feathered system of woody twigs,
-      // not in blobs along a bare radial pole. Alternate the twig side and make
-      // each outer twig shorter so the limb tapers as a single grown structure.
-      const branchletCount = species === "pine" ? 3 : 1;
+      // Foliage belongs on a feathered system of woody twigs, not in blobs along
+      // a bare radial pole. Pine twigs sweep outward and up; spruce twigs spread
+      // laterally and hang. Fir retains its simpler, compact branch structure.
+      const branchletCount = species === "pine" ? 5 : species === "spruce" ? 3 : 1;
       const lateral = new Vector3(-horizontal.z, 0, horizontal.x);
       for (let branchlet = 0; branchlet < branchletCount; branchlet++) {
-        const along = 0.4 + branchlet * (species === "pine" ? 0.17 : 0) + random() * 0.07;
+        const along = species === "pine"
+          ? 0.3 + branchlet * 0.13 + random() * 0.055
+          : species === "spruce"
+            ? 0.2 + branchlet * 0.18 + random() * 0.06
+            : 0.4 + random() * 0.07;
         const branchletStart = pointAlongPath(limbPath, along);
         const branchletLength = length * (species === "pine"
-          ? 0.3 - branchlet * 0.045 + random() * 0.05
-          : 0.34 + random() * 0.2);
+          ? 0.34 - branchlet * 0.035 + random() * 0.05
+          : species === "spruce"
+            ? 0.24 + (1 - along) * 0.16 + random() * 0.06
+            : 0.34 + random() * 0.2);
         const side = branchlet % 2 === 0 ? 1 : -1;
         const branchletAngle = angle + (random() - 0.5) * 1.2;
         const branchletDirection = species === "pine"
           ? horizontal.scale(0.65).add(lateral.scale(side * (0.62 + random() * 0.16))).normalize()
+          : species === "spruce"
+            ? horizontal.scale(0.42).add(lateral.scale(side * (0.82 + random() * 0.16))).normalize()
           : new Vector3(
             Math.cos(branchletAngle), 0, Math.sin(branchletAngle),
           );
         const branchletEnd = branchletStart.add(branchletDirection.scale(branchletLength))
-          .add(new Vector3(0, species === "pine" ? 0.025 + random() * 0.045 : droop * 0.55, 0));
+          .add(new Vector3(
+            0,
+            species === "pine"
+              ? 0.025 + random() * 0.045
+              : species === "spruce"
+                ? -0.025 - branchletLength * 0.12
+                : droop * 0.55,
+            0,
+          ));
         const branchletPath = curvePath(
           branchletStart,
           branchletEnd,
-          new Vector3(0, species === "pine" ? -branchletLength * 0.045 : 0, 0),
-          species === "pine" ? 2 : 1,
+          new Vector3(
+            0,
+            species === "pine"
+              ? -branchletLength * 0.045
+              : species === "spruce"
+                ? branchletLength * 0.08
+                : 0,
+            0,
+          ),
+          species === "pine" || species === "spruce" ? 2 : 1,
         );
         addLimbAlongPath(
           buffers, branchletPath, radius * 0.42, radius * 0.09, 5, heightT,
@@ -960,11 +990,17 @@ function createConiferTree(
             needles[Math.floor(random() * needles.length)], random, cards,
           );
         } else {
-          for (let spray = 0; spray < 2; spray++) {
+          const branchletSprays = species === "spruce" ? 3 : 2;
+          for (let spray = 0; spray < branchletSprays; spray++) {
             addNeedleSpray(
               buffers,
-              Vector3.Lerp(branchletStart, branchletEnd, 0.45 + random() * 0.55),
-              horizontal, 0.1, 0.062,
+              pointAlongPath(
+                branchletPath,
+                0.32 + spray / branchletSprays * 0.62 + random() * 0.08,
+              ),
+              branchletDirection,
+              species === "spruce" ? 0.115 : 0.1,
+              species === "spruce" ? 0.068 : 0.062,
               needles[Math.floor(random() * needles.length)], random, cards,
             );
           }
@@ -1069,7 +1105,11 @@ function addNeedleSpray(
   }
 }
 
-/** A compact crossed shoot for the open, tip-heavy foliage of a pine. */
+/**
+ * A feathered pine shoot. The texture already depicts a complete needled twig,
+ * so only a few crossed cards are needed. Stacking density-multiplied cards at
+ * one point makes each branch end read as a round pom-pom.
+ */
 function addPineNeedleTuft(
   buffers: GeometryBuffers,
   center: Vector3,
@@ -1079,19 +1119,25 @@ function addPineNeedleTuft(
   cards?: FoliageCardShape,
   scale = 1,
 ): void {
-  for (let card = 0; card < 3; card++) {
-    const direction = growthDirection
-      .add(Vector3.Up().scale(0.12 + random() * 0.12))
-      .add(randomUnitVector(random).scale(0.14))
+  const cardCount = 3;
+  const shootDirection = growthDirection.lengthSquared() > 0.001
+    ? growthDirection.normalize()
+    : Vector3.Up();
+  for (let card = 0; card < cardCount; card++) {
+    const along = (card / (cardCount - 1) - 0.36) * 0.07 * scale;
+    const direction = shootDirection
+      .add(Vector3.Up().scale(0.07 + random() * 0.07))
+      .add(randomUnitVector(random).scale(0.055))
       .normalize();
     const size = shapeFoliageCard(
-      0.038 * scale * (0.9 + random() * 0.16),
-      0.085 * scale * (0.9 + random() * 0.16),
+      0.034 * scale * (0.9 + random() * 0.16),
+      0.112 * scale * (0.9 + random() * 0.16),
       cards?.aspect,
     );
     addLeaf(
       buffers,
-      center.add(randomUnitVector(random).scale(0.012 * scale)),
+      center.add(shootDirection.scale(along))
+        .add(randomUnitVector(random).scale(0.006 * scale)),
       direction,
       size.halfWidth,
       size.halfLength,

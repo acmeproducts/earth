@@ -43,17 +43,17 @@ const BARK_SEEDS: Record<TreeBarkStyle, number> = {
 };
 
 const BARK_BASE: Record<TreeBarkStyle, readonly [number, number, number]> = {
-  acacia: [216, 202, 180],
-  beech: [229, 226, 214],
+  acacia: [157, 139, 111],
+  beech: [181, 181, 169],
   birch: [229, 226, 216],
-  eucalyptus: [232, 220, 193],
-  fir: [207, 199, 184],
-  mangrove: [205, 192, 171],
-  maple: [218, 211, 197],
-  oak: [202, 190, 170],
-  palm: [221, 203, 174],
-  pine: [224, 190, 154],
-  spruce: [211, 205, 192],
+  eucalyptus: [205, 191, 160],
+  fir: [151, 143, 128],
+  mangrove: [139, 124, 99],
+  maple: [160, 148, 127],
+  oak: [151, 133, 105],
+  palm: [165, 137, 98],
+  pine: [157, 128, 94],
+  spruce: [145, 137, 122],
 };
 
 /** Builds and caches one seamless, deterministic birch-bark texture per scene. */
@@ -84,16 +84,19 @@ export function getTreeBarkTexture(scene: Scene, species: TreeBarkStyle): Dynami
 
   const base = BARK_BASE[species];
   const verticalSpecies = species !== "birch" && species !== "beech" && species !== "palm";
-  // Periodic grain keeps both tile boundaries continuous without copying an asset.
+  const seedPhase = (BARK_SEEDS[species] & 0xff) / 255 * Math.PI * 2;
+  // Several periodic frequencies make a seamless, non-flat substrate. Drawing
+  // the large bark structures over this retains fine detail in close-up.
   for (let y = 0; y < size; y++) {
     const vertical = Math.PI * 2 * y / size;
     for (let x = 0; x < size; x++) {
       const horizontal = Math.PI * 2 * x / size;
       const grain = verticalSpecies
-        ? Math.sin(horizontal * 23 + Math.sin(vertical * 3) * 1.2) * 4.2
-        : Math.sin(vertical * 31 + Math.sin(horizontal * 3) * 0.8) * 2.5;
-      const broadMottle = Math.sin(horizontal * 4 + vertical * 2) * 3.2
-        + Math.cos(horizontal * 9 - vertical * 5) * 1.8;
+        ? Math.sin(horizontal * 29 + Math.sin(vertical * 3 + seedPhase) * 1.5) * 5.5
+        : Math.sin(vertical * 35 + Math.sin(horizontal * 3 + seedPhase) * 0.9) * 3.5;
+      const broadMottle = Math.sin(horizontal * 3 + vertical * 2 + seedPhase) * 7
+        + Math.cos(horizontal * 8 - vertical * 5 - seedPhase) * 3
+        + Math.sin(horizontal * 17 + vertical * 13) * 1.5;
       const offset = (y * size + x) * 4;
       pixels.data[offset] = base[0] + grain + broadMottle;
       pixels.data[offset + 1] = base[1] + grain + broadMottle;
@@ -131,76 +134,181 @@ export function getTreeBarkTexture(scene: Scene, species: TreeBarkStyle): Dynami
       context.stroke();
     });
   };
+  const strokeVertical = (
+    x: number,
+    y: number,
+    height: number,
+    sway: number,
+    lineWidth: number,
+    color: string,
+  ): void => {
+    context.strokeStyle = color;
+    context.lineWidth = lineWidth;
+    context.lineCap = "round";
+    wrapped((xShift, yShift) => {
+      context.beginPath();
+      context.moveTo(x + xShift, y + yShift - height / 2);
+      context.bezierCurveTo(
+        x + xShift + sway, y + yShift - height * 0.18,
+        x + xShift - sway, y + yShift + height * 0.2,
+        x + xShift + sway * 0.25, y + yShift + height / 2,
+      );
+      context.stroke();
+    });
+  };
+  const barkChip = (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    color: string,
+    outline?: string,
+  ): void => {
+    wrapped((xShift, yShift) => {
+      context.beginPath();
+      context.moveTo(x + xShift - width * 0.46, y + yShift - height * 0.25);
+      context.lineTo(x + xShift - width * 0.2, y + yShift - height * 0.5);
+      context.lineTo(x + xShift + width * 0.42, y + yShift - height * 0.34);
+      context.lineTo(x + xShift + width * 0.5, y + yShift + height * 0.18);
+      context.lineTo(x + xShift + width * 0.12, y + yShift + height * 0.5);
+      context.lineTo(x + xShift - width * 0.5, y + yShift + height * 0.28);
+      context.closePath();
+      context.fillStyle = color;
+      context.fill();
+      if (outline) {
+        context.strokeStyle = outline;
+        context.lineWidth = 1.2;
+        context.stroke();
+      }
+    });
+  };
 
-  if (species === "birch" || species === "beech") {
-    const contrast = species === "birch" ? 1 : 0.48;
-    // Birch has papery scars; beech keeps the same horizontal grain much quieter.
-    for (let index = 0; index < (species === "birch" ? 190 : 95); index++) {
+  if (species === "birch") {
+    for (let index = 0; index < 190; index++) {
       strokeHorizontal(random() * size, random() * size, 5 + random() * 25,
         (random() - 0.5) * 2.2, 0.45 + random() * 1.1,
-        `rgba(58, 54, 48, ${(0.16 + random() * 0.3) * contrast})`);
+        `rgba(58, 54, 48, ${0.16 + random() * 0.3})`);
     }
-    for (let index = 0; index < (species === "birch" ? 24 : 8); index++) {
+    for (let index = 0; index < 24; index++) {
       const x = random() * size;
       const y = random() * size;
       const width = 25 + random() * 72;
       const bend = (random() - 0.5) * 5;
-      strokeHorizontal(x, y + 1.4, width, bend, 4 + random() * 4, `rgba(65,60,52,${0.13 * contrast})`);
-      strokeHorizontal(x, y, width, bend, 1.2 + random() * 2.2, `rgba(42,40,36,${0.68 * contrast})`);
-      strokeHorizontal(x, y - 1.2, width * 0.76, -bend * 0.5, 0.8, `rgba(255,252,240,${0.7 * contrast})`);
+      strokeHorizontal(x, y + 1.4, width, bend, 4 + random() * 4, "rgba(65,60,52,0.13)");
+      strokeHorizontal(x, y, width, bend, 1.2 + random() * 2.2, "rgba(42,40,36,0.68)");
+      strokeHorizontal(x, y - 1.2, width * 0.76, -bend * 0.5, 0.8, "rgba(255,252,240,0.7)");
     }
-  } else if (species === "palm") {
-    // Stacked old frond scars form irregular, fibrous rings around the stem.
-    for (let band = 0; band < 22; band++) {
-      const y = (band + random() * 0.45) * size / 22;
-      strokeHorizontal(size * 0.5, y, size * 1.12, (random() - 0.5) * 8,
-        3 + random() * 5, "rgba(86,55,31,0.42)");
-      strokeHorizontal(size * 0.5, y - 2, size * 1.08, 0,
-        1 + random() * 2, "rgba(247,225,185,0.46)");
+  } else if (species === "beech") {
+    // Smooth elephant-grey bark with subtle horizontal lenticels and old scars.
+    for (let mark = 0; mark < 130; mark++) {
+      strokeHorizontal(random() * size, random() * size, 4 + random() * 19,
+        (random() - 0.5) * 1.6, 0.5 + random() * 1.3, "rgba(52,58,49,0.28)");
     }
-  } else if (species === "eucalyptus") {
-    // Long peeling ribbons alternate fresh cream bark and weathered cinnamon strips.
-    for (let strip = 0; strip < 32; strip++) {
-      const x = random() * size;
-      const width = 7 + random() * 26;
-      context.lineCap = "round";
-      context.lineWidth = width;
-      context.strokeStyle = random() < 0.55 ? "rgba(255,242,207,0.48)" : "rgba(139,91,52,0.34)";
-      wrapped((xShift, yShift) => {
-        context.beginPath();
-        context.moveTo(x + xShift, yShift - 10);
-        context.bezierCurveTo(x + xShift + 18, yShift + size * 0.3,
-          x + xShift - 16, yShift + size * 0.7, x + xShift + 8, yShift + size + 10);
-        context.stroke();
-      });
-    }
-  } else {
-    const deep = species === "oak" || species === "mangrove" || species === "fir";
-    const warm = species === "pine" || species === "acacia";
-    // Furrows split into staggered plates: broad and deep on oak/mangrove/fir,
-    // smaller and warmer on pine/acacia, and fine on maple/spruce.
-    const furrows = deep ? 34 : 46;
-    for (let groove = 0; groove < furrows; groove++) {
-      const x = (groove + random() * 0.8) * size / furrows;
-      const sway = 5 + random() * (deep ? 20 : 11);
-      context.lineCap = "round";
-      context.lineWidth = (deep ? 3.5 : 1.7) + random() * (deep ? 5 : 3);
-      context.strokeStyle = warm ? "rgba(91,52,29,0.5)" : "rgba(61,54,44,0.48)";
-      wrapped((xShift, yShift) => {
-        context.beginPath();
-        context.moveTo(x + xShift, yShift - 8);
-        context.bezierCurveTo(x + xShift + sway, yShift + size * 0.28,
-          x + xShift - sway, yShift + size * 0.72, x + xShift + sway * 0.25, yShift + size + 8);
-        context.stroke();
-      });
-    }
-    const plateCount = deep ? 85 : 125;
-    for (let plate = 0; plate < plateCount; plate++) {
+    for (let scar = 0; scar < 18; scar++) {
       const x = random() * size;
       const y = random() * size;
-      const width = 7 + random() * (deep ? 24 : 15);
-      strokeHorizontal(x, y, width, (random() - 0.5) * 5,
-        0.8 + random() * 2.1, warm ? "rgba(246,204,151,0.32)" : "rgba(241,230,207,0.25)");
+      const radius = 4 + random() * 11;
+      const rotation = random() - 0.5;
+      context.strokeStyle = "rgba(69,67,57,0.42)";
+      context.lineWidth = 1 + random() * 2;
+      wrapped((xs, ys) => {
+        context.beginPath();
+        context.ellipse(x + xs, y + ys, radius, radius * 0.45, rotation, 0, Math.PI * 2);
+        context.stroke();
+      });
+    }
+  } else if (species === "palm") {
+    // Overlapping diamond-shaped frond bases with loose vertical fibres.
+    const rows = 14;
+    const columns = 11;
+    for (let row = -1; row <= rows; row++) {
+      for (let column = -1; column <= columns; column++) {
+        const x = (column + 0.5 * (row & 1)) * size / columns;
+        const y = row * size / rows;
+        barkChip(x, y, size / columns * 0.92, size / rows * 0.9,
+          "rgba(202,165,111,0.34)", "rgba(76,50,28,0.48)");
+      }
+    }
+    for (let fibre = 0; fibre < 55; fibre++) {
+      strokeVertical(random() * size, random() * size, 18 + random() * 65,
+        (random() - 0.5) * 6, 0.6 + random() * 1.5, "rgba(73,48,27,0.34)");
+    }
+  } else if (species === "eucalyptus") {
+    // Long peeling ribbons expose cream, ochre, sage and cinnamon layers.
+    const peelColors = [
+      "rgba(246,230,190,0.62)", "rgba(145,113,80,0.44)",
+      "rgba(116,128,100,0.33)", "rgba(218,171,113,0.46)",
+    ];
+    for (let strip = 0; strip < 45; strip++) {
+      const x = random() * size;
+      strokeVertical(x, random() * size, 90 + random() * 330, 6 + random() * 22,
+        7 + random() * 24, peelColors[Math.floor(random() * peelColors.length)]);
+      strokeVertical(x + 2, random() * size, 70 + random() * 180, 8 + random() * 13,
+        0.7 + random() * 1.4, "rgba(78,57,39,0.32)");
+    }
+  } else if (species === "oak") {
+    // Massive interrupted ridges and dark, block-forming fissures.
+    for (let groove = 0; groove < 28; groove++) {
+      strokeVertical((groove + random() * 0.65) * size / 28, size * 0.5,
+        size * 1.15, 12 + random() * 22, 5 + random() * 7, "rgba(55,46,34,0.58)");
+    }
+    for (let cross = 0; cross < 115; cross++) {
+      strokeHorizontal(random() * size, random() * size, 10 + random() * 34,
+        (random() - 0.5) * 7, 1.5 + random() * 3.5, "rgba(61,49,35,0.46)");
+    }
+  } else if (species === "pine") {
+    // Warm puzzle-like plates sit over nearly black red-brown crevices.
+    for (let chip = 0; chip < 165; chip++) {
+      barkChip(random() * size, random() * size, 15 + random() * 32, 12 + random() * 42,
+        random() < 0.45 ? "rgba(207,164,109,0.4)" : "rgba(151,111,73,0.34)",
+        "rgba(72,56,40,0.56)");
+    }
+  } else if (species === "spruce") {
+    // Small cool-grey scales flake away in irregular vertical columns.
+    for (let chip = 0; chip < 230; chip++) {
+      barkChip(random() * size, random() * size, 7 + random() * 18, 12 + random() * 29,
+        random() < 0.3 ? "rgba(183,170,143,0.3)" : "rgba(82,72,60,0.28)",
+        "rgba(62,57,49,0.34)");
+    }
+  } else if (species === "fir") {
+    // Fir is finely plated, with horizontal resin blisters and pitch marks.
+    for (let groove = 0; groove < 58; groove++) {
+      strokeVertical((groove + random() * 0.8) * size / 58, size * 0.5,
+        size * 1.1, 3 + random() * 9, 1 + random() * 2.4, "rgba(65,58,48,0.4)");
+    }
+    for (let blister = 0; blister < 90; blister++) {
+      strokeHorizontal(random() * size, random() * size, 5 + random() * 18,
+        (random() - 0.5) * 2, 1 + random() * 2.5,
+        random() < 0.18 ? "rgba(224,177,99,0.5)" : "rgba(66,58,47,0.4)");
+    }
+  } else if (species === "maple") {
+    // Narrow curling plates create the shaggy vertical character of old maple.
+    for (let strip = 0; strip < 78; strip++) {
+      const x = random() * size;
+      strokeVertical(x, random() * size, 35 + random() * 150, 4 + random() * 12,
+        4 + random() * 8, "rgba(205,188,154,0.25)");
+      strokeVertical(x - 3, random() * size, 30 + random() * 120, 3 + random() * 8,
+        1 + random() * 2, "rgba(62,53,42,0.44)");
+    }
+  } else if (species === "mangrove") {
+    // Wet, rope-like ridges with pale horizontal lenticels.
+    for (let ridge = 0; ridge < 25; ridge++) {
+      const x = (ridge + random() * 0.7) * size / 25;
+      strokeVertical(x, size * 0.5, size * 1.15, 16 + random() * 28,
+        8 + random() * 11, "rgba(67,57,43,0.5)");
+      strokeVertical(x + 3, size * 0.5, size * 1.15, 10 + random() * 22,
+        2 + random() * 4, "rgba(147,127,88,0.32)");
+    }
+    for (let mark = 0; mark < 75; mark++) {
+      strokeHorizontal(random() * size, random() * size, 5 + random() * 18,
+        (random() - 0.5) * 3, 0.8 + random() * 1.5, "rgba(195,178,136,0.32)");
+    }
+  } else {
+    // Acacia: interlocking dry plates crossed by angular, charcoal fissures.
+    for (let chip = 0; chip < 145; chip++) {
+      barkChip(random() * size, random() * size, 16 + random() * 35, 18 + random() * 50,
+        random() < 0.35 ? "rgba(201,174,126,0.34)" : "rgba(119,94,62,0.25)",
+        "rgba(48,38,28,0.62)");
     }
   }
 
@@ -287,6 +395,7 @@ export function createVertexColorCaptureMaterial(
         uniform float leafTextureEnabled;
         uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
+        uniform float instanceColorCoverage;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
         float bayer4(vec2 pixel) {
@@ -336,7 +445,8 @@ export function createVertexColorCaptureMaterial(
             * lightingEnabled;
           surfaceColor *= mix(1.0, lowLightAlbedoScale, lowLightBlend);
           float petalMask = smoothstep(0.68, 0.86, min(surfaceColor.r, min(surfaceColor.g, surfaceColor.b)));
-          vec3 instanceColor = mix(surfaceColor, surfaceColor * vInstanceColor, petalMask);
+          float instanceColorMask = max(petalMask, instanceColorCoverage);
+          vec3 instanceColor = mix(surfaceColor, surfaceColor * vInstanceColor, instanceColorMask);
           gl_FragColor = vec4(instanceColor * lighting, 1.0);
         }
       `,
@@ -356,6 +466,7 @@ export function createVertexColorCaptureMaterial(
         "leafTextureEnabled",
         "barkTextureEnabled",
         "lowLightAlbedoScale",
+        "instanceColorCoverage",
       ],
       samplers: ["leafTexture", "barkTexture"],
       needAlphaBlending: false,
@@ -368,6 +479,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("leafTextureEnabled", 0);
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
+  material.setFloat("instanceColorCoverage", 0);
   if (leafTextureUrl) {
     const leafTexture = new Texture(
       leafTextureUrl,

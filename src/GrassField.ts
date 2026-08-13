@@ -15,7 +15,8 @@ import {
   createVegetationFieldResult,
   VegetationFieldResult,
 } from "./VegetationField";
-import { LandCoverClass } from "./WorldCover";
+import { LandCoverClass, landCoverSurfaceColor } from "./WorldCover";
+import { varyGroundColor } from "./GroundVariation";
 import { createSeededRandom } from "./Random";
 import {
   createPlacementGrid,
@@ -27,6 +28,9 @@ import {
 const GRASS_GROUND_OFFSET_METERS = 0.07;
 const GRASS_HEIGHT_METERS = 0.55;
 const GRASS_SPACING_METERS = 1.5;
+/** How strongly each clump adopts the hue and brightness of its local ground. */
+const GRASS_GROUND_COLOR_INFLUENCE = 0.8;
+const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
 
 type GrassFieldOptions = VegetationPlacementOptions;
 
@@ -75,10 +79,14 @@ export async function createGrassField(
     // 128 px atlas through the middle distance before blending to 20 px.
     grass.material.setFloat("impostorLodNear", 40);
     grass.material.setFloat("impostorLodFar", 80);
+    grass.material.setFloat("instanceColorCoverage", 0.8);
   }
   const grassModel = createGrassModel(scene, grassHeight);
   grassModel.parent = root;
   grassModel.isPickable = false;
+  if (grassModel.material instanceof ShaderMaterial) {
+    grassModel.material.setFloat("instanceColorCoverage", 0.8);
+  }
   root.onDisposeObservable.add(() => grassModel.material?.dispose(true, true));
   const captureSize = prototype.captureSize;
   const random = createSeededRandom(seed);
@@ -90,6 +98,7 @@ export async function createGrassField(
   );
   const maximumHalfWidth = captureSize * 0.72;
   const matrices: Matrix[] = [];
+  const colors: number[] = [];
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
@@ -97,9 +106,10 @@ export async function createGrassField(
         const x = -meshWidth / 2 + (column + 0.15 + random() * 0.7) * cellWidth;
         const z = meshDepth / 2 - (row + 0.15 + random() * 0.7) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+        const coverClass = landCover.sample(lon, lat);
         const occupancy = Math.min(
           1,
-          (OCCUPANCY[landCover.sample(lon, lat)] ?? 0) *
+          (OCCUPANCY[coverClass] ?? 0) *
             Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
@@ -141,6 +151,7 @@ export async function createGrassField(
             ),
           ),
         );
+        colors.push(...grassGroundColorMultiplier(lon, lat, coverClass));
       }
     }
   }
@@ -159,12 +170,39 @@ export async function createGrassField(
     metersPerUnit,
     renderMode,
     instanceOcclusion,
-    undefined,
+    new Float32Array(colors),
     {
       nearDistance: prototype.captureHeight * 55,
       farDistance: prototype.captureHeight * 65,
     },
   );
+}
+
+/**
+ * Converts the local rendered ground color into a restrained RGB multiplier.
+ * Grassland is the neutral reference, so blade-level color variation survives;
+ * other covers and world-anchored dry/lush bands pull the whole clump toward
+ * the terrain beneath it.
+ */
+export function grassGroundColorMultiplier(
+  longitude: number,
+  latitude: number,
+  landCover: LandCoverClass,
+): readonly [number, number, number] {
+  const ground = varyGroundColor(
+    landCoverSurfaceColor(landCover),
+    longitude,
+    latitude,
+    landCover,
+  );
+  return ground.map((channel, index) => {
+    const ratio = channel / GRASSLAND_REFERENCE_COLOR[index];
+    return clamp(1 + (ratio - 1) * GRASS_GROUND_COLOR_INFLUENCE, 0.55, 1.35);
+  }) as [number, number, number];
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function sampleTerrainNormal(

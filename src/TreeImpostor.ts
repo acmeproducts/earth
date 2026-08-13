@@ -34,7 +34,7 @@ function createTreeProvider(species: TreeSpecies) {
     sampling: {
       horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
       verticalSamples: { default: 5, minimum: 1, maximum: 10 },
-      resolution: { default: 256, minimum: 64, maximum: 256 },
+      resolution: { default: 192, minimum: 64, maximum: 256 },
     },
   });
 }

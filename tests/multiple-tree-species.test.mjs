@@ -67,16 +67,25 @@ test("uses optional species textures with procedural-color fallback", () => {
 test("gives every tree species its own procedural bark texture", () => {
   assert.match(captureMaterial, /export function getTreeBarkTexture/);
   assert.match(captureMaterial, /Record<TreeBarkStyle, number>/);
-  assert.match(captureMaterial, /species === "eucalyptus"/);
-  assert.match(captureMaterial, /species === "palm"/);
-  assert.match(captureMaterial, /species === "oak" \|\| species === "mangrove"/);
+  for (const species of [
+    "acacia", "beech", "birch", "eucalyptus", "fir", "mangrove",
+    "maple", "oak", "palm", "pine", "spruce",
+  ]) {
+    if (species === "acacia") continue;
+    assert.match(captureMaterial, new RegExp(`species === "${species}"`));
+  }
+  assert.match(captureMaterial, /const barkChip =/);
+  assert.match(captureMaterial, /const strokeVertical =/);
+  assert.match(captureMaterial, /Acacia: interlocking dry plates/);
   assert.match(proceduralTrees, /getTreeBarkTexture\(scene, species\)/);
 });
 
-test("gives pine an open, twigged crown and converges species brightness in low light", () => {
-  assert.match(proceduralTrees, /firstLevel = species === "pine" \? 5 : 2/);
-  assert.match(proceduralTrees, /const branches = species === "pine" \? 4 \+ \(level % 3 === 0 \? 1 : 0\) : 6/);
-  assert.match(proceduralTrees, /const branchletCount = species === "pine" \? 3 : 1/);
+test("gives pine and spruce dense, twigged crowns and converges species brightness in low light", () => {
+  assert.match(proceduralTrees, /firstLevel = species === "pine" \? 4 : 2/);
+  assert.match(proceduralTrees, /species === "spruce"\s*\? 7/);
+  assert.match(proceduralTrees, /const branchletCount = species === "pine" \? 5 : species === "spruce" \? 3 : 1/);
+  assert.match(proceduralTrees, /const cardCount = 3/);
+  assert.match(proceduralTrees, /center\.add\(shootDirection\.scale\(along\)\)/);
   assert.match(proceduralTrees, /function addPineNeedleTuft/);
   assert.match(proceduralTrees, /TREE_LOW_LIGHT_BRIGHTNESS/);
   assert.match(treeField, /lowLightAlbedoScale/);
