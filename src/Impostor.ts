@@ -8,6 +8,7 @@ import {
   Scene,
   Texture,
   Vector3,
+  Viewport,
 } from "@babylonjs/core";
 
 export interface ImpostorAssets {
@@ -35,6 +36,9 @@ export interface ImpostorAssets {
   captureWidth: number;
   captureHeight: number;
 }
+
+/** Capture work per yielded frame, decoupling atlas speed from display refresh. */
+const CAPTURE_FRAME_BUDGET_MS = 12;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
@@ -324,9 +328,12 @@ export async function captureImpostorAtlases(
   camera.maxZ = captureDiameter * 4;
   camera.orthoLeft = -captureWidth / 2;
   camera.orthoRight = captureWidth / 2;
+  // All of a face's views render into one atlas-sized target through per-tile
+  // camera viewports, so the whole face needs a single GPU readback instead of
+  // one synchronous pipeline stall per view.
   const target = new RenderTargetTexture(
     `${name}CaptureTarget`,
-    { width: resolutionWidth, height: resolutionHeight },
+    { width: atlasWidth, height: atlasHeight },
     scene,
     false,
     false,
@@ -334,11 +341,20 @@ export async function captureImpostorAtlases(
   target.clearColor = new Color4(0, 0, 0, 0);
   target.renderList = meshes;
   target.activeCamera = camera;
-  target.ignoreCameraViewport = true;
   target.samples = 1;
+  // The default clear wipes the full target on every tile render, erasing the
+  // tiles already captured. Tiles occupy disjoint viewport regions, so color
+  // and depth only need clearing once per face.
+  let clearPending = true;
+  target.onClearObservable.add(() => {
+    if (!clearPending) return;
+    scene.getEngine().clear(target.clearColor, true, true, true);
+    clearPending = false;
+  });
   const sourceVisibility = meshes.map((mesh) => mesh.isVisible);
   const total = faces.length * gridWidth * gridHeight;
   let completed = 0;
+  let sliceStart = performance.now();
 
   try {
     for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
@@ -347,6 +363,7 @@ export async function captureImpostorAtlases(
       const verticalSpan = Math.abs(face.normal.y) > 0.5 ? captureWidth : captureHeight;
       camera.orthoTop = verticalSpan / 2;
       camera.orthoBottom = -verticalSpan / 2;
+      clearPending = true;
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
           const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
@@ -359,24 +376,33 @@ export async function captureImpostorAtlases(
           camera.position.copyFrom(direction.scale(captureDiameter));
           camera.upVector.copyFrom(face.up);
           camera.setTarget(Vector3.Zero());
+          // The readback conversion flips the atlas vertically, so grid row 0
+          // renders at the top of the bottom-up GL target to end up on top.
+          camera.viewport = new Viewport(
+            x / gridWidth,
+            (gridHeight - 1 - y) / gridHeight,
+            1 / gridWidth,
+            1 / gridHeight,
+          );
           meshes.forEach((mesh) => { mesh.isVisible = true; });
           try {
             target.render(true);
           } finally {
             meshes.forEach((mesh) => { mesh.isVisible = false; });
           }
-          const pixels = await target.readPixels();
-          if (!pixels) throw new Error(`${name} GPU readback failed.`);
-          context.putImageData(
-            binaryImage(pixels, resolutionWidth, resolutionHeight, context),
-            x * resolutionWidth,
-            y * resolutionHeight,
-          );
           completed++;
           onProgress?.(completed, total, faceIndex, x, y);
-          await nextFrame();
+          if (performance.now() - sliceStart > CAPTURE_FRAME_BUDGET_MS) {
+            await nextFrame();
+            sliceStart = performance.now();
+          }
         }
       }
+      const pixels = await target.readPixels();
+      if (!pixels) throw new Error(`${name} GPU readback failed.`);
+      context.putImageData(binaryImage(pixels, atlasWidth, atlasHeight, context), 0, 0);
+      await nextFrame();
+      sliceStart = performance.now();
     }
   } finally {
     meshes.forEach((mesh, index) => { mesh.isVisible = sourceVisibility[index]; });
