@@ -420,7 +420,18 @@ export function createVertexColorCaptureMaterial(
           }
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;
-          normal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), 0.58));
+          // A foliage card's normal describes the arbitrary plane used to hold
+          // the cutout, not the direction of the many leaves pictured on it.
+          // Lighting that plane directly makes otherwise identical needles
+          // jump between dark and bright as different crossed cards come into
+          // view. Give foliage a stable canopy normal; retain shaped normals
+          // for bark and cut branch ends.
+          float foliageMask = step(0.0, vUv.x) * (1.0 - step(1.5, vUv.x));
+          normal = normalize(mix(
+            normal,
+            vec3(0.0, 1.0, 0.0),
+            mix(0.58, 1.0, foliageMask)
+          ));
 
           float upward = normal.y * 0.5 + 0.5;
           vec3 ambientColor = mix(groundColor, skyColor, upward);

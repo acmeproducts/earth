@@ -371,19 +371,16 @@ void main(void) {
   float instanceColorMask = max(petalMask, instanceColorCoverage);
   straightColor = mix(straightColor, straightColor * vInstanceColor, instanceColorMask);
 
-  // Treat the complete impostor as one softly rounded volume. This keeps
-  // lighting coherent instead of exposing every captured leaf normal.
-  vec2 centered = imageUV * 2.0 - 1.0;
-  float bulge = sqrt(max(0.18, 1.0 - dot(centered, centered) * 0.68));
-  vec3 localNormal = normalize(
-    direction * bulge
-    + billboardRight * centered.x * 0.55
-    - billboardUp * centered.y * 0.38
+  // The atlas contains the whole canopy rather than one physical surface.
+  // Deriving a normal from the camera-facing billboard makes the same foliage
+  // change brightness when the camera orbits it. Light the canopy from its
+  // stable world-up axis instead, matching the orientation-independent leaf
+  // lighting used by the close model.
+  vec3 ambientColor = skyColor;
+  float direct = max(
+    0.0,
+    (dot(vLocalWorldUp, vLocalSunDirection) + 0.42) / 1.42
   );
-  localNormal = normalize(mix(localNormal, vLocalWorldUp, 0.58));
-  float upward = dot(localNormal, vLocalWorldUp) * 0.5 + 0.5;
-  vec3 ambientColor = mix(groundColor, skyColor, upward);
-  float direct = max(0.0, (dot(localNormal, vLocalSunDirection) + 0.42) / 1.42);
   vec3 lighting = clamp(
     ambientColor + sunColor * (0.16 + direct * 0.62),
     vec3(0.0),

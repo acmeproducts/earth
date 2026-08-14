@@ -56,6 +56,14 @@ test("applies transparent foliage only to leaf UVs", () => {
   assert.match(captureMaterial, /else if \(leafTextureEnabled > 0\.5 && vUv\.x >= 0\.0\)/);
 });
 
+test("keeps foliage illumination stable while the camera orbits a tree", () => {
+  assert.match(captureMaterial, /float foliageMask = step\(0\.0, vUv\.x\)/);
+  assert.match(captureMaterial, /mix\(0\.58, 1\.0, foliageMask\)/);
+  assert.match(treeField, /vec3 ambientColor = skyColor/);
+  assert.match(treeField, /dot\(vLocalWorldUp, vLocalSunDirection\)/);
+  assert.doesNotMatch(treeField, /dot\(localNormal, vLocalSunDirection\)/);
+});
+
 test("uses optional species textures with procedural-color fallback", () => {
   assert.match(proceduralTrees, /require as NodeRequire/);
   assert.match(proceduralTrees, /availableFoliageTextures\.has\(path\)/);
