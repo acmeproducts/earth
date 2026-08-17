@@ -6,6 +6,7 @@ import {
   Matrix,
   Mesh,
   Scene,
+  ShadowDepthWrapper,
   ShaderMaterial,
   TransformNode,
   Vector2,
@@ -45,6 +46,11 @@ import {
   packInstanceMatrices,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
+import {
+  bindVegetationShadowReceiver,
+  vegetationShadowFragmentDeclaration,
+  vegetationShadowVertexDeclaration,
+} from "./VegetationShadowReceiver";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -95,6 +101,7 @@ uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform float captureCenterY;
 uniform vec3 sunDirection;
+${vegetationShadowVertexDeclaration}
 #include<instancesDeclaration>
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
@@ -108,6 +115,7 @@ varying float vImpostorDetailLodBlend;
 void main(void) {
   #include<instancesVertex>
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
+  vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
   vec3 center = (finalWorld * vec4(0.0, captureCenterY, 0.0, 1.0)).xyz;
   vec3 axisX = normalize(finalWorld[0].xyz);
   vec3 axisY = normalize(finalWorld[1].xyz);
@@ -187,6 +195,7 @@ uniform float instanceColorCoverage;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
+${vegetationShadowFragmentDeclaration}
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -252,7 +261,12 @@ void main(void) {
   // Complement the model shader's screen-door mask so the two LODs blend
   // without the depth-sorting problems of translucent vegetation.
   if (vInstanceLodBlend > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
+  // Select the captured silhouette from the light during shadow rendering.
+  #if SM_DIRECTIONINLIGHTDATA == 1
+  vec3 direction = normalize(vLocalSunDirection);
+  #else
   vec3 direction = normalize(vViewDirection);
+  #endif
   vec3 absoluteDirection = abs(direction);
   vec3 captureDirection = direction;
   vec3 faceNormal;
@@ -318,6 +332,7 @@ void main(void) {
   }
   vec2 samplePosition = clamp(normalizedSamplePosition, 0.0, 1.0) * (gridDimensions - 1.0);
   vec3 projectedPosition = vLocalPosition;
+  #if SM_DIRECTIONINLIGHTDATA != 1
   if (cameraOrthographic < 0.5) {
     vec3 cameraOffset = vViewDirection;
     vec3 ray = vLocalPosition - cameraOffset;
@@ -326,6 +341,7 @@ void main(void) {
     float distanceAlongRay = -dot(cameraOffset, direction) / rayDenominator;
     projectedPosition = cameraOffset + ray * distanceAlongRay;
   }
+  #endif
 
   vec3 billboardRight = normalize(cross(direction, billboardFaceUp));
   vec3 billboardUp = normalize(cross(billboardRight, direction));
@@ -396,6 +412,7 @@ void main(void) {
   // Preserve enough ambient response for foliage to remain readable after
   // sunset, including shaded lower crowns and densely occluded trees.
   lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+  lighting *= vegetationShadowVisibility();
   float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
   gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
 }`;
@@ -604,7 +621,11 @@ export async function createTreeField(
       fields.forEach((field) => field.setAmbientOcclusionEnabled(enabled));
     },
     updateLod: (cameraPosition, distanceMeters) => {
-      fields.forEach((field) => field.updateLod(cameraPosition, distanceMeters));
+      let changed = false;
+      fields.forEach((field) => {
+        changed = field.updateLod(cameraPosition, distanceMeters) || changed;
+      });
+      return changed;
     },
     consumeLodDebugStats: () => fields.reduce<VegetationLodDebugStats>(
       (total, field) => {
@@ -722,12 +743,20 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend", "impostorDetailLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd"],
-      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
+      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
   );
   material.backFaceCulling = true;
+  // Preserve atlas alpha and the complementary model/impostor LOD mask in the
+  // depth pass, avoiding a solid box shadow around each proxy.
+  const shadowDepthWrapper = new ShadowDepthWrapper(material, scene, {
+    remappedVariables: ["worldPos", "worldPosition"],
+  });
+  material.shadowDepthWrapper = shadowDepthWrapper;
+  material.onDisposeObservable.addOnce(() => shadowDepthWrapper.dispose());
+  bindVegetationShadowReceiver(material, scene);
   material.setFloat("captureCenterY", renderHeight / 2);
   material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));

@@ -5,11 +5,17 @@ import {
   HemisphericLight,
   Mesh,
   Scene,
+  ShadowDepthWrapper,
   ShaderMaterial,
   Texture,
   Vector3,
 } from "@babylonjs/core";
 import { createSeededRandom } from "./Random";
+import {
+  bindVegetationShadowReceiver,
+  vegetationShadowFragmentDeclaration,
+  vegetationShadowVertexDeclaration,
+} from "./VegetationShadowReceiver";
 
 const BARK_TEXTURE_SIZE = 512;
 
@@ -347,6 +353,7 @@ export function createVertexColorCaptureMaterial(
         #endif
         uniform mat4 viewProjection;
         uniform float modelHeight;
+        ${vegetationShadowVertexDeclaration}
         #include<instancesDeclaration>
         varying vec4 vColor;
         varying vec2 vUv;
@@ -375,7 +382,9 @@ export function createVertexColorCaptureMaterial(
           vInstanceColor = vec3(1.0);
           vInstanceLodBlend = 1.0;
           #endif
-          gl_Position = viewProjection * finalWorld * vec4(position, 1.0);
+          vec4 worldPosition = finalWorld * vec4(position, 1.0);
+          vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
+          gl_Position = viewProjection * worldPosition;
         }
       `,
       fragmentSource: `
@@ -399,6 +408,7 @@ export function createVertexColorCaptureMaterial(
         uniform float instanceColorCoverage;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
+        ${vegetationShadowFragmentDeclaration}
         float bayer4(vec2 pixel) {
           vec2 p = mod(floor(pixel), 4.0);
           vec2 low = mod(p, 2.0);
@@ -448,6 +458,7 @@ export function createVertexColorCaptureMaterial(
             - vInstanceOcclusion * ambientOcclusionStrength * mix(0.16, 0.48, lowerTree);
           // Keep live vegetation readable when direct sunlight has faded out.
           lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+          lighting *= vegetationShadowVisibility();
           lighting = mix(vec3(1.0), lighting, lightingEnabled);
           float sceneBrightness = max(
             max(skyColor.r, max(skyColor.g, skyColor.b)),
@@ -479,12 +490,27 @@ export function createVertexColorCaptureMaterial(
         "barkTextureEnabled",
         "lowLightAlbedoScale",
         "instanceColorCoverage",
+        "vegetationShadowMatrix",
+        "vegetationShadowTexelSize",
+        "vegetationShadowDepthValues",
+        "vegetationShadowEnabled",
+        "vegetationShadowReverseDepth",
+        "vegetationShadowDarkness",
+        "vegetationShadowFloatTexture",
       ],
-      samplers: ["leafTexture", "barkTexture"],
+      samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
   );
   material.backFaceCulling = false;
+  // Keep the model shader's leaf alpha test and complementary LOD dither in
+  // the shadow pass, rather than casting the opaque bounds of the cards.
+  const shadowDepthWrapper = new ShadowDepthWrapper(material, scene, {
+    remappedVariables: ["worldPos", "worldPosition"],
+  });
+  material.shadowDepthWrapper = shadowDepthWrapper;
+  material.onDisposeObservable.addOnce(() => shadowDepthWrapper.dispose());
+  bindVegetationShadowReceiver(material, scene);
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
   material.setFloat("modelHeight", 1);
   material.setFloat("ambientOcclusionStrength", 1);

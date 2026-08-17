@@ -34,7 +34,8 @@ export interface VegetationFieldResult {
   count: number;
   setRenderMode(mode: VegetationRenderMode): void;
   setAmbientOcclusionEnabled(enabled: boolean): void;
-  updateLod(cameraPosition: Vector3, distanceMeters: number): void;
+  /** Updates packed model/impostor instances; true when the shadow map changed. */
+  updateLod(cameraPosition: Vector3, distanceMeters: number): boolean;
   consumeLodDebugStats(): VegetationLodDebugStats;
 }
 
@@ -373,12 +374,12 @@ export function createVegetationFieldResult(
     }
   };
 
-  const updateLod = (cameraPosition: Vector3, distanceMeters: number): void => {
+  const updateLod = (cameraPosition: Vector3, distanceMeters: number): boolean => {
     if (
       lastCameraPosition &&
       Vector3.DistanceSquared(cameraPosition, lastCameraPosition) < 1e-12 &&
       distanceMeters === lastDistanceMeters
-    ) return;
+    ) return false;
     const previousCameraPosition = lastCameraPosition;
     const distanceChanged = distanceMeters !== lastDistanceMeters;
     const transitionWidth = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters) / metersPerUnit;
@@ -397,6 +398,7 @@ export function createVegetationFieldResult(
     } else if (mode === "impostors") {
       updateImpostorOnlyLod(cameraPosition, forceFullUpdate);
     }
+    return true;
   };
 
   const updateImpostorOnlyLod = (cameraPosition: Vector3, forceFullUpdate: boolean): void => {

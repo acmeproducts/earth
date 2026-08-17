@@ -55,9 +55,17 @@ export class SolarLighting {
     );
     this.directLight.diffuse = new Color3(1, 0.94, 0.82);
     this.directLight.specular = new Color3(1, 0.96, 0.88);
+    // Fit directional shadow depth to the actual caster bounds. Falling back
+    // to the camera's very large maxZ turns a small normalized depth bias into
+    // metres of separation, so shadows only survive at grazing sun angles.
+    this.directLight.autoCalcShadowZBounds = true;
+    this.directLight.autoUpdateExtends = true;
 
-    this.shadows = new ShadowGenerator(2048, this.directLight);
-    this.shadows.usePercentageCloserFiltering = true;
+    // A float depth texture can also be sampled by the custom vegetation
+    // receiver shaders. Poisson filtering keeps the built-in terrain receiver
+    // compatible with that regular sampler path.
+    this.shadows = new ShadowGenerator(2048, this.directLight, true);
+    this.shadows.usePoissonSampling = true;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
 
@@ -158,6 +166,10 @@ export class SolarLighting {
       mesh.receiveShadows = true;
       this.shadows.addShadowCaster(mesh);
     }
+    // Babylon caches a directional shadow transform independently of the RTT
+    // render list. A location rebuild replaces every caster, so invalidate the
+    // old projection before replacement vegetation samples the shadow matrix.
+    this.directLight.forceProjectionMatrixCompute();
     this.refreshStaticShadows();
   }
 
@@ -195,6 +207,7 @@ export class SolarLighting {
     this.skyMaterial.sunPosition.copyFrom(towardSun.scale(SUN_DISTANCE));
     this.directLight.direction.copyFrom(towardSun.scale(-1));
     this.directLight.position.copyFrom(towardSun.scale(200));
+    this.directLight.forceProjectionMatrixCompute();
 
     const elevationDegrees = position.altitude;
     const daylight = elevationDegrees > 0;
@@ -218,6 +231,11 @@ export class SolarLighting {
     this.scene.environmentIntensity = daylight
       ? 0.7 + 0.3 * elevationFactor
       : 0.12;
+    this.refreshStaticShadows();
+  }
+
+  /** Re-renders once after packed vegetation instances or their LOD masks move. */
+  refreshShadows(): void {
     this.refreshStaticShadows();
   }
 

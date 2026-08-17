@@ -35,9 +35,9 @@ export const EXAMPLE_LOCATIONS = [
     lon: -74.01329094009722,
   },
   {
-    name: "Tunisia",
-    lat: 33.803097622174015,
-    lon: 9.695113749182223,
+    name: "Edsåsdalen",
+    lat: 63.31740743074281,
+    lon: 13.074744350282623,
   },
   {
     name: "Bangladesh",

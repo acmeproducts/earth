@@ -579,6 +579,10 @@ export class Game {
     this.solarLighting?.setShadowCasters([
       terrain,
       ...mapFeatures.meshes,
+      ...treeField.meshes,
+      ...grassField.meshes,
+      ...flowerField.meshes,
+      ...bushField.meshes,
     ]);
     await reportInitializationProgress(onProgress, "Finalizing terrain appearance", 96);
     await this.applyTerrainLayer(requestId);
@@ -634,6 +638,7 @@ export class Game {
         : this.bushField;
     field?.setRenderMode(mode);
     if (category === "grass") this.flowerField?.setRenderMode(mode);
+    this.solarLighting?.refreshShadows();
   }
 
   private setAllVegetationModes(mode: VegetationRenderMode): void {
@@ -661,10 +666,13 @@ export class Game {
     if (!camera) return;
 
     const position = camera.globalPosition;
-    this.treeField?.updateLod(position, this.vegetationLodDistanceMeters);
-    this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
-    this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8));
-    this.bushField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 16));
+    const shadowsChanged = [
+      this.treeField?.updateLod(position, this.vegetationLodDistanceMeters),
+      this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8)),
+      this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8)),
+      this.bushField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 16)),
+    ].some(Boolean);
+    if (shadowsChanged) this.solarLighting?.refreshShadows();
     this.logVegetationLodStats();
   }
 
