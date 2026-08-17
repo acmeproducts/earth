@@ -10,6 +10,7 @@ import {
   Vector3,
   Viewport,
 } from "@babylonjs/core";
+import { waitForVertexColorTextures } from "./ProceduralCaptureMaterial";
 
 export interface ImpostorAssets {
   /** Raw RGBA atlases preserve hidden edge colors used by bilinear filtering. */
@@ -202,6 +203,10 @@ async function captureDefinition(
   meshes.forEach((mesh) => { mesh.isVisible = false; });
 
   try {
+    // Invisible capture sources are not a reliable part of Babylon's scene
+    // readiness checks. Explicitly wait for their optional foliage cutouts so
+    // every atlas direction is captured with the same material state.
+    await waitForVertexColorTextures(meshes);
     await scene.whenReadyAsync();
     let captureWidth = definition.captureWidth ?? definition.captureDiameter;
     let captureHeight = definition.captureHeight ?? definition.captureDiameter;

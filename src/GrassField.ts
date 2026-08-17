@@ -27,7 +27,10 @@ import {
 /** Keeps the broad grass patch above small terrain interpolation differences. */
 const GRASS_GROUND_OFFSET_METERS = 0.07;
 const GRASS_HEIGHT_METERS = 0.55;
-const GRASS_SPACING_METERS = 1.5;
+// A mature grass clump is about two metres wide after source scaling. Keeping
+// centres comfortably inside that footprint lets neighbouring clumps overlap
+// into turf instead of reading as isolated tufts.
+const GRASS_SPACING_METERS = 1.3;
 /** How strongly each clump adopts the hue and brightness of its local ground. */
 const GRASS_GROUND_COLOR_INFLUENCE = 0.8;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
@@ -35,13 +38,15 @@ const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland
 type GrassFieldOptions = VegetationPlacementOptions;
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
-  [LandCoverClass.TreeCover]: 0.6,
-  [LandCoverClass.Shrubland]: 0.7,
-  [LandCoverClass.Grassland]: 0.74,
-  [LandCoverClass.Cropland]: 0.74,
-  [LandCoverClass.Wetland]: 0.7,
-  [LandCoverClass.Mangrove]: 0.55,
-  [LandCoverClass.MossAndLichen]: 0.68,
+  [LandCoverClass.TreeCover]: 0.72,
+  [LandCoverClass.Shrubland]: 0.84,
+  // These covers represent continuous low vegetation. Full occupancy is
+  // intentional: variation comes from overlapping clumps, not bare grid cells.
+  [LandCoverClass.Grassland]: 1,
+  [LandCoverClass.Cropland]: 1,
+  [LandCoverClass.Wetland]: 0.88,
+  [LandCoverClass.Mangrove]: 0.68,
+  [LandCoverClass.MossAndLichen]: 0.82,
 };
 
 /** Places procedurally captured grass clumps over vegetated WorldCover cells. */
@@ -103,8 +108,10 @@ export async function createGrassField(
   if (landCover) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
-        const x = -meshWidth / 2 + (column + 0.15 + random() * 0.7) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.15 + random() * 0.7) * cellDepth;
+        // Restrained jitter keeps the carpet gap-free while rotations, scale,
+        // and the clump silhouettes keep the underlying grid imperceptible.
+        const x = -meshWidth / 2 + (column + 0.35 + random() * 0.3) * cellWidth;
+        const z = meshDepth / 2 - (row + 0.35 + random() * 0.3) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const coverClass = landCover.sample(lon, lat);
         const occupancy = Math.min(
@@ -128,7 +135,7 @@ export async function createGrassField(
         )) continue;
 
         const heightScale = 0.72 + random() * 0.56;
-        const widthScale = 0.94 + random() * 0.5;
+        const widthScale = 1.1 + random() * 0.42;
         const yaw = random() * Math.PI * 2;
         const normal = sampleTerrainNormal(
           terrain,

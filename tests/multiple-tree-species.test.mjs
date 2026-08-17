@@ -72,6 +72,16 @@ test("uses optional species textures with procedural-color fallback", () => {
   assert.match(captureMaterial, /setFloat\("leafTextureEnabled", 1\)/);
 });
 
+test("waits for foliage textures before capturing any impostor angle", () => {
+  assert.match(captureMaterial, /export async function waitForVertexColorTextures/);
+  assert.match(captureMaterial, /textureReadiness\.set\(material, ready\)/);
+  assert.match(captureMaterial, /resolveTextureReadiness\?\.\(\)/g);
+  const textureWait = impostorCapture.indexOf("await waitForVertexColorTextures(meshes)");
+  const atlasCapture = impostorCapture.indexOf("await captureImpostorAtlases(scene");
+  assert.ok(textureWait >= 0);
+  assert.ok(atlasCapture > textureWait);
+});
+
 test("gives every tree species its own procedural bark texture", () => {
   assert.match(captureMaterial, /export function getTreeBarkTexture/);
   assert.match(captureMaterial, /Record<TreeBarkStyle, number>/);
@@ -97,6 +107,12 @@ test("gives pine and spruce dense, twigged crowns and converges species brightne
   assert.match(proceduralTrees, /function addPineNeedleTuft/);
   assert.match(proceduralTrees, /TREE_LOW_LIGHT_BRIGHTNESS/);
   assert.match(treeField, /lowLightAlbedoScale/);
+});
+
+test("tapers the Scots pine crown upward from its widest surviving whorl", () => {
+  assert.match(proceduralTrees, /lerp\(0\.84, 0\.14, Math\.pow\(crownT, 0\.78\)\)/);
+  assert.doesNotMatch(proceduralTrees, /Math\.sin\(Math\.min\(1, crownT/);
+  assert.match(proceduralTrees, /species === "pine"\s*\? 0\.93 \+ random\(\) \* 0\.1/);
 });
 
 test("scales pine up and spruce down", () => {

@@ -880,14 +880,21 @@ function createConiferTree(
         : 6;
     const crownT = (level - firstLevel) / (trunkSegments - firstLevel);
     const tierRadius = species === "pine"
-      ? Math.sin(Math.min(1, crownT * 1.08) * Math.PI) * 0.55 + 0.32
+      // A Swedish Scots pine does not build a spindle-shaped crown. Once its
+      // shaded lower limbs have died, the first surviving whorl is normally
+      // the widest and successive whorls shorten toward the leader.
+      ? lerp(0.84, 0.14, Math.pow(crownT, 0.78))
       : lerp(0.92, 0.16, Math.pow(crownT, 0.72));
 
     for (let branch = 0; branch < branches; branch++) {
       const angle = level * 1.71 + branch * Math.PI * 2 / branches + (random() - 0.5) * 0.18;
       const horizontal = new Vector3(Math.cos(angle), 0, Math.sin(angle));
       const start = trunkPoints[level];
-      const length = tierRadius * (0.84 + random() * 0.24);
+      // Keep pine's small whorl-to-whorl irregularity without allowing a high
+      // tier to undo the crown's overall downward widening.
+      const length = tierRadius * (species === "pine"
+        ? 0.93 + random() * 0.1
+        : 0.84 + random() * 0.24);
       const droop = species === "spruce"
         ? -0.11 - length * 0.08
         : species === "pine"

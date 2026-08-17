@@ -27,6 +27,7 @@ export type TreeBarkStyle =
   | "spruce";
 
 const barkTextures = new WeakMap<Scene, Map<TreeBarkStyle, DynamicTexture>>();
+const textureReadiness = new WeakMap<ShaderMaterial, Promise<void>>();
 
 const BARK_SEEDS: Record<TreeBarkStyle, number> = {
   acacia: 0x41434143,
@@ -491,6 +492,11 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("instanceColorCoverage", 0);
+  let resolveTextureReadiness: (() => void) | undefined;
+  const ready = leafTextureUrl
+    ? new Promise<void>((resolve) => { resolveTextureReadiness = resolve; })
+    : Promise.resolve();
+  textureReadiness.set(material, ready);
   if (leafTextureUrl) {
     const leafTexture = new Texture(
       leafTextureUrl,
@@ -498,10 +504,16 @@ export function createVertexColorCaptureMaterial(
       false,
       false,
       Texture.TRILINEAR_SAMPLINGMODE,
-      () => { material.setFloat("leafTextureEnabled", 1); },
+      () => {
+        material.setFloat("leafTextureEnabled", 1);
+        resolveTextureReadiness?.();
+        resolveTextureReadiness = undefined;
+      },
       () => {
         material.setFloat("leafTextureEnabled", 0);
         leafTexture.dispose();
+        resolveTextureReadiness?.();
+        resolveTextureReadiness = undefined;
       },
     );
     leafTexture.wrapU = Texture.CLAMP_ADDRESSMODE;
@@ -541,6 +553,15 @@ export function createVertexColorCaptureMaterial(
     );
   });
   return material;
+}
+
+/** Waits for optional cutout textures before a hidden source is atlas-captured. */
+export async function waitForVertexColorTextures(meshes: readonly Mesh[]): Promise<void> {
+  await Promise.all(meshes.map((mesh) => (
+    mesh.material instanceof ShaderMaterial
+      ? textureReadiness.get(mesh.material) ?? Promise.resolve()
+      : Promise.resolve()
+  )));
 }
 
 /** Sets the normalized-height range used by live vegetation model lighting. */
