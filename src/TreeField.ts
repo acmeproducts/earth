@@ -95,7 +95,6 @@ attribute vec3 position;
 attribute float instanceOcclusion;
 attribute vec3 vegetationColor;
 attribute float instanceLodBlend;
-attribute float impostorDetailLodBlend;
 #endif
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
@@ -110,7 +109,6 @@ varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
-varying float vImpostorDetailLodBlend;
 
 void main(void) {
   #include<instancesVertex>
@@ -138,12 +136,10 @@ void main(void) {
   vInstanceOcclusion = instanceOcclusion;
   vInstanceColor = vegetationColor;
   vInstanceLodBlend = instanceLodBlend;
-  vImpostorDetailLodBlend = impostorDetailLodBlend;
   #else
   vInstanceOcclusion = 0.0;
   vInstanceColor = vec3(1.0);
   vInstanceLodBlend = 0.0;
-  vImpostorDetailLodBlend = 0.0;
   #endif
   vec4 clipPosition = viewProjection * worldPosition;
   vec4 centerClipPosition = viewProjection * vec4(center, 1.0);
@@ -164,7 +160,6 @@ varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
-varying float vImpostorDetailLodBlend;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -362,7 +357,11 @@ void main(void) {
     blend.x * blend.y
   );
   float choice = bayer4(gl_FragCoord.xy);
-  float lodBlend = vImpostorDetailLodBlend;
+  // Distance drives the atlas blend directly in the material, so one impostor
+  // instance covers every detail tier. No per-instance blend attribute and no
+  // CPU transition ring are needed to reach the reduced source.
+  float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
+  float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
   vec4 color;
   if (choice < weights.x) {
     color = frame(face, vec2(low.x, low.y), imageUV, lodBlend);
@@ -599,12 +598,6 @@ export async function createTreeField(
       metersPerUnit,
       renderMode,
       instanceOcclusion,
-      undefined,
-      {
-        nearDistance: prototype.captureHeight * 15.625,
-        farDistance: prototype.captureHeight * 19.375,
-        forceLowest: forceLowestImpostorLod,
-      },
     );
   });
   const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
@@ -742,7 +735,7 @@ export function createImpostorMaterial(
     scene,
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
-      attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend", "impostorDetailLodBlend"],
+      attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
       uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
@@ -768,8 +761,9 @@ export function createImpostorMaterial(
     0.5 / assets.lowResolutionWidth,
     0.5 / assets.lowResolutionHeight,
   ));
-  // Begin the distant tier close enough to cover most of the local forest
-  // (about 10x-25x the rendered impostor height).
+  // Distances are multiples of the impostor's capture height, so the same
+  // range holds for any scene scale. Begin the distant tier close enough to
+  // cover most of the local forest.
   material.setFloat("impostorLodNear", 10);
   material.setFloat("impostorLodFar", 25);
   material.setFloat("forceLowestLod", 0);

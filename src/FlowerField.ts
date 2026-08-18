@@ -140,10 +140,6 @@ export async function createFlowerField(
     renderMode,
     instanceOcclusion,
     new Float32Array(colors),
-    {
-      nearDistance: prototype.captureHeight * 31.25,
-      farDistance: prototype.captureHeight * 38.75,
-    },
   );
 }
 

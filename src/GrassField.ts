@@ -178,10 +178,6 @@ export async function createGrassField(
     renderMode,
     instanceOcclusion,
     new Float32Array(colors),
-    {
-      nearDistance: prototype.captureHeight * 55,
-      farDistance: prototype.captureHeight * 65,
-    },
   );
 }
 
