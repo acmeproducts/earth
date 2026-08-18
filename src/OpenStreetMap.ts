@@ -39,10 +39,9 @@ interface MapLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   lakeElevationSource?: Float32Array;
-  excludeBoundaryWater?: boolean;
 }
 
-export interface MapClipBounds {
+interface MapClipBounds {
   minX: number;
   maxX: number;
   minZ: number;
@@ -150,9 +149,6 @@ export class OpenStreetMap {
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
-          if (options.excludeBoundaryWater && touchesTerrainBoundary(polygon, terrain, options)) {
-            continue;
-          }
           const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
           if (mesh) water.push(mesh);
         }
@@ -168,38 +164,6 @@ export class OpenStreetMap {
       root,
       meshes,
       counts: { buildings: buildings.length, roads: roads.length, water: water.length },
-    };
-  }
-
-  static createWaterLayer(
-    scene: Scene,
-    tiles: MapTile[],
-    terrain: TerrainData,
-    options: MapLayerOptions,
-    innerBounds?: MapClipBounds,
-  ): MapFeatureLayer {
-    const root = new TransformNode("mapWater", scene);
-    const water: Mesh[] = [];
-
-    for (const tile of tiles) {
-      forEachFeature(tile, "water", (feature) => {
-        if (feature.properties.class === "ocean") return;
-        for (const polygon of polygons(feature, tile)) {
-          const points = polygonScenePoints(polygon, terrain, options);
-          // Lakes wholly owned by the detailed terrain are already rendered there.
-          // A lake touching or crossing its boundary remains one complete vista polygon.
-          if (innerBounds && isStrictlyInsideBounds(points, innerBounds)) continue;
-          const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
-          if (mesh) water.push(mesh);
-        }
-      });
-    }
-
-    const meshes = styleWater(water, root);
-    return {
-      root,
-      meshes,
-      counts: { buildings: 0, roads: 0, water: water.length },
     };
   }
 
@@ -274,31 +238,6 @@ function polygonScenePoints(
 ): Array<{ x: number; z: number }> {
   return coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
-  );
-}
-
-function touchesTerrainBoundary(
-  coordinates: LonLat[],
-  terrain: TerrainData,
-  options: MapLayerOptions,
-): boolean {
-  const halfWidth = options.meshWidth / 2;
-  const halfDepth = options.meshDepth / 2;
-  const epsilon = 1e-5;
-  return polygonScenePoints(coordinates, terrain, options).some((point) =>
-    point.x <= -halfWidth + epsilon || point.x >= halfWidth - epsilon ||
-    point.z <= -halfDepth + epsilon || point.z >= halfDepth - epsilon
-  );
-}
-
-function isStrictlyInsideBounds(
-  points: Array<{ x: number; z: number }>,
-  bounds: MapClipBounds,
-): boolean {
-  const epsilon = 1e-5;
-  return points.length >= 3 && points.every((point) =>
-    point.x > bounds.minX + epsilon && point.x < bounds.maxX - epsilon &&
-    point.z > bounds.minZ + epsilon && point.z < bounds.maxZ - epsilon
   );
 }
 

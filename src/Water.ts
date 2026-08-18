@@ -54,9 +54,7 @@ export function createWaterPlane(
   water.waveLength = 0.1;
   water.windDirection = new Vector2(1, 1);
 
-  // Keep one authoritative tint across the local and distant-vista geometry.
-  // Refraction otherwise exposes the differently rendered terrain beneath each
-  // region as a visible color boundary on the sea surface.
+  // Keep one authoritative tint across the water surface.
   const seaColor = new Color3(0.05, 0.2, 0.4);
   const litSeaColor = seaColor.clone();
   const ambientColor = Color3.White();

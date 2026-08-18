@@ -874,8 +874,7 @@ function distanceInsideMask(
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
-      // A tile boundary is not a forest boundary. Leaving edge cells open lets
-      // adjacent local/vista fields share density without an artificial rim.
+      // A tile boundary is not a forest boundary, so edge cells remain open.
       distance[index] = mask[index] ? Infinity : 0;
     }
   }

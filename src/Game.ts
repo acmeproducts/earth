@@ -16,7 +16,7 @@ import {
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
 import { createWaterPlane } from "./Water";
-import { createTreeField, DEFAULT_TREE_SPACING_METERS } from "./TreeField";
+import { createTreeField } from "./TreeField";
 import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
@@ -49,24 +49,16 @@ import {
   MIN_MODEL_RANGE_METERS,
   SceneControls,
 } from "./SceneControls";
-import { DistantVista } from "./DistantVista";
 import {
   DEFAULT_WORLD_SEED,
   layerSeed,
   WORLD_GRID_LEVEL,
   worldTileAreaAtLocation,
 } from "./WorldGrid";
-import {
-  chooseVistaVegetationSpacing,
-  vegetationDensityScaleAcrossLocalBoundary,
-} from "./VistaVegetation";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 type VegetationCategory = "trees" | "grass" | "bushes";
 type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
-// Zoom 14 retains OpenFreeMap's per-building render heights. At zoom 13 the
-// footprints are generalized and their height attributes are omitted.
-const DISTANT_OSM_ZOOM = 14;
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
@@ -100,7 +92,6 @@ interface TerrainSceneResources {
   flowerField?: VegetationFieldResult;
   bushField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
-  distantVista?: DistantVista;
 }
 
 export type InitializationProgress = (step: string, progress: number) => void;
@@ -119,7 +110,6 @@ export class Game {
   private terrainData?: TerrainData;
   private readonly gridLevel = WORLD_GRID_LEVEL;
   private readonly worldSeed: number;
-  private readonly innerSize: number;
   private readonly renderScale: number;
   private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
@@ -136,7 +126,6 @@ export class Game {
   private walkableTerrain?: WalkableTerrain;
   private readonly heldMovementKeys = new Set<string>();
   private verticalVelocityMetersPerSecond = 0;
-  private distantVista?: DistantVista;
   private lastVegetationLodDebugLogMilliseconds = 0;
 
   private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
@@ -173,10 +162,6 @@ export class Game {
       stencil: false,
       antialias: true,
     });
-    // The vista spans a much larger depth range than the local terrain. A
-    // reversed depth buffer preserves precision at that distance and prevents
-    // distant terrain, water, and mapped surfaces from collapsing onto the
-    // same depth values on lower-precision GPUs.
     this.engine.useReverseDepthBuffer = true;
     this.scene = new Scene(this.engine);
     // The app does not use hover picking. Skipping the implicit ray cast keeps
@@ -191,13 +176,12 @@ export class Game {
       -2_147_483_648,
       2_147_483_647,
     );
-    this.innerSize = queryInteger(query, "inner-size", 1, 1, 4);
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
     this.engine.setHardwareScalingLevel(1 / this.renderScale);
     this.fpsCounter = new FpsCounter(
       this.scene,
       query.has("performance-debug") || query.has("perf"),
-      { renderScale: this.renderScale, innerSize: this.innerSize },
+      { renderScale: this.renderScale },
     );
     const requestedMode = query.get("vegetation");
     const initialMode: VegetationRenderMode = requestedMode === "models" || requestedMode === "impostors"
@@ -290,53 +274,14 @@ export class Game {
     const terrainArea = worldTileAreaAtLocation(
       location.lat,
       location.lon,
-      this.innerSize,
+      1,
       this.worldSeed,
       this.gridLevel,
     );
     const terrainData = await TerrainElevationSource.fetchWorldArea(terrainArea);
     if (requestId !== this.terrainRequestId) return;
-    const localCenter = sceneToLonLat(
-      0,
-      0,
-      terrainData.bounds,
-      terrainData.groundWidthMeters,
-      terrainData.groundHeightMeters,
-    );
-
     await reportInitializationProgress(onProgress, "Loading maps and land cover", 18);
-    const distantArea = worldTileAreaAtLocation(
-      localCenter.lat,
-      localCenter.lon,
-      3,
-      this.worldSeed,
-      Math.max(1, this.gridLevel - 1),
-    );
-    const distantTerrainPromise = TerrainElevationSource.fetchWorldArea(distantArea).then(async (terrain) => {
-      const lakeElevationSource = terrain.elevations.slice();
-      const [distantLandCover, distantMapWays] = await Promise.all([
-        WorldCover.fetch(terrain.bounds, 12).catch((error: unknown) => {
-            console.warn("Distant WorldCover unavailable; vista vegetation was skipped.", error);
-            return undefined;
-          }),
-        OpenStreetMap.fetch(terrain.bounds, DISTANT_OSM_ZOOM).catch((error: unknown) => {
-            console.warn("Distant OpenStreetMap unavailable; vista map geometry was skipped.", error);
-            return [];
-          }),
-      ]);
-      distantLandCover?.constrainElevations(terrain);
-      sinkSubmergedTerrain(terrain);
-      return {
-        terrain,
-        landCover: distantLandCover,
-        mapWays: distantMapWays,
-        lakeElevationSource,
-      };
-    }).catch((error: unknown) => {
-      console.warn("Distant terrain unavailable; the terrain ring was skipped.", error);
-      return undefined;
-    });
-    const [landCover, mapWays, distantScene] = await Promise.all([
+    const [landCover, mapWays] = await Promise.all([
       WorldCover.fetch(terrainData.bounds).catch((error: unknown) => {
         console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
         return undefined;
@@ -345,7 +290,6 @@ export class Game {
         console.warn("OpenStreetMap unavailable; map features were skipped.", error);
         return [];
       }),
-      distantTerrainPromise,
     ]);
     if (requestId !== this.terrainRequestId) return;
     await reportInitializationProgress(onProgress, "Building terrain mesh", 34);
@@ -360,23 +304,12 @@ export class Game {
     const groundHeight = terrainData.groundHeightMeters;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
-    if (distantScene) {
-      const vistaRadius = Math.min(
-        distantScene.terrain.groundWidthMeters,
-        distantScene.terrain.groundHeightMeters,
-      ) / (2 * metersPerUnit);
-      this.scene.fogMode = Scene.FOGMODE_LINEAR;
-      this.scene.fogStart = vistaRadius * 0.65;
-      this.scene.fogEnd = vistaRadius * 0.95;
-    } else {
-      this.scene.fogMode = Scene.FOGMODE_NONE;
-    }
+    this.scene.fogMode = Scene.FOGMODE_NONE;
     const mapOptions = {
       meshWidth,
       meshDepth,
       metersPerUnit,
       lakeElevationSource,
-      excludeBoundaryWater: true,
     };
     const roadExclusionMask = OpenStreetMap.createRoadExclusionMask(
       mapWays,
@@ -412,19 +345,6 @@ export class Game {
     });
     const resources: TerrainSceneResources = { terrain };
 
-    const vistaVegetationSpacingMeters = distantScene
-      ? chooseVistaVegetationSpacing(
-          distantScene.terrain.groundWidthMeters,
-          distantScene.terrain.groundHeightMeters,
-        )
-      : DEFAULT_TREE_SPACING_METERS;
-    // Equalize actual trees per square meter at the seam, not merely the
-    // occupancy percentage of two differently spaced candidate grids.
-    const localBorderDensityScale = Math.pow(
-      DEFAULT_TREE_SPACING_METERS / vistaVegetationSpacingMeters,
-      2,
-    );
-
     await reportInitializationProgress(onProgress, "Planting trees", 44);
     const treeField = await createTreeField(this.scene, terrainData, {
       meshWidth,
@@ -434,17 +354,6 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
-      densityScale: (worldX, worldZ) => vegetationDensityScaleAcrossLocalBoundary(
-        worldX,
-        worldZ,
-        meshWidth / 2,
-        meshDepth / 2,
-        {
-          innerScale: 0.88,
-          borderScale: localBorderDensityScale,
-          outerScale: localBorderDensityScale,
-        },
-      ),
     });
     resources.treeField = treeField;
     treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
@@ -461,13 +370,6 @@ export class Game {
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
-      densityScale: (worldX, worldZ) => vegetationDensityScaleAcrossLocalBoundary(
-        worldX,
-        worldZ,
-        meshWidth / 2,
-        meshDepth / 2,
-        { innerScale: 1, borderScale: 0, outerScale: 0 },
-      ),
     });
     resources.grassField = grassField;
     grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
@@ -527,23 +429,6 @@ export class Game {
     });
     resources.water = water;
 
-    await reportInitializationProgress(onProgress, "Building the distant landscape", 91);
-    const distantVista = distantScene
-      ? await DistantVista.create(this.scene, distantScene.terrain, {
-          localTerrain: terrainData,
-          localMeshWidth: meshWidth,
-          localMeshDepth: meshDepth,
-          metersPerUnit,
-          distantLandCover: distantScene.landCover,
-          localLandCover: landCover,
-          mapTiles: distantScene.mapWays,
-          lakeElevationSource: distantScene.lakeElevationSource,
-          waterMesh: water,
-          vegetationSpacingMeters: vistaVegetationSpacingMeters,
-        })
-      : undefined;
-    resources.distantVista = distantVista;
-    distantVista?.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
     disposeTerrainSceneResources({
       terrain: this.terrain,
@@ -553,7 +438,6 @@ export class Game {
       flowerField: this.flowerField,
       bushField: this.bushField,
       mapFeatures: this.mapFeatures,
-      distantVista: this.distantVista,
     });
     this.terrain = terrain;
     terrain.checkCollisions = true;
@@ -563,7 +447,6 @@ export class Game {
     this.flowerField = flowerField;
     this.bushField = bushField;
     this.mapFeatures = mapFeatures.root;
-    this.distantVista = distantVista;
     this.terrainData = terrainData;
     this.walkableTerrain = {
       data: terrainData,
@@ -658,7 +541,6 @@ export class Game {
     this.grassField?.setAmbientOcclusionEnabled(enabled);
     this.flowerField?.setAmbientOcclusionEnabled(enabled);
     this.bushField?.setAmbientOcclusionEnabled(enabled);
-    this.distantVista?.setAmbientOcclusionEnabled(enabled);
   }
 
   private updateVegetationLod(): void {
@@ -1104,7 +986,6 @@ function disposeTerrainSceneResources(resources: TerrainSceneResources): void {
   resources.flowerField?.root.dispose(false, false);
   resources.bushField?.root.dispose(false, false);
   resources.mapFeatures?.dispose(false, true);
-  resources.distantVista?.dispose();
 }
 
 function emptyVegetationLodStats(): VegetationLodDebugStats {
