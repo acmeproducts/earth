@@ -62,7 +62,10 @@ export async function createFlowerField(
   const flowerModel = createFlowerModel(scene, flowerHeight);
   flowerModel.parent = root;
   flowerModel.isPickable = false;
-  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, true));
+  // Never force-dispose this material's textures: the bound shadow sampler is
+  // the scene's shared shadow map, and destroying it blanks all vegetation
+  // after a terrain rebuild. The material disposes its own textures itself.
+  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, false));
   const random = createSeededRandom(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);

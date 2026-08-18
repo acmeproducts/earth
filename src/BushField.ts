@@ -65,7 +65,10 @@ export async function createBushField(
   const bushModel = createBushModel(scene, bushHeight);
   bushModel.parent = root;
   bushModel.isPickable = false;
-  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));
+  // Never force-dispose this material's textures: the bound shadow sampler is
+  // the scene's shared shadow map, and destroying it blanks all vegetation
+  // after a terrain rebuild. The material disposes its own textures itself.
+  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, false));
   const captureSize = prototype.captureSize;
 
   const random = createSeededRandom(seed);

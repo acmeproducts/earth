@@ -92,7 +92,10 @@ export async function createGrassField(
   if (grassModel.material instanceof ShaderMaterial) {
     grassModel.material.setFloat("instanceColorCoverage", 0.8);
   }
-  root.onDisposeObservable.add(() => grassModel.material?.dispose(true, true));
+  // Never force-dispose this material's textures: the bound shadow sampler is
+  // the scene's shared shadow map, and destroying it blanks all vegetation
+  // after a terrain rebuild. The material disposes its own textures itself.
+  root.onDisposeObservable.add(() => grassModel.material?.dispose(true, false));
   const captureSize = prototype.captureSize;
   const random = createSeededRandom(seed);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(

@@ -545,6 +545,10 @@ export function createVertexColorCaptureMaterial(
     leafTexture.wrapU = Texture.CLAMP_ADDRESSMODE;
     leafTexture.wrapV = Texture.CLAMP_ADDRESSMODE;
     material.setTexture("leafTexture", leafTexture);
+    // The leaf texture is created per material, so the material owns it.
+    // Callers must not force-dispose material textures instead: the shared
+    // shadow map and the scene-cached bark texture are bound here too.
+    material.onDisposeObservable.addOnce(() => leafTexture.dispose());
   }
   if (barkTexture) {
     material.setTexture("barkTexture", barkTexture);
