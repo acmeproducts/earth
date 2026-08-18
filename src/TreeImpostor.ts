@@ -9,7 +9,11 @@ import {
   TREE_SPECIES_LIST,
   TreeSpecies,
 } from "./ProceduralTree";
-import { setVertexColorModelHeight } from "./ProceduralCaptureMaterial";
+import {
+  setVegetationWindSway,
+  setVertexColorModelHeight,
+} from "./ProceduralCaptureMaterial";
+import { treeWindSwayFraction, treeWindTimeSamples } from "./Wind";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
@@ -31,9 +35,16 @@ function createTreeProvider(species: TreeSpecies) {
     preserveCaptureAspectRatio: true,
     minimumResolutionWidth: 64,
     faces: IMPOSTOR_CUBE_FACES,
+    // Trees are the one vegetation type whose atlas covers every azimuth, so
+    // they are the one that can carry a directional sway. The time dimension
+    // multiplies the atlas, which is what pays for the smaller direction grid.
+    wind: {
+      swayFraction: treeWindSwayFraction(),
+      timeSamples: { default: treeWindTimeSamples(), minimum: 1, maximum: 8 },
+    },
     sampling: {
-      horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
-      verticalSamples: { default: 5, minimum: 1, maximum: 10 },
+      horizontalSamples: { default: 4, minimum: 1, maximum: 16 },
+      verticalSamples: { default: 4, minimum: 1, maximum: 10 },
       resolution: { default: 192, minimum: 64, maximum: 256 },
     },
   });
@@ -85,5 +96,8 @@ export async function createTreeModels(
   tree.setVerticesData(VertexBuffer.PositionKind, positions);
   tree.refreshBoundingInfo();
   setVertexColorModelHeight(tree, renderHeight);
+  // The same sway the atlas was captured with, described in this model's own
+  // space: rescaled geometry standing on y = 0 rather than centered on it.
+  setVegetationWindSway([tree], treeWindSwayFraction(), 0, renderHeight);
   return [tree];
 }

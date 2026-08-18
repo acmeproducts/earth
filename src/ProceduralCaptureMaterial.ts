@@ -16,6 +16,18 @@ import {
   vegetationShadowFragmentDeclaration,
   vegetationShadowVertexDeclaration,
 } from "./VegetationShadowReceiver";
+import {
+  bindWindPhase,
+  setWindPhaseOverride,
+  setWindShear,
+  setWindSway,
+  windPhaseVertexDeclaration,
+  windShearVertexDeclaration,
+  windSwayVertexDeclaration,
+  WIND_PHASE_UNIFORMS,
+  WIND_SHEAR_UNIFORMS,
+  WIND_SWAY_UNIFORMS,
+} from "./Wind";
 
 const BARK_TEXTURE_SIZE = 512;
 
@@ -354,6 +366,9 @@ export function createVertexColorCaptureMaterial(
         uniform mat4 viewProjection;
         uniform float modelHeight;
         ${vegetationShadowVertexDeclaration}
+        ${windPhaseVertexDeclaration}
+        ${windSwayVertexDeclaration}
+        ${windShearVertexDeclaration}
         #include<instancesDeclaration>
         varying vec4 vColor;
         varying vec2 vUv;
@@ -382,7 +397,21 @@ export function createVertexColorCaptureMaterial(
           vInstanceColor = vec3(1.0);
           vInstanceLodBlend = 1.0;
           #endif
-          vec4 worldPosition = finalWorld * vec4(position, 1.0);
+          // The fragment shader's own foliage mask: cards carrying a leaf
+          // cutout flutter, bark and cut branch ends only bend with the wood.
+          float foliage = step(0.0, uv.x) * (1.0 - step(1.5, uv.x));
+          vec3 instanceOrigin = finalWorld[3].xyz;
+          // Captured sway and live shear are alternatives, not layers: a
+          // species uses whichever its own atlas can reproduce.
+          vec3 swayPosition = position
+            + windSwayOffset(position, windLoopPhase(instanceOrigin), foliage)
+            + windShearOffset(
+              position,
+              windModelBaseY,
+              windLocalDirection(rotation[0], rotation[2]),
+              windBend(instanceOrigin)
+            );
+          vec4 worldPosition = finalWorld * vec4(swayPosition, 1.0);
           vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
           gl_Position = viewProjection * worldPosition;
         }
@@ -497,6 +526,9 @@ export function createVertexColorCaptureMaterial(
         "vegetationShadowReverseDepth",
         "vegetationShadowDarkness",
         "vegetationShadowFloatTexture",
+        ...WIND_PHASE_UNIFORMS,
+        ...WIND_SWAY_UNIFORMS,
+        ...WIND_SHEAR_UNIFORMS,
       ],
       samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler"],
       needAlphaBlending: false,
@@ -518,6 +550,10 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("instanceColorCoverage", 0);
+  // Vegetation stands still until something describes its sway, so species
+  // without a captured wind dimension are unaffected.
+  setWindSway(material, 0, 0, 1);
+  setWindShear(material, 0);
   let resolveTextureReadiness: (() => void) | undefined;
   const ready = leafTextureUrl
     ? new Promise<void>((resolve) => { resolveTextureReadiness = resolve; })
@@ -554,6 +590,7 @@ export function createVertexColorCaptureMaterial(
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
   const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
+    bindWindPhase(material);
     const sun = scene.lights.find((light): light is DirectionalLight => (
       light instanceof DirectionalLight && light.name === "sunLight"
     ));
@@ -588,6 +625,46 @@ export async function waitForVertexColorTextures(meshes: readonly Mesh[]): Promi
       ? textureReadiness.get(mesh.material) ?? Promise.resolve()
       : Promise.resolve()
   )));
+}
+
+/**
+ * Gives a model its wind sway. `baseY` and `modelHeight` describe the model in
+ * its own local space: a capture source is origin-centered, while the live
+ * geometry built from it stands on y = 0.
+ */
+export function setVegetationWindSway(
+  meshes: readonly Mesh[],
+  swayFraction: number,
+  baseY: number,
+  modelHeight: number,
+): void {
+  for (const mesh of meshes) {
+    if (mesh.material instanceof ShaderMaterial) {
+      setWindSway(mesh.material, swayFraction, baseY, modelHeight);
+    }
+  }
+}
+
+/**
+ * Leans models by a shear instead of a captured sway. Their impostors reproduce
+ * the same shear by warping their proxy, so both stay in step.
+ */
+export function setVegetationWindShear(
+  meshes: readonly Mesh[],
+  shearFraction: number,
+): void {
+  for (const mesh of meshes) {
+    if (mesh.material instanceof ShaderMaterial) setWindShear(mesh.material, shearFraction);
+  }
+}
+
+/** Freezes sources at one moment of the loop so it can be captured. */
+export function setVegetationWindPhase(meshes: readonly Mesh[], phase?: number): void {
+  for (const mesh of meshes) {
+    if (mesh.material instanceof ShaderMaterial) {
+      setWindPhaseOverride(mesh.material, phase);
+    }
+  }
 }
 
 /** Sets the normalized-height range used by live vegetation model lighting. */

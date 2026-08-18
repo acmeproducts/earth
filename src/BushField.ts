@@ -1,5 +1,7 @@
 import { Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { createBushModel, getBushImpostorAssets } from "./BushImpostor";
+import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { windShearFraction } from "./Wind";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
@@ -63,6 +65,10 @@ export async function createBushField(
     bush.material.setFloat("impostorLodFar", 50);
   }
   const bushModel = createBushModel(scene, bushHeight);
+  // Symmetric atlases cannot hold a directional sway, but a shear needs no
+  // atlas frames: the impostor warps its proxy and the model displaces its
+  // vertices by the same linear amount. Woody shrubs bend least.
+  setVegetationWindShear([bush, bushModel], windShearFraction("bush"));
   bushModel.parent = root;
   bushModel.isPickable = false;
   root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));

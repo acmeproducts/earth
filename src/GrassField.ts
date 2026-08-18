@@ -8,6 +8,8 @@ import {
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
+import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { windShearFraction } from "./Wind";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import type { TerrainData } from "./TerrainData";
 import {
@@ -87,6 +89,10 @@ export async function createGrassField(
     grass.material.setFloat("instanceColorCoverage", 0.8);
   }
   const grassModel = createGrassModel(scene, grassHeight);
+  // Grass is rotationally symmetric, so its atlas cannot hold a directional
+  // sway. A shear needs no atlas frames at all: the impostor warps its proxy
+  // and the live model displaces its vertices by the same linear amount.
+  setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
   grassModel.parent = root;
   grassModel.isPickable = false;
   if (grassModel.material instanceof ShaderMaterial) {

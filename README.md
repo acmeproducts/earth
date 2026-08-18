@@ -83,13 +83,14 @@ five-face impostor pipeline. Grass, flowers, and bushes are rotationally symmetr
 they capture only one side and the top. Their side atlases use the optional
 upper-hemisphere mode, spending every vertical row on level-to-overhead views
 because these low vegetation types are not normally seen from below. Tree captures
-retain the full below-to-above range and use 5 horizontal
-by 5 vertical samples per face. Each
+retain the full below-to-above range and use 4 horizontal
+by 4 vertical samples per face, spending the freed atlas budget on a wind
+dimension instead. Each
 tree frame keeps a 192 px height and derives its narrower width from the
 generated tree's bounding box. `tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
 override those defaults for quality testing, up to a maximum resolution of 256
-px. Grass uses the same 5 by 5 grid at
+px. Grass uses a 5 by 5 grid at
 128 px by default. `grass-impostor-x-samples`,
 `grass-impostor-y-samples`, and `grass-impostor-resolution` query parameters
 can override those values for quality testing.
@@ -97,6 +98,55 @@ can override those values for quality testing.
 Bushes are generated from procedural branches and dense curved shoots, captured
 into their own directional atlases, and scattered in noise-shaped clusters most
 densely through WorldCover shrubland with lighter placement elsewhere.
+
+Trees sway in a looping wind cycle. `src/Wind.ts` owns the cycle and the GLSL
+that displaces a vertex within it, and both the atlas capture pass and the live
+model material run that same code: an impostor frame is therefore exactly what
+the model would have looked like at that moment, so the two agree through the
+LOD transition. Every vertex moves on the loop's fundamental frequency and
+differs only in phase, which is what makes a small number of captured moments
+sufficient — harmonics or per-vertex flutter would alias into noise between
+frames.
+
+Each tree face captures 4 moments of the loop alongside its 4 by 4 directions,
+laid out along the atlas's tile-column axis, and the shader dithers between
+consecutive moments the same way it already dithers between neighboring
+directions. Gusts travel across the world, so an instance's position sets its
+phase and the forest reads as one moving air mass. The sway direction is the
+model's own local X, which per-instance yaw scatters: that is what keeps the
+directional atlas valid, and it also avoids a uniformly combed forest.
+
+Grass, flowers, and bushes lean a different way, because their atlases exploit
+rotational symmetry and a folded atlas cannot hold a directional pose. They use
+a pure shear instead: displacement grows linearly with height above the base, so
+the roots stay planted and the tips lean furthest. A shear needs no captured
+moments at all. Real geometry adds the gradient to its vertices, while an
+impostor subtracts the same gradient from the point it samples inside its own
+frame, which leans the captured image by exactly as much. Nothing is baked, so
+that lean is free to follow one world direction and carry a second harmonic —
+the forest's captured sway can do neither.
+
+Displacing the sample point *after* it has been projected is what anchors the
+lean to the subject rather than to its proxy box, which for grass is over four
+times the clump's own height. Side on, image height is capture height, so the
+frame shears progressively. From overhead the projection plane is level and the
+whole frame shifts by the lean at mid-height, which is as close as a flat lookup
+gets to a silhouette smeared through every height. The technique needs slack
+around the subject inside its frame; the square captures of low vegetation have
+it, and a tightly fitted capture like the trees' would clip.
+
+`?wind=0` removes all vegetation motion and collapses the capture's time axis
+back to a single moment; values up to 3 scale it. `tree-impostor-time-samples`
+overrides the number of captured moments (1 to 8).
+
+Shadows do not follow any of this by default. Nothing is missing from the
+shaders — the depth pass reuses each vegetation vertex shader, so the model
+displacement, the impostor's captured moment and its lean are all already in the
+shadow silhouette. The only reason shadows sit still is that the map renders once
+and caches until the LOD packing or the sun changes. `?shadow-refresh=N`
+re-renders it every N frames instead, at the cost of re-drawing every caster that
+often — and the caster list includes every grass clump, which is by far the most
+expensive part of it.
 
 Impostor capture is model-agnostic. `src/Impostor.ts` owns sampling validation,
 URL overrides, per-scene reuse, source disposal, optional bounds fitting, and

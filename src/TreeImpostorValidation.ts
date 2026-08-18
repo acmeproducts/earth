@@ -16,6 +16,7 @@ import { createTreeImpostorPrototype } from "./TreeField";
 import { TreeImpostorAssets } from "./TreeImpostor";
 import { IMPOSTOR_CUBE_FACES as TREE_IMPOSTOR_FACES } from "./Impostor";
 import { FpsCounter } from "./FpsCounter";
+import { setWindPhaseOverride } from "./Wind";
 
 interface FaceValidation {
   face: string;
@@ -70,6 +71,9 @@ export class TreeImpostorValidation {
     mesh.thinInstanceSetBuffer("matrix", Float32Array.from(Matrix.Identity().asArray()), 16, true);
     mesh.thinInstanceRefreshBoundingInfo(true);
     (mesh.material as ShaderMaterial).setFloat("cameraOrthographic", 1);
+    // Comparing a live render against fixed atlas frames only means anything
+    // at a fixed moment of the wind loop.
+    setWindPhaseOverride(mesh.material as ShaderMaterial, 0);
     const resolution = assets.resolution;
     const centerSample = (assets.gridSize - 1) / 2;
 
@@ -443,6 +447,7 @@ uniform sampler2D atlas3;
 uniform sampler2D atlas4;
 uniform vec2 samplePosition;
 uniform float gridSize;
+uniform vec2 atlasTileCounts;
 uniform float faceIndex;
 uniform float tileInset;
 vec4 atlasSample(vec2 uv) {
@@ -454,7 +459,9 @@ vec4 atlasSample(vec2 uv) {
 }
 vec4 frame(vec2 tile) {
   vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), vUV);
-  return atlasSample((tile + localUV) / gridSize);
+  // Wind moments extend the atlas along its columns; validation reads the
+  // first one, which is the still pose the capture starts its loop from.
+  return atlasSample((tile + localUV) / atlasTileCounts);
 }
 float bayer4(vec2 pixel) {
   vec2 p = mod(floor(pixel), 4.0);
@@ -497,7 +504,7 @@ function createDemoReference(
     fragmentSource: demoFragmentShader,
   }, {
     attributes: ["position", "uv"],
-    uniforms: ["viewProjection", "center", "billboardRight", "billboardUp", "diameter", "samplePosition", "gridSize", "faceIndex", "tileInset"],
+    uniforms: ["viewProjection", "center", "billboardRight", "billboardUp", "diameter", "samplePosition", "gridSize", "atlasTileCounts", "faceIndex", "tileInset"],
     samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4"],
     needAlphaBlending: false,
   });
@@ -505,6 +512,10 @@ function createDemoReference(
   material.setVector3("center", center);
   material.setFloat("diameter", diameter);
   material.setFloat("gridSize", assets.gridSize);
+  material.setVector2("atlasTileCounts", new Vector2(
+    assets.gridWidth * assets.timeSamples,
+    assets.gridHeight,
+  ));
   material.setFloat("tileInset", 0.5 / assets.resolution);
   assets.textures.forEach((texture, index) => material.setTexture(`atlas${index}`, texture));
   mesh.material = material;

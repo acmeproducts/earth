@@ -51,6 +51,14 @@ import {
   vegetationShadowFragmentDeclaration,
   vegetationShadowVertexDeclaration,
 } from "./VegetationShadowReceiver";
+import {
+  bindWindPhase,
+  setWindShear,
+  windPhaseVertexDeclaration,
+  windShearVertexDeclaration,
+  WIND_PHASE_UNIFORMS,
+  WIND_SHEAR_UNIFORMS,
+} from "./Wind";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -101,6 +109,8 @@ uniform vec3 cameraPosition;
 uniform float captureCenterY;
 uniform vec3 sunDirection;
 ${vegetationShadowVertexDeclaration}
+${windPhaseVertexDeclaration}
+${windShearVertexDeclaration}
 #include<instancesDeclaration>
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
@@ -109,15 +119,26 @@ varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
+varying float vWindPhase;
+varying vec3 vWindShear;
 
 void main(void) {
   #include<instancesVertex>
-  vec4 worldPosition = finalWorld * vec4(position, 1.0);
-  vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
-  vec3 center = (finalWorld * vec4(0.0, captureCenterY, 0.0, 1.0)).xyz;
+  vec3 instanceOrigin = finalWorld[3].xyz;
+  // Which captured moment this instance is in, for sources that baked a sway.
+  vWindPhase = windLoopPhase(instanceOrigin);
   vec3 axisX = normalize(finalWorld[0].xyz);
   vec3 axisY = normalize(finalWorld[1].xyz);
   vec3 axisZ = normalize(finalWorld[2].xyz);
+  // Local-space lean per unit of height. The fragment stage applies it to the
+  // point it samples, so a source leans with no extra atlas frames at all.
+  vWindShear = windShearGradient(
+    windLocalDirection(axisX, axisZ),
+    windBend(instanceOrigin)
+  );
+  vec4 worldPosition = finalWorld * vec4(position, 1.0);
+  vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
+  vec3 center = (finalWorld * vec4(0.0, captureCenterY, 0.0, 1.0)).xyz;
   vec3 worldViewDirection = cameraPosition - center;
 
   vLocalPosition = position - vec3(0.0, captureCenterY, 0.0);
@@ -160,6 +181,8 @@ varying vec3 vLocalWorldUp;
 varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
+varying float vWindPhase;
+varying vec3 vWindShear;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -174,6 +197,8 @@ uniform float rotationallySymmetric;
 uniform float rotationalSymmetryOrder;
 uniform float upperHemisphereOnly;
 uniform vec2 gridDimensions;
+uniform vec2 atlasTileCounts;
+uniform float timeSamples;
 uniform vec2 tileInset;
 uniform vec2 lowTileInset;
 uniform vec2 captureDimensions;
@@ -211,7 +236,7 @@ vec4 lowAtlasSample(float face, vec2 uv) {
 vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   if (forceLowestLod > 0.5) {
     vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
-    vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / gridDimensions);
+    vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts);
     // Keep the low atlas's straight RGB and make its edge binary. In
     // particular, do not divide filtered foliage RGB by its small alpha:
     // that amplifies pale leaf-edge texels into a bright fringe.
@@ -219,11 +244,11 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
     return lowColor;
   }
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
-  vec2 atlasUV = (tile + localUV) / gridDimensions;
+  vec2 atlasUV = (tile + localUV) / atlasTileCounts;
   if (lodBlend <= 0.0) return atlasSample(face, atlasUV);
 
   vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
-  vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / gridDimensions);
+  vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts);
   // The low atlas is color-only. Its coarse coverage is unsuitable for a
   // stable foliage silhouette, so the original atlas remains the alpha mask.
   lowColor.a = step(0.5, lowColor.a);
@@ -338,6 +363,16 @@ void main(void) {
   }
   #endif
 
+  // Lean the captured image by sampling it against the lean. Displacing the
+  // point after it has been projected is what anchors the warp to the subject
+  // rather than to the proxy box: side-on, image height is capture height, so
+  // the frame shears progressively; from overhead the projection plane is level
+  // and the whole frame shifts by the lean at mid-height, which is the closest a
+  // flat lookup gets to a silhouette smeared through every height. Any component
+  // along the view direction falls out of the billboard dots below on its own.
+  // This needs slack around the subject inside its frame, which the square
+  // captures of low vegetation have and a tightly fitted one would not.
+  projectedPosition -= vWindShear * (projectedPosition.y + captureCenterY);
   vec3 billboardRight = normalize(cross(direction, billboardFaceUp));
   vec3 billboardUp = normalize(cross(billboardRight, direction));
   float verticalDimension = mix(captureDimensions.y, captureDimensions.x, topFacing);
@@ -357,6 +392,20 @@ void main(void) {
     blend.x * blend.y
   );
   float choice = bayer4(gl_FragCoord.xy);
+  // The atlas is alpha tested rather than blended, so consecutive moments of
+  // the wind loop are dithered together exactly as neighboring directions are.
+  // A second, offset pattern keeps the two choices from correlating.
+  float timeColumn = 0.0;
+  if (timeSamples > 1.5) {
+    float timePosition = fract(vWindPhase) * timeSamples;
+    float earlierMoment = floor(timePosition);
+    float timeChoice = bayer4(gl_FragCoord.xy + vec2(3.0, 2.0));
+    // The loop wraps, so the last moment blends back into the first.
+    float moment = timeChoice < fract(timePosition)
+      ? mod(earlierMoment + 1.0, timeSamples)
+      : earlierMoment;
+    timeColumn = moment * gridDimensions.x;
+  }
   // Distance drives the atlas blend directly in the material, so one impostor
   // instance covers every detail tier. No per-instance blend attribute and no
   // CPU transition ring are needed to reach the reduced source.
@@ -364,13 +413,13 @@ void main(void) {
   float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
   vec4 color;
   if (choice < weights.x) {
-    color = frame(face, vec2(low.x, low.y), imageUV, lodBlend);
+    color = frame(face, vec2(low.x + timeColumn, low.y), imageUV, lodBlend);
   } else if (choice < weights.x + weights.y) {
-    color = frame(face, vec2(high.x, low.y), imageUV, lodBlend);
+    color = frame(face, vec2(high.x + timeColumn, low.y), imageUV, lodBlend);
   } else if (choice < weights.x + weights.y + weights.z) {
-    color = frame(face, vec2(low.x, high.y), imageUV, lodBlend);
+    color = frame(face, vec2(low.x + timeColumn, high.y), imageUV, lodBlend);
   } else {
-    color = frame(face, vec2(high.x, high.y), imageUV, lodBlend);
+    color = frame(face, vec2(high.x + timeColumn, high.y), imageUV, lodBlend);
   }
 
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
@@ -736,7 +785,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "timeSamples", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
@@ -753,6 +802,11 @@ export function createImpostorMaterial(
   material.setFloat("captureCenterY", renderHeight / 2);
   material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));
+  material.setVector2("atlasTileCounts", new Vector2(
+    assets.gridWidth * assets.timeSamples,
+    assets.gridHeight,
+  ));
+  material.setFloat("timeSamples", assets.timeSamples);
   material.setVector2("tileInset", new Vector2(
     0.5 / assets.resolutionWidth,
     0.5 / assets.resolutionHeight,
@@ -773,6 +827,7 @@ export function createImpostorMaterial(
   material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", 1);
   material.setFloat("instanceColorCoverage", 0);
+  setWindShear(material, 0);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(
@@ -783,6 +838,7 @@ export function createImpostorMaterial(
   const fallbackSky = new Color3(0.38, 0.42, 0.48);
   const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
+    bindWindPhase(material);
     material.setFloat(
       "cameraOrthographic",
       scene.activeCamera?.mode === Camera.ORTHOGRAPHIC_CAMERA ? 1 : 0,

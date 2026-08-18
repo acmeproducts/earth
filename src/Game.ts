@@ -35,6 +35,7 @@ import {
   WorldCover,
 } from "./WorldCover";
 import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial";
+import { configureWindSceneScale } from "./Wind";
 import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
@@ -360,6 +361,8 @@ export class Game {
     const groundHeight = terrainData.groundHeightMeters;
     const metersPerUnit = groundWidth / meshWidth;
     const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
+    // Wind gusts travel a distance in meters, so they need the ground scale.
+    configureWindSceneScale(metersPerUnit);
     if (distantScene) {
       const vistaRadius = Math.min(
         distantScene.terrain.groundWidthMeters,
