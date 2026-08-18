@@ -44,6 +44,7 @@ export async function createFlowerField(
     exclusionMask,
     ambientOccluders = [],
     renderMode = "auto",
+    yieldControl,
   } = options;
   const flowerHeight = 0.92 / metersPerUnit;
   const root = new TransformNode("flowerField", scene);
@@ -125,14 +126,16 @@ export async function createFlowerField(
         ));
         colors.push(...sampleFlowerColor(colorNoise, x / colorScale, z / colorScale));
       }
+      await yieldControl?.();
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(
+  const instanceOcclusion = await computeVegetationOcclusion(
     matrixData,
     8 / metersPerUnit,
     ambientOccluders,
+    yieldControl,
   );
   return createVegetationFieldResult(
     root,
@@ -143,6 +146,7 @@ export async function createFlowerField(
     renderMode,
     instanceOcclusion,
     new Float32Array(colors),
+    yieldControl,
   );
 }
 

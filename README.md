@@ -123,8 +123,15 @@ tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
 with latitude (a detailed tile is about 1.2 km wide around Oslo). Use `?seed=123`
 to select another deterministic world seed.
 
-The terrain currently renders one application tile. `?render-scale=0.75` renders
-at 75% of the canvas resolution (values are clamped from 0.25 through 1), and
+The terrain keeps the four closest application tiles loaded as a moving 2 by 2
+window. The window changes at tile midlines, loading the next row or column in
+the background before the player reaches the outer edge. Overlapping elevation,
+WorldCover, and OpenStreetMap source requests are cached between window shifts.
+CPU-heavy terrain, map, vegetation, and LOD-index construction is spread across
+animation frames so the active window remains responsive while its replacement loads.
+
+`?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
+from 0.25 through 1), and
 `?vegetation=impostors` avoids the more expensive nearby models. These options
 can be combined, for example:
 

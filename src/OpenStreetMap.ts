@@ -121,12 +121,13 @@ export class OpenStreetMap {
     return (await Promise.all(requests)).filter((tile): tile is MapTile => tile !== undefined);
   }
 
-  static createLayer(
+  static async createLayer(
     scene: Scene,
     tiles: MapTile[],
     terrain: TerrainData,
     options: MapLayerOptions,
-  ): MapFeatureLayer {
+    yieldControl?: () => Promise<void>,
+  ): Promise<MapFeatureLayer> {
     const root = new TransformNode("mapFeatures", scene);
     const buildings: Mesh[] = [];
     const roads: Mesh[] = [];
@@ -140,12 +141,14 @@ export class OpenStreetMap {
           if (mesh) buildings.push(mesh);
         }
       });
+      await yieldControl?.();
       forEachFeature(tile, "transportation", (feature) => {
         const width = roadWidth(String(feature.properties.class ?? ""));
         for (const line of lines(feature, tile)) {
           roads.push(...createRoad(scene, line, terrain, options, width));
         }
       });
+      await yieldControl?.();
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
@@ -153,6 +156,7 @@ export class OpenStreetMap {
           if (mesh) water.push(mesh);
         }
       });
+      await yieldControl?.();
     }
 
     const meshes = [
@@ -167,11 +171,12 @@ export class OpenStreetMap {
     };
   }
 
-  static createRoadExclusionMask(
+  static async createRoadExclusionMask(
     tiles: MapTile[],
     terrain: TerrainData,
     options: MapLayerOptions,
-  ): HorizontalExclusionMask {
+    yieldControl?: () => Promise<void>,
+  ): Promise<HorizontalExclusionMask> {
     const segments: RoadSegment[] = [];
     for (const tile of tiles) {
       forEachFeature(tile, "transportation", (feature) => {
@@ -185,6 +190,7 @@ export class OpenStreetMap {
           }
         }
       });
+      await yieldControl?.();
     }
     return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
   }

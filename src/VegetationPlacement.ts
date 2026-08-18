@@ -15,6 +15,8 @@ export interface VegetationPlacementOptions {
   ambientOccluders?: readonly Float32Array[];
   densityScale?: (worldX: number, worldZ: number) => number;
   renderMode?: VegetationRenderMode;
+  /** Optional cooperative yield used while streaming large placement grids. */
+  yieldControl?: () => Promise<void>;
 }
 
 export interface PlacementGrid {

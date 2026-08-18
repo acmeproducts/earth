@@ -77,8 +77,16 @@ export function worldTileAreaAtLocation(
   const size = Math.max(1, Math.min(4, Math.round(tilesAcross)));
   const center = worldTileAtLocation(latitude, longitude, level);
   const scale = 2 ** center.level;
-  const startX = center.x - Math.floor((size - 1) / 2);
-  const startY = Math.max(0, Math.min(scale - size, center.y - Math.floor((size - 1) / 2)));
+  const evenSize = size % 2 === 0;
+  const longitudeFraction = tileLongitudeFraction(longitude, center);
+  const latitudeFraction = tileLatitudeFraction(latitude, center);
+  const startX = center.x - Math.floor((size - 1) / 2) -
+    (evenSize && longitudeFraction < 0.5 ? 1 : 0);
+  const startY = Math.max(0, Math.min(
+    scale - size,
+    center.y - Math.floor((size - 1) / 2) -
+      (evenSize && latitudeFraction < 0.5 ? 1 : 0),
+  ));
   const endX = startX + size - 1;
   if (startX < 0 || endX >= scale) {
     throw new Error("Multi-tile areas crossing the antimeridian must be loaded tile-by-tile.");
@@ -98,6 +106,11 @@ export function worldTileAreaAtLocation(
     },
     seed: worldTileSeed(center, worldSeed),
   };
+}
+
+/** Stable identity for a loaded square tile window. */
+export function worldTileAreaKey(area: WorldTileArea): string {
+  return `${area.start.level}/${area.start.x}/${area.start.y}/${area.tilesAcross}`;
 }
 
 /** Stable per-tile seed, independent of load order and online data providers. */
@@ -127,6 +140,22 @@ function deriveSeed(seed: number, label: string, ...values: number[]): number {
 
 function normalizeLevel(level: number): number {
   return Math.max(0, Math.min(30, Math.round(level)));
+}
+
+function tileLongitudeFraction(longitude: number, tile: WorldTileId): number {
+  const bounds = worldTileBounds(tile);
+  const normalized = ((longitude + 180) % 360 + 360) % 360 - 180;
+  return Math.max(0, Math.min(
+    1,
+    (normalized - bounds.lonWest) / (bounds.lonEast - bounds.lonWest),
+  ));
+}
+
+function tileLatitudeFraction(latitude: number, tile: WorldTileId): number {
+  const scale = 2 ** tile.level;
+  const latitudeRadians = clampLatitude(latitude) * Math.PI / 180;
+  const projectedRow = (1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale;
+  return Math.max(0, Math.min(1, projectedRow - tile.y));
 }
 
 function clampLatitude(latitude: number): number {

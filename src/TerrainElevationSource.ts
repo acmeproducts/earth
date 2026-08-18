@@ -9,6 +9,11 @@ import type { TileBounds, WorldTileArea } from "./WorldGrid";
 export class TerrainElevationSource {
   private static readonly BASE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
   private static readonly OPEN_TOPO_MAP_BASE_URL = "https://tile.opentopomap.org";
+  private static readonly elevationCache = new Map<string, Promise<{
+    elevations: Float32Array;
+    width: number;
+    height: number;
+  }>>();
 
   /**
    * Loads a single Terrarium tile and decodes RGB to raw elevation values.
@@ -18,6 +23,23 @@ export class TerrainElevationSource {
    * @returns Raw elevation data and image dimensions
    */
   private static async loadTileElevations(z: number, x: number, y: number): Promise<{
+    elevations: Float32Array;
+    width: number;
+    height: number;
+  }> {
+    const key = `${z}/${x}/${y}`;
+    const cached = this.elevationCache.get(key);
+    if (cached) return cached;
+
+    const request = this.fetchTileElevations(z, x, y).catch((error: unknown) => {
+      this.elevationCache.delete(key);
+      throw error;
+    });
+    this.elevationCache.set(key, request);
+    return request;
+  }
+
+  private static async fetchTileElevations(z: number, x: number, y: number): Promise<{
     elevations: Float32Array;
     width: number;
     height: number;

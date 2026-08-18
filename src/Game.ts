@@ -22,11 +22,14 @@ import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
 import { EXAMPLE_LOCATIONS } from "./Locations";
 import {
+  geographicFrameOffset,
+  lonLatToScene,
   sampleElevation,
   sceneToLonLat,
   sinkSubmergedElevation,
   sinkSubmergedTerrain,
 } from "./Geo";
+import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import {
   landCoverColor,
@@ -38,6 +41,7 @@ import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial"
 import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
+import { createFrameBudgetYielder } from "./FrameBudget";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -54,7 +58,9 @@ import {
   layerSeed,
   WORLD_GRID_LEVEL,
   worldTileAreaAtLocation,
+  worldTileAreaKey,
 } from "./WorldGrid";
+import type { WorldTileArea } from "./WorldGrid";
 
 type DebugTerrainLayer = "none" | "worldCover" | "openTopoMap";
 type VegetationCategory = "trees" | "grass" | "bushes";
@@ -69,6 +75,8 @@ const PLAYER_RADIUS_METERS = 0.3;
 const WALK_SPEED_METERS_PER_SECOND = 8;
 const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
 const CAMERA_NEAR_CLIP_METERS = 0.1;
+const LOADED_TILES_ACROSS = 2;
+const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 
 type MovementMode = "fly" | "walk";
 
@@ -77,6 +85,8 @@ interface WalkableTerrain {
   width: number;
   depth: number;
   metersPerUnit: number;
+  offsetX: number;
+  offsetZ: number;
 }
 
 interface TerrainMetadata {
@@ -92,6 +102,11 @@ interface TerrainSceneResources {
   flowerField?: VegetationFieldResult;
   bushField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
+}
+
+interface CameraGeographicState {
+  longitude: number;
+  latitude: number;
 }
 
 export type InitializationProgress = (step: string, progress: number) => void;
@@ -113,6 +128,9 @@ export class Game {
   private readonly renderScale: number;
   private debugTerrainLayer: DebugTerrainLayer = "none";
   private terrainRequestId = 0;
+  private loadedTerrainAreaKey?: string;
+  private loadingTerrainAreaKey?: string;
+  private lastTerrainStreamingCheckMilliseconds = 0;
   private terrainLocationIndex = 0;
   private solarLighting?: SolarLighting;
   private readonly fpsCounter: FpsCounter;
@@ -124,6 +142,8 @@ export class Game {
   private flySpeedOutput?: HTMLOutputElement;
   private movementMode: MovementMode = "fly";
   private walkableTerrain?: WalkableTerrain;
+  private terrainCoordinateFrame?: SceneGeographicFrame;
+  private terrainMetersPerUnit?: number;
   private readonly heldMovementKeys = new Set<string>();
   private verticalVelocityMetersPerSecond = 0;
   private lastVegetationLodDebugLogMilliseconds = 0;
@@ -267,17 +287,26 @@ export class Game {
     await reportInitializationProgress(onProgress, "Ready", 100);
   }
 
-  private async rebuildTerrain(onProgress?: InitializationProgress): Promise<void> {
+  private async rebuildTerrain(
+    onProgress?: InitializationProgress,
+    target: { lat: number; lon: number } = EXAMPLE_LOCATIONS[this.terrainLocationIndex],
+    preserveCameraPosition = false,
+    requestedArea?: WorldTileArea,
+  ): Promise<void> {
     const requestId = ++this.terrainRequestId;
-    const location = EXAMPLE_LOCATIONS[this.terrainLocationIndex];
     await reportInitializationProgress(onProgress, "Loading terrain elevation", 8);
-    const terrainArea = worldTileAreaAtLocation(
-      location.lat,
-      location.lon,
-      1,
+    const terrainArea = requestedArea ?? worldTileAreaAtLocation(
+      target.lat,
+      target.lon,
+      LOADED_TILES_ACROSS,
       this.worldSeed,
       this.gridLevel,
     );
+    const terrainAreaKey = worldTileAreaKey(terrainArea);
+    this.loadingTerrainAreaKey = terrainAreaKey;
+    const yieldControl = preserveCameraPosition
+      ? createFrameBudgetYielder()
+      : undefined;
     const terrainData = await TerrainElevationSource.fetchWorldArea(terrainArea);
     if (requestId !== this.terrainRequestId) return;
     await reportInitializationProgress(onProgress, "Loading maps and land cover", 18);
@@ -299,11 +328,38 @@ export class Game {
 
     // Derive meters-per-unit from the real ground extent so
     // horizontal and vertical scales match 1:1 (absolute height).
-    const meshWidth = 100; // scene units for the ground plane
     const groundWidth = terrainData.groundWidthMeters;
     const groundHeight = terrainData.groundHeightMeters;
-    const metersPerUnit = groundWidth / meshWidth;
-    const meshDepth = groundHeight / metersPerUnit; // may differ slightly from meshWidth due to latitude
+    let meshWidth = 100;
+    let metersPerUnit = groundWidth / meshWidth;
+    let meshDepth = groundHeight / metersPerUnit;
+    if (preserveCameraPosition && this.terrainCoordinateFrame && this.terrainMetersPerUnit) {
+      const northWest = lonLatToScene(
+        terrainData.bounds.lonWest,
+        terrainData.bounds.latNorth,
+        this.terrainCoordinateFrame.bounds,
+        this.terrainCoordinateFrame.meshWidth,
+        this.terrainCoordinateFrame.meshDepth,
+      );
+      const southEast = lonLatToScene(
+        terrainData.bounds.lonEast,
+        terrainData.bounds.latSouth,
+        this.terrainCoordinateFrame.bounds,
+        this.terrainCoordinateFrame.meshWidth,
+        this.terrainCoordinateFrame.meshDepth,
+      );
+      meshWidth = southEast.x - northWest.x;
+      meshDepth = northWest.z - southEast.z;
+      metersPerUnit = this.terrainMetersPerUnit;
+    }
+    const targetFrame: SceneGeographicFrame = {
+      bounds: terrainData.bounds,
+      meshWidth,
+      meshDepth,
+    };
+    const terrainOffset = preserveCameraPosition && this.terrainCoordinateFrame
+      ? geographicFrameOffset(this.terrainCoordinateFrame, targetFrame)
+      : { x: 0, z: 0 };
     this.scene.fogMode = Scene.FOGMODE_NONE;
     const mapOptions = {
       meshWidth,
@@ -311,10 +367,12 @@ export class Game {
       metersPerUnit,
       lakeElevationSource,
     };
-    const roadExclusionMask = OpenStreetMap.createRoadExclusionMask(
+    await yieldControl?.();
+    const roadExclusionMask = await OpenStreetMap.createRoadExclusionMask(
       mapWays,
       terrainData,
       mapOptions,
+      yieldControl,
     );
 
     console.log(
@@ -336,14 +394,37 @@ export class Game {
       `Terrain: ${terrainData.width}×${terrainData.height}px → ${subdivisions} subdivisions (×${subdivisionMultiplier})`,
     );
 
-    const terrain = this.createTerrainMesh("terrain", terrainData, {
+    const terrain = await this.createTerrainMesh("terrain", terrainData, {
       meshWidth,
       meshDepth,
       subdivisions,
       metersPerUnit,
       landCover,
+      yieldControl,
     });
     const resources: TerrainSceneResources = { terrain };
+    if (preserveCameraPosition) terrain.setEnabled(false);
+    let terrainCommittedEarly = false;
+    if (preserveCameraPosition) {
+      setFrozenMeshOffset(terrain, terrainOffset.x, terrainOffset.z);
+      terrain.setEnabled(true);
+      this.terrain?.dispose(false, true);
+      this.terrain = terrain;
+      terrain.checkCollisions = true;
+      this.terrainData = terrainData;
+      this.walkableTerrain = {
+        data: terrainData,
+        width: meshWidth,
+        depth: meshDepth,
+        metersPerUnit,
+        offsetX: terrainOffset.x,
+        offsetZ: terrainOffset.z,
+      };
+      this.loadedTerrainAreaKey = terrainAreaKey;
+      this.configureCameraCollisionBody();
+      terrainCommittedEarly = true;
+      console.log(`Terrain window ${terrainAreaKey} is ready; streaming detail layers.`);
+    }
 
     await reportInitializationProgress(onProgress, "Planting trees", 44);
     const treeField = await createTreeField(this.scene, terrainData, {
@@ -354,8 +435,10 @@ export class Game {
       landCover,
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
+      yieldControl,
     });
     resources.treeField = treeField;
+    if (preserveCameraPosition) treeField.root.setEnabled(false);
     treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
@@ -370,8 +453,10 @@ export class Game {
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
+      yieldControl,
     });
     resources.grassField = grassField;
+    if (preserveCameraPosition) grassField.root.setEnabled(false);
     grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
@@ -386,8 +471,10 @@ export class Game {
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
+      yieldControl,
     });
     resources.flowerField = flowerField;
+    if (preserveCameraPosition) flowerField.root.setEnabled(false);
     flowerField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Flowers: ${flowerField.count} simplex-placed grassland patches`);
@@ -402,20 +489,31 @@ export class Game {
       exclusionMask: roadExclusionMask,
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.bushes,
+      yieldControl,
     });
     resources.bushField = bushField;
+    if (preserveCameraPosition) bushField.root.setEnabled(false);
     bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
     console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Creating map features", 80);
-    const mapFeatures = OpenStreetMap.createLayer(this.scene, mapWays, terrainData, mapOptions);
+    await yieldControl?.();
+    const mapFeatures = await OpenStreetMap.createLayer(
+      this.scene,
+      mapWays,
+      terrainData,
+      mapOptions,
+      yieldControl,
+    );
     resources.mapFeatures = mapFeatures.root;
+    if (preserveCameraPosition) mapFeatures.root.setEnabled(false);
     console.log(
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );
 
     await reportInitializationProgress(onProgress, "Creating water", 86);
+    await yieldControl?.();
     const water = createWaterPlane(this.scene, [
       terrain,
       ...treeField.meshes,
@@ -428,10 +526,15 @@ export class Game {
       height: meshDepth,
     });
     resources.water = water;
+    if (preserveCameraPosition) water.setEnabled(false);
 
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    const cameraState = preserveCameraPosition
+      ? this.captureCameraGeographicState()
+      : undefined;
+    setTerrainSceneResourcesOffset(resources, terrainOffset.x, terrainOffset.z);
     disposeTerrainSceneResources({
-      terrain: this.terrain,
+      terrain: terrainCommittedEarly ? undefined : this.terrain,
       water: this.water,
       treeField: this.treeField,
       grassField: this.grassField,
@@ -453,12 +556,24 @@ export class Game {
       width: meshWidth,
       depth: meshDepth,
       metersPerUnit,
+      offsetX: terrainOffset.x,
+      offsetZ: terrainOffset.z,
     };
+    if (!preserveCameraPosition || !this.terrainCoordinateFrame) {
+      this.terrainCoordinateFrame = targetFrame;
+      this.terrainMetersPerUnit = metersPerUnit;
+    }
+    setTerrainSceneResourcesEnabled(resources, true);
+    this.loadedTerrainAreaKey = terrainAreaKey;
+    if (this.loadingTerrainAreaKey === terrainAreaKey) this.loadingTerrainAreaKey = undefined;
     this.configureCameraCollisionBody();
     this.ensurePlayerAboveGround();
     this.updateVegetationLod();
 
-    this.solarLighting?.setLocation(location.lat, location.lon);
+    this.solarLighting?.setLocation(
+      cameraState?.latitude ?? target.lat,
+      cameraState?.longitude ?? target.lon,
+    );
     this.solarLighting?.setShadowCasters([
       terrain,
       ...mapFeatures.meshes,
@@ -547,7 +662,9 @@ export class Game {
     const camera = this.scene.activeCamera;
     if (!camera) return;
 
-    const position = camera.globalPosition;
+    const position = camera.globalPosition.clone();
+    position.x -= this.walkableTerrain?.offsetX ?? 0;
+    position.z -= this.walkableTerrain?.offsetZ ?? 0;
     const shadowsChanged = [
       this.treeField?.updateLod(position, this.vegetationLodDistanceMeters),
       this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8)),
@@ -586,6 +703,60 @@ export class Game {
     this.terrainLocationIndex = locationIndex;
     console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
     await this.rebuildTerrain();
+  }
+
+  private updateTerrainStreaming(): void {
+    const now = performance.now();
+    if (now - this.lastTerrainStreamingCheckMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) {
+      return;
+    }
+    this.lastTerrainStreamingCheckMilliseconds = now;
+
+    const cameraState = this.captureCameraGeographicState();
+    if (!cameraState) return;
+
+    let area: WorldTileArea;
+    try {
+      area = worldTileAreaAtLocation(
+        cameraState.latitude,
+        cameraState.longitude,
+        LOADED_TILES_ACROSS,
+        this.worldSeed,
+        this.gridLevel,
+      );
+    } catch (error) {
+      console.warn("Unable to select the next terrain tile window.", error);
+      return;
+    }
+    const areaKey = worldTileAreaKey(area);
+    if (areaKey === this.loadedTerrainAreaKey || this.loadingTerrainAreaKey) return;
+
+    console.log(`Streaming terrain window ${areaKey}`);
+    const target = { lat: cameraState.latitude, lon: cameraState.longitude };
+    void this.rebuildTerrain(undefined, target, true, area).catch((error: unknown) => {
+      if (this.loadingTerrainAreaKey === areaKey) this.loadingTerrainAreaKey = undefined;
+      if (this.loadedTerrainAreaKey === areaKey) this.loadedTerrainAreaKey = undefined;
+      console.error(`Failed to stream terrain window ${areaKey}.`, error);
+    });
+  }
+
+  private captureCameraGeographicState(): CameraGeographicState | undefined {
+    const camera = this.flyCamera;
+    const terrain = this.walkableTerrain;
+    if (!camera || !terrain) return undefined;
+    const localX = camera.position.x - terrain.offsetX;
+    const localZ = camera.position.z - terrain.offsetZ;
+    const { lon, lat } = sceneToLonLat(
+      localX,
+      localZ,
+      terrain.data.bounds,
+      terrain.width,
+      terrain.depth,
+    );
+    return {
+      longitude: lon,
+      latitude: lat,
+    };
   }
 
   private async toggleDebugTerrainLayer(layer: Exclude<DebugTerrainLayer, "none">): Promise<void> {
@@ -629,6 +800,7 @@ export class Game {
   run(): void {
     this.engine.runRenderLoop(() => {
       this.updateWalker();
+      this.updateTerrainStreaming();
       this.updateVegetationLod();
       this.scene.render();
       this.fpsCounter.update(this.engine, this.scene);
@@ -745,7 +917,11 @@ export class Game {
   private getGroundEyeHeight(x: number, z: number): number | undefined {
     const terrain = this.walkableTerrain;
     if (!terrain) return undefined;
-    if (Math.abs(x) > terrain.width / 2 || Math.abs(z) > terrain.depth / 2) return undefined;
+    const localX = x - terrain.offsetX;
+    const localZ = z - terrain.offsetZ;
+    if (Math.abs(localX) > terrain.width / 2 || Math.abs(localZ) > terrain.depth / 2) {
+      return undefined;
+    }
 
     // Use the highest point under the player's footprint so the 1.8 m body
     // cannot intersect a steep triangle beside its center point.
@@ -763,8 +939,8 @@ export class Game {
         elevationMeters,
         sampleElevation(
           terrain.data,
-          x + offsetX,
-          z + offsetZ,
+          localX + offsetX,
+          localZ + offsetZ,
           terrain.width,
           terrain.depth,
         ),
@@ -799,7 +975,7 @@ export class Game {
    * @param options - Mesh dimensions and scale
    * @returns The created ground mesh
    */
-  createTerrainMesh(
+  async createTerrainMesh(
     name: string,
     terrain: TerrainData,
     options: {
@@ -808,9 +984,10 @@ export class Game {
       subdivisions: number;
       metersPerUnit: number;
       landCover?: WorldCover;
+      yieldControl?: () => Promise<void>;
     },
-  ): Mesh {
-    const { meshWidth, meshDepth, subdivisions, metersPerUnit, landCover } = options;
+  ): Promise<Mesh> {
+    const { meshWidth, meshDepth, subdivisions, metersPerUnit, landCover, yieldControl } = options;
 
     const ground = MeshBuilder.CreateGround(
       name,
@@ -892,6 +1069,7 @@ export class Game {
           coverClasses![vertexIndex] = coverClass;
         }
       }
+      await yieldControl?.();
     }
 
     if (surfaceColors && coverClasses) {
@@ -899,22 +1077,24 @@ export class Game {
         terrain.groundWidthMeters / subdivisions,
         terrain.groundHeightMeters / subdivisions,
       );
-      smoothVertexColors(
+      await smoothVertexColors(
         surfaceColors,
         vPerRow,
         Math.max(1, Math.round(GROUND_COVER_BLEND_METERS / metersPerVertex)),
+        yieldControl,
       );
       // Applied after the blend on purpose: smoothing exists to soften
       // land-cover class edges, and running it over the variation would erase
       // the finer bands this pass contributes.
-      applyGroundVariation(surfaceColors, coverClasses, positions, terrain, {
+      await applyGroundVariation(surfaceColors, coverClasses, positions, terrain, {
         meshWidth,
         meshDepth,
         metersPerVertex,
-      });
+      }, yieldControl);
     }
 
     // Recompute normals for correct lighting after modifying heights
+    await yieldControl?.();
     const normals = new Float32Array(positions.length);
     VertexData.ComputeNormals(positions, indices, normals);
     ground.updateVerticesData(VertexBuffer.PositionKind, positions);
@@ -988,6 +1168,52 @@ function disposeTerrainSceneResources(resources: TerrainSceneResources): void {
   resources.mapFeatures?.dispose(false, true);
 }
 
+function setTerrainSceneResourcesEnabled(
+  resources: TerrainSceneResources,
+  enabled: boolean,
+): void {
+  resources.terrain?.setEnabled(enabled);
+  resources.water?.setEnabled(enabled);
+  resources.treeField?.root.setEnabled(enabled);
+  resources.grassField?.root.setEnabled(enabled);
+  resources.flowerField?.root.setEnabled(enabled);
+  resources.bushField?.root.setEnabled(enabled);
+  resources.mapFeatures?.setEnabled(enabled);
+}
+
+function setTerrainSceneResourcesOffset(
+  resources: TerrainSceneResources,
+  x: number,
+  z: number,
+): void {
+  if (resources.terrain) setFrozenMeshOffset(resources.terrain, x, z);
+  if (resources.water) setFrozenMeshOffset(resources.water, x, z);
+  if (resources.treeField) setTransformNodeOffset(resources.treeField.root, x, z);
+  if (resources.grassField) setTransformNodeOffset(resources.grassField.root, x, z);
+  if (resources.flowerField) setTransformNodeOffset(resources.flowerField.root, x, z);
+  if (resources.bushField) setTransformNodeOffset(resources.bushField.root, x, z);
+  if (resources.mapFeatures) setTransformNodeOffset(resources.mapFeatures, x, z);
+}
+
+function setFrozenMeshOffset(mesh: Mesh, x: number, z: number): void {
+  const wasFrozen = mesh.isWorldMatrixFrozen;
+  if (wasFrozen) mesh.unfreezeWorldMatrix();
+  mesh.position.x = x;
+  mesh.position.z = z;
+  mesh.computeWorldMatrix(true);
+  if (wasFrozen) mesh.freezeWorldMatrix();
+}
+
+function setTransformNodeOffset(root: TransformNode, x: number, z: number): void {
+  const frozenChildren = root.getChildMeshes(false).filter((mesh) => mesh.isWorldMatrixFrozen);
+  frozenChildren.forEach((mesh) => mesh.unfreezeWorldMatrix());
+  root.position.x = x;
+  root.position.z = z;
+  root.computeWorldMatrix(true);
+  root.getChildMeshes(false).forEach((mesh) => mesh.computeWorldMatrix(true));
+  frozenChildren.forEach((mesh) => mesh.freezeWorldMatrix());
+}
+
 function emptyVegetationLodStats(): VegetationLodDebugStats {
   return {
     totalInstances: 0,
@@ -1042,13 +1268,14 @@ async function reportInitializationProgress(
  * this pass owns the coarser variation that keeps mid and far ground from
  * reading as flat fields of one color per land-cover class.
  */
-function applyGroundVariation(
+async function applyGroundVariation(
   colors: Float32Array,
   coverClasses: Uint8Array,
   positions: Float32Array | number[],
   terrain: TerrainData,
   options: { meshWidth: number; meshDepth: number; metersPerVertex: number },
-): void {
+  yieldControl?: () => Promise<void>,
+): Promise<void> {
   for (let index = 0; index < coverClasses.length; index++) {
     const { lon, lat } = sceneToLonLat(
       positions[index * 3],
@@ -1068,10 +1295,16 @@ function applyGroundVariation(
     colors[target] = red;
     colors[target + 1] = green;
     colors[target + 2] = blue;
+    if ((index & 511) === 511) await yieldControl?.();
   }
 }
 
-function smoothVertexColors(colors: Float32Array, rowSize: number, radius: number): void {
+async function smoothVertexColors(
+  colors: Float32Array,
+  rowSize: number,
+  radius: number,
+  yieldControl?: () => Promise<void>,
+): Promise<void> {
   const horizontal = new Float32Array(colors.length);
   const vertexCount = colors.length / 4;
 
@@ -1090,6 +1323,7 @@ function smoothVertexColors(colors: Float32Array, rowSize: number, radius: numbe
       }
       horizontal[target + 3] = 1;
     }
+    await yieldControl?.();
   }
 
   for (let index = 0; index < vertexCount; index++) {
@@ -1106,5 +1340,6 @@ function smoothVertexColors(colors: Float32Array, rowSize: number, radius: numbe
       colors[index * 4 + channel] = sum / count;
     }
     colors[index * 4 + 3] = 1;
+    if (index % rowSize === rowSize - 1) await yieldControl?.();
   }
 }

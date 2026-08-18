@@ -31,7 +31,7 @@ export interface VegetationFieldResult {
   consumeLodDebugStats(): VegetationLodDebugStats;
 }
 
-export function createVegetationFieldResult(
+export async function createVegetationFieldResult(
   root: TransformNode,
   impostorMeshes: Mesh[],
   modelMeshes: Mesh[],
@@ -40,7 +40,8 @@ export function createVegetationFieldResult(
   initialMode: VegetationRenderMode,
   instanceOcclusion?: Float32Array,
   instanceColors?: Float32Array,
-): VegetationFieldResult {
+  yieldControl?: () => Promise<void>,
+): Promise<VegetationFieldResult> {
   const count = matrices.length / 16;
   if (instanceOcclusion && instanceOcclusion.length !== count) {
     throw new Error("Instance occlusion count must match the vegetation matrix count.");
@@ -61,36 +62,46 @@ export function createVegetationFieldResult(
   const modelLodBlend = new Float32Array(count);
   const sourceLodBlend = new Float32Array(count);
   impostorMatrices.set(matrices);
+  await yieldControl?.();
   modelMatrices.set(matrices);
+  await yieldControl?.();
   activeSourceOcclusion.set(sourceOcclusion);
   impostorOcclusion.set(sourceOcclusion);
   modelOcclusion.set(sourceOcclusion);
+  await yieldControl?.();
   impostorColors.set(sourceColors);
   modelColors.set(sourceColors);
   modelLodBlend.fill(1);
 
   initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion, impostorColors, impostorLodBlend);
+  await yieldControl?.();
   initializeMeshes(modelMeshes, modelMatrices, modelOcclusion, modelColors, modelLodBlend);
 
   let mode = initialMode;
   let lastCameraPosition: Vector3 | undefined;
   let lastDistanceMeters = 10;
   let ambientOcclusionEnabled = true;
-  const allInstanceIndices = Array.from({ length: count }, (_, index) => index);
+  const allInstanceIndices: number[] = [];
   let minimumInstanceY = Number.POSITIVE_INFINITY;
   let maximumInstanceY = Number.NEGATIVE_INFINITY;
-  for (const index of allInstanceIndices) {
+  for (let index = 0; index < count; index++) {
+    allInstanceIndices.push(index);
     minimumInstanceY = Math.min(minimumInstanceY, matrices[index * 16 + 13]);
     maximumInstanceY = Math.max(maximumInstanceY, matrices[index * 16 + 13]);
+    if ((index & 511) === 511) await yieldControl?.();
   }
-  const spatialGrid = new SpatialReferenceGrid(
-    allInstanceIndices.map((index) => ({
+  const spatialGrid = new SpatialReferenceGrid<number>(
+    [],
+    Math.max(1 / metersPerUnit, Math.min(LOD_TRANSITION_WIDTH_METERS / metersPerUnit, 16 / metersPerUnit)),
+  );
+  for (let index = 0; index < count; index++) {
+    spatialGrid.add({
       x: matrices[index * 16 + 12],
       z: matrices[index * 16 + 14],
       value: index,
-    })),
-    Math.max(1 / metersPerUnit, Math.min(LOD_TRANSITION_WIDTH_METERS / metersPerUnit, 16 / metersPerUnit)),
-  );
+    });
+    if ((index & 511) === 511) await yieldControl?.();
+  }
   let previousTransitionIndices = new Set<number>();
   const modelSlotBySource = new Int32Array(count).fill(-1);
   const impostorSlotBySource = new Int32Array(count).fill(-1);
@@ -398,11 +409,12 @@ export function createVegetationFieldResult(
 }
 
 /** Approximates sky occlusion from neighboring vegetation instances. */
-export function computeVegetationOcclusion(
+export async function computeVegetationOcclusion(
   matrices: Float32Array,
   radius: number,
   additionalOccluders: readonly Float32Array[] = [],
-): Float32Array {
+  yieldControl?: () => Promise<void>,
+): Promise<Float32Array> {
   const count = matrices.length / 16;
   const result = new Float32Array(count);
   if (count === 0 || radius <= 0) return result;
@@ -427,6 +439,7 @@ export function computeVegetationOcclusion(
       const occluder = { matrices: occluderMatrices, index };
       if (bucket) bucket.push(occluder);
       else buckets.set(key, [occluder]);
+      if ((index & 511) === 511) await yieldControl?.();
     }
   }
 
@@ -457,6 +470,7 @@ export function computeVegetationOcclusion(
     }
 
     result[index] = Math.min(0.7, 1 - Math.exp(-crowding * 0.32));
+    if ((index & 511) === 511) await yieldControl?.();
   }
 
   return result;

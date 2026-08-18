@@ -5,6 +5,12 @@ interface GeographicBounds {
   latSouth: number;
 }
 
+export interface SceneGeographicFrame {
+  bounds: GeographicBounds;
+  meshWidth: number;
+  meshDepth: number;
+}
+
 interface ElevationGrid {
   elevations: Float32Array;
   width: number;
@@ -89,6 +95,31 @@ export function sceneToLonLat(
     lon: bounds.lonWest + u * (bounds.lonEast - bounds.lonWest),
     lat: (Math.atan(Math.sinh(projectedY)) * 180) / Math.PI,
   };
+}
+
+/**
+ * Positions a locally centered geographic mesh inside a stable scene frame.
+ * Adding this offset to any target-local coordinate produces the same scene
+ * coordinate as projecting that longitude/latitude directly in the frame.
+ */
+export function geographicFrameOffset(
+  frame: SceneGeographicFrame,
+  target: SceneGeographicFrame,
+): { x: number; z: number } {
+  const center = sceneToLonLat(
+    0,
+    0,
+    target.bounds,
+    target.meshWidth,
+    target.meshDepth,
+  );
+  return lonLatToScene(
+    center.lon,
+    center.lat,
+    frame.bounds,
+    frame.meshWidth,
+    frame.meshDepth,
+  );
 }
 
 export function sampleElevation(

@@ -440,6 +440,7 @@ export async function createTreeField(
     positionOffset = Vector3.Zero(),
     elevationSampler,
     densityScale,
+    yieldControl,
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const root = new TransformNode("treeField", scene);
@@ -473,6 +474,7 @@ export async function createTreeField(
           forestMask[row * columns + column] = 1;
         }
       }
+      await yieldControl?.();
     }
 
     const edgeDistances = distanceInsideMask(
@@ -545,6 +547,7 @@ export async function createTreeField(
         matrices.push(matrix);
         speciesMatrices[species].push(matrix);
       }
+      await yieldControl?.();
     }
   }
 
@@ -583,14 +586,17 @@ export async function createTreeField(
   const packedSpeciesMatrices = speciesList.map(
     (species) => packInstanceMatrices(speciesMatrices[species]),
   );
-  const fields = speciesResources.map(({ prototype, modelMeshes }, index) => {
+  const fields: VegetationFieldResult[] = [];
+  for (let index = 0; index < speciesResources.length; index++) {
+    const { prototype, modelMeshes } = speciesResources[index];
     const ownMatrices = packedSpeciesMatrices[index];
-    const instanceOcclusion = computeVegetationOcclusion(
+    const instanceOcclusion = await computeVegetationOcclusion(
       ownMatrices,
       10 / metersPerUnit,
       packedSpeciesMatrices.filter((_, otherIndex) => otherIndex !== index),
+      yieldControl,
     );
-    return createVegetationFieldResult(
+    fields.push(await createVegetationFieldResult(
       prototype.root,
       [prototype.mesh],
       modelMeshes,
@@ -598,8 +604,11 @@ export async function createTreeField(
       metersPerUnit,
       renderMode,
       instanceOcclusion,
-    );
-  });
+      undefined,
+      yieldControl,
+    ));
+    await yieldControl?.();
+  }
   const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
   const modelMeshes = fields.flatMap((field) => field.modelMeshes);
   return {
