@@ -47,9 +47,11 @@ export async function createBushField(
     ambientOccluders = [],
     renderMode = "auto",
     yieldControl,
+    startDisabled = false,
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
   const root = new TransformNode("bushField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getBushImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,

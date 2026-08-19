@@ -20,7 +20,7 @@ test("maps a location into the fixed application-owned grid", () => {
   assert.equal(tile.level, WORLD_GRID_LEVEL);
   assert.ok(longitude >= bounds.lonWest && longitude < bounds.lonEast);
   assert.ok(latitude <= bounds.latNorth && latitude > bounds.latSouth);
-  assert.ok(Math.abs(WORLD_TILE_PROJECTED_SIZE_METERS - 2445.985) < 0.001);
+  assert.ok(Math.abs(WORLD_TILE_PROJECTED_SIZE_METERS - 611.496) < 0.001);
 });
 
 test("wraps tile identity continuously across the antimeridian", () => {

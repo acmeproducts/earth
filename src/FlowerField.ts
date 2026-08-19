@@ -45,9 +45,11 @@ export async function createFlowerField(
     ambientOccluders = [],
     renderMode = "auto",
     yieldControl,
+    startDisabled = false,
   } = options;
   const flowerHeight = 0.92 / metersPerUnit;
   const root = new TransformNode("flowerField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getFlowerImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,

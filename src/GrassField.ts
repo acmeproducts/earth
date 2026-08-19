@@ -68,9 +68,11 @@ export async function createGrassField(
     densityScale,
     renderMode = "auto",
     yieldControl,
+    startDisabled = false,
   } = options;
   const grassHeight = GRASS_HEIGHT_METERS / metersPerUnit;
   const root = new TransformNode("grassField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getGrassImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,

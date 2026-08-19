@@ -124,43 +124,61 @@ export class TerrainElevationSource {
       providerTileRange(area.bounds, sourceLevel);
     const sourceColumns = sourceSouthEast.x - sourceNorthWest.x + 1;
     const sourceRows = sourceSouthEast.y - sourceNorthWest.y + 1;
-    if (sourceColumns !== sourceRows) {
-      throw new Error("The elevation adapter expected a square source tile range.");
-    }
-    const gridSize = sourceColumns;
     const startX = sourceNorthWest.x;
     const startY = sourceNorthWest.y;
     const requests = [] as Array<Promise<{ elevations: Float32Array; width: number; height: number }>>;
-    for (let row = 0; row < gridSize; row++) {
-      for (let column = 0; column < gridSize; column++) {
+    for (let row = 0; row < sourceRows; row++) {
+      for (let column = 0; column < sourceColumns; column++) {
         requests.push(this.loadTileElevations(sourceLevel, startX + column, startY + row));
       }
     }
     const rawTiles = await Promise.all(requests);
     const tileSize = rawTiles[0].width; // typically 256
-    const stitchedSize = tileSize * gridSize;
+    const stitchedWidth = tileSize * sourceColumns;
+    const stitchedHeight = tileSize * sourceRows;
 
     // Stitch the tile grid into a single elevation grid.
-    const stitched = new Float32Array(stitchedSize * stitchedSize);
+    const stitched = new Float32Array(stitchedWidth * stitchedHeight);
     for (let i = 0; i < rawTiles.length; i++) {
-      const ox = (i % gridSize) * tileSize;
-      const oy = Math.floor(i / gridSize) * tileSize;
+      const ox = (i % sourceColumns) * tileSize;
+      const oy = Math.floor(i / sourceColumns) * tileSize;
       for (let row = 0; row < tileSize; row++) {
         for (let col = 0; col < tileSize; col++) {
-          stitched[(oy + row) * stitchedSize + (ox + col)] =
+          stitched[(oy + row) * stitchedWidth + (ox + col)] =
             rawTiles[i].elevations[row * tileSize + col];
         }
       }
     }
 
-    // Compute the real-world ground extent of the stitched area.
+    // Provider tiles rarely align with our grid when its level is finer than
+    // the source level, so cut the stitched grid down to the requested bounds.
+    const crop = providerPixelCrop(
+      area.bounds,
+      sourceLevel,
+      sourceNorthWest,
+      tileSize,
+      stitchedWidth,
+      stitchedHeight,
+    );
+    const cropped = new Float32Array(crop.width * crop.height);
+    for (let row = 0; row < crop.height; row++) {
+      cropped.set(
+        stitched.subarray(
+          (crop.top + row) * stitchedWidth + crop.left,
+          (crop.top + row) * stitchedWidth + crop.left + crop.width,
+        ),
+        row * crop.width,
+      );
+    }
+
+    // Compute the real-world ground extent of the requested area.
     const stitchedBounds = area.bounds;
     const { widthMeters, heightMeters } = this.tileSizeMeters(stitchedBounds);
 
     const result = this.processElevations(
-      stitched,
-      stitchedSize,
-      stitchedSize,
+      cropped,
+      crop.width,
+      crop.height,
       `World tile ${area.center.level}/${area.center.x}/${area.center.y}`,
     );
     return {
@@ -255,4 +273,44 @@ function providerTileFor(latitude: number, longitude: number, level: number): { 
     x: Math.floor((longitude + 180) / 360 * scale),
     y: Math.floor((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale),
   };
+}
+
+/**
+ * Pixel window of a geographic bounds inside a stitched provider-tile grid.
+ * Bounds aligned with provider tile edges resolve to the full stitched grid.
+ */
+function providerPixelCrop(
+  bounds: TileBounds,
+  level: number,
+  northWestTile: { x: number; y: number },
+  tileSize: number,
+  stitchedWidth: number,
+  stitchedHeight: number,
+): { left: number; top: number; width: number; height: number } {
+  const scale = 2 ** level;
+  const column = (longitude: number): number => (longitude + 180) / 360 * scale;
+  const row = (latitude: number): number => {
+    const latitudeRadians = latitude * Math.PI / 180;
+    return (1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale;
+  };
+  const left = Math.max(
+    0,
+    Math.round((column(bounds.lonWest) - northWestTile.x) * tileSize),
+  );
+  const top = Math.max(
+    0,
+    Math.round((row(bounds.latNorth) - northWestTile.y) * tileSize),
+  );
+  const right = Math.min(
+    stitchedWidth,
+    Math.round((column(bounds.lonEast) - northWestTile.x) * tileSize),
+  );
+  const bottom = Math.min(
+    stitchedHeight,
+    Math.round((row(bounds.latSouth) - northWestTile.y) * tileSize),
+  );
+  if (right - left < 2 || bottom - top < 2) {
+    throw new Error("Requested area maps to an unusably small elevation window.");
+  }
+  return { left, top, width: right - left, height: bottom - top };
 }

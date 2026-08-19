@@ -441,9 +441,11 @@ export async function createTreeField(
     elevationSampler,
     densityScale,
     yieldControl,
+    startDisabled = false,
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const root = new TransformNode("treeField", scene);
+  if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
   const speciesNoise = new SimplexNoise2D(seed ^ 0x54524545);
   const speciesDetailNoise = new SimplexNoise2D(seed ^ 0x434c5553);

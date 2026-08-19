@@ -39,6 +39,8 @@ interface MapLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   lakeElevationSource?: Float32Array;
+  /** Creates the layer hidden so partially built meshes never flash on screen. */
+  startDisabled?: boolean;
 }
 
 interface MapClipBounds {
@@ -129,6 +131,7 @@ export class OpenStreetMap {
     yieldControl?: () => Promise<void>,
   ): Promise<MapFeatureLayer> {
     const root = new TransformNode("mapFeatures", scene);
+    if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
     const roads: Mesh[] = [];
     const water: Mesh[] = [];

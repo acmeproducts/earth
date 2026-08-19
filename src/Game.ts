@@ -75,7 +75,7 @@ const PLAYER_RADIUS_METERS = 0.3;
 const WALK_SPEED_METERS_PER_SECOND = 8;
 const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
 const CAMERA_NEAR_CLIP_METERS = 0.1;
-const LOADED_TILES_ACROSS = 2;
+const LOADED_TILES_ACROSS = 4;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 
 type MovementMode = "fly" | "walk";
@@ -227,10 +227,12 @@ export class Game {
     // Set scene background
     this.scene.clearColor = new Color4(0.02, 0.02, 0.05, 1);
 
-    // Create fly camera with WASD controls
+    // Create fly camera with WASD controls. The spawn stays well inside the
+    // loaded window's central tile so startup does not immediately trigger a
+    // terrain streaming pass.
     const camera = new UniversalCamera(
       "camera",
-      new Vector3(0, 5, -15),
+      new Vector3(0, 5, -6),
       this.scene,
     );
     camera.setTarget(Vector3.Zero());
@@ -366,6 +368,7 @@ export class Game {
       meshDepth,
       metersPerUnit,
       lakeElevationSource,
+      startDisabled: preserveCameraPosition,
     };
     await yieldControl?.();
     const roadExclusionMask = await OpenStreetMap.createRoadExclusionMask(
@@ -403,8 +406,7 @@ export class Game {
       yieldControl,
     });
     const resources: TerrainSceneResources = { terrain };
-    if (preserveCameraPosition) terrain.setEnabled(false);
-    let terrainCommittedEarly = false;
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     if (preserveCameraPosition) {
       setFrozenMeshOffset(terrain, terrainOffset.x, terrainOffset.z);
       terrain.setEnabled(true);
@@ -422,7 +424,19 @@ export class Game {
       };
       this.loadedTerrainAreaKey = terrainAreaKey;
       this.configureCameraCollisionBody();
-      terrainCommittedEarly = true;
+      this.ensurePlayerAboveGround();
+      delete resources.terrain;
+
+      // Water is cheap to build, and without this the sea keeps ending at the
+      // previous window's edge for the whole detail build. The reflection
+      // render list stays minimal because render targets are disabled.
+      const water = createWaterPlane(this.scene, [terrain], {
+        width: meshWidth,
+        height: meshDepth,
+      });
+      setFrozenMeshOffset(water, terrainOffset.x, terrainOffset.z);
+      this.water?.dispose(false, true);
+      this.water = water;
       console.log(`Terrain window ${terrainAreaKey} is ready; streaming detail layers.`);
     }
 
@@ -436,11 +450,14 @@ export class Game {
       exclusionMask: roadExclusionMask,
       renderMode: this.vegetationModes.trees,
       yieldControl,
+      startDisabled: preserveCameraPosition,
     });
     resources.treeField = treeField;
-    if (preserveCameraPosition) treeField.root.setEnabled(false);
     treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    if (preserveCameraPosition) {
+      this.commitStreamedField("treeField", treeField, resources, terrainOffset);
+    }
     console.log(`Trees: ${treeField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Growing grass", 55);
@@ -454,11 +471,14 @@ export class Game {
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
       yieldControl,
+      startDisabled: preserveCameraPosition,
     });
     resources.grassField = grassField;
-    if (preserveCameraPosition) grassField.root.setEnabled(false);
     grassField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    if (preserveCameraPosition) {
+      this.commitStreamedField("grassField", grassField, resources, terrainOffset);
+    }
     console.log(`Grass: ${grassField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Adding flowers", 64);
@@ -472,11 +492,14 @@ export class Game {
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
       yieldControl,
+      startDisabled: preserveCameraPosition,
     });
     resources.flowerField = flowerField;
-    if (preserveCameraPosition) flowerField.root.setEnabled(false);
     flowerField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    if (preserveCameraPosition) {
+      this.commitStreamedField("flowerField", flowerField, resources, terrainOffset);
+    }
     console.log(`Flowers: ${flowerField.count} simplex-placed grassland patches`);
 
     await reportInitializationProgress(onProgress, "Adding bushes", 72);
@@ -490,11 +513,14 @@ export class Game {
       ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.bushes,
       yieldControl,
+      startDisabled: preserveCameraPosition,
     });
     resources.bushField = bushField;
-    if (preserveCameraPosition) bushField.root.setEnabled(false);
     bushField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    if (preserveCameraPosition) {
+      this.commitStreamedField("bushField", bushField, resources, terrainOffset);
+    }
     console.log(`Bushes: ${bushField.count} WorldCover-placed instances`);
 
     await reportInitializationProgress(onProgress, "Creating map features", 80);
@@ -507,63 +533,69 @@ export class Game {
       yieldControl,
     );
     resources.mapFeatures = mapFeatures.root;
-    if (preserveCameraPosition) mapFeatures.root.setEnabled(false);
+    if (this.discardStaleTerrainBuild(requestId, resources)) return;
+    if (preserveCameraPosition) {
+      setTransformNodeOffset(mapFeatures.root, terrainOffset.x, terrainOffset.z);
+      mapFeatures.root.setEnabled(true);
+      this.mapFeatures?.dispose(false, true);
+      this.mapFeatures = mapFeatures.root;
+      delete resources.mapFeatures;
+      this.refreshShadowCasters();
+    }
     console.log(
       `OSM: ${mapFeatures.counts.buildings} buildings, ${mapFeatures.counts.roads} roads, ${mapFeatures.counts.water} water areas`,
     );
 
-    await reportInitializationProgress(onProgress, "Creating water", 86);
-    await yieldControl?.();
-    const water = createWaterPlane(this.scene, [
-      terrain,
-      ...treeField.meshes,
-      ...grassField.meshes,
-      ...flowerField.meshes,
-      ...bushField.meshes,
-      ...mapFeatures.meshes,
-    ], {
-      width: meshWidth,
-      height: meshDepth,
-    });
-    resources.water = water;
-    if (preserveCameraPosition) water.setEnabled(false);
-
-    if (this.discardStaleTerrainBuild(requestId, resources)) return;
     const cameraState = preserveCameraPosition
       ? this.captureCameraGeographicState()
       : undefined;
-    setTerrainSceneResourcesOffset(resources, terrainOffset.x, terrainOffset.z);
-    disposeTerrainSceneResources({
-      terrain: terrainCommittedEarly ? undefined : this.terrain,
-      water: this.water,
-      treeField: this.treeField,
-      grassField: this.grassField,
-      flowerField: this.flowerField,
-      bushField: this.bushField,
-      mapFeatures: this.mapFeatures,
-    });
-    this.terrain = terrain;
-    terrain.checkCollisions = true;
-    this.water = water;
-    this.treeField = treeField;
-    this.grassField = grassField;
-    this.flowerField = flowerField;
-    this.bushField = bushField;
-    this.mapFeatures = mapFeatures.root;
-    this.terrainData = terrainData;
-    this.walkableTerrain = {
-      data: terrainData,
-      width: meshWidth,
-      depth: meshDepth,
-      metersPerUnit,
-      offsetX: terrainOffset.x,
-      offsetZ: terrainOffset.z,
-    };
+    if (!preserveCameraPosition) {
+      await reportInitializationProgress(onProgress, "Creating water", 86);
+      const water = createWaterPlane(this.scene, [
+        terrain,
+        ...treeField.meshes,
+        ...grassField.meshes,
+        ...flowerField.meshes,
+        ...bushField.meshes,
+        ...mapFeatures.meshes,
+      ], {
+        width: meshWidth,
+        height: meshDepth,
+      });
+      resources.water = water;
+
+      if (this.discardStaleTerrainBuild(requestId, resources)) return;
+      disposeTerrainSceneResources({
+        terrain: this.terrain,
+        water: this.water,
+        treeField: this.treeField,
+        grassField: this.grassField,
+        flowerField: this.flowerField,
+        bushField: this.bushField,
+        mapFeatures: this.mapFeatures,
+      });
+      this.terrain = terrain;
+      terrain.checkCollisions = true;
+      this.water = water;
+      this.treeField = treeField;
+      this.grassField = grassField;
+      this.flowerField = flowerField;
+      this.bushField = bushField;
+      this.mapFeatures = mapFeatures.root;
+      this.terrainData = terrainData;
+      this.walkableTerrain = {
+        data: terrainData,
+        width: meshWidth,
+        depth: meshDepth,
+        metersPerUnit,
+        offsetX: terrainOffset.x,
+        offsetZ: terrainOffset.z,
+      };
+    }
     if (!preserveCameraPosition || !this.terrainCoordinateFrame) {
       this.terrainCoordinateFrame = targetFrame;
       this.terrainMetersPerUnit = metersPerUnit;
     }
-    setTerrainSceneResourcesEnabled(resources, true);
     this.loadedTerrainAreaKey = terrainAreaKey;
     if (this.loadingTerrainAreaKey === terrainAreaKey) this.loadingTerrainAreaKey = undefined;
     this.configureCameraCollisionBody();
@@ -574,16 +606,45 @@ export class Game {
       cameraState?.latitude ?? target.lat,
       cameraState?.longitude ?? target.lon,
     );
-    this.solarLighting?.setShadowCasters([
-      terrain,
-      ...mapFeatures.meshes,
-      ...treeField.meshes,
-      ...grassField.meshes,
-      ...flowerField.meshes,
-      ...bushField.meshes,
-    ]);
+    this.refreshShadowCasters();
     await reportInitializationProgress(onProgress, "Finalizing terrain appearance", 96);
     await this.applyTerrainLayer(requestId);
+  }
+
+  /**
+   * Swaps one streamed detail layer in as soon as it is built, so the new
+   * window fills in progressively instead of staying bare until every layer
+   * finishes. The committed layer is removed from the pending resources so a
+   * stale-build discard cannot dispose it.
+   */
+  private commitStreamedField(
+    kind: "treeField" | "grassField" | "flowerField" | "bushField",
+    field: VegetationFieldResult,
+    resources: TerrainSceneResources,
+    offset: { x: number; z: number },
+  ): void {
+    setTransformNodeOffset(field.root, offset.x, offset.z);
+    field.root.setEnabled(true);
+    this[kind]?.root.dispose(false, false);
+    this[kind] = field;
+    delete resources[kind];
+    this.refreshShadowCasters();
+    this.updateVegetationLod();
+  }
+
+  /** Rebuilds the shadow render list from whichever layers are live right now. */
+  private refreshShadowCasters(): void {
+    if (!this.terrain) return;
+    this.solarLighting?.setShadowCasters([
+      this.terrain,
+      ...(this.mapFeatures?.getChildMeshes(false) ?? []).filter(
+        (mesh): mesh is Mesh => mesh instanceof Mesh,
+      ),
+      ...(this.treeField?.meshes ?? []),
+      ...(this.grassField?.meshes ?? []),
+      ...(this.flowerField?.meshes ?? []),
+      ...(this.bushField?.meshes ?? []),
+    ]);
   }
 
   private discardStaleTerrainBuild(
@@ -662,14 +723,32 @@ export class Game {
     const camera = this.scene.activeCamera;
     if (!camera) return;
 
-    const position = camera.globalPosition.clone();
-    position.x -= this.walkableTerrain?.offsetX ?? 0;
-    position.z -= this.walkableTerrain?.offsetZ ?? 0;
+    // Fields can sit at different scene offsets while a streamed window
+    // replaces them one at a time, so LOD runs in each field's local space.
+    const localCameraPosition = (field: VegetationFieldResult): Vector3 => {
+      const position = camera.globalPosition.clone();
+      position.x -= field.root.position.x;
+      position.z -= field.root.position.z;
+      return position;
+    };
+    const grassDistanceMeters = Math.min(this.vegetationLodDistanceMeters, 8);
     const shadowsChanged = [
-      this.treeField?.updateLod(position, this.vegetationLodDistanceMeters),
-      this.grassField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8)),
-      this.flowerField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 8)),
-      this.bushField?.updateLod(position, Math.min(this.vegetationLodDistanceMeters, 16)),
+      this.treeField && this.treeField.updateLod(
+        localCameraPosition(this.treeField),
+        this.vegetationLodDistanceMeters,
+      ),
+      this.grassField && this.grassField.updateLod(
+        localCameraPosition(this.grassField),
+        grassDistanceMeters,
+      ),
+      this.flowerField && this.flowerField.updateLod(
+        localCameraPosition(this.flowerField),
+        grassDistanceMeters,
+      ),
+      this.bushField && this.bushField.updateLod(
+        localCameraPosition(this.bushField),
+        Math.min(this.vegetationLodDistanceMeters, 16),
+      ),
     ].some(Boolean);
     if (shadowsChanged) this.solarLighting?.refreshShadows();
     this.logVegetationLodStats();
@@ -994,6 +1073,9 @@ export class Game {
       { width: meshWidth, height: meshDepth, subdivisions, updatable: true },
       this.scene,
     );
+    // A cooperative build renders frames while the vertices are still flat;
+    // the caller re-enables the mesh when it commits the finished terrain.
+    if (yieldControl) ground.setEnabled(false);
 
     const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
     const indices = ground.getIndices()!;
@@ -1166,33 +1248,6 @@ function disposeTerrainSceneResources(resources: TerrainSceneResources): void {
   resources.flowerField?.root.dispose(false, false);
   resources.bushField?.root.dispose(false, false);
   resources.mapFeatures?.dispose(false, true);
-}
-
-function setTerrainSceneResourcesEnabled(
-  resources: TerrainSceneResources,
-  enabled: boolean,
-): void {
-  resources.terrain?.setEnabled(enabled);
-  resources.water?.setEnabled(enabled);
-  resources.treeField?.root.setEnabled(enabled);
-  resources.grassField?.root.setEnabled(enabled);
-  resources.flowerField?.root.setEnabled(enabled);
-  resources.bushField?.root.setEnabled(enabled);
-  resources.mapFeatures?.setEnabled(enabled);
-}
-
-function setTerrainSceneResourcesOffset(
-  resources: TerrainSceneResources,
-  x: number,
-  z: number,
-): void {
-  if (resources.terrain) setFrozenMeshOffset(resources.terrain, x, z);
-  if (resources.water) setFrozenMeshOffset(resources.water, x, z);
-  if (resources.treeField) setTransformNodeOffset(resources.treeField.root, x, z);
-  if (resources.grassField) setTransformNodeOffset(resources.grassField.root, x, z);
-  if (resources.flowerField) setTransformNodeOffset(resources.flowerField.root, x, z);
-  if (resources.bushField) setTransformNodeOffset(resources.bushField.root, x, z);
-  if (resources.mapFeatures) setTransformNodeOffset(resources.mapFeatures, x, z);
 }
 
 function setFrozenMeshOffset(mesh: Mesh, x: number, z: number): void {
