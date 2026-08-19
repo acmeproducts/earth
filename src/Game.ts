@@ -1536,7 +1536,12 @@ export class Game {
     await yieldControl?.();
     const normals = new Float32Array(positions.length);
     VertexData.ComputeNormals(positions, indices, normals);
-    ground.updateVerticesData(VertexBuffer.PositionKind, positions);
+    // CreateGround leaves the bounding box flat at y = 0. Vertices carry
+    // absolute elevation, so a mountain tile's geometry ends up hundreds of
+    // units above bounds that still describe a flat plane, and the frustum
+    // test, shadow frustum and collision broad phase all miss it. Updating the
+    // extents alongside the positions keeps the bounds on the real surface.
+    ground.updateVerticesData(VertexBuffer.PositionKind, positions, true);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
     ground.metadata = { worldCoverColors, surfaceColors } satisfies TerrainMetadata;
     ground.freezeWorldMatrix();
