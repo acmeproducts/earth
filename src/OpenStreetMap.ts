@@ -41,6 +41,12 @@ interface MapLayerOptions {
   lakeElevationSource?: Float32Array;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
+  /**
+   * Restricts the layer to features whose first vertex lies inside these
+   * bounds. Streamed tiles share provider vector tiles, so without one owner
+   * per feature every neighboring tile would rebuild the same geometry.
+   */
+  ownerBounds?: TileBounds;
 }
 
 interface MapClipBounds {
@@ -140,6 +146,7 @@ export class OpenStreetMap {
       forEachFeature(tile, "building", (feature) => {
         const height = numericProperty(feature, "render_height") || 8;
         for (const polygon of polygons(feature, tile)) {
+          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, height);
           if (mesh) buildings.push(mesh);
         }
@@ -148,6 +155,7 @@ export class OpenStreetMap {
       forEachFeature(tile, "transportation", (feature) => {
         const width = roadWidth(String(feature.properties.class ?? ""));
         for (const line of lines(feature, tile)) {
+          if (!ownsGeometry(line, options.ownerBounds)) continue;
           roads.push(...createRoad(scene, line, terrain, options, width));
         }
       });
@@ -155,6 +163,7 @@ export class OpenStreetMap {
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
+          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
           if (mesh) water.push(mesh);
         }
@@ -216,6 +225,19 @@ export class OpenStreetMap {
     const data = await request;
     return data ? { x, y, zoom, data } : undefined;
   }
+}
+
+/**
+ * One streamed tile owns each feature piece: the tile containing its first
+ * vertex. The geometry itself is projected from absolute coordinates, so an
+ * owned road or building still renders correctly across tile boundaries.
+ */
+function ownsGeometry(points: LonLat[], bounds?: TileBounds): boolean {
+  if (!bounds) return true;
+  if (points.length === 0) return false;
+  const [lon, lat] = points[0];
+  return lon >= bounds.lonWest && lon < bounds.lonEast &&
+    lat > bounds.latSouth && lat <= bounds.latNorth;
 }
 
 function forEachFeature(tile: MapTile, layerName: string, visit: (feature: VectorTileFeature) => void): void {

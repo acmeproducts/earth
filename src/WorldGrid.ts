@@ -113,6 +113,32 @@ export function worldTileAreaKey(area: WorldTileArea): string {
   return `${area.start.level}/${area.start.x}/${area.start.y}/${area.tilesAcross}`;
 }
 
+/** Stable identity for one streamed world tile. */
+export function worldTileKey(tile: WorldTileId): string {
+  return `${tile.level}/${tile.x}/${tile.y}`;
+}
+
+/** Describes one explicit tile as a loadable area. */
+export function worldTileArea(
+  tile: WorldTileId,
+  worldSeed = DEFAULT_WORLD_SEED,
+): WorldTileArea {
+  const level = normalizeLevel(tile.level);
+  const scale = 2 ** level;
+  const normalized = {
+    level,
+    x: wrap(tile.x, scale),
+    y: Math.max(0, Math.min(scale - 1, tile.y)),
+  };
+  return {
+    center: normalized,
+    start: normalized,
+    tilesAcross: 1,
+    bounds: worldTileBounds(normalized),
+    seed: worldTileSeed(normalized, worldSeed),
+  };
+}
+
 /** Stable per-tile seed, independent of load order and online data providers. */
 export function worldTileSeed(tile: WorldTileId, worldSeed = DEFAULT_WORLD_SEED): number {
   return deriveSeed(worldSeed, "tile", tile.level, tile.x, tile.y);

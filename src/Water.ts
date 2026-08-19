@@ -42,10 +42,15 @@ export function createWaterPlane(
   waterMesh.position.y = elevation;
 
   const water = new WaterMaterial('waterMaterial', scene, new Vector2(512, 512));
-  water.bumpTexture = new Texture(
+  const bumpTexture = new Texture(
     'https://assets.babylonjs.com/textures/waterbump.png',
     scene
   );
+  // Wave normals were tuned on a 100-unit plane; tile the bump texture with
+  // the plane size so larger oceans keep the same physical wave scale.
+  bumpTexture.uScale = Math.max(1, width / 100);
+  bumpTexture.vScale = Math.max(1, height / 100);
+  water.bumpTexture = bumpTexture;
 
   // Wave properties
   water.windForce = -5;

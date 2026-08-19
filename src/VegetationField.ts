@@ -1,4 +1,4 @@
-import { Mesh, TransformNode, Vector3 } from "@babylonjs/core";
+import { Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
@@ -26,6 +26,8 @@ export interface VegetationFieldResult {
   count: number;
   setRenderMode(mode: VegetationRenderMode): void;
   setAmbientOcclusionEnabled(enabled: boolean): void;
+  /** Dithers the whole field in or out; 0 hides it and 1 shows it fully. */
+  setFade(fade: number): void;
   /** Updates packed model/impostor instances; true when the shadow map changed. */
   updateLod(cameraPosition: Vector3, distanceMeters: number): boolean;
   consumeLodDebugStats(): VegetationLodDebugStats;
@@ -393,6 +395,13 @@ export async function createVegetationFieldResult(
     setRenderMode(mode);
   };
 
+  const setFade = (fade: number): void => {
+    for (const mesh of [...impostorMeshes, ...modelMeshes]) {
+      const material = mesh.material;
+      if (material instanceof ShaderMaterial) material.setFloat("fieldFade", fade);
+    }
+  };
+
   applyRenderMode(initialMode);
   return {
     root,
@@ -403,6 +412,7 @@ export async function createVegetationFieldResult(
     count,
     setRenderMode: applyRenderMode,
     setAmbientOcclusionEnabled,
+    setFade,
     updateLod,
     consumeLodDebugStats,
   };

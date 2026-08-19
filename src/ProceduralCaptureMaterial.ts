@@ -406,6 +406,7 @@ export function createVertexColorCaptureMaterial(
         uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
         uniform float instanceColorCoverage;
+        uniform float fieldFade;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
         ${vegetationShadowFragmentDeclaration}
@@ -419,6 +420,9 @@ export function createVertexColorCaptureMaterial(
         }
         void main(void) {
           if (vInstanceLodBlend <= bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
+          // Whole-field dither lets streamed tiles fade their vegetation in
+          // and out without true transparency.
+          if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
           vec3 surfaceColor = vColor.rgb;
           if (vUv.x >= 1.5) {
             if (barkTextureEnabled > 0.5) {
@@ -490,6 +494,7 @@ export function createVertexColorCaptureMaterial(
         "barkTextureEnabled",
         "lowLightAlbedoScale",
         "instanceColorCoverage",
+        "fieldFade",
         "vegetationShadowMatrix",
         "vegetationShadowTexelSize",
         "vegetationShadowDepthValues",
@@ -518,6 +523,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("instanceColorCoverage", 0);
+  material.setFloat("fieldFade", 1);
   let resolveTextureReadiness: (() => void) | undefined;
   const ready = leafTextureUrl
     ? new Promise<void>((resolve) => { resolveTextureReadiness = resolve; })
