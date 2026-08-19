@@ -4,6 +4,7 @@ import {
   HemisphericLight,
   Mesh,
   MeshBuilder,
+  ReflectionProbe,
   RenderTargetTexture,
   Scene,
   ShaderMaterial,
@@ -17,6 +18,11 @@ import * as SunCalc from "suncalc";
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
 const UPDATE_INTERVAL_MS = 60_000;
+/**
+ * The sky reflection only has to survive being seen in a rippling surface, so
+ * a small cube is plenty and keeps the six extra faces off the frame budget.
+ */
+const SKY_PROBE_SIZE = 128;
 const MIN_AMBIENT_INTENSITY = 0.24;
 
 /** Keeps the visible sun and scene lighting aligned with the real sky. */
@@ -30,6 +36,7 @@ export class SolarLighting {
   private readonly shadows: ShadowGenerator;
   private readonly skyMaterial: SkyMaterial;
   private readonly horizonMaterial: ShaderMaterial;
+  private readonly skyProbe: ReflectionProbe;
   private latitude: number;
   private longitude: number;
   private lastUpdate = 0;
@@ -142,8 +149,22 @@ export class SolarLighting {
     material.emissiveColor = new Color3(1, 0.78, 0.36);
     this.sunMesh.material = material;
 
+    // Reflective surfaces need the sky as an environment, and the sky here is
+    // a procedural dome rather than a loaded cube map. Capturing it into a
+    // probe costs six small renders of three meshes, and only when the sun has
+    // actually moved.
+    this.skyProbe = new ReflectionProbe("skyProbe", SKY_PROBE_SIZE, scene);
+    this.skyProbe.renderList?.push(this.skyMesh, horizonMesh, this.sunMesh);
+    this.skyProbe.cubeTexture.refreshRate =
+      RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+
     this.update(new Date(), true);
     scene.onBeforeRenderObservable.add(() => this.update(this.currentLightingDate()));
+  }
+
+  /** The captured sky, for materials that reflect their surroundings. */
+  get skyReflectionTexture(): RenderTargetTexture {
+    return this.skyProbe.cubeTexture;
   }
 
   setLocation(latitude: number, longitude: number): void {
@@ -231,6 +252,8 @@ export class SolarLighting {
     this.scene.environmentIntensity = daylight
       ? 0.7 + 0.3 * elevationFactor
       : 0.12;
+    // The dome's colours were just rewritten, so the captured copy is stale.
+    this.skyProbe.cubeTexture.resetRefreshCounter();
     this.refreshStaticShadows();
   }
 

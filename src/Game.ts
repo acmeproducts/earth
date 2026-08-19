@@ -1,6 +1,10 @@
 import {
+  BaseTexture,
+  Constants,
   Engine,
+  RenderTargetTexture,
   Scene,
+  SSRRenderingPipeline,
   UniversalCamera,
   Vector3,
   MeshBuilder,
@@ -15,7 +19,7 @@ import {
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
-import { createWaterPlane } from "./Water";
+import { createWaterPlane, disposeWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
 import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
@@ -90,6 +94,10 @@ const TILE_MESH_WIDTH_UNITS = 25;
 const TERRAIN_TILE_RADIUS = 6;
 /** Vegetation and map features stream out to this many rings. */
 const DETAIL_TILE_RADIUS = 2;
+/** Scene units from the camera to the outer edge of the streamed terrain. */
+const LOAD_HORIZON_UNITS = (TERRAIN_TILE_RADIUS + 0.5) * TILE_MESH_WIDTH_UNITS;
+/** Share of that horizon the view stays clear before fog takes over. */
+const FOG_START_FRACTION = 0.6;
 /** Built tiles cool down for this long after leaving the radius before disposal. */
 const TILE_COOLDOWN_MS = 30_000;
 const DETAIL_COOLDOWN_MS = 10_000;
@@ -176,6 +184,7 @@ export class Game {
   private sceneControls?: SceneControls;
   private vegetationLodDistanceMeters: number;
   private vegetationAmbientOcclusionEnabled: boolean;
+  private readonly waterReflectionsEnabled: boolean;
   private flyCamera?: UniversalCamera;
   private flySpeedOutput?: HTMLOutputElement;
   private movementMode: MovementMode = "fly";
@@ -257,6 +266,9 @@ export class Game {
     this.vegetationAmbientOcclusionEnabled = !["0", "off", "false"].includes(
       query.get("vegetation-ao")?.toLowerCase() ?? "",
     );
+    this.waterReflectionsEnabled = !["0", "off", "false"].includes(
+      query.get("reflections")?.toLowerCase() ?? "",
+    );
   }
 
   async initialize(onProgress?: InitializationProgress): Promise<void> {
@@ -313,6 +325,7 @@ export class Game {
       location.lat,
       location.lon,
     );
+    if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
 
     // Load terrain at the active example location. Only the center tile
     // blocks the loading screen; the rest streams in from the render loop.
@@ -745,12 +758,96 @@ export class Game {
     if (casters.length > 0) this.solarLighting?.setShadowCasters(casters);
   }
 
+  /**
+   * Screen-space reflections, aimed at the ocean.
+   *
+   * The pass runs over the whole frame but only touches pixels whose material
+   * reported a reflectivity above the threshold. Terrain specular sits an
+   * order of magnitude below it once the prepass linearises it, and the map
+   * features are matte, so the water is the only surface that traces rays.
+   *
+   * Vegetation draws with custom shaders that write no prepass geometry. That
+   * costs nothing here beyond trees reflecting as if they were painted on the
+   * ground behind them, and it keeps the streamed instance fields out of an
+   * extra geometry pass.
+   */
+  private enableWaterReflections(camera: UniversalCamera): void {
+    const reflections = new SSRRenderingPipeline(
+      "waterReflections",
+      this.scene,
+      [camera],
+      false,
+      Constants.TEXTURETYPE_UNSIGNED_BYTE,
+    );
+    if (!reflections.isSupported) {
+      console.warn("Screen-space reflections are unsupported here; water stays flat.");
+      reflections.dispose();
+      return;
+    }
+    // Above the terrain's specular colour, below the water's reflectivity.
+    reflections.reflectivityThreshold = 0.045;
+    // Water is a weak reflector head-on and a mirror at grazing angles, which
+    // is the whole reason the surface stops reading as a flat blue sheet.
+    reflections.useFresnel = true;
+    // A long stride with hit refinement covers the distance to the shoreline
+    // for a fraction of the samples a per-pixel march would need.
+    reflections.step = 12;
+    reflections.maxSteps = 96;
+    reflections.enableSmoothReflections = true;
+    // Rays stop at the distance fog starts washing the scene out, which is as
+    // far as a reflection can still be told apart from the haze.
+    reflections.maxDistance = LOAD_HORIZON_UNITS * FOG_START_FRACTION;
+    reflections.thickness = 0.4;
+    // Waves tip some rays back down into the surface they just left; skipping
+    // the first steps keeps those from returning the water's own colour.
+    reflections.selfCollisionNumSkip = 3;
+    // Blurring the reflection would mean gathering it in a separate
+    // half-resolution texture, which smears the water's reflection across the
+    // silhouettes in front of it and, because the vertical blur covers an even
+    // number of rows, drops a black row off the top and bottom of an
+    // odd-height frame. Scattering the rays themselves gives a rippled
+    // surface's broken reflection with no neighbouring pixels involved, and
+    // saves three full-screen passes.
+    reflections.blurDispersionStrength = 0;
+    reflections.roughnessFactor = 0.35;
+    reflections.attenuateScreenBorders = true;
+    reflections.attenuateFacingCamera = true;
+    reflections.attenuateBackfaceReflection = true;
+    // The prepass takes rendering off the back buffer, so the engine's own
+    // anti-aliasing no longer applies to the scene.
+    reflections.samples = 4;
+    this.keepRenderTargetsOutOfPrePass();
+  }
+
+  /**
+   * Babylon re-runs the prepass' "is anything still asking for this?" check at
+   * the start of every render target draw, and answers it from the scene's
+   * active camera. Inside a shadow map, a reflection probe or an impostor
+   * capture that camera is not the one carrying the SSR post-processes, so the
+   * check concludes nothing needs the prepass and switches it off until the
+   * next time a material dirties it — which, with tiles streaming in and out,
+   * leaves the reflections flickering on and off at random.
+   *
+   * None of those targets want prepass output anyway, and opting them out also
+   * spares each one the multi-target attachments it was allocating.
+   */
+  private keepRenderTargetsOutOfPrePass(): void {
+    const prePass = this.scene.prePassRenderer;
+    if (!prePass) return;
+    const exclude = (texture: BaseTexture): void => {
+      if (!(texture instanceof RenderTargetTexture)) return;
+      if (prePass.renderTargets.some((target) => target === texture)) return;
+      texture.noPrePassRenderer = true;
+    };
+    for (const texture of this.scene.textures) exclude(texture);
+    this.scene.onNewTextureAddedObservable.add(exclude);
+  }
+
   /** Fog hides tiles popping in at the edge of the streamed radius. */
   private configureLoadHorizon(): void {
-    const radiusUnits = (TERRAIN_TILE_RADIUS + 0.5) * TILE_MESH_WIDTH_UNITS;
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
-    this.scene.fogStart = radiusUnits * 0.6;
-    this.scene.fogEnd = radiusUnits * 0.95;
+    this.scene.fogStart = LOAD_HORIZON_UNITS * FOG_START_FRACTION;
+    this.scene.fogEnd = LOAD_HORIZON_UNITS * 0.95;
   }
 
   /** Keeps one large ocean plane centered on the camera's tile. */
@@ -759,9 +856,11 @@ export class Game {
     if (!frame) return;
     if (!this.water) {
       const sizeUnits = (2 * (TERRAIN_TILE_RADIUS + 1) + 1) * TILE_MESH_WIDTH_UNITS;
-      this.water = createWaterPlane(this.scene, [], {
+      this.water = createWaterPlane(this.scene, {
         width: sizeUnits,
         height: sizeUnits,
+        metersPerUnit: this.terrainMetersPerUnit,
+        skyReflection: this.solarLighting?.skyReflectionTexture,
       });
     }
     const bounds = worldTileBounds(center);
@@ -809,7 +908,7 @@ export class Game {
     for (const record of this.tiles.values()) this.disposeTile(record);
     this.tiles.clear();
     this.activeTileBuilds.clear();
-    this.water?.dispose(false, true);
+    if (this.water) disposeWaterPlane(this.water);
     this.water = undefined;
     this.cameraTileKey = undefined;
   }
