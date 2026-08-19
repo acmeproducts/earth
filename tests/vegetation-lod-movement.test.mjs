@@ -122,7 +122,7 @@ function assertFieldMatchesGroundTruth(impostorMesh, modelMesh, positions, camer
   );
 }
 
-test("incremental LOD keeps every instance drawn while the camera walks", () => {
+test("incremental LOD keeps every instance drawn while the camera walks", async () => {
   const positions = [];
   for (let x = 0; x <= 300; x += 3) {
     for (let z = -6; z <= 6; z += 6) {
@@ -132,7 +132,7 @@ test("incremental LOD keeps every instance drawn while the camera walks", () => 
   const matrices = packMatrices(positions);
   const impostorMesh = createMeshStub("impostors");
   const modelMesh = createMeshStub("models");
-  const field = createVegetationFieldResult(
+  const field = await createVegetationFieldResult(
     { name: "test-root" },
     [impostorMesh],
     [modelMesh],
@@ -158,7 +158,7 @@ test("incremental LOD keeps every instance drawn while the camera walks", () => 
   }
 });
 
-test("incremental LOD survives direction changes and revisits", () => {
+test("incremental LOD survives direction changes and revisits", async () => {
   const positions = [];
   for (let x = -120; x <= 120; x += 4) {
     positions.push({ x, y: 0, z: 0 }, { x, y: 0, z: 30 });
@@ -166,7 +166,7 @@ test("incremental LOD survives direction changes and revisits", () => {
   const matrices = packMatrices(positions);
   const impostorMesh = createMeshStub("impostors");
   const modelMesh = createMeshStub("models");
-  const field = createVegetationFieldResult(
+  const field = await createVegetationFieldResult(
     { name: "test-root" },
     [impostorMesh],
     [modelMesh],

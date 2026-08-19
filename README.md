@@ -115,14 +115,6 @@ The top-right counter reports live FPS and active triangles; use
 `?vegetation=models` to force tree models or
 `?vegetation-distance=20` to change the initial Auto range.
 
-The landscape extends beyond the detailed player area with a lower-detail terrain
-ring. Its compact 3 by 3 level-13 footprint keeps the horizon focused while the
-fixed vegetation budget produces roughly four times the former tree density. The
-ring uses a coarser WorldCover tint and tree impostors to keep the expanded horizon
-inexpensive while blending into the local terrain. Its OSM vector data is fetched
-at zoom 14 so the vista retains per-building heights even though its elevation
-data is coarser.
-
 The world uses an application-owned Web Mercator grid at fixed level 14. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
 the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
@@ -131,18 +123,22 @@ tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
 with latitude (a detailed tile is about 1.2 km wide around Oslo). Use `?seed=123`
 to select another deterministic world seed.
 
-The detailed terrain defaults to a 1 by 1 application-tile grid, which cuts terrain
-samples and the detailed vegetation area to roughly one quarter of the former
-2 by 2 default. Values from 1 through 4 remain available through
-`?inner-size=2`. `?render-scale=0.75` renders at 75% of the canvas
-resolution (values are clamped from 0.25 through 1), and
+The terrain keeps the four closest application tiles loaded as a moving 2 by 2
+window. The window changes at tile midlines, loading the next row or column in
+the background before the player reaches the outer edge. Overlapping elevation,
+WorldCover, and OpenStreetMap source requests are cached between window shifts.
+CPU-heavy terrain, map, vegetation, and LOD-index construction is spread across
+animation frames so the active window remains responsive while its replacement loads.
+
+`?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
+from 0.25 through 1), and
 `?vegetation=impostors` avoids the more expensive nearby models. These options
 can be combined, for example:
 
-`?inner-size=1&render-scale=0.75&vegetation=impostors&performance-debug`
+`?render-scale=0.75&vegetation=impostors&performance-debug`
 
 Add `performance-debug` (or `perf`) to expand the top-right counter with frame
-and render time, draw calls, active meshes, render scale, and inner-grid size.
+and render time, draw calls, active meshes, and render scale.
 Press `F` to toggle the expanded counter at runtime.
 
 

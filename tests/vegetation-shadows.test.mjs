@@ -24,9 +24,13 @@ const solarLighting = readFileSync(
 );
 
 test("registers both vegetation models and impostors as shadow casters", () => {
+  // Every streamed tile contributes each vegetation layer's meshes (models and
+  // impostors together) to the shadow render list.
   for (const field of ["treeField", "grassField", "flowerField", "bushField"]) {
-    assert.match(game, new RegExp(`\\.\\.\\.${field}\\.meshes`));
+    assert.match(game, new RegExp(`"${field}"`));
   }
+  assert.match(game, /casters\.push\(\.\.\.field\.meshes\)/);
+  assert.match(game, /setShadowCasters\(casters\)/);
 });
 
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {

@@ -15,14 +15,17 @@ export class SpatialReferenceGrid<T> {
   ) {
     if (!(cellSize > 0)) throw new RangeError("Spatial grid cell size must be positive.");
     this.cellSize = cellSize;
-    for (const entry of entries) {
-      const cellX = this.coordinate(entry.x);
-      const cellZ = this.coordinate(entry.z);
-      const key = this.key(cellX, cellZ);
-      const cell = this.cells.get(key);
-      if (cell) cell.push(entry);
-      else this.cells.set(key, [entry]);
-    }
+    for (const entry of entries) this.add(entry);
+  }
+
+  /** Adds one reference, allowing large grids to be populated cooperatively. */
+  public add(entry: SpatialReferenceGridEntry<T>): void {
+    const cellX = this.coordinate(entry.x);
+    const cellZ = this.coordinate(entry.z);
+    const key = this.key(cellX, cellZ);
+    const cell = this.cells.get(key);
+    if (cell) cell.push(entry);
+    else this.cells.set(key, [entry]);
   }
 
   /** Returns references in cells intersecting an annulus's conservative bounds. */

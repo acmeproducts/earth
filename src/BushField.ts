@@ -46,9 +46,12 @@ export async function createBushField(
     exclusionMask,
     ambientOccluders = [],
     renderMode = "auto",
+    yieldControl,
+    startDisabled = false,
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
   const root = new TransformNode("bushField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getBushImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,
@@ -125,14 +128,16 @@ export async function createBushField(
           ),
         );
       }
+      await yieldControl?.();
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(
+  const instanceOcclusion = await computeVegetationOcclusion(
     matrixData,
     10 / metersPerUnit,
     ambientOccluders,
+    yieldControl,
   );
   return createVegetationFieldResult(
     root,
@@ -142,6 +147,8 @@ export async function createBushField(
     metersPerUnit,
     renderMode,
     instanceOcclusion,
+    undefined,
+    yieldControl,
   );
 }
 

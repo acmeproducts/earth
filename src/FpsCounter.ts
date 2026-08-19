@@ -11,7 +11,7 @@ export class FpsCounter {
   constructor(
     scene: Scene,
     expanded = false,
-    private readonly configuration?: { renderScale: number; innerSize: number },
+    private readonly configuration?: { renderScale: number },
   ) {
     this.instrumentation = new SceneInstrumentation(scene);
     this.instrumentation.captureFrameTime = true;
@@ -44,7 +44,7 @@ export class FpsCounter {
     const renderMs = this.instrumentation.renderTimeCounter.lastSecAverage;
     const drawCalls = this.instrumentation.drawCallsCounter.lastSecAverage;
     const config = this.configuration
-      ? `scale ${this.configuration.renderScale.toFixed(2)}  inner ${this.configuration.innerSize}x${this.configuration.innerSize}`
+      ? `scale ${this.configuration.renderScale.toFixed(2)}`
       : "";
     this.element.textContent = [
       `${fps}  ${frameMs.toFixed(1)} ms frame`,

@@ -55,6 +55,7 @@ import {
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
 const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
+const METERS_PER_DEGREE = 111_320;
 const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   acacia: 0.92,
   beech: 1.02,
@@ -86,6 +87,11 @@ interface TreeFieldOptions extends VegetationPlacementOptions {
   forceLowestImpostorLod?: boolean;
   positionOffset?: Vector3;
   elevationSampler?: (x: number, z: number) => number;
+  /**
+   * Seed for the species-grove noise. Pass a world-level seed (not a per-tile
+   * one) so groves continue seamlessly across streamed tile boundaries.
+   */
+  speciesSeed?: number;
 }
 
 export const impostorVertexShader = `
@@ -187,6 +193,7 @@ uniform vec3 skyColor;
 uniform vec3 groundColor;
 uniform float lowLightAlbedoScale;
 uniform float instanceColorCoverage;
+uniform float fieldFade;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -256,6 +263,9 @@ void main(void) {
   // Complement the model shader's screen-door mask so the two LODs blend
   // without the depth-sorting problems of translucent vegetation.
   if (vInstanceLodBlend > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
+  // Whole-field dither lets streamed tiles fade their vegetation in and out
+  // without the depth-sorting problems of true transparency.
+  if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
   // Select the captured silhouette from the light during shadow rendering.
   #if SM_DIRECTIONINLIGHTDATA == 1
   vec3 direction = normalize(vLocalSunDirection);
@@ -440,12 +450,16 @@ export async function createTreeField(
     positionOffset = Vector3.Zero(),
     elevationSampler,
     densityScale,
+    yieldControl,
+    startDisabled = false,
+    speciesSeed = seed,
   } = options;
   const treeHeight = 11 / metersPerUnit;
   const root = new TransformNode("treeField", scene);
+  if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
-  const speciesNoise = new SimplexNoise2D(seed ^ 0x54524545);
-  const speciesDetailNoise = new SimplexNoise2D(seed ^ 0x434c5553);
+  const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
+  const speciesDetailNoise = new SimplexNoise2D(speciesSeed ^ 0x434c5553);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
@@ -473,6 +487,7 @@ export async function createTreeField(
           forestMask[row * columns + column] = 1;
         }
       }
+      await yieldControl?.();
     }
 
     const edgeDistances = distanceInsideMask(
@@ -518,11 +533,13 @@ export async function createTreeField(
 
         const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const treeDistribution = treeDistributionAt(location.lon, location.lat);
+        // Geographic meters anchor the grove noise to the world rather than
+        // to this tile's local frame, keeping groves seamless across tiles.
         const species = sampleTreeSpecies(
           speciesNoise,
           speciesDetailNoise,
-          worldX * metersPerUnit,
-          worldZ * metersPerUnit,
+          location.lon * METERS_PER_DEGREE * Math.cos(location.lat * Math.PI / 180),
+          location.lat * METERS_PER_DEGREE,
           treeDistribution,
           random(),
         );
@@ -545,6 +562,7 @@ export async function createTreeField(
         matrices.push(matrix);
         speciesMatrices[species].push(matrix);
       }
+      await yieldControl?.();
     }
   }
 
@@ -583,14 +601,17 @@ export async function createTreeField(
   const packedSpeciesMatrices = speciesList.map(
     (species) => packInstanceMatrices(speciesMatrices[species]),
   );
-  const fields = speciesResources.map(({ prototype, modelMeshes }, index) => {
+  const fields: VegetationFieldResult[] = [];
+  for (let index = 0; index < speciesResources.length; index++) {
+    const { prototype, modelMeshes } = speciesResources[index];
     const ownMatrices = packedSpeciesMatrices[index];
-    const instanceOcclusion = computeVegetationOcclusion(
+    const instanceOcclusion = await computeVegetationOcclusion(
       ownMatrices,
       10 / metersPerUnit,
       packedSpeciesMatrices.filter((_, otherIndex) => otherIndex !== index),
+      yieldControl,
     );
-    return createVegetationFieldResult(
+    fields.push(await createVegetationFieldResult(
       prototype.root,
       [prototype.mesh],
       modelMeshes,
@@ -598,8 +619,11 @@ export async function createTreeField(
       metersPerUnit,
       renderMode,
       instanceOcclusion,
-    );
-  });
+      undefined,
+      yieldControl,
+    ));
+    await yieldControl?.();
+  }
   const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
   const modelMeshes = fields.flatMap((field) => field.modelMeshes);
   return {
@@ -613,6 +637,7 @@ export async function createTreeField(
     setAmbientOcclusionEnabled: (enabled) => {
       fields.forEach((field) => field.setAmbientOcclusionEnabled(enabled));
     },
+    setFade: (fade) => fields.forEach((field) => field.setFade(fade)),
     updateLod: (cameraPosition, distanceMeters) => {
       let changed = false;
       fields.forEach((field) => {
@@ -736,7 +761,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
@@ -773,6 +798,7 @@ export function createImpostorMaterial(
   material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", 1);
   material.setFloat("instanceColorCoverage", 0);
+  material.setFloat("fieldFade", 1);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(
@@ -874,8 +900,7 @@ function distanceInsideMask(
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
-      // A tile boundary is not a forest boundary. Leaving edge cells open lets
-      // adjacent local/vista fields share density without an artificial rim.
+      // A tile boundary is not a forest boundary, so edge cells remain open.
       distance[index] = mask[index] ? Infinity : 0;
     }
   }

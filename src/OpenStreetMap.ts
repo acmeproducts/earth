@@ -39,10 +39,17 @@ interface MapLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   lakeElevationSource?: Float32Array;
-  excludeBoundaryWater?: boolean;
+  /** Creates the layer hidden so partially built meshes never flash on screen. */
+  startDisabled?: boolean;
+  /**
+   * Restricts the layer to features whose first vertex lies inside these
+   * bounds. Streamed tiles share provider vector tiles, so without one owner
+   * per feature every neighboring tile would rebuild the same geometry.
+   */
+  ownerBounds?: TileBounds;
 }
 
-export interface MapClipBounds {
+interface MapClipBounds {
   minX: number;
   maxX: number;
   minZ: number;
@@ -122,13 +129,15 @@ export class OpenStreetMap {
     return (await Promise.all(requests)).filter((tile): tile is MapTile => tile !== undefined);
   }
 
-  static createLayer(
+  static async createLayer(
     scene: Scene,
     tiles: MapTile[],
     terrain: TerrainData,
     options: MapLayerOptions,
-  ): MapFeatureLayer {
+    yieldControl?: () => Promise<void>,
+  ): Promise<MapFeatureLayer> {
     const root = new TransformNode("mapFeatures", scene);
+    if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
     const roads: Mesh[] = [];
     const water: Mesh[] = [];
@@ -137,26 +146,29 @@ export class OpenStreetMap {
       forEachFeature(tile, "building", (feature) => {
         const height = numericProperty(feature, "render_height") || 8;
         for (const polygon of polygons(feature, tile)) {
+          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, height);
           if (mesh) buildings.push(mesh);
         }
       });
+      await yieldControl?.();
       forEachFeature(tile, "transportation", (feature) => {
         const width = roadWidth(String(feature.properties.class ?? ""));
         for (const line of lines(feature, tile)) {
+          if (!ownsGeometry(line, options.ownerBounds)) continue;
           roads.push(...createRoad(scene, line, terrain, options, width));
         }
       });
+      await yieldControl?.();
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
-          if (options.excludeBoundaryWater && touchesTerrainBoundary(polygon, terrain, options)) {
-            continue;
-          }
+          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
           if (mesh) water.push(mesh);
         }
       });
+      await yieldControl?.();
     }
 
     const meshes = [
@@ -171,43 +183,12 @@ export class OpenStreetMap {
     };
   }
 
-  static createWaterLayer(
-    scene: Scene,
+  static async createRoadExclusionMask(
     tiles: MapTile[],
     terrain: TerrainData,
     options: MapLayerOptions,
-    innerBounds?: MapClipBounds,
-  ): MapFeatureLayer {
-    const root = new TransformNode("mapWater", scene);
-    const water: Mesh[] = [];
-
-    for (const tile of tiles) {
-      forEachFeature(tile, "water", (feature) => {
-        if (feature.properties.class === "ocean") return;
-        for (const polygon of polygons(feature, tile)) {
-          const points = polygonScenePoints(polygon, terrain, options);
-          // Lakes wholly owned by the detailed terrain are already rendered there.
-          // A lake touching or crossing its boundary remains one complete vista polygon.
-          if (innerBounds && isStrictlyInsideBounds(points, innerBounds)) continue;
-          const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
-          if (mesh) water.push(mesh);
-        }
-      });
-    }
-
-    const meshes = styleWater(water, root);
-    return {
-      root,
-      meshes,
-      counts: { buildings: 0, roads: 0, water: water.length },
-    };
-  }
-
-  static createRoadExclusionMask(
-    tiles: MapTile[],
-    terrain: TerrainData,
-    options: MapLayerOptions,
-  ): HorizontalExclusionMask {
+    yieldControl?: () => Promise<void>,
+  ): Promise<HorizontalExclusionMask> {
     const segments: RoadSegment[] = [];
     for (const tile of tiles) {
       forEachFeature(tile, "transportation", (feature) => {
@@ -221,6 +202,7 @@ export class OpenStreetMap {
           }
         }
       });
+      await yieldControl?.();
     }
     return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
   }
@@ -243,6 +225,19 @@ export class OpenStreetMap {
     const data = await request;
     return data ? { x, y, zoom, data } : undefined;
   }
+}
+
+/**
+ * One streamed tile owns each feature piece: the tile containing its first
+ * vertex. The geometry itself is projected from absolute coordinates, so an
+ * owned road or building still renders correctly across tile boundaries.
+ */
+function ownsGeometry(points: LonLat[], bounds?: TileBounds): boolean {
+  if (!bounds) return true;
+  if (points.length === 0) return false;
+  const [lon, lat] = points[0];
+  return lon >= bounds.lonWest && lon < bounds.lonEast &&
+    lat > bounds.latSouth && lat <= bounds.latNorth;
 }
 
 function forEachFeature(tile: MapTile, layerName: string, visit: (feature: VectorTileFeature) => void): void {
@@ -274,31 +269,6 @@ function polygonScenePoints(
 ): Array<{ x: number; z: number }> {
   return coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
-  );
-}
-
-function touchesTerrainBoundary(
-  coordinates: LonLat[],
-  terrain: TerrainData,
-  options: MapLayerOptions,
-): boolean {
-  const halfWidth = options.meshWidth / 2;
-  const halfDepth = options.meshDepth / 2;
-  const epsilon = 1e-5;
-  return polygonScenePoints(coordinates, terrain, options).some((point) =>
-    point.x <= -halfWidth + epsilon || point.x >= halfWidth - epsilon ||
-    point.z <= -halfDepth + epsilon || point.z >= halfDepth - epsilon
-  );
-}
-
-function isStrictlyInsideBounds(
-  points: Array<{ x: number; z: number }>,
-  bounds: MapClipBounds,
-): boolean {
-  const epsilon = 1e-5;
-  return points.length >= 3 && points.every((point) =>
-    point.x > bounds.minX + epsilon && point.x < bounds.maxX - epsilon &&
-    point.z > bounds.minZ + epsilon && point.z < bounds.maxZ - epsilon
   );
 }
 

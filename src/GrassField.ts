@@ -67,9 +67,12 @@ export async function createGrassField(
     ambientOccluders = [],
     densityScale,
     renderMode = "auto",
+    yieldControl,
+    startDisabled = false,
   } = options;
   const grassHeight = GRASS_HEIGHT_METERS / metersPerUnit;
   const root = new TransformNode("grassField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getGrassImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,
@@ -163,14 +166,16 @@ export async function createGrassField(
         );
         colors.push(...grassGroundColorMultiplier(lon, lat, coverClass));
       }
+      await yieldControl?.();
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(
+  const instanceOcclusion = await computeVegetationOcclusion(
     matrixData,
     10 / metersPerUnit,
     ambientOccluders,
+    yieldControl,
   );
   return createVegetationFieldResult(
     root,
@@ -181,6 +186,7 @@ export async function createGrassField(
     renderMode,
     instanceOcclusion,
     new Float32Array(colors),
+    yieldControl,
   );
 }
 
