@@ -176,6 +176,11 @@ export class OpenStreetMap {
       merge(roads, "roads", new Color3(0.22, 0.22, 0.21), root),
       ...styleWater(water, root),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
+    // Source meshes are disabled as soon as they are constructed so yielding
+    // between feature batches cannot expose them at the scene origin. The
+    // merged meshes can now be enabled safely: a streamed layer's disabled
+    // root keeps them hidden until Game applies the tile offset and commits it.
+    for (const mesh of meshes) mesh.setEnabled(true);
     return {
       root,
       meshes,
@@ -318,7 +323,9 @@ function createPolygon(
     const roofElevation = baseElevation + heightMeters;
     const bottomElevation = terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
     const depth = (roofElevation - bottomElevation) / options.metersPerUnit;
-    const mesh = new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth);
+    const mesh = stageMapMesh(
+      new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth),
+    );
     mesh.position.y = roofElevation / options.metersPerUnit;
     return mesh;
   }
@@ -329,7 +336,9 @@ function createPolygon(
   const shape = clipped.map(({ x, z }) => new Vector2(x, z));
   const surfaceElevation = lakeElevation + LAKE_SURFACE_CLEARANCE_METERS;
   const surface = surfaceElevation / options.metersPerUnit;
-  const mesh = new PolygonMeshBuilder("water", shape, scene, earcut).build(false);
+  const mesh = stageMapMesh(
+    new PolygonMeshBuilder("water", shape, scene, earcut).build(false),
+  );
   mesh.position.y = surface;
   return mesh;
 }
@@ -371,7 +380,9 @@ function createRoadMeshes(
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
-      meshes.push(MeshBuilder.CreateRibbon("road", { pathArray: [left, right] }, scene));
+      meshes.push(stageMapMesh(
+        MeshBuilder.CreateRibbon("road", { pathArray: [left, right] }, scene),
+      ));
     }
     left = [];
     right = [];
@@ -415,6 +426,12 @@ function createRoadMeshes(
   }
   finishPath();
   return meshes;
+}
+
+/** Keeps a newly registered Babylon mesh out of render lists while its tile is assembled. */
+function stageMapMesh<T extends Mesh>(mesh: T): T {
+  mesh.setEnabled(false);
+  return mesh;
 }
 
 function resamplePath(

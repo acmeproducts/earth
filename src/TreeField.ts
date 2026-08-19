@@ -22,7 +22,6 @@ import {
 } from "./TreeImpostor";
 import { ImpostorAssets } from "./Impostor";
 import {
-  computeVegetationOcclusion,
   createVegetationFieldResult,
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -98,7 +97,6 @@ export const impostorVertexShader = `
 precision highp float;
 attribute vec3 position;
 #ifdef THIN_INSTANCES
-attribute float instanceOcclusion;
 attribute vec3 vegetationColor;
 attribute float instanceLodBlend;
 #endif
@@ -112,14 +110,18 @@ varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
 varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
-varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 
 void main(void) {
   #include<instancesVertex>
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
-  vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
+  vec4 shadowWorldPosition = mix(
+    worldPosition,
+    finalWorld * vec4(0.0, 0.0, 0.0, 1.0),
+    vegetationShadowAtInstanceRoot
+  );
+  vVegetationShadowPosition = vegetationShadowMatrix * shadowWorldPosition;
   vec3 center = (finalWorld * vec4(0.0, captureCenterY, 0.0, 1.0)).xyz;
   vec3 axisX = normalize(finalWorld[0].xyz);
   vec3 axisY = normalize(finalWorld[1].xyz);
@@ -139,11 +141,9 @@ void main(void) {
   ));
   vLocalWorldUp = normalize(vec3(axisX.y, axisY.y, axisZ.y));
   #ifdef THIN_INSTANCES
-  vInstanceOcclusion = instanceOcclusion;
   vInstanceColor = vegetationColor;
   vInstanceLodBlend = instanceLodBlend;
   #else
-  vInstanceOcclusion = 0.0;
   vInstanceColor = vec3(1.0);
   vInstanceLodBlend = 0.0;
   #endif
@@ -163,7 +163,6 @@ varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
 varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
-varying float vInstanceOcclusion;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 uniform sampler2D atlas0;
@@ -194,6 +193,12 @@ uniform vec3 groundColor;
 uniform float lowLightAlbedoScale;
 uniform float instanceColorCoverage;
 uniform float fieldFade;
+uniform float distanceFadeNear;
+uniform float distanceFadeFar;
+uniform float groundColorBlend;
+uniform float distanceGroundBlend;
+uniform vec3 distanceGroundColor;
+uniform float impostorAmbientUpward;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -266,6 +271,15 @@ void main(void) {
   // Whole-field dither lets streamed tiles fade their vegetation in and out
   // without the depth-sorting problems of true transparency.
   if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
+  // Low ground cover dissolves before its streamed detail ring ends. Dithered
+  // coverage stays depth-safe while avoiding a visible wall of transparency.
+  float distanceFade = 1.0 - smoothstep(
+    distanceFadeNear,
+    distanceFadeFar,
+    length(vViewDirection)
+  );
+  if (distanceFade < 0.999 &&
+      bayer4(gl_FragCoord.xy + vec2(3.0, 2.0)) >= distanceFade) discard;
   // Select the captured silhouette from the light during shadow rendering.
   #if SM_DIRECTIONINLIGHTDATA == 1
   vec3 direction = normalize(vLocalSunDirection);
@@ -395,13 +409,22 @@ void main(void) {
   float petalMask = smoothstep(0.68, 0.86, min(straightColor.r, min(straightColor.g, straightColor.b)));
   float instanceColorMask = max(petalMask, instanceColorCoverage);
   straightColor = mix(straightColor, straightColor * vInstanceColor, instanceColorMask);
+  // The remaining sparse blades converge on the same locally-derived palette
+  // as the terrain, making the final coverage loss read as ground texture.
+  straightColor = mix(
+    straightColor,
+    distanceGroundColor * vInstanceColor,
+    mix(groundColorBlend, distanceGroundBlend, 1.0 - distanceFade)
+  );
 
   // The atlas contains the whole canopy rather than one physical surface.
   // Deriving a normal from the camera-facing billboard makes the same foliage
   // change brightness when the camera orbits it. Light the canopy from its
   // stable world-up axis instead, matching the orientation-independent leaf
   // lighting used by the close model.
-  vec3 ambientColor = skyColor;
+  // Grass uses the same ground/sky ambient balance as its live model. Trees
+  // retain the sky-lit canopy default through impostorAmbientUpward = 1.
+  vec3 ambientColor = mix(groundColor, skyColor, impostorAmbientUpward);
   float direct = max(
     0.0,
     (dot(vLocalWorldUp, vLocalSunDirection) + 0.42) / 1.42
@@ -412,15 +435,11 @@ void main(void) {
     vec3(1.25)
   );
 
-  // Open sky lights the crown more strongly than the lower foliage. Nearby
-  // crowns reduce that sky visibility, most noticeably low in the tree.
+  // Open sky lights the crown more strongly than the lower foliage.
   float height01 = clamp((vLocalPosition.y / captureCenterY + 1.0) * 0.5, 0.0, 1.0);
   float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
-  float lowerTree = 1.0 - smoothstep(0.18, 0.82, height01);
-  float neighborShade = 1.0 - vInstanceOcclusion * mix(0.16, 0.48, lowerTree);
-  // Preserve enough ambient response for foliage to remain readable after
-  // sunset, including shaded lower crowns and densely occluded trees.
-  lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+  // Preserve enough ambient response for foliage to remain readable after sunset.
+  lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
   lighting *= vegetationShadowVisibility();
   float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
   gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
@@ -605,12 +624,6 @@ export async function createTreeField(
   for (let index = 0; index < speciesResources.length; index++) {
     const { prototype, modelMeshes } = speciesResources[index];
     const ownMatrices = packedSpeciesMatrices[index];
-    const instanceOcclusion = await computeVegetationOcclusion(
-      ownMatrices,
-      10 / metersPerUnit,
-      packedSpeciesMatrices.filter((_, otherIndex) => otherIndex !== index),
-      yieldControl,
-    );
     fields.push(await createVegetationFieldResult(
       prototype.root,
       [prototype.mesh],
@@ -618,7 +631,6 @@ export async function createTreeField(
       ownMatrices,
       metersPerUnit,
       renderMode,
-      instanceOcclusion,
       undefined,
       yieldControl,
     ));
@@ -634,9 +646,6 @@ export async function createTreeField(
     instanceMatrices: matrixData,
     count: matrices.length,
     setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
-    setAmbientOcclusionEnabled: (enabled) => {
-      fields.forEach((field) => field.setAmbientOcclusionEnabled(enabled));
-    },
     setFade: (fade) => fields.forEach((field) => field.setFade(fade)),
     updateLod: (cameraPosition, distanceMeters) => {
       let changed = false;
@@ -760,8 +769,8 @@ export function createImpostorMaterial(
     scene,
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
-      attributes: ["position", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
+      attributes: ["position", "vegetationColor", "instanceLodBlend"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture"],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
@@ -799,6 +808,12 @@ export function createImpostorMaterial(
   material.setFloat("lowLightAlbedoScale", 1);
   material.setFloat("instanceColorCoverage", 0);
   material.setFloat("fieldFade", 1);
+  material.setFloat("distanceFadeNear", 1e6);
+  material.setFloat("distanceFadeFar", 1e6 + 1);
+  material.setFloat("groundColorBlend", 0);
+  material.setFloat("distanceGroundBlend", 0);
+  material.setColor3("distanceGroundColor", Color3.White());
+  material.setFloat("impostorAmbientUpward", 1);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(

@@ -20,13 +20,14 @@ const SOURCE_HEIGHT = 0.85;
 // Keeping the patch compact and relatively tall lets its blades use the square
 // capture efficiently instead of collapsing into a thin strip of pixels.
 const CAPTURE_DIAMETER = 3.8;
-// Keep grass in the same cool-green family as the tree canopy, with a small
-// lift so it remains distinguishable at ground level.
+// Keep grass in the same cool-green family as the tree canopy, but bias the
+// blades toward muted olive tones. Highly green tips become neon once direct
+// sun and the local ground multiplier are both applied.
 const GRASS_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
-  [new Color3(0.05, 0.202, 0.062), new Color3(0.202, 0.493, 0.106)],
-  [new Color3(0.073, 0.258, 0.056), new Color3(0.302, 0.594, 0.118)],
-  [new Color3(0.101, 0.291, 0.062), new Color3(0.392, 0.661, 0.134)],
-  [new Color3(0.134, 0.28, 0.05), new Color3(0.482, 0.627, 0.118)],
+  [new Color3(0.07, 0.18, 0.07), new Color3(0.22, 0.42, 0.14)],
+  [new Color3(0.09, 0.22, 0.07), new Color3(0.3, 0.49, 0.15)],
+  [new Color3(0.12, 0.25, 0.08), new Color3(0.38, 0.54, 0.17)],
+  [new Color3(0.15, 0.24, 0.07), new Color3(0.43, 0.51, 0.15)],
 ];
 const grassImpostors = createImpostorAssetProvider({
   name: "grassImpostor",
@@ -86,7 +87,8 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
       ? GRASS_PALETTES.length - 1
       : Math.floor(random() * (GRASS_PALETTES.length - 1));
     const [baseColor, tipColor] = GRASS_PALETTES[paletteIndex];
-    const brightness = (0.86 + random() * 0.34) * 0.9;
+    // A restrained brightness keeps dense patches visually grounded.
+    const brightness = (0.86 + random() * 0.34) * 0.76;
     const colorMix = 0.58 + random() * 0.28;
     const red = Math.min(1, (baseColor.r + (tipColor.r - baseColor.r) * colorMix) * brightness);
     const green = Math.min(1, (baseColor.g + (tipColor.g - baseColor.g) * colorMix) * brightness);

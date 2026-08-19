@@ -23,12 +23,8 @@ const solarLighting = readFileSync(
   "utf8",
 );
 
-test("registers both vegetation models and impostors as shadow casters", () => {
-  // Every streamed tile contributes each vegetation layer's meshes (models and
-  // impostors together) to the shadow render list.
-  for (const field of ["treeField", "grassField", "flowerField", "bushField"]) {
-    assert.match(game, new RegExp(`"${field}"`));
-  }
+test("keeps grass, flowers, and bushes out of the vegetation shadow-caster list", () => {
+  assert.match(game, /filter\(\(kind\) => kind === "treeField"\)/);
   assert.match(game, /casters\.push\(\.\.\.field\.meshes\)/);
   assert.match(game, /setShadowCasters\(casters\)/);
 });
@@ -44,6 +40,21 @@ test("keeps foliage alpha and LOD masks in model and impostor shadow passes", ()
 
 test("refreshes the static shadow map after vegetation LOD changes", () => {
   assert.match(game, /if \(shadowsChanged\) this\.solarLighting\?\.refreshShadows\(\)/);
+});
+
+test("refreshes shadows throughout streamed layer cross-fades", () => {
+  const fades = game.slice(
+    game.indexOf("private updateLayerFades"),
+    game.indexOf("private commitTileField"),
+  );
+  assert.match(fades, /this\.solarLighting\?\.refreshShadows\(\)/);
+});
+
+test("grass models and impostors share terrain-root shadow sampling", () => {
+  assert.match(impostors, /vegetationShadowAtInstanceRoot/);
+  assert.match(models, /vegetationShadowAtInstanceRoot/);
+  assert.match(impostors, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
+  assert.match(models, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
 });
 
 test("darkens custom vegetation with the regular sun depth texture", () => {

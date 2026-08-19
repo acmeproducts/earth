@@ -25,7 +25,6 @@ export interface VegetationFieldResult {
   instanceMatrices: Float32Array;
   count: number;
   setRenderMode(mode: VegetationRenderMode): void;
-  setAmbientOcclusionEnabled(enabled: boolean): void;
   /** Dithers the whole field in or out; 0 hides it and 1 shows it fully. */
   setFade(fade: number): void;
   /** Updates packed model/impostor instances; true when the shadow map changed. */
@@ -40,23 +39,15 @@ export async function createVegetationFieldResult(
   matrices: Float32Array,
   metersPerUnit: number,
   initialMode: VegetationRenderMode,
-  instanceOcclusion?: Float32Array,
   instanceColors?: Float32Array,
   yieldControl?: () => Promise<void>,
 ): Promise<VegetationFieldResult> {
   const count = matrices.length / 16;
-  if (instanceOcclusion && instanceOcclusion.length !== count) {
-    throw new Error("Instance occlusion count must match the vegetation matrix count.");
-  }
   if (instanceColors && instanceColors.length !== count * 3) {
     throw new Error("Instance color count must match the vegetation matrix count.");
   }
   const impostorMatrices = new Float32Array(matrices.length);
   const modelMatrices = new Float32Array(matrices.length);
-  const sourceOcclusion = instanceOcclusion ?? new Float32Array(count);
-  const activeSourceOcclusion = new Float32Array(count);
-  const impostorOcclusion = new Float32Array(count);
-  const modelOcclusion = new Float32Array(count);
   const sourceColors = instanceColors ?? new Float32Array(count * 3).fill(1);
   const impostorColors = new Float32Array(sourceColors.length);
   const modelColors = new Float32Array(sourceColors.length);
@@ -67,22 +58,17 @@ export async function createVegetationFieldResult(
   await yieldControl?.();
   modelMatrices.set(matrices);
   await yieldControl?.();
-  activeSourceOcclusion.set(sourceOcclusion);
-  impostorOcclusion.set(sourceOcclusion);
-  modelOcclusion.set(sourceOcclusion);
-  await yieldControl?.();
   impostorColors.set(sourceColors);
   modelColors.set(sourceColors);
   modelLodBlend.fill(1);
 
-  initializeMeshes(impostorMeshes, impostorMatrices, impostorOcclusion, impostorColors, impostorLodBlend);
+  initializeMeshes(impostorMeshes, impostorMatrices, impostorColors, impostorLodBlend);
   await yieldControl?.();
-  initializeMeshes(modelMeshes, modelMatrices, modelOcclusion, modelColors, modelLodBlend);
+  initializeMeshes(modelMeshes, modelMatrices, modelColors, modelLodBlend);
 
   let mode = initialMode;
   let lastCameraPosition: Vector3 | undefined;
   let lastDistanceMeters = 10;
-  let ambientOcclusionEnabled = true;
   const allInstanceIndices: number[] = [];
   let minimumInstanceY = Number.POSITIVE_INFINITY;
   let maximumInstanceY = Number.NEGATIVE_INFINITY;
@@ -135,9 +121,7 @@ export async function createVegetationFieldResult(
       if (lastCameraPosition) {
         writeFrontToBackInstances(
           impostorMatrices,
-          impostorOcclusion,
           matrices,
-          activeSourceOcclusion,
           allInstanceIndices,
           lastCameraPosition,
           impostorColors,
@@ -148,7 +132,6 @@ export async function createVegetationFieldResult(
         );
       } else {
         impostorMatrices.set(matrices);
-        impostorOcclusion.set(activeSourceOcclusion);
         impostorColors.set(sourceColors);
       }
       setCounts(count, 0);
@@ -156,7 +139,6 @@ export async function createVegetationFieldResult(
     } else if (mode === "models") {
       autoSlotsValid = false;
       modelMatrices.set(matrices);
-      modelOcclusion.set(activeSourceOcclusion);
       modelColors.set(sourceColors);
       modelLodBlend.fill(1);
       setCounts(0, count);
@@ -165,7 +147,6 @@ export async function createVegetationFieldResult(
       updateAutoLod(lastCameraPosition, lastDistanceMeters, true);
     } else {
       impostorMatrices.set(matrices);
-      impostorOcclusion.set(activeSourceOcclusion);
       impostorColors.set(sourceColors);
       setCounts(count, 0);
       updateMeshBuffers(impostorMeshes, true);
@@ -319,18 +300,15 @@ export async function createVegetationFieldResult(
     rebuilding: boolean,
   ): void => {
     const destinationMatrices = model ? modelMatrices : impostorMatrices;
-    const destinationOcclusion = model ? modelOcclusion : impostorOcclusion;
     const destinationColors = model ? modelColors : impostorColors;
     const destinationLod = model ? modelLodBlend : impostorLodBlend;
     copyMatrix(destinationMatrices, slot * 16, matrices, sourceIndex * 16);
     copyColor(destinationColors, slot * 3, sourceColors, sourceIndex * 3);
-    destinationOcclusion[slot] = activeSourceOcclusion[sourceIndex];
     destinationLod[slot] = sourceLodBlend[sourceIndex];
     if (rebuilding) return;
 
     const meshes = model ? modelMeshes : impostorMeshes;
     partialUpdateArray(meshes, "matrix", destinationMatrices, slot * 16, 16);
-    partialUpdateArray(meshes, "instanceOcclusion", destinationOcclusion, slot, 1);
     partialUpdateArray(meshes, "vegetationColor", destinationColors, slot * 3, 3);
     partialUpdateArray(meshes, "instanceLodBlend", destinationLod, slot, 1);
   };
@@ -387,14 +365,6 @@ export async function createVegetationFieldResult(
     setRenderMode(nextMode);
   };
 
-  const setAmbientOcclusionEnabled = (enabled: boolean): void => {
-    if (ambientOcclusionEnabled === enabled) return;
-    ambientOcclusionEnabled = enabled;
-    if (enabled) activeSourceOcclusion.set(sourceOcclusion);
-    else activeSourceOcclusion.fill(0);
-    setRenderMode(mode);
-  };
-
   const setFade = (fade: number): void => {
     for (const mesh of [...impostorMeshes, ...modelMeshes]) {
       const material = mesh.material;
@@ -411,86 +381,15 @@ export async function createVegetationFieldResult(
     instanceMatrices: matrices,
     count,
     setRenderMode: applyRenderMode,
-    setAmbientOcclusionEnabled,
     setFade,
     updateLod,
     consumeLodDebugStats,
   };
 }
 
-/** Approximates sky occlusion from neighboring vegetation instances. */
-export async function computeVegetationOcclusion(
-  matrices: Float32Array,
-  radius: number,
-  additionalOccluders: readonly Float32Array[] = [],
-  yieldControl?: () => Promise<void>,
-): Promise<Float32Array> {
-  const count = matrices.length / 16;
-  const result = new Float32Array(count);
-  if (count === 0 || radius <= 0) return result;
-
-  interface Occluder {
-    matrices: Float32Array;
-    index: number;
-  }
-  const buckets = new Map<string, Occluder[]>();
-  const bucketCoordinate = (value: number): number => Math.floor(value / radius);
-  const bucketKey = (x: number, z: number): string => `${x}:${z}`;
-
-  for (const occluderMatrices of [matrices, ...additionalOccluders]) {
-    const occluderCount = occluderMatrices.length / 16;
-    for (let index = 0; index < occluderCount; index++) {
-      const offset = index * 16;
-      const key = bucketKey(
-        bucketCoordinate(occluderMatrices[offset + 12]),
-        bucketCoordinate(occluderMatrices[offset + 14]),
-      );
-      const bucket = buckets.get(key);
-      const occluder = { matrices: occluderMatrices, index };
-      if (bucket) bucket.push(occluder);
-      else buckets.set(key, [occluder]);
-      if ((index & 511) === 511) await yieldControl?.();
-    }
-  }
-
-  const radiusSquared = radius * radius;
-  for (let index = 0; index < count; index++) {
-    const offset = index * 16;
-    const x = matrices[offset + 12];
-    const z = matrices[offset + 14];
-    const centerX = bucketCoordinate(x);
-    const centerZ = bucketCoordinate(z);
-    let crowding = 0;
-
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const bucket = buckets.get(bucketKey(centerX + dx, centerZ + dz));
-        if (!bucket) continue;
-        for (const occluder of bucket) {
-          if (occluder.matrices === matrices && occluder.index === index) continue;
-          const neighborOffset = occluder.index * 16;
-          const offsetX = occluder.matrices[neighborOffset + 12] - x;
-          const offsetZ = occluder.matrices[neighborOffset + 14] - z;
-          const distanceSquared = offsetX * offsetX + offsetZ * offsetZ;
-          if (distanceSquared >= radiusSquared) continue;
-          const proximity = 1 - Math.sqrt(distanceSquared) / radius;
-          crowding += proximity * proximity;
-        }
-      }
-    }
-
-    result[index] = Math.min(0.7, 1 - Math.exp(-crowding * 0.32));
-    if ((index & 511) === 511) await yieldControl?.();
-  }
-
-  return result;
-}
-
 function writeFrontToBackInstances(
   destinationMatrices: Float32Array,
-  destinationOcclusion: Float32Array,
   sourceMatrices: Float32Array,
-  sourceOcclusion: Float32Array,
   instanceIndices: number[],
   cameraPosition: Vector3,
   destinationColors?: Float32Array,
@@ -510,7 +409,6 @@ function writeFrontToBackInstances(
       sourceMatrices,
       sourceIndex * 16,
     );
-    destinationOcclusion[destinationIndex] = sourceOcclusion[sourceIndex];
     if (destinationColors && sourceColors) {
       copyColor(destinationColors, destinationIndex * 3, sourceColors, sourceIndex * 3);
     }
@@ -569,15 +467,11 @@ function copyColor(
 function initializeMeshes(
   meshes: Mesh[],
   matrices: Float32Array,
-  instanceOcclusion?: Float32Array,
   instanceColors?: Float32Array,
   instanceLodBlend?: Float32Array,
 ): void {
   for (const mesh of meshes) {
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
-    if (instanceOcclusion) {
-      mesh.thinInstanceSetBuffer("instanceOcclusion", instanceOcclusion, 1, false);
-    }
     if (instanceColors) {
       mesh.thinInstanceSetBuffer("vegetationColor", instanceColors, 3, false);
     }
@@ -590,11 +484,10 @@ function initializeMeshes(
   }
 }
 
-function updateMeshBuffers(meshes: Mesh[], updateOcclusion = false): void {
+function updateMeshBuffers(meshes: Mesh[], updateInstanceData = false): void {
   meshes.forEach((mesh) => {
     mesh.thinInstanceBufferUpdated("matrix");
-    if (updateOcclusion) {
-      mesh.thinInstanceBufferUpdated("instanceOcclusion");
+    if (updateInstanceData) {
       mesh.thinInstanceBufferUpdated("vegetationColor");
       mesh.thinInstanceBufferUpdated("instanceLodBlend");
     }

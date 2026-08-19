@@ -5,11 +5,7 @@ import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import type { TerrainData } from "./TerrainData";
 import { LandCoverClass } from "./WorldCover";
-import {
-  computeVegetationOcclusion,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
+import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
 import { createSeededRandom } from "./Random";
 import {
   createPlacementGrid,
@@ -44,7 +40,6 @@ export async function createBushField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    ambientOccluders = [],
     renderMode = "auto",
     yieldControl,
     startDisabled = false,
@@ -133,12 +128,6 @@ export async function createBushField(
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = await computeVegetationOcclusion(
-    matrixData,
-    10 / metersPerUnit,
-    ambientOccluders,
-    yieldControl,
-  );
   return createVegetationFieldResult(
     root,
     [bush],
@@ -146,7 +135,6 @@ export async function createBushField(
     matrixData,
     metersPerUnit,
     renderMode,
-    instanceOcclusion,
     undefined,
     yieldControl,
   );

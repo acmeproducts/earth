@@ -4,11 +4,7 @@ import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
 import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
-import {
-  computeVegetationOcclusion,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
+import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
 import {
@@ -42,7 +38,6 @@ export async function createFlowerField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    ambientOccluders = [],
     renderMode = "auto",
     yieldControl,
     startDisabled = false,
@@ -133,12 +128,6 @@ export async function createFlowerField(
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = await computeVegetationOcclusion(
-    matrixData,
-    8 / metersPerUnit,
-    ambientOccluders,
-    yieldControl,
-  );
   return createVegetationFieldResult(
     root,
     [prototype.mesh],
@@ -146,7 +135,6 @@ export async function createFlowerField(
     matrixData,
     metersPerUnit,
     renderMode,
-    instanceOcclusion,
     new Float32Array(colors),
     yieldControl,
   );

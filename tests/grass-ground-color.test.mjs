@@ -17,9 +17,27 @@ test("grass instances inherit their local rendered ground color", () => {
 });
 
 test("grass applies the tint consistently to models and impostors", () => {
-  assert.match(fieldSource, /instanceColorCoverage", 0\.8/g);
+  assert.match(fieldSource, /instanceColorCoverage", 1/g);
   assert.match(impostorSource, /max\(petalMask, instanceColorCoverage\)/);
   assert.match(modelSource, /max\(petalMask, instanceColorCoverage\)/);
   assert.match(impostorSource, /setFloat\("instanceColorCoverage", 0\)/);
   assert.match(modelSource, /setFloat\("instanceColorCoverage", 0\)/);
+});
+
+test("distant grass dissolves into its local ground palette before the tile edge", () => {
+  assert.match(fieldSource, /distanceFadeNear/);
+  assert.match(fieldSource, /distanceFadeFar/);
+  assert.match(fieldSource, /distanceGroundColor/);
+  assert.match(
+    impostorSource,
+    /distanceGroundColor \* vInstanceColor,[\s\S]*?mix\(groundColorBlend, distanceGroundBlend, 1\.0 - distanceFade\)/,
+  );
+  assert.match(impostorSource, /bayer4\([\s\S]*?\) >= distanceFade\) discard/);
+  assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
+});
+
+test("grass impostors use ground-aware ambient light and stronger terrain shadows", () => {
+  assert.match(fieldSource, /impostorAmbientUpward", GRASS_AMBIENT_UPWARD/);
+  assert.match(fieldSource, /vegetationShadowDarkness", GRASS_SHADOW_DARKNESS/g);
+  assert.match(impostorSource, /mix\(groundColor, skyColor, impostorAmbientUpward\)/);
 });

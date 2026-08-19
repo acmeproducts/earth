@@ -12,7 +12,6 @@ export interface VegetationPlacementOptions {
   waterLineMeters?: number;
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
-  ambientOccluders?: readonly Float32Array[];
   densityScale?: (worldX: number, worldZ: number) => number;
   renderMode?: VegetationRenderMode;
   /** Optional cooperative yield used while streaming large placement grids. */

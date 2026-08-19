@@ -156,6 +156,7 @@ interface LayerFade {
   to: number;
   apply: (fade: number) => void;
   onComplete?: () => void;
+  refreshShadows: boolean;
 }
 
 export type InitializationProgress = (step: string, progress: number) => void;
@@ -183,7 +184,6 @@ export class Game {
   private readonly vegetationModes: VegetationModes;
   private sceneControls?: SceneControls;
   private vegetationLodDistanceMeters: number;
-  private vegetationAmbientOcclusionEnabled: boolean;
   private readonly waterReflectionsEnabled: boolean;
   private flyCamera?: UniversalCamera;
   private flySpeedOutput?: HTMLOutputElement;
@@ -263,9 +263,6 @@ export class Game {
     this.vegetationLodDistanceMeters = requestedDistance !== null && Number.isFinite(parsedDistance)
       ? Math.max(MIN_MODEL_RANGE_METERS, Math.min(MAX_MODEL_RANGE_METERS, parsedDistance))
       : DEFAULT_MODEL_RANGE_METERS;
-    this.vegetationAmbientOcclusionEnabled = !["0", "off", "false"].includes(
-      query.get("vegetation-ao")?.toLowerCase() ?? "",
-    );
     this.waterReflectionsEnabled = !["0", "off", "false"].includes(
       query.get("reflections")?.toLowerCase() ?? "",
     );
@@ -467,6 +464,12 @@ export class Game {
     terrain.setEnabled(true);
 
     const previous = this.tiles.get(key);
+    // Upgrading a streamed tile from the coarse terrain tier to native detail
+    // replaces its record. Keep the already-visible distant tree stand-in
+    // alive across that replacement; buildTileDetail will cross-fade it only
+    // after the matching detailed tree field has committed.
+    const carriedFarTreeField = previous?.farTreeField;
+    if (previous) previous.farTreeField = undefined;
     const now = performance.now();
     const record: StreamedTile = {
       id: area.center,
@@ -478,6 +481,7 @@ export class Game {
       offsetX: offset.x,
       offsetZ: offset.z,
       nativeTerrain: native,
+      farTreeField: carriedFarTreeField,
       detailed: false,
       lastNeededMilliseconds: now,
       detailLastNeededMilliseconds: now,
@@ -555,7 +559,6 @@ export class Game {
       seed: layerSeed(terrainData.generationSeed, "grass"),
       landCover,
       exclusionMask,
-      ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
       yieldControl,
       startDisabled,
@@ -570,7 +573,6 @@ export class Game {
       seed: layerSeed(terrainData.generationSeed, "flowers"),
       landCover,
       exclusionMask,
-      ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.grass,
       yieldControl,
       startDisabled,
@@ -585,7 +587,6 @@ export class Game {
       seed: layerSeed(terrainData.generationSeed, "bushes"),
       landCover,
       exclusionMask,
-      ambientOccluders: [treeField.instanceMatrices],
       renderMode: this.vegetationModes.bushes,
       yieldControl,
       startDisabled,
@@ -607,7 +608,7 @@ export class Game {
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
-    this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade));
+    this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
     record.detailed = true;
     this.refreshShadowCasters();
@@ -648,7 +649,6 @@ export class Game {
       treeField.root.dispose(false, false);
       return;
     }
-    treeField.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     // Far fields never swap LOD slots, so frustum culling is safe and drops
     // the tiles behind the camera from the draw list.
     for (const mesh of treeField.meshes) mesh.alwaysSelectAsActiveMesh = false;
@@ -670,6 +670,7 @@ export class Game {
     to: number,
     apply: (fade: number) => void,
     onComplete?: () => void,
+    refreshShadows = false,
   ): void {
     apply(from);
     this.activeLayerFades.push({
@@ -678,29 +679,32 @@ export class Game {
       to,
       apply,
       onComplete,
+      refreshShadows,
     });
   }
 
-  private fadeFieldIn(field: VegetationFieldResult): void {
+  private fadeFieldIn(field: VegetationFieldResult, refreshShadows = false): void {
     this.beginLayerFade(0, 1, (fade) => {
       if (!field.root.isDisposed()) field.setFade(fade);
     }, () => {
-      // The static shadow map last rendered with this field dithered out.
+      // Leave one settled static frame after the temporary fade refreshes.
       this.solarLighting?.refreshShadows();
-    });
+    }, refreshShadows);
   }
 
-  private fadeFieldOutAndDispose(field: VegetationFieldResult): void {
+  private fadeFieldOutAndDispose(field: VegetationFieldResult, refreshShadows = false): void {
     this.beginLayerFade(1, 0, (fade) => {
       if (!field.root.isDisposed()) field.setFade(fade);
-    }, () => field.root.dispose(false, false));
+    }, () => field.root.dispose(false, false), refreshShadows);
   }
 
   private updateLayerFades(): void {
     if (this.activeLayerFades.length === 0) return;
     const now = performance.now();
+    let refreshShadows = false;
     for (let index = this.activeLayerFades.length - 1; index >= 0; index--) {
       const fade = this.activeLayerFades[index];
+      refreshShadows = refreshShadows || fade.refreshShadows;
       const progress = Math.min(1, (now - fade.startMilliseconds) / LAYER_FADE_DURATION_MS);
       const eased = progress * progress * (3 - 2 * progress);
       fade.apply(fade.from + (fade.to - fade.from) * eased);
@@ -709,6 +713,11 @@ export class Game {
         fade.onComplete?.();
       }
     }
+    // The sun shadow map normally renders once because its casters are static.
+    // During a streamed-layer cross-fade, however, the shadow depth shaders use
+    // the same dither mask as the visible materials. Refresh temporarily so
+    // shadows interpolate with the tile instead of jumping between snapshots.
+    if (refreshShadows) this.solarLighting?.refreshShadows();
   }
 
   /** Commits one finished detail layer, or disposes it when the world moved on. */
@@ -722,12 +731,11 @@ export class Game {
       field.root.dispose(false, false);
       return false;
     }
-    field.setAmbientOcclusionEnabled(this.vegetationAmbientOcclusionEnabled);
     setTransformNodeOffset(field.root, record.offsetX, record.offsetZ);
     field.root.setEnabled(true);
     record[kind] = field;
     record.lodResolved = false;
-    this.fadeFieldIn(field);
+    this.fadeFieldIn(field, kind === "treeField");
     // The full tree layer cross-fades against the tile's distant stand-in.
     if (kind === "treeField" && record.farTreeField) {
       const farTrees = record.farTreeField;
@@ -744,6 +752,9 @@ export class Game {
     const casters: Mesh[] = [];
     for (const record of this.tiles.values()) {
       const fields = VEGETATION_FIELD_KINDS
+        // Only trees cast vegetation shadows. Grass, flowers, and bushes stay
+        // lit as receivers without adding noisy small geometry to the map.
+        .filter((kind) => kind === "treeField")
         .map((kind) => record[kind])
         .filter((field): field is VegetationFieldResult => field !== undefined);
       if (fields.length === 0 && !record.mapFeatures) continue;
@@ -928,13 +939,13 @@ export class Game {
       const field = record[kind];
       if (!field) continue;
       record[kind] = undefined;
-      this.fadeFieldOutAndDispose(field);
+      this.fadeFieldOutAndDispose(field, kind === "treeField");
     }
     const mapFeatures = record.mapFeatures;
     if (mapFeatures) {
       record.mapFeatures = undefined;
       this.beginLayerFade(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
-        () => mapFeatures.dispose(false, true));
+        () => mapFeatures.dispose(false, true), true);
     }
     record.detailed = false;
   }
@@ -984,8 +995,6 @@ export class Game {
         this.setAllVegetationModes(nextMode);
       } else if (kbInfo.event.key === "f" || kbInfo.event.key === "F") {
         this.fpsCounter.toggleExpanded();
-      } else if (kbInfo.event.key === "o" || kbInfo.event.key === "O") {
-        this.setVegetationAmbientOcclusion(!this.vegetationAmbientOcclusionEnabled);
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
@@ -1021,16 +1030,6 @@ export class Game {
   private setVegetationLodDistance(distanceMeters: number): void {
     this.vegetationLodDistanceMeters = distanceMeters;
     this.updateVegetationLod();
-  }
-
-  private setVegetationAmbientOcclusion(enabled: boolean): void {
-    this.vegetationAmbientOcclusionEnabled = enabled;
-    for (const record of this.tiles.values()) {
-      for (const kind of VEGETATION_FIELD_KINDS) {
-        record[kind]?.setAmbientOcclusionEnabled(enabled);
-      }
-      record.farTreeField?.setAmbientOcclusionEnabled(enabled);
-    }
   }
 
   private updateVegetationLod(): void {

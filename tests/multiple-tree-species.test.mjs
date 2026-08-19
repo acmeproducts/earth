@@ -59,7 +59,7 @@ test("applies transparent foliage only to leaf UVs", () => {
 test("keeps foliage illumination stable while the camera orbits a tree", () => {
   assert.match(captureMaterial, /float foliageMask = step\(0\.0, vUv\.x\)/);
   assert.match(captureMaterial, /mix\(0\.58, 1\.0, foliageMask\)/);
-  assert.match(treeField, /vec3 ambientColor = skyColor/);
+  assert.match(treeField, /mix\(groundColor, skyColor, impostorAmbientUpward\)/);
   assert.match(treeField, /dot\(vLocalWorldUp, vLocalSunDirection\)/);
   assert.doesNotMatch(treeField, /dot\(localNormal, vLocalSunDirection\)/);
 });
