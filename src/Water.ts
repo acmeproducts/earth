@@ -15,8 +15,12 @@ import {
 const WAVE_NORMAL_MAP_URL = 'https://assets.babylonjs.com/textures/waterbump.png';
 /** Ground distance spanned by one repeat of the broad swell normal map. */
 const SWELL_TILE_METERS = 48;
-/** The chop layer repeats this many times inside one swell tile. */
-const CHOP_TILE_RATIO = 6;
+/**
+ * The chop layer repeats this many times inside one swell tile. Keeping this
+ * deliberately non-integer prevents both square textures from forming one
+ * large, aligned super-grid when a GPU selects a coarser mip level.
+ */
+const CHOP_TILE_RATIO = 5.37;
 /** Metres the swell drifts downwind each second. */
 const SWELL_DRIFT_METERS_PER_SECOND = 0.5;
 /** Chop rides across the swell rather than with it, so the two never lock. */
@@ -62,7 +66,9 @@ export function createWaterPlane(
   const {
     width = 100,
     height = 100,
-    subdivisions = 64,
+    // This surface has no vertex displacement. One quad avoids exposing an
+    // otherwise pointless 64x64 triangle grid on precision-sensitive GPUs.
+    subdivisions = 1,
     elevation = -0.01,
     metersPerUnit = 1,
     skyReflection = null,
@@ -255,10 +261,12 @@ function animateWaves(
     seconds += scene.getEngine().getDeltaTime() / 1000;
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
-    swell.uOffset = seconds * swellRepeatsPerSecond * 0.8;
-    swell.vOffset = seconds * swellRepeatsPerSecond * 0.6;
-    chop.uOffset = seconds * chopRepeatsPerSecond * -0.4;
-    chop.vOffset = seconds * chopRepeatsPerSecond;
+    // Different starting phases keep the two copies of the same source image
+    // from reinforcing its square tile boundaries.
+    swell.uOffset = 0.173 + seconds * swellRepeatsPerSecond * 0.8;
+    swell.vOffset = 0.417 + seconds * swellRepeatsPerSecond * 0.6;
+    chop.uOffset = 0.631 + seconds * chopRepeatsPerSecond * -0.4;
+    chop.vOffset = 0.289 + seconds * chopRepeatsPerSecond;
   });
 
   // The plane is rebuilt whenever the world moves; the ticker must go with it.
