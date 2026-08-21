@@ -32,7 +32,7 @@ test("distant grass dissolves into its local ground palette before the tile edge
     impostorSource,
     /distanceGroundColor \* vInstanceColor,[\s\S]*?mix\(groundColorBlend, distanceGroundBlend, 1\.0 - distanceFade\)/,
   );
-  assert.match(impostorSource, /bayer4\([\s\S]*?\) >= distanceFade\) discard/);
+  assert.match(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
 });
 
