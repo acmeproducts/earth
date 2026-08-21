@@ -455,8 +455,6 @@ vec4 atlasSample(vec2 uv) {
 }
 vec4 frame(vec2 tile) {
   vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), vUV);
-  // Wind moments extend the atlas along its columns; validation reads the
-  // first one, which is the still pose the capture starts its loop from.
   return atlasSample((tile + localUV) / atlasTileCounts);
 }
 float bayer4(vec2 pixel) {
@@ -508,10 +506,7 @@ function createDemoReference(
   material.setVector3("center", center);
   material.setFloat("diameter", diameter);
   material.setFloat("gridSize", assets.gridSize);
-  material.setVector2("atlasTileCounts", new Vector2(
-    assets.gridWidth * assets.timeSamples,
-    assets.gridHeight,
-  ));
+  material.setVector2("atlasTileCounts", new Vector2(assets.gridWidth, assets.gridHeight));
   material.setFloat("tileInset", 0.5 / assets.resolution);
   assets.textures.forEach((texture, index) => material.setTexture(`atlas${index}`, texture));
   mesh.material = material;

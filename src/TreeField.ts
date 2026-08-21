@@ -122,14 +122,11 @@ varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
-varying float vWindPhase;
 varying vec3 vWindShear;
 
 void main(void) {
   #include<instancesVertex>
   vec3 instanceOrigin = finalWorld[3].xyz;
-  // Which captured moment this instance is in, for sources that baked a sway.
-  vWindPhase = windLoopPhase(instanceOrigin);
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
   vec4 shadowWorldPosition = mix(
     worldPosition,
@@ -186,7 +183,6 @@ varying vec3 vLocalSunDirection;
 varying vec3 vLocalWorldUp;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
-varying float vWindPhase;
 varying vec3 vWindShear;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
@@ -203,7 +199,6 @@ uniform float rotationalSymmetryOrder;
 uniform float upperHemisphereOnly;
 uniform vec2 gridDimensions;
 uniform vec2 atlasTileCounts;
-uniform float timeSamples;
 uniform vec2 tileInset;
 uniform vec2 lowTileInset;
 uniform vec2 captureDimensions;
@@ -416,20 +411,6 @@ void main(void) {
     blend.x * blend.y
   );
   float choice = bayer4(gl_FragCoord.xy);
-  // The atlas is alpha tested rather than blended, so consecutive moments of
-  // the wind loop are dithered together exactly as neighboring directions are.
-  // A second, offset pattern keeps the two choices from correlating.
-  float timeColumn = 0.0;
-  if (timeSamples > 1.5) {
-    float timePosition = fract(vWindPhase) * timeSamples;
-    float earlierMoment = floor(timePosition);
-    float timeChoice = bayer4(gl_FragCoord.xy + vec2(3.0, 2.0));
-    // The loop wraps, so the last moment blends back into the first.
-    float moment = timeChoice < fract(timePosition)
-      ? mod(earlierMoment + 1.0, timeSamples)
-      : earlierMoment;
-    timeColumn = moment * gridDimensions.x;
-  }
   // Distance drives the atlas blend directly in the material, so one impostor
   // instance covers every detail tier. No per-instance blend attribute and no
   // CPU transition ring are needed to reach the reduced source.
@@ -437,13 +418,13 @@ void main(void) {
   float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
   vec4 color;
   if (choice < weights.x) {
-    color = frame(face, vec2(low.x + timeColumn, low.y), imageUV, lodBlend);
+    color = frame(face, low, imageUV, lodBlend);
   } else if (choice < weights.x + weights.y) {
-    color = frame(face, vec2(high.x + timeColumn, low.y), imageUV, lodBlend);
+    color = frame(face, vec2(high.x, low.y), imageUV, lodBlend);
   } else if (choice < weights.x + weights.y + weights.z) {
-    color = frame(face, vec2(low.x + timeColumn, high.y), imageUV, lodBlend);
+    color = frame(face, vec2(low.x, high.y), imageUV, lodBlend);
   } else {
-    color = frame(face, vec2(high.x + timeColumn, high.y), imageUV, lodBlend);
+    color = frame(face, high, imageUV, lodBlend);
   }
 
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
@@ -819,7 +800,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "timeSamples", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
       needAlphaBlending: false,
     },
@@ -836,11 +817,7 @@ export function createImpostorMaterial(
   material.setFloat("captureCenterY", renderHeight / 2);
   material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));
-  material.setVector2("atlasTileCounts", new Vector2(
-    assets.gridWidth * assets.timeSamples,
-    assets.gridHeight,
-  ));
-  material.setFloat("timeSamples", assets.timeSamples);
+  material.setVector2("atlasTileCounts", new Vector2(assets.gridWidth, assets.gridHeight));
   material.setVector2("tileInset", new Vector2(
     0.5 / assets.resolutionWidth,
     0.5 / assets.resolutionHeight,

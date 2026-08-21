@@ -88,7 +88,7 @@ test("the impostor and the live model lean by the same amount", () => {
     impostor,
     /projectedPosition -= vWindShear \* \(projectedPosition\.y \+ captureCenterY\)/,
   );
-  assert.match(model, /windShearOffset\(\s*position,\s*windModelBaseY,/);
+  assert.match(model, /windShearOffset\(\s*position,\s*0\.0,/);
   // The proxy box itself must not move, or the warp would be applied twice.
   assert.doesNotMatch(impostor, /vec4\(position \+ /);
   // The capture must stay upright, or the lean would be baked in as well.

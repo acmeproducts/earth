@@ -20,6 +20,16 @@ test("trees use one static atlas pose and static live geometry", () => {
   assert.doesNotMatch(source("TreeImpostorValidation.ts"), /setWindPhaseOverride/);
 });
 
+test("impostor atlases have no obsolete time-sample dimension", () => {
+  for (const file of ["Impostor.ts", "TreeField.ts", "TreeImpostorValidation.ts"]) {
+    assert.doesNotMatch(source(file), /timeSamples|time-samples|setTimePhase/);
+  }
+  assert.doesNotMatch(
+    source("ProceduralCaptureMaterial.ts"),
+    /windSway|setVegetationWindPhase|setWindPhaseOverride/,
+  );
+});
+
 test("the grass ripple joins continuously at the loop boundary", () => {
   assert.match(wind, /float ripple = windPhase \* 2\.0/);
   assert.doesNotMatch(wind, /windPhase \* 1\.7/);

@@ -25,17 +25,10 @@ export const WIND_PHASE_UNIFORMS: readonly string[] = [
   "windGustFrequency",
   "windDirection",
 ];
-/** Additional uniforms needed only by shaders that displace real geometry. */
-export const WIND_SWAY_UNIFORMS: readonly string[] = [
-  "windSwayFraction",
-  "windModelBaseY",
-  "windModelHeight",
-];
 /** Additional uniform for shaders that lean their subject by a shear. */
 export const WIND_SHEAR_UNIFORMS: readonly string[] = ["windShearFraction"];
 
 const strengthScale = queryStrengthScale();
-const phaseOverrides = new WeakMap<ShaderMaterial, number>();
 // Rebuilt only when the ground scale changes, because every wind-aware
 // material reads it on every bind.
 const gustFrequency = new Vector2();
@@ -60,15 +53,6 @@ export function windShearFraction(kind: ShearedVegetation): number {
   return SHEAR_FRACTIONS[kind] * strengthScale;
 }
 
-/**
- * Widens a capture so the swayed silhouette still fits inside the frame. The
- * two sway axes are a fifth of a loop apart, so their combined reach slightly
- * exceeds the primary amplitude.
- */
-export function windSwayReach(modelHeight: number, swayFraction: number): number {
-  return 1.1 * swayFraction * modelHeight;
-}
-
 /** Position within the current wind loop, wrapped to [0, 1). */
 export function currentWindLoopPhase(): number {
   if (typeof performance === "undefined") return 0;
@@ -76,33 +60,14 @@ export function currentWindLoopPhase(): number {
   return loops - Math.floor(loops);
 }
 
-/** Pins a material to one moment of the loop, as the capture pass needs. */
-export function setWindPhaseOverride(material: ShaderMaterial, phase?: number): void {
-  if (phase === undefined) phaseOverrides.delete(material);
-  else phaseOverrides.set(material, phase);
-}
-
 /** Sets how far a subject's tip leans, as a fraction of its own height. */
 export function setWindShear(material: ShaderMaterial, shearFraction: number): void {
   material.setFloat("windShearFraction", shearFraction);
 }
 
-/** Describes the sway of one model whose base sits at `baseY` in local space. */
-export function setWindSway(
-  material: ShaderMaterial,
-  swayFraction: number,
-  baseY: number,
-  modelHeight: number,
-): void {
-  material.setFloat("windSwayFraction", swayFraction);
-  material.setFloat("windModelBaseY", baseY);
-  material.setFloat("windModelHeight", modelHeight);
-}
-
-/** Advances a material through the loop, unless it is pinned for capture. */
+/** Advances a material through the shared wind loop. */
 export function bindWindPhase(material: ShaderMaterial): void {
-  const override = phaseOverrides.get(material);
-  material.setFloat("windPhase", override ?? currentWindLoopPhase());
+  material.setFloat("windPhase", currentWindLoopPhase());
   material.setVector2("windGustFrequency", gustFrequency);
   material.setVector2("windDirection", direction);
 }
@@ -122,44 +87,12 @@ float windLoopPhase(vec3 instanceOrigin) {
 }`;
 
 /**
- * The displacement itself. Every vertex moves on the loop's fundamental
- * frequency and differs only in phase, which is what makes a handful of
- * captured moments enough: a pure sine is reconstructed from four samples,
- * while harmonics or per-vertex flutter would alias into noise between frames.
- */
-export const windSwayVertexDeclaration = `
-uniform float windSwayFraction;
-uniform float windModelBaseY;
-uniform float windModelHeight;
-
-vec3 windSwayOffset(vec3 localPosition, float loopPhase, float foliage) {
-  if (windSwayFraction <= 0.0) return vec3(0.0);
-  // Base-relative and height-normalized, so a capture source and the scaled
-  // live model built from it produce identical numbers here.
-  vec3 normalized = (localPosition - vec3(0.0, windModelBaseY, 0.0))
-    / max(windModelHeight, 0.0001);
-  float height01 = clamp(normalized.y, 0.0, 1.0);
-  // Height still softens the motion near the crown's attachment points.
-  float flex = height01 * height01;
-  // Leaves rustle in small neighboring groups while the woody structure stays
-  // visually anchored. A trace response in wood avoids a perfectly rigid
-  // silhouette without returning to a whole-tree crown swing.
-  float cluster = dot(normalized, vec3(31.0, 17.0, 23.0));
-  float leafVariation = 0.7 + 0.3 * sin(cluster);
-  float materialResponse = mix(0.03, leafVariation, foliage);
-  float lag = foliage * (0.3 + 0.18 * sin(cluster));
-  float angle = 6.28318530718 * loopPhase - lag;
-  return vec3(sin(angle), 0.0, sin(angle + 1.9) * 0.35)
-    * (windSwayFraction * windModelHeight * flex * materialResponse);
-}`;
-
-/**
  * A pure shear leans a subject without moving its base, and needs no captured
  * moments at all: an impostor reproduces it by displacing the point it samples
  * within its own frame. That is what lets rotationally symmetric vegetation
  * sway, since a folded atlas cannot hold a directional pose. Nothing being
  * baked also frees the motion from what baking constrains — it can follow one
- * world direction and carry a harmonic, where the tree sway can do neither.
+ * world direction and carry a harmonic.
  */
 export const windShearVertexDeclaration = `
 uniform float windShearFraction;

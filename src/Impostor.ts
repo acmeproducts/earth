@@ -10,12 +10,7 @@ import {
   Vector3,
   Viewport,
 } from "@babylonjs/core";
-import {
-  setVegetationWindPhase,
-  setVegetationWindSway,
-  waitForVertexColorTextures,
-} from "./ProceduralCaptureMaterial";
-import { windSwayReach } from "./Wind";
+import { waitForVertexColorTextures } from "./ProceduralCaptureMaterial";
 
 export interface ImpostorAssets {
   /** Raw RGBA atlases preserve hidden edge colors used by bilinear filtering. */
@@ -30,11 +25,6 @@ export interface ImpostorAssets {
   upperHemisphereOnly: boolean;
   gridWidth: number;
   gridHeight: number;
-  /**
-   * Captured moments of the wind loop, laid out along the atlas's tile-column
-   * axis after the directional grid. One means a motionless capture.
-   */
-  timeSamples: number;
   /** Kept for the square-grid validation tools. */
   gridSize: number;
   resolution: number;
@@ -81,7 +71,6 @@ export interface ImpostorCaptureOptions {
   meshes: Mesh[];
   gridWidth: number;
   gridHeight: number;
-  timeSamples?: number;
   resolution: number;
   resolutionWidth?: number;
   resolutionHeight?: number;
@@ -94,8 +83,6 @@ export interface ImpostorCaptureOptions {
   rotationalSymmetryOrder?: number;
   /** Captures side faces from level through overhead; top faces retain their full range. */
   upperHemisphereOnly?: boolean;
-  /** Poses the source at one moment of the wind loop before its views render. */
-  setTimePhase?: (phase: number) => void;
   onProgress?: (
     completed: number,
     total: number,
@@ -108,7 +95,6 @@ export interface ImpostorCaptureOptions {
 export interface ImpostorSampling {
   horizontalSamples: number;
   verticalSamples: number;
-  timeSamples: number;
   resolution: number;
 }
 
@@ -137,16 +123,6 @@ export interface ImpostorDefinition {
   rotationalSymmetryOrder?: number;
   /** Omits below-object angles from side-face atlas rows. Defaults to false. */
   upperHemisphereOnly?: boolean;
-  /**
-   * Captures a looping wind animation as an extra atlas dimension. Only makes
-   * sense for sources whose atlas covers every azimuth: a sway has a direction,
-   * which a rotationally symmetric capture cannot represent.
-   */
-  wind?: {
-    /** Horizontal crown swing as a fraction of the source height. */
-    swayFraction: number;
-    timeSamples: ImpostorParameter;
-  };
   sampling: {
     horizontalSamples: ImpostorParameter;
     verticalSamples: ImpostorParameter;
@@ -178,9 +154,6 @@ export function createImpostorAssetProvider(
       `${queryPrefix}-y-samples`,
       definition.sampling.verticalSamples,
     ),
-    timeSamples: definition.wind
-      ? queryParameter(`${queryPrefix}-time-samples`, definition.wind.timeSamples)
-      : 1,
     resolution: queryParameter(
       `${queryPrefix}-resolution`,
       definition.sampling.resolution,
@@ -201,7 +174,6 @@ export function createImpostorAssetProvider(
       const key = [
         sampling.horizontalSamples,
         sampling.verticalSamples,
-        sampling.timeSamples,
         sampling.resolution,
       ].join(":");
       const existing = cache.get(key);
@@ -243,20 +215,6 @@ async function captureDefinition(
       captureWidth = Math.max(bounds.x, bounds.z) * definition.boundsPadding;
       captureHeight = bounds.y * definition.boundsPadding;
     }
-    const swayFraction = definition.wind?.swayFraction ?? 0;
-    if (swayFraction > 0) {
-      // A capture source is built around the origin, so its base sits half a
-      // source height below it.
-      setVegetationWindSway(
-        meshes,
-        swayFraction,
-        -definition.sourceHeight / 2,
-        definition.sourceHeight,
-      );
-      // Sway is horizontal, and the bounding box measured above describes only
-      // the still pose. Widen the frame or the leaning crown is clipped off.
-      captureWidth += 2 * windSwayReach(definition.sourceHeight, swayFraction);
-    }
     const resolutionWidth = definition.preserveCaptureAspectRatio
       ? Math.max(
         definition.minimumResolutionWidth ?? 1,
@@ -269,7 +227,6 @@ async function captureDefinition(
       meshes,
       gridWidth: sampling.horizontalSamples,
       gridHeight: sampling.verticalSamples,
-      timeSamples: sampling.timeSamples,
       resolution: sampling.resolution,
       resolutionWidth,
       resolutionHeight: sampling.resolution,
@@ -281,9 +238,6 @@ async function captureDefinition(
       rotationallySymmetric: definition.rotationallySymmetric,
       rotationalSymmetryOrder: definition.rotationalSymmetryOrder,
       upperHemisphereOnly: definition.upperHemisphereOnly,
-      setTimePhase: swayFraction > 0
-        ? (phase) => setVegetationWindPhase(meshes, phase)
-        : undefined,
     });
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
@@ -309,13 +263,10 @@ function sourceDimensions(meshes: readonly Mesh[]): Vector3 {
   return maximum.subtract(minimum);
 }
 
-const MOTIONLESS_TIME_SAMPLES: ImpostorParameter = { default: 1, minimum: 1, maximum: 1 };
-
 function validateSampling(definition: ImpostorDefinition, sampling: ImpostorSampling): void {
   for (const [name, value, limits] of [
     ["horizontalSamples", sampling.horizontalSamples, definition.sampling.horizontalSamples],
     ["verticalSamples", sampling.verticalSamples, definition.sampling.verticalSamples],
-    ["timeSamples", sampling.timeSamples, definition.wind?.timeSamples ?? MOTIONLESS_TIME_SAMPLES],
     ["resolution", sampling.resolution, definition.sampling.resolution],
   ] as const) {
     if (!Number.isInteger(value) || value < limits.minimum || value > limits.maximum) {
@@ -344,7 +295,6 @@ export async function captureImpostorAtlases(
     meshes,
     gridWidth,
     gridHeight,
-    timeSamples = 1,
     resolution,
     resolutionWidth = resolution,
     resolutionHeight = resolution,
@@ -356,13 +306,9 @@ export async function captureImpostorAtlases(
     rotationallySymmetric = false,
     rotationalSymmetryOrder = 0,
     upperHemisphereOnly = false,
-    setTimePhase,
     onProgress,
   } = options;
-  // Moments of the wind loop extend the directional grid along the tile-column
-  // axis, so one atlas per face still holds every view.
-  const atlasColumns = gridWidth * timeSamples;
-  const atlasWidth = atlasColumns * resolutionWidth;
+  const atlasWidth = gridWidth * resolutionWidth;
   const atlasHeight = gridHeight * resolutionHeight;
   const maxTextureSize = scene.getEngine().getCaps().maxTextureSize;
   if (atlasWidth > maxTextureSize || atlasHeight > maxTextureSize) {
@@ -371,8 +317,8 @@ export async function captureImpostorAtlases(
     );
   }
   console.log(
-    `${name}: capturing ${faces.length * atlasColumns * gridHeight} views ` +
-    `(${gridWidth}x${gridHeight} directions x ${timeSamples} wind moments per face) ` +
+    `${name}: capturing ${faces.length * gridWidth * gridHeight} views ` +
+    `(${gridWidth}x${gridHeight} directions per face) ` +
     `at ${resolutionWidth}x${resolutionHeight}`,
   );
 
@@ -412,7 +358,7 @@ export async function captureImpostorAtlases(
     clearPending = false;
   });
   const sourceVisibility = meshes.map((mesh) => mesh.isVisible);
-  const total = faces.length * atlasColumns * gridHeight;
+  const total = faces.length * gridWidth * gridHeight;
   let completed = 0;
   let sliceStart = performance.now();
 
@@ -424,43 +370,37 @@ export async function captureImpostorAtlases(
       camera.orthoTop = verticalSpan / 2;
       camera.orthoBottom = -verticalSpan / 2;
       clearPending = true;
-      for (let timeIndex = 0; timeIndex < timeSamples; timeIndex++) {
-        // The loop is periodic, so the last moment must not repeat the first:
-        // sampling i/timeSamples leaves the wrap-around blend one step wide.
-        setTimePhase?.(timeIndex / timeSamples);
-        for (let y = 0; y < gridHeight; y++) {
-          for (let x = 0; x < gridWidth; x++) {
-            const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
-            const fullRangeV = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
-            const isSideFace = Math.abs(face.normal.y) <= 0.5;
-            const v = upperHemisphereOnly && isSideFace
-              ? (fullRangeV + 1) * 0.5
-              : fullRangeV;
-            const direction = face.normal.add(face.right.scale(u)).add(face.up.scale(v)).normalize();
-            camera.position.copyFrom(direction.scale(captureDiameter));
-            camera.upVector.copyFrom(face.up);
-            camera.setTarget(Vector3.Zero());
-            const column = timeIndex * gridWidth + x;
-            // The readback conversion flips the atlas vertically, so grid row 0
-            // renders at the top of the bottom-up GL target to end up on top.
-            camera.viewport = new Viewport(
-              column / atlasColumns,
-              (gridHeight - 1 - y) / gridHeight,
-              1 / atlasColumns,
-              1 / gridHeight,
-            );
-            meshes.forEach((mesh) => { mesh.isVisible = true; });
-            try {
-              target.render(true);
-            } finally {
-              meshes.forEach((mesh) => { mesh.isVisible = false; });
-            }
-            completed++;
-            onProgress?.(completed, total, faceIndex, x, y);
-            if (performance.now() - sliceStart > CAPTURE_FRAME_BUDGET_MS) {
-              await nextFrame();
-              sliceStart = performance.now();
-            }
+      for (let y = 0; y < gridHeight; y++) {
+        for (let x = 0; x < gridWidth; x++) {
+          const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
+          const fullRangeV = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
+          const isSideFace = Math.abs(face.normal.y) <= 0.5;
+          const v = upperHemisphereOnly && isSideFace
+            ? (fullRangeV + 1) * 0.5
+            : fullRangeV;
+          const direction = face.normal.add(face.right.scale(u)).add(face.up.scale(v)).normalize();
+          camera.position.copyFrom(direction.scale(captureDiameter));
+          camera.upVector.copyFrom(face.up);
+          camera.setTarget(Vector3.Zero());
+          // The readback conversion flips the atlas vertically, so grid row 0
+          // renders at the top of the bottom-up GL target to end up on top.
+          camera.viewport = new Viewport(
+            x / gridWidth,
+            (gridHeight - 1 - y) / gridHeight,
+            1 / gridWidth,
+            1 / gridHeight,
+          );
+          meshes.forEach((mesh) => { mesh.isVisible = true; });
+          try {
+            target.render(true);
+          } finally {
+            meshes.forEach((mesh) => { mesh.isVisible = false; });
+          }
+          completed++;
+          onProgress?.(completed, total, faceIndex, x, y);
+          if (performance.now() - sliceStart > CAPTURE_FRAME_BUDGET_MS) {
+            await nextFrame();
+            sliceStart = performance.now();
           }
         }
       }
@@ -482,7 +422,6 @@ export async function captureImpostorAtlases(
     upperHemisphereOnly,
     gridWidth,
     gridHeight,
-    timeSamples,
     resolution: resolutionHeight,
     resolutionWidth,
     resolutionHeight,
@@ -507,8 +446,7 @@ function createImpostorTextures(
     "textures" | "atlasCanvases" | "lowResolutionTextures" | "gridSize"
   >,
 ): ImpostorAssets {
-  const atlasColumns = metadata.gridWidth * metadata.timeSamples;
-  const atlasWidth = atlasColumns * metadata.resolutionWidth;
+  const atlasWidth = metadata.gridWidth * metadata.resolutionWidth;
   const atlasHeight = metadata.gridHeight * metadata.resolutionHeight;
   const textures = canvases.map((canvas, index) => {
     const image = canvas.getContext("2d", { alpha: true })!.getImageData(
@@ -523,7 +461,7 @@ function createImpostorTextures(
     // RawTexture keeps this two-pixel, per-frame color gutter intact.
     dilateTransparentTileEdgeColors(
       image,
-      atlasColumns,
+      metadata.gridWidth,
       metadata.gridHeight,
       metadata.resolutionWidth,
       metadata.resolutionHeight,
@@ -549,7 +487,7 @@ function createImpostorTextures(
   const lowResolutionTextures = canvases.map((canvas, index) => {
     const lowImage = downsampleAtlasTiles(
       canvas,
-      atlasColumns,
+      metadata.gridWidth,
       metadata.gridHeight,
       metadata.resolutionWidth,
       metadata.resolutionHeight,

@@ -18,15 +18,11 @@ import {
 } from "./VegetationShadowReceiver";
 import {
   bindWindPhase,
-  setWindPhaseOverride,
   setWindShear,
-  setWindSway,
   windPhaseVertexDeclaration,
   windShearVertexDeclaration,
-  windSwayVertexDeclaration,
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
-  WIND_SWAY_UNIFORMS,
 } from "./Wind";
 
 const BARK_TEXTURE_SIZE = 512;
@@ -366,7 +362,6 @@ export function createVertexColorCaptureMaterial(
         uniform float modelHeight;
         ${vegetationShadowVertexDeclaration}
         ${windPhaseVertexDeclaration}
-        ${windSwayVertexDeclaration}
         ${windShearVertexDeclaration}
         #include<instancesDeclaration>
         varying vec4 vColor;
@@ -393,21 +388,14 @@ export function createVertexColorCaptureMaterial(
           vInstanceColor = vec3(1.0);
           vInstanceLodBlend = 1.0;
           #endif
-          // The fragment shader's own foliage mask: cards carrying a leaf
-          // cutout flutter, bark and cut branch ends only bend with the wood.
-          float foliage = step(0.0, uv.x) * (1.0 - step(1.5, uv.x));
           vec3 instanceOrigin = finalWorld[3].xyz;
-          // Captured sway and live shear are alternatives, not layers: a
-          // species uses whichever its own atlas can reproduce.
-          vec3 swayPosition = position
-            + windSwayOffset(position, windLoopPhase(instanceOrigin), foliage)
-            + windShearOffset(
-              position,
-              windModelBaseY,
-              windLocalDirection(rotation[0], rotation[2]),
-              windBend(instanceOrigin)
-            );
-          vec4 worldPosition = finalWorld * vec4(swayPosition, 1.0);
+          vec3 windPosition = position + windShearOffset(
+            position,
+            0.0,
+            windLocalDirection(rotation[0], rotation[2]),
+            windBend(instanceOrigin)
+          );
+          vec4 worldPosition = finalWorld * vec4(windPosition, 1.0);
           vec4 shadowWorldPosition = mix(
             worldPosition,
             finalWorld * vec4(0.0, 0.0, 0.0, 1.0),
@@ -537,7 +525,6 @@ export function createVertexColorCaptureMaterial(
         "vegetationShadowDarkness",
         "vegetationShadowFloatTexture",
         ...WIND_PHASE_UNIFORMS,
-        ...WIND_SWAY_UNIFORMS,
         ...WIND_SHEAR_UNIFORMS,
       ],
       samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler"],
@@ -559,9 +546,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("instanceColorCoverage", 0);
-  // Vegetation stands still until something describes its sway, so species
-  // without a captured wind dimension are unaffected.
-  setWindSway(material, 0, 0, 1);
+  // Species opt into wind explicitly; trees and flowers remain still.
   setWindShear(material, 0);
   material.setFloat("fieldFade", 1);
   material.setFloat("groundColorBlend", 0);
@@ -644,26 +629,8 @@ export async function waitForVertexColorTextures(meshes: readonly Mesh[]): Promi
 }
 
 /**
- * Gives a model its wind sway. `baseY` and `modelHeight` describe the model in
- * its own local space: a capture source is origin-centered, while the live
- * geometry built from it stands on y = 0.
- */
-export function setVegetationWindSway(
-  meshes: readonly Mesh[],
-  swayFraction: number,
-  baseY: number,
-  modelHeight: number,
-): void {
-  for (const mesh of meshes) {
-    if (mesh.material instanceof ShaderMaterial) {
-      setWindSway(mesh.material, swayFraction, baseY, modelHeight);
-    }
-  }
-}
-
-/**
- * Leans models by a shear instead of a captured sway. Their impostors reproduce
- * the same shear by warping their proxy, so both stay in step.
+ * Leans models by a shear. Their impostors reproduce the same shear by warping
+ * their proxy, so both stay in step without animated atlas frames.
  */
 export function setVegetationWindShear(
   meshes: readonly Mesh[],
@@ -671,15 +638,6 @@ export function setVegetationWindShear(
 ): void {
   for (const mesh of meshes) {
     if (mesh.material instanceof ShaderMaterial) setWindShear(mesh.material, shearFraction);
-  }
-}
-
-/** Freezes sources at one moment of the loop so it can be captured. */
-export function setVegetationWindPhase(meshes: readonly Mesh[], phase?: number): void {
-  for (const mesh of meshes) {
-    if (mesh.material instanceof ShaderMaterial) {
-      setWindPhaseOverride(mesh.material, phase);
-    }
   }
 }
 
