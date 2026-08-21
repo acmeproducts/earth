@@ -65,20 +65,17 @@ test("the warp anchors to the subject, not to the oversized proxy box", () => {
   );
 });
 
-test("low vegetation leans by a shear while only trees bake moments", () => {
+test("grass and bushes lean by a shear", () => {
   const wind = source("Wind.ts");
-  assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, flower: [\d.]+, bush: [\d.]+ \}/);
+  assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+ \}/);
   assert.match(wind, /return windShearGradient\(localDirection, bend\) \* \(localPosition\.y - baseY\)/);
   // Nothing about the shear is captured, so it can follow one world direction.
   assert.match(wind, /vec2 windLocalDirection\(vec3 axisX, vec3 axisZ\)/);
-  for (const field of ["GrassField.ts", "FlowerField.ts", "BushField.ts"]) {
+  for (const field of ["GrassField.ts", "BushField.ts"]) {
     assert.match(source(field), /setVegetationWindShear\(/);
-    assert.match(source(field), /windShearFraction\("(grass|flower|bush)"\)/);
+    assert.match(source(field), /windShearFraction\("(grass|bush)"\)/);
   }
-  // The captured tree atlas stays the only thing paying for a time dimension.
-  for (const name of ["GrassImpostor.ts", "FlowerImpostor.ts", "BushImpostor.ts"]) {
-    assert.doesNotMatch(source(name), /wind: \{/);
-  }
+  assert.doesNotMatch(source("FlowerField.ts"), /setVegetationWindShear\(/);
 });
 
 test("the impostor and the live model lean by the same amount", () => {
@@ -98,11 +95,8 @@ test("the impostor and the live model lean by the same amount", () => {
   assert.match(model, /setWindShear\(material, 0\)/);
 });
 
-test("swaying shadows are one refresh rate away, and off by default", () => {
+test("shadows remain cached because wind does not affect tree casters", () => {
   const lighting = source("SolarLighting.ts");
-  assert.match(lighting, /shadowMap\.refreshRate = SHADOW_REFRESH_FRAMES/);
-  assert.match(lighting, /if \(SHADOW_REFRESH_FRAMES > 0\) return;/);
-  assert.match(lighting, /get\("shadow-refresh"\)/);
-  // Absent parameter must not read as a request to refresh every frame.
-  assert.match(lighting, /value >= 1 && value <= 60 \? Math\.round\(value\) : 0/);
+  assert.doesNotMatch(lighting, /SHADOW_REFRESH_FRAMES|shadow-refresh|vegetation shadows sway/);
+  assert.match(lighting, /RenderTargetTexture\.REFRESHRATE_RENDER_ONCE/);
 });

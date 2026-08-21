@@ -1,8 +1,6 @@
 import { Matrix, Quaternion, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
-import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
-import { windShearFraction } from "./Wind";
 import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
@@ -60,13 +58,6 @@ export async function createFlowerField(
     prototype.mesh.material.setFloat("impostorLodFar", 50);
   }
   const flowerModel = createFlowerModel(scene, flowerHeight);
-  // Symmetric atlases cannot hold a directional sway, but a shear needs no
-  // atlas frames: the impostor warps its proxy and the model displaces its
-  // vertices by the same linear amount.
-  setVegetationWindShear(
-    [prototype.mesh, flowerModel],
-    windShearFraction("flower"),
-  );
   flowerModel.parent = root;
   flowerModel.isPickable = false;
   // Never force-dispose this material's textures: the bound shadow sampler is

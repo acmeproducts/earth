@@ -24,20 +24,6 @@ const UPDATE_INTERVAL_MS = 60_000;
  */
 const SKY_PROBE_SIZE = 128;
 const MIN_AMBIENT_INTENSITY = 0.24;
-/**
- * Frames between shadow map renders, or 0 to render once and cache. The depth
- * pass already reuses each vegetation vertex shader, so swaying shadows need
- * nothing but a re-render — the reason they are off by default is that the
- * caster list includes every grass clump.
- */
-const SHADOW_REFRESH_FRAMES = queryShadowRefreshFrames();
-
-function queryShadowRefreshFrames(): number {
-  if (typeof window === "undefined") return 0;
-  const value = Number(new URLSearchParams(window.location.search).get("shadow-refresh"));
-  return Number.isFinite(value) && value >= 1 && value <= 60 ? Math.round(value) : 0;
-}
-
 /** Keeps the visible sun and scene lighting aligned with the real sky. */
 export class SolarLighting {
   private readonly skyMesh: Mesh;
@@ -88,14 +74,6 @@ export class SolarLighting {
     this.shadows.usePoissonSampling = true;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
-    if (SHADOW_REFRESH_FRAMES > 0) {
-      const shadowMap = this.shadows.getShadowMap();
-      if (shadowMap) shadowMap.refreshRate = SHADOW_REFRESH_FRAMES;
-      console.log(
-        `Shadows: re-rendering every ${SHADOW_REFRESH_FRAMES} frame(s) so vegetation shadows sway`,
-      );
-    }
-
     this.skyMesh = MeshBuilder.CreateSphere(
       "sky",
       { diameter: SUN_DISTANCE * 1.8, segments: 32 },
@@ -285,9 +263,6 @@ export class SolarLighting {
   /** The terrain and map geometry are static, so one shadow render is enough
    * until the once-per-minute sun update changes the light direction. */
   private refreshStaticShadows(): void {
-    // A periodically refreshing map re-renders on its own; forcing it back to
-    // render-once here would switch the swaying shadows off again.
-    if (SHADOW_REFRESH_FRAMES > 0) return;
     const shadowMap = this.shadows.getShadowMap();
     if (shadowMap) {
       shadowMap.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;

@@ -16,7 +16,6 @@ import { createTreeImpostorPrototype } from "./TreeField";
 import { TreeImpostorAssets } from "./TreeImpostor";
 import { IMPOSTOR_CUBE_FACES as TREE_IMPOSTOR_FACES } from "./Impostor";
 import { FpsCounter } from "./FpsCounter";
-import { setWindPhaseOverride } from "./Wind";
 
 interface FaceValidation {
   face: string;
@@ -71,9 +70,6 @@ export class TreeImpostorValidation {
     mesh.thinInstanceSetBuffer("matrix", Float32Array.from(Matrix.Identity().asArray()), 16, true);
     mesh.thinInstanceRefreshBoundingInfo(true);
     (mesh.material as ShaderMaterial).setFloat("cameraOrthographic", 1);
-    // Comparing a live render against fixed atlas frames only means anything
-    // at a fixed moment of the wind loop.
-    setWindPhaseOverride(mesh.material as ShaderMaterial, 0);
     const resolution = assets.resolution;
     const centerSample = (assets.gridSize - 1) / 2;
 
