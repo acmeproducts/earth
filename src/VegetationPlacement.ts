@@ -12,9 +12,12 @@ export interface VegetationPlacementOptions {
   waterLineMeters?: number;
   landCover?: WorldCover;
   exclusionMask?: HorizontalExclusionMask;
-  ambientOccluders?: readonly Float32Array[];
   densityScale?: (worldX: number, worldZ: number) => number;
   renderMode?: VegetationRenderMode;
+  /** Optional cooperative yield used while streaming large placement grids. */
+  yieldControl?: () => Promise<void>;
+  /** Creates the field hidden so partially built meshes never flash on screen. */
+  startDisabled?: boolean;
 }
 
 export interface PlacementGrid {

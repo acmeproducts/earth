@@ -10,6 +10,7 @@ export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
 
 export const vegetationShadowVertexDeclaration = `
 uniform mat4 vegetationShadowMatrix;
+uniform float vegetationShadowAtInstanceRoot;
 varying vec4 vVegetationShadowPosition;
 `;
 
@@ -74,6 +75,7 @@ float vegetationShadowVisibility(void) {
 export function bindVegetationShadowReceiver(material: ShaderMaterial, scene: Scene): void {
   material.setFloat("vegetationShadowEnabled", 0);
   material.setFloat("vegetationShadowDarkness", 0.3);
+  material.setFloat("vegetationShadowAtInstanceRoot", 0);
   material.setFloat("vegetationShadowReverseDepth", scene.getEngine().useReverseDepthBuffer ? 1 : 0);
   const updateShadowUniforms = (): void => {
     const sun = scene.lights.find((light): light is DirectionalLight => (

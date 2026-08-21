@@ -359,7 +359,6 @@ export function createVertexColorCaptureMaterial(
         attribute vec4 color;
         attribute vec2 uv;
         #ifdef THIN_INSTANCES
-        attribute float instanceOcclusion;
         attribute vec3 vegetationColor;
         attribute float instanceLodBlend;
         #endif
@@ -374,7 +373,6 @@ export function createVertexColorCaptureMaterial(
         varying vec2 vUv;
         varying vec3 vWorldNormal;
         varying float vHeight01;
-        varying float vInstanceOcclusion;
         varying vec3 vInstanceColor;
         varying float vInstanceLodBlend;
         void main(void) {
@@ -389,11 +387,9 @@ export function createVertexColorCaptureMaterial(
           vWorldNormal = normalize(rotation * normal);
           vHeight01 = clamp(position.y / max(modelHeight, 0.0001), 0.0, 1.0);
           #ifdef THIN_INSTANCES
-          vInstanceOcclusion = instanceOcclusion;
           vInstanceColor = vegetationColor;
           vInstanceLodBlend = instanceLodBlend;
           #else
-          vInstanceOcclusion = 0.0;
           vInstanceColor = vec3(1.0);
           vInstanceLodBlend = 1.0;
           #endif
@@ -412,7 +408,12 @@ export function createVertexColorCaptureMaterial(
               windBend(instanceOrigin)
             );
           vec4 worldPosition = finalWorld * vec4(swayPosition, 1.0);
-          vVegetationShadowPosition = vegetationShadowMatrix * worldPosition;
+          vec4 shadowWorldPosition = mix(
+            worldPosition,
+            finalWorld * vec4(0.0, 0.0, 0.0, 1.0),
+            vegetationShadowAtInstanceRoot
+          );
+          vVegetationShadowPosition = vegetationShadowMatrix * shadowWorldPosition;
           gl_Position = viewProjection * worldPosition;
         }
       `,
@@ -422,7 +423,6 @@ export function createVertexColorCaptureMaterial(
         varying vec2 vUv;
         varying vec3 vWorldNormal;
         varying float vHeight01;
-        varying float vInstanceOcclusion;
         varying vec3 vInstanceColor;
         varying float vInstanceLodBlend;
         uniform vec3 sunDirection;
@@ -430,11 +430,13 @@ export function createVertexColorCaptureMaterial(
         uniform vec3 skyColor;
         uniform vec3 groundColor;
         uniform float lightingEnabled;
-        uniform float ambientOcclusionStrength;
         uniform float leafTextureEnabled;
         uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
         uniform float instanceColorCoverage;
+        uniform float fieldFade;
+        uniform float groundColorBlend;
+        uniform vec3 distanceGroundColor;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
         ${vegetationShadowFragmentDeclaration}
@@ -448,6 +450,9 @@ export function createVertexColorCaptureMaterial(
         }
         void main(void) {
           if (vInstanceLodBlend <= bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
+          // Whole-field dither lets streamed tiles fade their vegetation in
+          // and out without true transparency.
+          if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
           vec3 surfaceColor = vColor.rgb;
           if (vUv.x >= 1.5) {
             if (barkTextureEnabled > 0.5) {
@@ -482,11 +487,8 @@ export function createVertexColorCaptureMaterial(
             vec3(1.25)
           );
           float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01));
-          float lowerTree = 1.0 - smoothstep(0.18, 0.82, vHeight01);
-          float neighborShade = 1.0
-            - vInstanceOcclusion * ambientOcclusionStrength * mix(0.16, 0.48, lowerTree);
           // Keep live vegetation readable when direct sunlight has faded out.
-          lighting = clamp(lighting * crownLight * neighborShade, vec3(0.18), vec3(1.25));
+          lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
           lighting *= vegetationShadowVisibility();
           lighting = mix(vec3(1.0), lighting, lightingEnabled);
           float sceneBrightness = max(
@@ -499,12 +501,17 @@ export function createVertexColorCaptureMaterial(
           float petalMask = smoothstep(0.68, 0.86, min(surfaceColor.r, min(surfaceColor.g, surfaceColor.b)));
           float instanceColorMask = max(petalMask, instanceColorCoverage);
           vec3 instanceColor = mix(surfaceColor, surfaceColor * vInstanceColor, instanceColorMask);
+          instanceColor = mix(
+            instanceColor,
+            distanceGroundColor * vInstanceColor,
+            groundColorBlend
+          );
           gl_FragColor = vec4(instanceColor * lighting, 1.0);
         }
       `,
     },
     {
-      attributes: ["position", "normal", "color", "uv", "instanceOcclusion", "vegetationColor", "instanceLodBlend"],
+      attributes: ["position", "normal", "color", "uv", "vegetationColor", "instanceLodBlend"],
       uniforms: [
         "world",
         "viewProjection",
@@ -514,12 +521,15 @@ export function createVertexColorCaptureMaterial(
         "groundColor",
         "lightingEnabled",
         "modelHeight",
-        "ambientOcclusionStrength",
         "leafTextureEnabled",
         "barkTextureEnabled",
         "lowLightAlbedoScale",
         "instanceColorCoverage",
+        "fieldFade",
+        "groundColorBlend",
+        "distanceGroundColor",
         "vegetationShadowMatrix",
+        "vegetationShadowAtInstanceRoot",
         "vegetationShadowTexelSize",
         "vegetationShadowDepthValues",
         "vegetationShadowEnabled",
@@ -545,7 +555,6 @@ export function createVertexColorCaptureMaterial(
   bindVegetationShadowReceiver(material, scene);
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
   material.setFloat("modelHeight", 1);
-  material.setFloat("ambientOcclusionStrength", 1);
   material.setFloat("leafTextureEnabled", 0);
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
@@ -554,6 +563,9 @@ export function createVertexColorCaptureMaterial(
   // without a captured wind dimension are unaffected.
   setWindSway(material, 0, 0, 1);
   setWindShear(material, 0);
+  material.setFloat("fieldFade", 1);
+  material.setFloat("groundColorBlend", 0);
+  material.setColor3("distanceGroundColor", Color3.White());
   let resolveTextureReadiness: (() => void) | undefined;
   const ready = leafTextureUrl
     ? new Promise<void>((resolve) => { resolveTextureReadiness = resolve; })
@@ -581,6 +593,10 @@ export function createVertexColorCaptureMaterial(
     leafTexture.wrapU = Texture.CLAMP_ADDRESSMODE;
     leafTexture.wrapV = Texture.CLAMP_ADDRESSMODE;
     material.setTexture("leafTexture", leafTexture);
+    // The leaf texture is created per material, so the material owns it.
+    // Callers must not force-dispose material textures instead: the shared
+    // shadow map and the scene-cached bark texture are bound here too.
+    material.onDisposeObservable.addOnce(() => leafTexture.dispose());
   }
   if (barkTexture) {
     material.setTexture("barkTexture", barkTexture);
@@ -671,10 +687,8 @@ export function setVegetationWindPhase(meshes: readonly Mesh[], phase?: number):
 export function setVertexColorModelHeight(
   mesh: Mesh,
   modelHeight: number,
-  ambientOcclusionStrength = 1,
 ): void {
   if (mesh.material instanceof ShaderMaterial) {
     mesh.material.setFloat("modelHeight", modelHeight);
-    mesh.material.setFloat("ambientOcclusionStrength", ambientOcclusionStrength);
   }
 }

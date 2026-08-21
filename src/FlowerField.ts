@@ -6,11 +6,7 @@ import { windShearFraction } from "./Wind";
 import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
-import {
-  computeVegetationOcclusion,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
+import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
 import {
@@ -44,11 +40,13 @@ export async function createFlowerField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    ambientOccluders = [],
     renderMode = "auto",
+    yieldControl,
+    startDisabled = false,
   } = options;
   const flowerHeight = 0.92 / metersPerUnit;
   const root = new TransformNode("flowerField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getFlowerImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,
@@ -71,7 +69,10 @@ export async function createFlowerField(
   );
   flowerModel.parent = root;
   flowerModel.isPickable = false;
-  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, true));
+  // Never force-dispose this material's textures: the bound shadow sampler is
+  // the scene's shared shadow map, and destroying it blanks all vegetation
+  // after a terrain rebuild. The material disposes its own textures itself.
+  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, false));
   const random = createSeededRandom(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
@@ -131,15 +132,11 @@ export async function createFlowerField(
         ));
         colors.push(...sampleFlowerColor(colorNoise, x / colorScale, z / colorScale));
       }
+      await yieldControl?.();
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(
-    matrixData,
-    8 / metersPerUnit,
-    ambientOccluders,
-  );
   return createVegetationFieldResult(
     root,
     [prototype.mesh],
@@ -147,8 +144,8 @@ export async function createFlowerField(
     matrixData,
     metersPerUnit,
     renderMode,
-    instanceOcclusion,
     new Float32Array(colors),
+    yieldControl,
   );
 }
 

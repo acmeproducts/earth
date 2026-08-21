@@ -5,6 +5,7 @@ import {
   WORLD_GRID_LEVEL,
   WORLD_TILE_PROJECTED_SIZE_METERS,
   worldTileAreaAtLocation,
+  worldTileAreaKey,
   worldTileAtLocation,
   worldTileBounds,
   worldTileSeed,
@@ -19,7 +20,7 @@ test("maps a location into the fixed application-owned grid", () => {
   assert.equal(tile.level, WORLD_GRID_LEVEL);
   assert.ok(longitude >= bounds.lonWest && longitude < bounds.lonEast);
   assert.ok(latitude <= bounds.latNorth && latitude > bounds.latSouth);
-  assert.ok(Math.abs(WORLD_TILE_PROJECTED_SIZE_METERS - 2445.985) < 0.001);
+  assert.ok(Math.abs(WORLD_TILE_PROJECTED_SIZE_METERS - 611.496) < 0.001);
 });
 
 test("wraps tile identity continuously across the antimeridian", () => {
@@ -47,4 +48,17 @@ test("describes a world area independently of provider tiles", () => {
   assert.ok(area.bounds.lonWest < area.bounds.lonEast);
   assert.ok(area.bounds.latSouth < area.bounds.latNorth);
   assert.equal(area.seed, smallerArea.seed);
+});
+
+test("selects the four closest tiles and changes the window at tile midlines", () => {
+  const tile = worldTileAtLocation(59.88, 10.59);
+  const bounds = worldTileBounds(tile);
+  const latitude = (bounds.latNorth + bounds.latSouth) / 2;
+  const west = worldTileAreaAtLocation(latitude, bounds.lonWest + 0.25 * (bounds.lonEast - bounds.lonWest), 2);
+  const east = worldTileAreaAtLocation(latitude, bounds.lonWest + 0.75 * (bounds.lonEast - bounds.lonWest), 2);
+
+  assert.equal(west.tilesAcross, 2);
+  assert.equal(west.start.x, tile.x - 1);
+  assert.equal(east.start.x, tile.x);
+  assert.notEqual(worldTileAreaKey(west), worldTileAreaKey(east));
 });

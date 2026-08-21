@@ -7,11 +7,7 @@ import { SimplexNoise2D } from "./SimplexNoise";
 import { createImpostorPrototypeFromAssets } from "./TreeField";
 import type { TerrainData } from "./TerrainData";
 import { LandCoverClass } from "./WorldCover";
-import {
-  computeVegetationOcclusion,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
+import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
 import { createSeededRandom } from "./Random";
 import {
   createPlacementGrid,
@@ -46,11 +42,13 @@ export async function createBushField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
-    ambientOccluders = [],
     renderMode = "auto",
+    yieldControl,
+    startDisabled = false,
   } = options;
   const bushHeight = 1.8 / metersPerUnit;
   const root = new TransformNode("bushField", scene);
+  if (startDisabled) root.setEnabled(false);
   const assets = await getBushImpostorAssets(scene);
   const prototype = createImpostorPrototypeFromAssets(
     scene,
@@ -71,7 +69,10 @@ export async function createBushField(
   setVegetationWindShear([bush, bushModel], windShearFraction("bush"));
   bushModel.parent = root;
   bushModel.isPickable = false;
-  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, true));
+  // Never force-dispose this material's textures: the bound shadow sampler is
+  // the scene's shared shadow map, and destroying it blanks all vegetation
+  // after a terrain rebuild. The material disposes its own textures itself.
+  root.onDisposeObservable.add(() => bushModel.material?.dispose(true, false));
   const captureSize = prototype.captureSize;
 
   const random = createSeededRandom(seed);
@@ -128,15 +129,11 @@ export async function createBushField(
           ),
         );
       }
+      await yieldControl?.();
     }
   }
 
   const matrixData = packInstanceMatrices(matrices);
-  const instanceOcclusion = computeVegetationOcclusion(
-    matrixData,
-    10 / metersPerUnit,
-    ambientOccluders,
-  );
   return createVegetationFieldResult(
     root,
     [bush],
@@ -144,7 +141,8 @@ export async function createBushField(
     matrixData,
     metersPerUnit,
     renderMode,
-    instanceOcclusion,
+    undefined,
+    yieldControl,
   );
 }
 

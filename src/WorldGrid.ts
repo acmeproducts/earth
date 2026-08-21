@@ -1,5 +1,5 @@
 /** The application-owned detailed grid. Provider zooms must not define this value. */
-export const WORLD_GRID_LEVEL = 14;
+export const WORLD_GRID_LEVEL = 16;
 export const DEFAULT_WORLD_SEED = 0x45415254;
 export const WEB_MERCATOR_MAX_LATITUDE = 85.0511287798066;
 export const WEB_MERCATOR_WORLD_WIDTH_METERS = 2 * Math.PI * 6_378_137;
@@ -77,8 +77,16 @@ export function worldTileAreaAtLocation(
   const size = Math.max(1, Math.min(4, Math.round(tilesAcross)));
   const center = worldTileAtLocation(latitude, longitude, level);
   const scale = 2 ** center.level;
-  const startX = center.x - Math.floor((size - 1) / 2);
-  const startY = Math.max(0, Math.min(scale - size, center.y - Math.floor((size - 1) / 2)));
+  const evenSize = size % 2 === 0;
+  const longitudeFraction = tileLongitudeFraction(longitude, center);
+  const latitudeFraction = tileLatitudeFraction(latitude, center);
+  const startX = center.x - Math.floor((size - 1) / 2) -
+    (evenSize && longitudeFraction < 0.5 ? 1 : 0);
+  const startY = Math.max(0, Math.min(
+    scale - size,
+    center.y - Math.floor((size - 1) / 2) -
+      (evenSize && latitudeFraction < 0.5 ? 1 : 0),
+  ));
   const endX = startX + size - 1;
   if (startX < 0 || endX >= scale) {
     throw new Error("Multi-tile areas crossing the antimeridian must be loaded tile-by-tile.");
@@ -97,6 +105,37 @@ export function worldTileAreaAtLocation(
       latSouth: southEast.latSouth,
     },
     seed: worldTileSeed(center, worldSeed),
+  };
+}
+
+/** Stable identity for a loaded square tile window. */
+export function worldTileAreaKey(area: WorldTileArea): string {
+  return `${area.start.level}/${area.start.x}/${area.start.y}/${area.tilesAcross}`;
+}
+
+/** Stable identity for one streamed world tile. */
+export function worldTileKey(tile: WorldTileId): string {
+  return `${tile.level}/${tile.x}/${tile.y}`;
+}
+
+/** Describes one explicit tile as a loadable area. */
+export function worldTileArea(
+  tile: WorldTileId,
+  worldSeed = DEFAULT_WORLD_SEED,
+): WorldTileArea {
+  const level = normalizeLevel(tile.level);
+  const scale = 2 ** level;
+  const normalized = {
+    level,
+    x: wrap(tile.x, scale),
+    y: Math.max(0, Math.min(scale - 1, tile.y)),
+  };
+  return {
+    center: normalized,
+    start: normalized,
+    tilesAcross: 1,
+    bounds: worldTileBounds(normalized),
+    seed: worldTileSeed(normalized, worldSeed),
   };
 }
 
@@ -127,6 +166,22 @@ function deriveSeed(seed: number, label: string, ...values: number[]): number {
 
 function normalizeLevel(level: number): number {
   return Math.max(0, Math.min(30, Math.round(level)));
+}
+
+function tileLongitudeFraction(longitude: number, tile: WorldTileId): number {
+  const bounds = worldTileBounds(tile);
+  const normalized = ((longitude + 180) % 360 + 360) % 360 - 180;
+  return Math.max(0, Math.min(
+    1,
+    (normalized - bounds.lonWest) / (bounds.lonEast - bounds.lonWest),
+  ));
+}
+
+function tileLatitudeFraction(latitude: number, tile: WorldTileId): number {
+  const scale = 2 ** tile.level;
+  const latitudeRadians = clampLatitude(latitude) * Math.PI / 180;
+  const projectedRow = (1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale;
+  return Math.max(0, Math.min(1, projectedRow - tile.y));
 }
 
 function clampLatitude(latitude: number): number {

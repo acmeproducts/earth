@@ -64,9 +64,7 @@ export function varyGroundColor(
 
   // Brightness carries most of the read; the tone shift keeps it from looking
   // like a single color under a dimmer. Weighted towards the broad band because
-  // that is the one every mesh can represent: the distant vista's cells are tens
-  // of metres wide and drop the finer bands, so leaning on them would put a step
-  // in the ground where the local terrain meets the vista.
+  // that is the one even coarse terrain meshes can represent reliably.
   const shade = 1 + (broad * 0.07 + mid * 0.032 + fine * 0.022) * strength;
   const tone = broad * 0.72 + mid * 0.28;
   const dry = Math.max(0, tone) * strength;
