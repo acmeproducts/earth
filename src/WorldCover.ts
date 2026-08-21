@@ -87,11 +87,12 @@ export class WorldCover {
     return this.classAtPixel(pixelX, pixelY, LandCoverClass.Bare);
   }
 
-  constrainElevations(
+  async constrainElevations(
     terrain: TerrainData,
     shorelineWidthMeters = 30,
     coastlineSmoothingMeters = 20,
-  ): void {
+    yieldControl?: () => Promise<void>,
+  ): Promise<void> {
     const { bounds, elevations, width, height } = terrain;
     let coverage: Float32Array = new Float32Array(elevations.length);
     const water = new Uint8Array(elevations.length);
@@ -110,15 +111,17 @@ export class WorldCover {
         const index = y * width + x;
         coverage[index] = this.waterCoverage(longitude, latitude);
       }
+      await yieldControl?.();
     }
 
     const smoothingRadius = Math.max(1, Math.round(coastlineSmoothingMeters / metersPerPixel));
-    coverage = smoothCoverage(coverage, width, height, smoothingRadius);
+    coverage = await smoothCoverage(coverage, width, height, smoothingRadius, yieldControl);
     for (let index = 0; index < water.length; index++) {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
+      if ((index & 4095) === 4095) await yieldControl?.();
     }
 
-    const distance = distanceFromShore(water, width, height);
+    const distance = await distanceFromShore(water, width, height, yieldControl);
     const blendWidth = Math.max(1, shorelineWidthMeters / metersPerPixel);
     const landClearance = 0.25;
 
@@ -139,6 +142,7 @@ export class WorldCover {
       elevations[index] = shorelineElevation + (corrected - shorelineElevation) * blend;
       terrain.minElevation = Math.min(terrain.minElevation, elevations[index]);
       terrain.maxElevation = Math.max(terrain.maxElevation, elevations[index]);
+      if ((index & 4095) === 4095) await yieldControl?.();
     }
   }
 
@@ -229,12 +233,13 @@ function fromWebMercatorY(y: number): number {
   return Math.atan(Math.sinh(y / 6_378_137)) * 180 / Math.PI;
 }
 
-function smoothCoverage(
+async function smoothCoverage(
   source: Float32Array,
   width: number,
   height: number,
   radius: number,
-): Float32Array {
+  yieldControl?: () => Promise<void>,
+): Promise<Float32Array> {
   let result = source;
   for (let pass = 0; pass < 2; pass++) {
     const horizontal = new Float32Array(source.length);
@@ -250,6 +255,7 @@ function smoothCoverage(
         }
         horizontal[y * width + x] = sum / count;
       }
+      await yieldControl?.();
     }
 
     const vertical = new Float32Array(source.length);
@@ -265,13 +271,19 @@ function smoothCoverage(
         }
         vertical[y * width + x] = sum / count;
       }
+      await yieldControl?.();
     }
     result = vertical;
   }
   return result;
 }
 
-function distanceFromShore(water: Uint8Array, width: number, height: number): Float32Array {
+async function distanceFromShore(
+  water: Uint8Array,
+  width: number,
+  height: number,
+  yieldControl?: () => Promise<void>,
+): Promise<Float32Array> {
   const distance = new Float32Array(water.length).fill(Infinity);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -283,14 +295,21 @@ function distanceFromShore(water: Uint8Array, width: number, height: number): Fl
         (y + 1 < height && water[index + width] !== water[index])
       ) distance[index] = 0.5;
     }
+    await yieldControl?.();
   }
 
-  distancePass(distance, width, height, false);
-  distancePass(distance, width, height, true);
+  await distancePass(distance, width, height, false, yieldControl);
+  await distancePass(distance, width, height, true, yieldControl);
   return distance;
 }
 
-function distancePass(distance: Float32Array, width: number, height: number, reverse: boolean): void {
+async function distancePass(
+  distance: Float32Array,
+  width: number,
+  height: number,
+  reverse: boolean,
+  yieldControl?: () => Promise<void>,
+): Promise<void> {
   const diagonal = Math.SQRT2;
   for (let row = 0; row < height; row++) {
     const y = reverse ? height - 1 - row : row;
@@ -313,5 +332,6 @@ function distancePass(distance: Float32Array, width: number, height: number, rev
         }
       }
     }
+    await yieldControl?.();
   }
 }

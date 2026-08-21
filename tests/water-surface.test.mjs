@@ -16,3 +16,9 @@ test("the two wave layers cannot reinforce an aligned square repeat", () => {
   assert.match(water, /swell\.uOffset = 0\.173/);
   assert.match(water, /chop\.uOffset = 0\.631/);
 });
+
+test("ocean and inland meshes can share the PBR water surface implementation", () => {
+  assert.match(water, /export function createWaterSurfaceMaterial/);
+  assert.match(water, /export function prepareWaterSurfaceMesh/);
+  assert.match(water, /new PBRMaterial\(name, scene\)/);
+});

@@ -38,8 +38,12 @@ test("keeps foliage alpha and LOD masks in model and impostor shadow passes", ()
   assert.match(impostors, /#if SM_DIRECTIONINLIGHTDATA == 1\s+vec3 direction = normalize\(vLocalSunDirection\)/);
 });
 
-test("refreshes the static shadow map after vegetation LOD changes", () => {
-  assert.match(game, /if \(shadowsChanged\) this\.solarLighting\?\.refreshShadows\(\)/);
+test("does not rerender the static shadow map for camera-relative LOD changes", () => {
+  const lodUpdate = game.slice(
+    game.indexOf("private updateVegetationLod"),
+    game.indexOf("private logVegetationLodStats"),
+  );
+  assert.doesNotMatch(lodUpdate, /refreshShadows\(\)/);
 });
 
 test("refreshes shadows throughout streamed layer cross-fades", () => {
@@ -57,9 +61,15 @@ test("grass models and impostors share terrain-root shadow sampling", () => {
   assert.match(models, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
 });
 
-test("darkens custom vegetation with the regular sun depth texture", () => {
-  assert.match(impostors, /lighting \*= vegetationShadowVisibility\(\)/);
-  assert.match(models, /lighting \*= vegetationShadowVisibility\(\)/);
+test("shadows custom vegetation direct light while preserving ambient light", () => {
+  for (const shader of [impostors, models]) {
+    assert.match(shader, /float shadowVisibility = vegetationShadowVisibility\(\)/);
+    assert.match(
+      shader,
+      /ambientColor \+ sunColor \* \(0\.16 \+ direct \* 0\.62\) \* shadowVisibility/,
+    );
+    assert.doesNotMatch(shader, /lighting \*= vegetationShadowVisibility\(\)/);
+  }
   assert.match(receivers, /uniform sampler2D vegetationShadowSampler/);
   assert.doesNotMatch(receivers, /sampler2DShadow/);
   assert.match(receivers, /visibility \/= 9\.0/);

@@ -127,7 +127,7 @@ export async function createFlowerField(
     }
   }
 
-  const matrixData = packInstanceMatrices(matrices);
+  const matrixData = await packInstanceMatrices(matrices, yieldControl);
   return createVegetationFieldResult(
     root,
     [prototype.mesh],

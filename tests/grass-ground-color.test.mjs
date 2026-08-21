@@ -36,7 +36,8 @@ test("distant grass dissolves into its local ground palette before the tile edge
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
 });
 
-test("grass impostors use ground-aware ambient light and stronger terrain shadows", () => {
+test("grass uses ground-aware ambient light and terrain-matched shadows", () => {
+  assert.match(fieldSource, /GRASS_SHADOW_DARKNESS = 0;/);
   assert.match(fieldSource, /impostorAmbientUpward", GRASS_AMBIENT_UPWARD/);
   assert.match(fieldSource, /vegetationShadowDarkness", GRASS_SHADOW_DARKNESS/g);
   assert.match(impostorSource, /mix\(groundColor, skyColor, impostorAmbientUpward\)/);

@@ -44,8 +44,14 @@ export function createPlacementGrid(
   };
 }
 
-export function packInstanceMatrices(matrices: readonly Matrix[]): Float32Array {
+export async function packInstanceMatrices(
+  matrices: readonly Matrix[],
+  yieldControl?: () => Promise<void>,
+): Promise<Float32Array> {
   const packed = new Float32Array(matrices.length * 16);
-  matrices.forEach((matrix, index) => matrix.copyToArray(packed, index * 16));
+  for (let index = 0; index < matrices.length; index++) {
+    matrices[index].copyToArray(packed, index * 16);
+    if ((index & 511) === 511) await yieldControl?.();
+  }
   return packed;
 }

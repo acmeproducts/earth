@@ -469,15 +469,15 @@ export function createVertexColorCaptureMaterial(
           float upward = normal.y * 0.5 + 0.5;
           vec3 ambientColor = mix(groundColor, skyColor, upward);
           float direct = max(0.0, (dot(normal, sunDirection) + 0.42) / 1.42);
+          float shadowVisibility = vegetationShadowVisibility();
           vec3 lighting = clamp(
-            ambientColor + sunColor * (0.16 + direct * 0.62),
+            ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility,
             vec3(0.0),
             vec3(1.25)
           );
           float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01));
           // Keep live vegetation readable when direct sunlight has faded out.
           lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
-          lighting *= vegetationShadowVisibility();
           lighting = mix(vec3(1.0), lighting, lightingEnabled);
           float sceneBrightness = max(
             max(skyColor.r, max(skyColor.g, skyColor.b)),

@@ -1,10 +1,13 @@
 import { Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { yieldToNextFrame } from "./FrameBudget";
 import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
 
 /** Narrow enough to keep the movement-time transition working set small. */
 const LOD_TRANSITION_WIDTH_METERS = 20;
+/** Small gaps are cheaper to upload than issuing another WebGL buffer call. */
+const PARTIAL_UPDATE_MERGE_GAP_SLOTS = 8;
 
 export interface VegetationLodDebugStats {
   totalInstances: number;
@@ -27,7 +30,13 @@ export interface VegetationFieldResult {
   setRenderMode(mode: VegetationRenderMode): void;
   /** Dithers the whole field in or out; 0 hides it and 1 shows it fully. */
   setFade(fade: number): void;
-  /** Updates packed model/impostor instances; true when the shadow map changed. */
+  /** Prepares the first full LOD layout without monopolizing one frame. */
+  prepareLod(
+    cameraPosition: Vector3,
+    distanceMeters: number,
+    yieldControl?: () => Promise<void>,
+  ): Promise<boolean>;
+  /** Updates packed model/impostor instances; true when instance buffers changed. */
   updateLod(cameraPosition: Vector3, distanceMeters: number): boolean;
   consumeLodDebugStats(): VegetationLodDebugStats;
 }
@@ -62,9 +71,20 @@ export async function createVegetationFieldResult(
   modelColors.set(sourceColors);
   modelLodBlend.fill(1);
 
-  initializeMeshes(impostorMeshes, impostorMatrices, impostorColors, impostorLodBlend);
-  await yieldControl?.();
-  initializeMeshes(modelMeshes, modelMatrices, modelColors, modelLodBlend);
+  await initializeMeshes(
+    impostorMeshes,
+    impostorMatrices,
+    impostorColors,
+    impostorLodBlend,
+    yieldControl,
+  );
+  await initializeMeshes(
+    modelMeshes,
+    modelMatrices,
+    modelColors,
+    modelLodBlend,
+    yieldControl,
+  );
 
   let mode = initialMode;
   let lastCameraPosition: Vector3 | undefined;
@@ -154,7 +174,25 @@ export async function createVegetationFieldResult(
     }
   };
 
-  const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number, forceFullUpdate = false): void => {
+  interface AutoLodUpdate {
+    rebuildSlots: boolean;
+    innerDistanceSquared: number;
+    outerDistanceSquared: number;
+    currentTransitionIndices: Set<number>;
+    transitionIndices: Iterable<number>;
+    transitionCount: number;
+    exactTransitionCount: number;
+    dirtyModelSlots: Set<number>;
+    dirtyModelBlendSlots: Set<number>;
+    dirtyImpostorSlots: Set<number>;
+    dirtyImpostorBlendSlots: Set<number>;
+  }
+
+  const beginAutoLodUpdate = (
+    cameraPosition: Vector3,
+    distanceMeters: number,
+    forceFullUpdate: boolean,
+  ): AutoLodUpdate => {
     const rebuildSlots = forceFullUpdate || !autoSlotsValid;
     if (rebuildSlots) lodDebugStats.fullRebuilds++;
     if (rebuildSlots) {
@@ -189,31 +227,48 @@ export async function createVegetationFieldResult(
       )) currentTransitionIndices.add(index);
     };
     addBounds(innerDistance, outerDistance);
-    const transitionIndices = forceFullUpdate
-      ? new Set(allInstanceIndices)
-      : new Set(currentTransitionIndices);
+    const incrementalIndices = new Set(currentTransitionIndices);
     if (!forceFullUpdate) {
-      previousTransitionIndices.forEach((index) => transitionIndices.add(index));
+      previousTransitionIndices.forEach((index) => incrementalIndices.add(index));
     }
-    let exactTransitionCount = 0;
+    return {
+      rebuildSlots,
+      innerDistanceSquared,
+      outerDistanceSquared,
+      currentTransitionIndices,
+      transitionIndices: forceFullUpdate ? allInstanceIndices : incrementalIndices,
+      transitionCount: forceFullUpdate ? allInstanceIndices.length : incrementalIndices.size,
+      exactTransitionCount: 0,
+      dirtyModelSlots: new Set<number>(),
+      dirtyModelBlendSlots: new Set<number>(),
+      dirtyImpostorSlots: new Set<number>(),
+      dirtyImpostorBlendSlots: new Set<number>(),
+    };
+  };
 
-    for (const instanceIndex of transitionIndices) {
+  const updateAutoLodInstance = (
+    instanceIndex: number,
+    cameraPosition: Vector3,
+    update: AutoLodUpdate,
+  ): void => {
       const matrixOffset = instanceIndex * 16;
       const dx = matrices[matrixOffset + 12] - cameraPosition.x;
       const dy = matrices[matrixOffset + 13] - cameraPosition.y;
       const dz = matrices[matrixOffset + 14] - cameraPosition.z;
       const distanceSquared = dx * dx + dy * dy + dz * dz;
       if (
-        distanceSquared > innerDistanceSquared &&
-        distanceSquared < outerDistanceSquared
-      ) exactTransitionCount++;
+        distanceSquared > update.innerDistanceSquared &&
+        distanceSquared < update.outerDistanceSquared
+      ) update.exactTransitionCount++;
       let modelWeight: number;
-      if (distanceSquared <= innerDistanceSquared) {
+      if (distanceSquared <= update.innerDistanceSquared) {
         modelWeight = 1;
-      } else if (distanceSquared >= outerDistanceSquared) {
+      } else if (distanceSquared >= update.outerDistanceSquared) {
         modelWeight = 0;
       } else {
         const distance = Math.sqrt(distanceSquared);
+        const innerDistance = Math.sqrt(update.innerDistanceSquared);
+        const outerDistance = Math.sqrt(update.outerDistanceSquared);
         const linearBlend = (outerDistance - distance) / (outerDistance - innerDistance);
         modelWeight = linearBlend * linearBlend * (3 - 2 * linearBlend);
       }
@@ -224,47 +279,74 @@ export async function createVegetationFieldResult(
         instanceIndex,
         modelWeight > 0,
         true,
-        rebuildSlots,
+        update,
       );
       updatePackedMembership(
         instanceIndex,
         modelWeight < 1,
         false,
-        rebuildSlots,
+        update,
       );
       const modelSlot = modelSlotBySource[instanceIndex];
-      if (modelSlot >= 0 && (rebuildSlots || modelWeight !== previousModelWeight)) {
+      if (modelSlot >= 0 && (update.rebuildSlots || modelWeight !== previousModelWeight)) {
         modelLodBlend[modelSlot] = modelWeight;
-        if (!rebuildSlots) {
-          partialUpdateArray(modelMeshes, "instanceLodBlend", modelLodBlend, modelSlot, 1);
+        if (!update.rebuildSlots) {
+          update.dirtyModelBlendSlots.add(modelSlot);
         }
       }
       const impostorSlot = impostorSlotBySource[instanceIndex];
-      if (impostorSlot >= 0 && (rebuildSlots || modelWeight !== previousModelWeight)) {
+      if (impostorSlot >= 0 && (update.rebuildSlots || modelWeight !== previousModelWeight)) {
         impostorLodBlend[impostorSlot] = modelWeight;
-        if (!rebuildSlots) {
-          partialUpdateArray(impostorMeshes, "instanceLodBlend", impostorLodBlend, impostorSlot, 1);
+        if (!update.rebuildSlots) {
+          update.dirtyImpostorBlendSlots.add(impostorSlot);
         }
       }
-    }
+  };
+
+  const finishAutoLodUpdate = (update: AutoLodUpdate, deferFullUpload = false): void => {
     recordLodDebugUpdate(
-      transitionIndices.size,
-      currentTransitionIndices.size,
-      exactTransitionCount,
+      update.transitionCount,
+      update.currentTransitionIndices.size,
+      update.exactTransitionCount,
     );
-    previousTransitionIndices = currentTransitionIndices;
+    previousTransitionIndices = update.currentTransitionIndices;
     setCounts(autoImpostorCount, autoModelCount);
-    if (rebuildSlots) {
+    if (update.rebuildSlots && !deferFullUpload) {
       updateMeshBuffers(impostorMeshes, true);
       updateMeshBuffers(modelMeshes, true);
+    } else {
+      flushPackedUpdates(
+        modelMeshes,
+        modelMatrices,
+        modelColors,
+        modelLodBlend,
+        update.dirtyModelSlots,
+        update.dirtyModelBlendSlots,
+      );
+      flushPackedUpdates(
+        impostorMeshes,
+        impostorMatrices,
+        impostorColors,
+        impostorLodBlend,
+        update.dirtyImpostorSlots,
+        update.dirtyImpostorBlendSlots,
+      );
     }
+  };
+
+  const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number, forceFullUpdate = false): void => {
+    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, forceFullUpdate);
+    for (const instanceIndex of update.transitionIndices) {
+      updateAutoLodInstance(instanceIndex, cameraPosition, update);
+    }
+    finishAutoLodUpdate(update);
   };
 
   const updatePackedMembership = (
     sourceIndex: number,
     shouldBePresent: boolean,
     model: boolean,
-    rebuilding: boolean,
+    update: AutoLodUpdate,
   ): void => {
     const slotBySource = model ? modelSlotBySource : impostorSlotBySource;
     const sourceBySlot = model ? modelSourceBySlot : impostorSourceBySlot;
@@ -276,7 +358,7 @@ export async function createVegetationFieldResult(
       const slot = model ? autoModelCount++ : autoImpostorCount++;
       slotBySource[sourceIndex] = slot;
       sourceBySlot[slot] = sourceIndex;
-      writePackedSlot(model, slot, sourceIndex, rebuilding);
+      writePackedSlot(model, slot, sourceIndex, update);
       return;
     }
 
@@ -285,7 +367,7 @@ export async function createVegetationFieldResult(
     if (currentSlot !== lastSlot) {
       sourceBySlot[currentSlot] = movedSourceIndex;
       slotBySource[movedSourceIndex] = currentSlot;
-      writePackedSlot(model, currentSlot, movedSourceIndex, rebuilding);
+      writePackedSlot(model, currentSlot, movedSourceIndex, update);
     }
     sourceBySlot.pop();
     slotBySource[sourceIndex] = -1;
@@ -297,7 +379,7 @@ export async function createVegetationFieldResult(
     model: boolean,
     slot: number,
     sourceIndex: number,
-    rebuilding: boolean,
+    update: AutoLodUpdate,
   ): void => {
     const destinationMatrices = model ? modelMatrices : impostorMatrices;
     const destinationColors = model ? modelColors : impostorColors;
@@ -305,12 +387,9 @@ export async function createVegetationFieldResult(
     copyMatrix(destinationMatrices, slot * 16, matrices, sourceIndex * 16);
     copyColor(destinationColors, slot * 3, sourceColors, sourceIndex * 3);
     destinationLod[slot] = sourceLodBlend[sourceIndex];
-    if (rebuilding) return;
-
-    const meshes = model ? modelMeshes : impostorMeshes;
-    partialUpdateArray(meshes, "matrix", destinationMatrices, slot * 16, 16);
-    partialUpdateArray(meshes, "vegetationColor", destinationColors, slot * 3, 3);
-    partialUpdateArray(meshes, "instanceLodBlend", destinationLod, slot, 1);
+    if (update.rebuildSlots) return;
+    (model ? update.dirtyModelSlots : update.dirtyImpostorSlots).add(slot);
+    (model ? update.dirtyModelBlendSlots : update.dirtyImpostorBlendSlots).add(slot);
   };
 
   const updateLod = (cameraPosition: Vector3, distanceMeters: number): boolean => {
@@ -332,6 +411,26 @@ export async function createVegetationFieldResult(
     // material resolves impostor detail per fragment.
     if (mode !== "auto") return false;
     updateAutoLod(cameraPosition, distanceMeters, forceFullUpdate);
+    return true;
+  };
+
+  const prepareLod = async (
+    cameraPosition: Vector3,
+    distanceMeters: number,
+    yieldControl?: () => Promise<void>,
+  ): Promise<boolean> => {
+    lastCameraPosition = cameraPosition.clone();
+    lastDistanceMeters = distanceMeters;
+    if (mode !== "auto") return false;
+    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, true);
+    let processed = 0;
+    for (const instanceIndex of update.transitionIndices) {
+      updateAutoLodInstance(instanceIndex, cameraPosition, update);
+      if ((processed++ & 511) === 511) await yieldControl?.();
+    }
+    finishAutoLodUpdate(update, true);
+    await updateMeshBuffersOverFrames(impostorMeshes, true, yieldControl);
+    await updateMeshBuffersOverFrames(modelMeshes, true, yieldControl);
     return true;
   };
 
@@ -372,7 +471,10 @@ export async function createVegetationFieldResult(
     }
   };
 
-  applyRenderMode(initialMode);
+  // The buffers above already contain the initial data. Only choose which set
+  // is visible here; uploading all three buffers again caused a large spike.
+  if (initialMode === "models") setCounts(0, count);
+  else setCounts(count, 0);
   return {
     root,
     meshes: [...impostorMeshes, ...modelMeshes],
@@ -382,6 +484,7 @@ export async function createVegetationFieldResult(
     count,
     setRenderMode: applyRenderMode,
     setFade,
+    prepareLod,
     updateLod,
     consumeLodDebugStats,
   };
@@ -464,20 +567,25 @@ function copyColor(
   destination[destinationOffset + 2] = source[sourceOffset + 2];
 }
 
-function initializeMeshes(
+async function initializeMeshes(
   meshes: Mesh[],
   matrices: Float32Array,
   instanceColors?: Float32Array,
   instanceLodBlend?: Float32Array,
-): void {
+  yieldControl?: () => Promise<void>,
+): Promise<void> {
   for (const mesh of meshes) {
+    await yieldToNextFrame(yieldControl);
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
     if (instanceColors) {
+      await yieldToNextFrame(yieldControl);
       mesh.thinInstanceSetBuffer("vegetationColor", instanceColors, 3, false);
     }
     if (instanceLodBlend) {
+      await yieldToNextFrame(yieldControl);
       mesh.thinInstanceSetBuffer("instanceLodBlend", instanceLodBlend, 1, false);
     }
+    await yieldControl?.();
     mesh.thinInstanceRefreshBoundingInfo(true);
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
@@ -503,6 +611,69 @@ function partialUpdateArray(
 ): void {
   const data = source.subarray(offset, offset + length);
   for (const mesh of meshes) mesh.thinInstancePartialBufferUpdate(kind, data, offset);
+}
+
+async function updateMeshBuffersOverFrames(
+  meshes: Mesh[],
+  updateInstanceData: boolean,
+  yieldControl?: () => Promise<void>,
+): Promise<void> {
+  for (const mesh of meshes) {
+    await yieldToNextFrame(yieldControl);
+    mesh.thinInstanceBufferUpdated("matrix");
+    if (updateInstanceData) {
+      await yieldToNextFrame(yieldControl);
+      mesh.thinInstanceBufferUpdated("vegetationColor");
+      await yieldToNextFrame(yieldControl);
+      mesh.thinInstanceBufferUpdated("instanceLodBlend");
+    }
+  }
+}
+
+function flushPackedUpdates(
+  meshes: Mesh[],
+  matrices: Float32Array,
+  colors: Float32Array,
+  lodBlend: Float32Array,
+  dirtySlots: Set<number>,
+  dirtyBlendSlots: Set<number>,
+): void {
+  partialUpdateSlots(meshes, "matrix", matrices, 16, dirtySlots);
+  partialUpdateSlots(meshes, "vegetationColor", colors, 3, dirtySlots);
+  partialUpdateSlots(meshes, "instanceLodBlend", lodBlend, 1, dirtyBlendSlots);
+}
+
+function partialUpdateSlots(
+  meshes: Mesh[],
+  kind: string,
+  source: Float32Array,
+  stride: number,
+  dirtySlots: Set<number>,
+): void {
+  if (dirtySlots.size === 0) return;
+  const slots = [...dirtySlots].sort((left, right) => left - right);
+  let rangeStart = slots[0];
+  let rangeEnd = rangeStart;
+  const flushRange = (): void => {
+    partialUpdateArray(
+      meshes,
+      kind,
+      source,
+      rangeStart * stride,
+      (rangeEnd - rangeStart + 1) * stride,
+    );
+  };
+  for (let index = 1; index < slots.length; index++) {
+    const slot = slots[index];
+    if (slot <= rangeEnd + PARTIAL_UPDATE_MERGE_GAP_SLOTS + 1) {
+      rangeEnd = slot;
+      continue;
+    }
+    flushRange();
+    rangeStart = slot;
+    rangeEnd = slot;
+  }
+  flushRange();
 }
 
 function setMeshCount(meshes: Mesh[], count: number): void {

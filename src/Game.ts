@@ -24,7 +24,7 @@ import { createTreeField } from "./TreeField";
 import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
-import { EXAMPLE_LOCATIONS } from "./Locations";
+import { EXAMPLE_LOCATIONS, randomWorldLocation } from "./Locations";
 import {
   geographicFrameOffset,
   lonLatToScene,
@@ -41,12 +41,24 @@ import {
   landCoverSurfaceColor,
   WorldCover,
 } from "./WorldCover";
-import { applyTerrainDepthBias, createTerrainMaterial } from "./TerrainMaterial";
+import {
+  applyTerrainDepthBias,
+  createTerrainMaterial,
+  isSharedTerrainMaterial,
+} from "./TerrainMaterial";
 import { configureWindSceneScale } from "./Wind";
 import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
 import { FpsCounter } from "./FpsCounter";
-import { createFrameBudgetYielder } from "./FrameBudget";
+import {
+  createFrameBudgetYielder,
+  FrameBudgetYielder,
+  yieldToNextFrame,
+} from "./FrameBudget";
+import {
+  adaptiveCameraNearClipMeters,
+  MIN_CAMERA_NEAR_CLIP_METERS,
+} from "./CameraDepth";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -88,7 +100,6 @@ const PLAYER_HEIGHT_METERS = 1.8;
 const PLAYER_RADIUS_METERS = 0.3;
 const WALK_SPEED_METERS_PER_SECOND = 8;
 const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
-const CAMERA_NEAR_CLIP_METERS = 0.1;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
 /** Terrain-only tiles stream out to this many rings around the camera. */
@@ -111,7 +122,6 @@ const FAR_TILE_SUBDIVISIONS = 32;
 const FAR_TREE_SPACING_METERS = 5;
 const FAR_TREE_OCCUPANCY = 1;
 const FAR_TREE_EDGE_OCCUPANCY = 0.24;
-const MAX_CONCURRENT_TILE_BUILDS = 3;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 /** Streamed layers dither in and out over this long instead of popping. */
 const LAYER_FADE_DURATION_MS = 700;
@@ -171,7 +181,7 @@ export class Game {
   private readonly activeTileBuilds = new Set<string>();
   private readonly activeLayerFades: LayerFade[] = [];
   private streamingGeneration = 0;
-  /** One shared budget keeps all concurrent tile builds inside a frame slice. */
+  /** Streaming CPU work yields when it has consumed its frame slice. */
   private readonly streamingYielder = createFrameBudgetYielder();
   private cameraTileKey?: string;
   private readonly gridLevel = WORLD_GRID_LEVEL;
@@ -391,7 +401,8 @@ export class Game {
   ): Promise<StreamedTile | undefined> {
     const key = worldTileKey(id);
     const area = worldTileArea(id, this.worldSeed);
-    const terrainData = await TerrainElevationSource.fetchWorldArea(area);
+    const yieldControl = onProgress ? undefined : this.streamingYielder;
+    const terrainData = await TerrainElevationSource.fetchWorldArea(area, yieldControl);
     if (generation !== this.streamingGeneration) return undefined;
     await reportInitializationProgress(onProgress, "Loading land cover", 24);
     const landCover = await WorldCover.fetch(terrainData.bounds).catch((error: unknown) => {
@@ -399,7 +410,7 @@ export class Game {
       return undefined;
     });
     if (generation !== this.streamingGeneration) return undefined;
-    landCover?.constrainElevations(terrainData);
+    await landCover?.constrainElevations(terrainData, 30, 20, yieldControl);
     sinkSubmergedTerrain(terrainData);
 
     // The first tile of a world anchors the stable coordinate frame; every
@@ -449,7 +460,6 @@ export class Game {
       1,
       native ? terrainData.width : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width),
     );
-    const yieldControl = onProgress ? undefined : this.streamingYielder;
     await reportInitializationProgress(onProgress, "Building terrain mesh", 40);
     const terrain = await this.createTerrainMesh(`terrain ${key}`, terrainData, {
       meshWidth,
@@ -517,7 +527,10 @@ export class Game {
         console.warn("OpenStreetMap unavailable; map features were skipped.", error);
         return [];
       }),
-      TerrainElevationSource.fetchWorldArea(worldTileArea(record.id, this.worldSeed))
+      TerrainElevationSource.fetchWorldArea(
+        worldTileArea(record.id, this.worldSeed),
+        yieldControl,
+      )
         .then((fresh) => fresh.elevations)
         .catch(() => undefined),
       WorldCover.fetch(terrainData.bounds).catch(() => undefined),
@@ -529,8 +542,8 @@ export class Game {
       meshDepth: record.meshDepth,
       metersPerUnit,
       lakeElevationSource,
+      skyReflection: this.solarLighting?.skyReflectionTexture,
       startDisabled,
-      ownerBounds: terrainData.bounds,
     };
     const exclusionMask = await OpenStreetMap.createRoadExclusionMask(
       mapWays,
@@ -553,6 +566,12 @@ export class Game {
       yieldControl,
       startDisabled,
     });
+    await this.prepareTileFieldLod(
+      record,
+      treeField,
+      this.vegetationLodDistanceMeters,
+      yieldControl,
+    );
     if (!this.commitTileField(record, "treeField", treeField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing grass", 66);
@@ -567,6 +586,12 @@ export class Game {
       yieldControl,
       startDisabled,
     });
+    await this.prepareTileFieldLod(
+      record,
+      grassField,
+      Math.min(this.vegetationLodDistanceMeters, 8),
+      yieldControl,
+    );
     if (!this.commitTileField(record, "grassField", grassField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding flowers", 72);
@@ -581,6 +606,12 @@ export class Game {
       yieldControl,
       startDisabled,
     });
+    await this.prepareTileFieldLod(
+      record,
+      flowerField,
+      Math.min(this.vegetationLodDistanceMeters, 8),
+      yieldControl,
+    );
     if (!this.commitTileField(record, "flowerField", flowerField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding bushes", 78);
@@ -595,6 +626,12 @@ export class Game {
       yieldControl,
       startDisabled,
     });
+    await this.prepareTileFieldLod(
+      record,
+      bushField,
+      Math.min(this.vegetationLodDistanceMeters, 16),
+      yieldControl,
+    );
     if (!this.commitTileField(record, "bushField", bushField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Creating map features", 86);
@@ -606,7 +643,7 @@ export class Game {
       yieldControl,
     );
     if (generation !== this.streamingGeneration) {
-      mapFeatures.root.dispose(false, true);
+      OpenStreetMap.disposeLayer(mapFeatures.root);
       return;
     }
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
@@ -722,6 +759,21 @@ export class Game {
     // the same dither mask as the visible materials. Refresh temporarily so
     // shadows interpolate with the tile instead of jumping between snapshots.
     if (refreshShadows) this.solarLighting?.refreshShadows();
+  }
+
+  /** Resolves the first full LOD layout while the field is still staged. */
+  private async prepareTileFieldLod(
+    record: StreamedTile,
+    field: VegetationFieldResult,
+    distanceMeters: number,
+    yieldControl?: () => Promise<void>,
+  ): Promise<void> {
+    const camera = this.scene.activeCamera;
+    if (!camera || !yieldControl) return;
+    const localCameraPosition = camera.globalPosition.clone();
+    localCameraPosition.x -= record.offsetX;
+    localCameraPosition.z -= record.offsetZ;
+    await field.prepareLod(localCameraPosition, distanceMeters, yieldControl);
   }
 
   /** Commits one finished detail layer, or disposes it when the world moved on. */
@@ -906,7 +958,7 @@ export class Game {
       record[kind]?.root.dispose(false, false);
       record[kind] = undefined;
     }
-    record.mapFeatures?.dispose(false, true);
+    if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
     record.mapFeatures = undefined;
     record.detailed = false;
   }
@@ -915,7 +967,8 @@ export class Game {
     this.disposeTileDetail(record);
     record.farTreeField?.root.dispose(false, false);
     record.farTreeField = undefined;
-    record.terrain.dispose(false, true);
+    this.disposeTerrainAppearance(record.terrain);
+    record.terrain.dispose(false, false);
   }
 
   private disposeAllTiles(): void {
@@ -949,7 +1002,7 @@ export class Game {
     if (mapFeatures) {
       record.mapFeatures = undefined;
       this.beginLayerFade(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
-        () => mapFeatures.dispose(false, true), true);
+        () => OpenStreetMap.disposeLayer(mapFeatures), true);
     }
     record.detailed = false;
   }
@@ -999,6 +1052,8 @@ export class Game {
         this.setAllVegetationModes(nextMode);
       } else if (kbInfo.event.key === "f" || kbInfo.event.key === "F") {
         this.fpsCounter.toggleExpanded();
+      } else if (kbInfo.event.key === "0") {
+        void this.changeToRandomTerrainLocation();
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
@@ -1045,14 +1100,14 @@ export class Game {
     const grassDistanceMeters = Math.min(this.vegetationLodDistanceMeters, 8);
     const bushDistanceMeters = Math.min(this.vegetationLodDistanceMeters, 16);
     // Fields sit at per-tile offsets in the stable frame; LOD runs in each
-    // field's local space.
-    const localCameraPosition = (field: VegetationFieldResult): Vector3 => {
-      const position = cameraPosition.clone();
-      position.x -= field.root.position.x;
-      position.z -= field.root.position.z;
-      return position;
+    // field's local space. Reuse one vector because updateLod stores a clone.
+    const localPosition = new Vector3();
+    const updateField = (field: VegetationFieldResult, distanceMeters: number): void => {
+      localPosition.copyFrom(cameraPosition);
+      localPosition.x -= field.root.position.x;
+      localPosition.z -= field.root.position.z;
+      field.updateLod(localPosition, distanceMeters);
     };
-    let shadowsChanged = false;
     for (const record of this.tiles.values()) {
       if (!record.treeField && !record.grassField && !record.flowerField && !record.bushField) {
         continue;
@@ -1068,26 +1123,15 @@ export class Game {
       const withinReach = dx * dx + dz * dz <= reachUnits * reachUnits;
       if (!withinReach && record.lodResolved) continue;
       record.lodResolved = !withinReach;
-      shadowsChanged = [
-        record.treeField && record.treeField.updateLod(
-          localCameraPosition(record.treeField),
-          this.vegetationLodDistanceMeters,
-        ),
-        record.grassField && record.grassField.updateLod(
-          localCameraPosition(record.grassField),
-          grassDistanceMeters,
-        ),
-        record.flowerField && record.flowerField.updateLod(
-          localCameraPosition(record.flowerField),
-          grassDistanceMeters,
-        ),
-        record.bushField && record.bushField.updateLod(
-          localCameraPosition(record.bushField),
-          bushDistanceMeters,
-        ),
-      ].some(Boolean) || shadowsChanged;
+      if (record.treeField) {
+        updateField(record.treeField, this.vegetationLodDistanceMeters);
+      }
+      if (record.grassField) updateField(record.grassField, grassDistanceMeters);
+      if (record.flowerField) updateField(record.flowerField, grassDistanceMeters);
+      if (record.bushField) updateField(record.bushField, bushDistanceMeters);
     }
-    if (shadowsChanged) this.solarLighting?.refreshShadows();
+    // Camera-relative LOD changes buffer contents but do not change the world
+    // caster set, so the cached static shadow map remains valid.
     this.logVegetationLodStats();
   }
 
@@ -1124,6 +1168,33 @@ export class Game {
     this.terrainLocationIndex = locationIndex;
     console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
     await this.startWorld(EXAMPLE_LOCATIONS[locationIndex]);
+  }
+
+  private async changeToRandomTerrainLocation(): Promise<void> {
+    const target = randomWorldLocation();
+    this.terrainLocationIndex = -1;
+    console.log(`Random location: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
+
+    const generation = this.streamingGeneration + 1;
+    await this.startWorld(target);
+    if (generation !== this.streamingGeneration || !this.flyCamera || !this.terrainCoordinateFrame) {
+      return;
+    }
+
+    const position = lonLatToScene(
+      target.lon,
+      target.lat,
+      this.terrainCoordinateFrame.bounds,
+      this.terrainCoordinateFrame.meshWidth,
+      this.terrainCoordinateFrame.meshDepth,
+    );
+    this.flyCamera.position.x = position.x;
+    this.flyCamera.position.z = position.z;
+    const groundEyeHeight = this.getGroundEyeHeight(position.x, position.z);
+    if (groundEyeHeight !== undefined) {
+      this.flyCamera.position.y = Math.max(this.flyCamera.position.y, groundEyeHeight);
+    }
+    this.verticalVelocityMetersPerSecond = 0;
   }
 
   private updateTerrainStreaming(): void {
@@ -1187,7 +1258,8 @@ export class Game {
     }
     work.sort((a, b) => a.distanceSquared - b.distanceSquared);
     for (const item of work) {
-      if (this.activeTileBuilds.size >= MAX_CONCURRENT_TILE_BUILDS) break;
+      // Keep the main-thread workload predictable: one tile builds at a time.
+      if (this.activeTileBuilds.size > 0) break;
       void this.streamTile(item.id, item.detail, generation).catch((error: unknown) => {
         console.error(`Failed to stream tile ${worldTileKey(item.id)}.`, error);
       });
@@ -1205,12 +1277,12 @@ export class Game {
 
   private async applyTerrainLayerToTile(record: StreamedTile): Promise<void> {
     if (this.debugTerrainLayer === "none") {
-      this.applyDefaultTerrainMaterial(record.terrain, record.terrainData);
+      this.applyDefaultTerrainMaterial(record.terrain);
       return;
     }
 
     if (this.debugTerrainLayer === "worldCover") {
-      this.applyWorldCoverDebugMaterial(record.terrain, record.terrainData);
+      this.applyWorldCoverDebugMaterial(record.terrain);
       return;
     }
 
@@ -1220,7 +1292,7 @@ export class Game {
       return;
     }
 
-    record.terrain.material?.dispose(true, true);
+    this.disposeTerrainAppearance(record.terrain);
     record.terrain.removeVerticesData(VertexBuffer.ColorKind);
     const material = new StandardMaterial("openTopoMapDebugMaterial", this.scene);
     material.diffuseTexture = texture;
@@ -1231,12 +1303,29 @@ export class Game {
 
   run(): void {
     this.engine.runRenderLoop(() => {
+      const gameStart = performance.now();
       this.updateWalker();
       this.updateTerrainStreaming();
       this.updateLayerFades();
+      const vegetationStart = performance.now();
       this.updateVegetationLod();
+      const vegetationEnd = performance.now();
+      this.updateCameraDepthPrecision();
+      const renderStart = performance.now();
       this.scene.render();
-      this.fpsCounter.update(this.engine, this.scene);
+      const renderEnd = performance.now();
+      let detailTiles = 0;
+      for (const tile of this.tiles.values()) {
+        if (tile.detailed) detailTiles++;
+      }
+      this.fpsCounter.update(this.engine, this.scene, {
+        gameMilliseconds: renderStart - gameStart,
+        vegetationMilliseconds: vegetationEnd - vegetationStart,
+        renderMilliseconds: renderEnd - renderStart,
+        activeTileBuilds: this.activeTileBuilds.size,
+        terrainTiles: this.tiles.size,
+        detailTiles,
+      });
     });
   }
 
@@ -1400,10 +1489,23 @@ export class Game {
     // Babylon defaults minZ to one whole scene unit. One unit represents many
     // meters here, causing that near plane to slice through the ground below
     // a correctly positioned 1.8 m camera.
-    camera.minZ = CAMERA_NEAR_CLIP_METERS / metersPerUnit;
+    camera.minZ = MIN_CAMERA_NEAR_CLIP_METERS / metersPerUnit;
     // FreeCamera positions its collision ellipsoid below the camera, placing
     // its bottom exactly one full player height below the eye point.
     camera.ellipsoidOffset.setAll(0);
+  }
+
+  /** Uses empty space below the camera to preserve distant depth precision. */
+  private updateCameraDepthPrecision(): void {
+    const camera = this.flyCamera;
+    const metersPerUnit = this.terrainMetersPerUnit;
+    if (!camera || !metersPerUnit) return;
+
+    const groundEyeHeight = this.getGroundEyeHeight(camera.position.x, camera.position.z);
+    if (groundEyeHeight === undefined) return;
+    const groundHeight = groundEyeHeight - PLAYER_HEIGHT_METERS / metersPerUnit;
+    const clearanceMeters = Math.max(0, (camera.position.y - groundHeight) * metersPerUnit);
+    camera.minZ = adaptiveCameraNearClipMeters(clearanceMeters) / metersPerUnit;
   }
 
   /**
@@ -1423,11 +1525,14 @@ export class Game {
       subdivisions: number;
       metersPerUnit: number;
       landCover?: WorldCover;
-      yieldControl?: () => Promise<void>;
+      yieldControl?: FrameBudgetYielder;
     },
   ): Promise<Mesh> {
     const { meshWidth, meshDepth, subdivisions, metersPerUnit, landCover, yieldControl } = options;
 
+    // Ground creation allocates and uploads the initial flat vertex buffers.
+    // Give it a fresh post-render slice when this is a streamed tile.
+    await yieldToNextFrame(yieldControl);
     const ground = MeshBuilder.CreateGround(
       name,
       { width: meshWidth, height: meshDepth, subdivisions, updatable: true },
@@ -1438,6 +1543,7 @@ export class Game {
     if (yieldControl) ground.setEnabled(false);
 
     const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
+    const uvs = ground.getVerticesData(VertexBuffer.UVKind)!;
     const indices = ground.getIndices()!;
     const { elevations, width: elevW, height: elevH } = terrain;
     const vPerRow = subdivisions + 1;
@@ -1485,6 +1591,10 @@ export class Game {
 
         const vertexIndex = row * vPerRow + col;
         positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
+        // Physical UVs let every tile share one set of terrain textures while
+        // preserving each detail layer's real-world repeat size.
+        uvs[vertexIndex * 2] *= terrain.groundWidthMeters;
+        uvs[vertexIndex * 2 + 1] *= terrain.groundHeightMeters;
 
         if (worldCoverColors && landCover) {
           const { lon, lat } = sceneToLonLat(
@@ -1536,7 +1646,7 @@ export class Game {
     }
 
     // Recompute normals for correct lighting after modifying heights
-    await yieldControl?.();
+    await yieldToNextFrame(yieldControl);
     const normals = new Float32Array(positions.length);
     VertexData.ComputeNormals(positions, indices, normals);
     // CreateGround leaves the bounding box flat at y = 0. Vertices carry
@@ -1544,18 +1654,25 @@ export class Game {
     // units above bounds that still describe a flat plane, and the frustum
     // test, shadow frustum and collision broad phase all miss it. Updating the
     // extents alongside the positions keeps the bounds on the real surface.
+    await yieldToNextFrame(yieldControl);
     ground.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+    await yieldToNextFrame(yieldControl);
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
+    await yieldToNextFrame(yieldControl);
+    ground.updateVerticesData(VertexBuffer.UVKind, uvs);
     ground.metadata = { worldCoverColors, surfaceColors } satisfies TerrainMetadata;
     ground.freezeWorldMatrix();
 
-    this.applyDefaultTerrainMaterial(ground, terrain);
+    // Vertex colors are another full-size GPU buffer, so commit them in their
+    // own slice after the geometry uploads above.
+    await yieldToNextFrame(yieldControl);
+    this.applyDefaultTerrainMaterial(ground);
 
     return ground;
   }
 
-  private applyDefaultTerrainMaterial(terrain: Mesh, data: TerrainData): void {
-    terrain.material?.dispose(true, true);
+  private applyDefaultTerrainMaterial(terrain: Mesh): void {
+    this.disposeTerrainAppearance(terrain);
     const colors = (terrain.metadata as TerrainMetadata | null)?.surfaceColors;
     if (colors) {
       terrain.setVerticesData(VertexBuffer.ColorKind, colors);
@@ -1563,24 +1680,27 @@ export class Game {
     } else {
       terrain.removeVerticesData(VertexBuffer.ColorKind);
     }
-    // The mesh spans the whole tile across one UV repeat, so the ground extent
-    // is what turns the material's real-world detail scales into tiling.
+    // The mesh UV buffer is already expressed in physical metres.
     terrain.material = createTerrainMaterial(this.scene, {
       usesLandCoverTint: Boolean(colors),
-      uvWidthMeters: data.groundWidthMeters,
-      uvHeightMeters: data.groundHeightMeters,
     });
   }
 
-  private applyWorldCoverDebugMaterial(terrain: Mesh, data: TerrainData): void {
+  private disposeTerrainAppearance(terrain: Mesh): void {
+    const material = terrain.material;
+    if (material && !isSharedTerrainMaterial(material)) material.dispose(true, true);
+    terrain.material = null;
+  }
+
+  private applyWorldCoverDebugMaterial(terrain: Mesh): void {
     const colors = (terrain.metadata as TerrainMetadata | null)?.worldCoverColors;
     if (!colors) {
       console.warn("WorldCover debug layer is unavailable for this terrain.");
-      this.applyDefaultTerrainMaterial(terrain, data);
+      this.applyDefaultTerrainMaterial(terrain);
       return;
     }
 
-    terrain.material?.dispose(true, true);
+    this.disposeTerrainAppearance(terrain);
     terrain.setVerticesData(VertexBuffer.ColorKind, colors);
     terrain.useVertexColors = true;
     const material = new StandardMaterial("worldCoverDebugMaterial", this.scene);

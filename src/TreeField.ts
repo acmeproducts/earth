@@ -459,8 +459,9 @@ void main(void) {
     0.0,
     (dot(vLocalWorldUp, vLocalSunDirection) + 0.42) / 1.42
   );
+  float shadowVisibility = vegetationShadowVisibility();
   vec3 lighting = clamp(
-    ambientColor + sunColor * (0.16 + direct * 0.62),
+    ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility,
     vec3(0.0),
     vec3(1.25)
   );
@@ -470,7 +471,6 @@ void main(void) {
   float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
   // Preserve enough ambient response for foliage to remain readable after sunset.
   lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
-  lighting *= vegetationShadowVisibility();
   float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
   gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
 }`;
@@ -646,10 +646,11 @@ export async function createTreeField(
     speciesResources.push({ prototype, modelMeshes });
   }
 
-  const matrixData = packInstanceMatrices(matrices);
-  const packedSpeciesMatrices = speciesList.map(
-    (species) => packInstanceMatrices(speciesMatrices[species]),
-  );
+  const matrixData = await packInstanceMatrices(matrices, yieldControl);
+  const packedSpeciesMatrices: Float32Array[] = [];
+  for (const species of speciesList) {
+    packedSpeciesMatrices.push(await packInstanceMatrices(speciesMatrices[species], yieldControl));
+  }
   const fields: VegetationFieldResult[] = [];
   for (let index = 0; index < speciesResources.length; index++) {
     const { prototype, modelMeshes } = speciesResources[index];
@@ -677,6 +678,17 @@ export async function createTreeField(
     count: matrices.length,
     setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
     setFade: (fade) => fields.forEach((field) => field.setFade(fade)),
+    prepareLod: async (cameraPosition, distanceMeters, prepareYieldControl) => {
+      let changed = false;
+      for (const field of fields) {
+        changed = await field.prepareLod(
+          cameraPosition,
+          distanceMeters,
+          prepareYieldControl,
+        ) || changed;
+      }
+      return changed;
+    },
     updateLod: (cameraPosition, distanceMeters) => {
       let changed = false;
       fields.forEach((field) => {

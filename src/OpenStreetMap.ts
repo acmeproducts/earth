@@ -1,13 +1,18 @@
 import {
+  BaseTexture,
   Color3,
   Mesh,
   MeshBuilder,
+  PBRMaterial,
   PolygonMeshBuilder,
+  RawTexture,
   Scene,
   StandardMaterial,
+  Texture,
   TransformNode,
   Vector2,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
@@ -20,6 +25,10 @@ import {
 } from "./Geo";
 import type { TerrainData } from "./TerrainData";
 import type { TileBounds } from "./WorldGrid";
+import {
+  createWaterSurfaceMaterial,
+  prepareWaterSurfaceMesh,
+} from "./Water";
 
 export interface MapTile {
   x: number;
@@ -32,21 +41,28 @@ type LonLat = [number, number];
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
 const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
+/** Covers the terrain's independently sampled 30 m shoreline transition. */
+const LAKE_SHORELINE_UNDERLAP_METERS = 35;
 const MINIMUM_LAKE_ELEVATION_METERS = SEA_LEVEL_METERS + 1;
+/** Enough separation to avoid z-fighting without making roads hover. */
+const ROAD_SURFACE_CLEARANCE_METERS = 0.025;
+const ROAD_TEXTURE_SIZE = 64;
+
+type RoadSurface = "paved" | "unpaved";
+
+interface RoadAppearance {
+  widthMeters: number;
+  surface: RoadSurface;
+}
 
 interface MapLayerOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
   lakeElevationSource?: Float32Array;
+  skyReflection?: BaseTexture | null;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
-  /**
-   * Restricts the layer to features whose first vertex lies inside these
-   * bounds. Streamed tiles share provider vector tiles, so without one owner
-   * per feature every neighboring tile would rebuild the same geometry.
-   */
-  ownerBounds?: TileBounds;
 }
 
 interface MapClipBounds {
@@ -139,31 +155,31 @@ export class OpenStreetMap {
     const root = new TransformNode("mapFeatures", scene);
     if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
-    const roads: Mesh[] = [];
+    const pavedRoads: Mesh[] = [];
+    const unpavedRoads: Mesh[] = [];
     const water: Mesh[] = [];
 
     for (const tile of tiles) {
       forEachFeature(tile, "building", (feature) => {
         const height = numericProperty(feature, "render_height") || 8;
         for (const polygon of polygons(feature, tile)) {
-          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, height);
           if (mesh) buildings.push(mesh);
         }
       });
       await yieldControl?.();
       forEachFeature(tile, "transportation", (feature) => {
-        const width = roadWidth(String(feature.properties.class ?? ""));
+        const appearance = roadAppearance(feature);
+        if (!appearance || feature.properties.brunnel === "tunnel") return;
+        const target = appearance.surface === "unpaved" ? unpavedRoads : pavedRoads;
         for (const line of lines(feature, tile)) {
-          if (!ownsGeometry(line, options.ownerBounds)) continue;
-          roads.push(...createRoad(scene, line, terrain, options, width));
+          target.push(...createRoad(scene, line, terrain, options, appearance));
         }
       });
       await yieldControl?.();
       forEachFeature(tile, "water", (feature) => {
         if (feature.properties.class === "ocean") return;
         for (const polygon of polygons(feature, tile)) {
-          if (!ownsGeometry(polygon, options.ownerBounds)) continue;
           const mesh = createPolygon(scene, polygon, terrain, options, 0.1, true);
           if (mesh) water.push(mesh);
         }
@@ -173,8 +189,9 @@ export class OpenStreetMap {
 
     const meshes = [
       merge(buildings, "buildings", new Color3(0.56, 0.53, 0.48), root),
-      merge(roads, "roads", new Color3(0.22, 0.22, 0.21), root),
-      ...styleWater(water, root),
+      mergeRoads(pavedRoads, "pavedRoads", "paved", root),
+      mergeRoads(unpavedRoads, "unpavedRoads", "unpaved", root),
+      ...styleWater(water, root, options),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
     // Source meshes are disabled as soon as they are constructed so yielding
     // between feature batches cannot expose them at the scene origin. The
@@ -184,7 +201,11 @@ export class OpenStreetMap {
     return {
       root,
       meshes,
-      counts: { buildings: buildings.length, roads: roads.length, water: water.length },
+      counts: {
+        buildings: buildings.length,
+        roads: pavedRoads.length + unpavedRoads.length,
+        water: water.length,
+      },
     };
   }
 
@@ -197,7 +218,9 @@ export class OpenStreetMap {
     const segments: RoadSegment[] = [];
     for (const tile of tiles) {
       forEachFeature(tile, "transportation", (feature) => {
-        const halfWidth = roadWidth(String(feature.properties.class ?? "")) / options.metersPerUnit / 2;
+        const appearance = roadAppearance(feature);
+        if (!appearance || feature.properties.brunnel === "tunnel") return;
+        const halfWidth = appearance.widthMeters / options.metersPerUnit / 2;
         for (const coordinates of lines(feature, tile)) {
           const points = coordinates.map(([lon, lat]) =>
             lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
@@ -210,6 +233,14 @@ export class OpenStreetMap {
       await yieldControl?.();
     }
     return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
+  }
+
+  /** Disposes a streamed layer without taking down its scene-owned sky map. */
+  static disposeLayer(root: TransformNode): void {
+    for (const mesh of root.getChildMeshes(false)) {
+      if (mesh.material instanceof PBRMaterial) mesh.material.reflectionTexture = null;
+    }
+    root.dispose(false, true);
   }
 
   private static async fetchTile(x: number, y: number, zoom: number): Promise<MapTile | undefined> {
@@ -230,19 +261,6 @@ export class OpenStreetMap {
     const data = await request;
     return data ? { x, y, zoom, data } : undefined;
   }
-}
-
-/**
- * One streamed tile owns each feature piece: the tile containing its first
- * vertex. The geometry itself is projected from absolute coordinates, so an
- * owned road or building still renders correctly across tile boundaries.
- */
-function ownsGeometry(points: LonLat[], bounds?: TileBounds): boolean {
-  if (!bounds) return true;
-  if (points.length === 0) return false;
-  const [lon, lat] = points[0];
-  return lon >= bounds.lonWest && lon < bounds.lonEast &&
-    lat > bounds.latSouth && lat <= bounds.latNorth;
 }
 
 function forEachFeature(tile: MapTile, layerName: string, visit: (feature: VectorTileFeature) => void): void {
@@ -287,7 +305,10 @@ function createPolygon(
 ): Mesh | undefined {
   const points = polygonScenePoints(coordinates, terrain, options);
   if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-  const clipped = clipPolygon(points, {
+  const expanded = isWater
+    ? expandPolygon(points, LAKE_SHORELINE_UNDERLAP_METERS / options.metersPerUnit)
+    : points;
+  const clipped = clipPolygon(expanded, {
     minX: -options.meshWidth / 2,
     maxX: options.meshWidth / 2,
     minZ: -options.meshDepth / 2,
@@ -340,7 +361,42 @@ function createPolygon(
     new PolygonMeshBuilder("water", shape, scene, earcut).build(false),
   );
   mesh.position.y = surface;
+  setWaterUvs(mesh, options.meshWidth, options.meshDepth);
+  prepareWaterSurfaceMesh(mesh);
   return mesh;
+}
+
+/**
+ * Extends the mapped shoreline under the terrain transition. Radial expansion
+ * preserves the source ring's topology, including the clipped vector-tile
+ * pieces that would be easy to self-intersect with a mitered polygon offset.
+ */
+function expandPolygon(
+  points: Array<{ x: number; z: number }>,
+  distance: number,
+): Array<{ x: number; z: number }> {
+  if (distance <= 0 || points.length < 3) return points;
+  const center = averagePoint(points);
+  return points.map((point) => {
+    const dx = point.x - center.x;
+    const dz = point.z - center.z;
+    const length = Math.hypot(dx, dz);
+    if (length < 1e-6) return point;
+    const scale = (length + distance) / length;
+    return { x: center.x + dx * scale, z: center.z + dz * scale };
+  });
+}
+
+/** Aligns every lake's waves to the full terrain tile instead of its own bounds. */
+function setWaterUvs(mesh: Mesh, width: number, depth: number): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) return;
+  const uvs = new Float32Array((positions.length / 3) * 2);
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    uvs[vertex * 2] = positions[vertex * 3] / width + 0.5;
+    uvs[vertex * 2 + 1] = 0.5 - positions[vertex * 3 + 2] / depth;
+  }
+  mesh.setVerticesData(VertexBuffer.UVKind, uvs);
 }
 
 function createRoad(
@@ -348,23 +404,30 @@ function createRoad(
   coordinates: LonLat[],
   terrain: TerrainData,
   options: MapLayerOptions,
-  widthMeters: number,
+  appearance: RoadAppearance,
 ): Mesh[] {
   const points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
   );
-  const halfWidth = widthMeters / options.metersPerUnit / 2;
+  const halfWidth = appearance.widthMeters / options.metersPerUnit / 2;
   const paths = clipPolyline(
     points,
-    options.meshWidth / 2 - halfWidth,
-    options.meshDepth / 2 - halfWidth,
+    options.meshWidth / 2,
+    options.meshDepth / 2,
   );
   const sampleSpacing = Math.min(
     options.meshWidth / Math.max(1, terrain.width - 1),
     options.meshDepth / Math.max(1, terrain.height - 1),
   ) / 2;
   return paths.flatMap((path) =>
-    createRoadMeshes(scene, resamplePath(path, sampleSpacing), terrain, options, halfWidth)
+    createRoadMeshes(
+      scene,
+      resamplePath(path, sampleSpacing),
+      terrain,
+      options,
+      halfWidth,
+      appearance.surface,
+    )
   );
 }
 
@@ -374,14 +437,16 @@ function createRoadMeshes(
   terrain: TerrainData,
   options: MapLayerOptions,
   halfWidth: number,
+  surface: RoadSurface,
 ): Mesh[] {
   const meshes: Mesh[] = [];
   let left: Vector3[] = [];
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
+      const uvs = roadUvs(left, right, options.metersPerUnit, surface);
       meshes.push(stageMapMesh(
-        MeshBuilder.CreateRibbon("road", { pathArray: [left, right] }, scene),
+        MeshBuilder.CreateRibbon("road", { pathArray: [left, right], uvs }, scene),
       ));
     }
     left = [];
@@ -409,23 +474,43 @@ function createRoadMeshes(
       options.meshWidth,
       options.meshDepth,
     );
-    if (leftElevation <= SEA_LEVEL_METERS || rightElevation <= SEA_LEVEL_METERS) {
-      finishPath();
-      continue;
-    }
     left.push(new Vector3(
       points[index].x + offsetX,
-      leftElevation / options.metersPerUnit + 0.025,
+      (leftElevation + ROAD_SURFACE_CLEARANCE_METERS) / options.metersPerUnit,
       points[index].z + offsetZ,
     ));
     right.push(new Vector3(
       points[index].x - offsetX,
-      rightElevation / options.metersPerUnit + 0.025,
+      (rightElevation + ROAD_SURFACE_CLEARANCE_METERS) / options.metersPerUnit,
       points[index].z - offsetZ,
     ));
   }
   finishPath();
   return meshes;
+}
+
+/** Gives road textures a stable real-world scale after ribbons are merged. */
+function roadUvs(
+  left: Vector3[],
+  right: Vector3[],
+  metersPerUnit: number,
+  surface: RoadSurface,
+): Vector2[] {
+  const repeatMeters = surface === "unpaved" ? 1.5 : 4;
+  const leftUvs = [new Vector2(0, 0)];
+  const rightUvs = [new Vector2(0, 1)];
+  let distanceMeters = 0;
+  for (let index = 1; index < left.length; index++) {
+    const previousX = (left[index - 1].x + right[index - 1].x) / 2;
+    const previousZ = (left[index - 1].z + right[index - 1].z) / 2;
+    const x = (left[index].x + right[index].x) / 2;
+    const z = (left[index].z + right[index].z) / 2;
+    distanceMeters += Math.hypot(x - previousX, z - previousZ) * metersPerUnit;
+    const u = distanceMeters / repeatMeters;
+    leftUvs.push(new Vector2(u, 0));
+    rightUvs.push(new Vector2(u, 1));
+  }
+  return [...leftUvs, ...rightUvs];
 }
 
 /** Keeps a newly registered Babylon mesh out of render lists while its tile is assembled. */
@@ -622,7 +707,8 @@ function quantile(values: number[], amount: number): number {
   return sorted[lower] * (1 - blend) + sorted[upper] * blend;
 }
 
-function roadWidth(type: string): number {
+function roadAppearance(feature: VectorTileFeature): RoadAppearance | undefined {
+  const type = String(feature.properties.class ?? "");
   const widths: Record<string, number> = {
     motorway: 10,
     trunk: 9,
@@ -631,9 +717,100 @@ function roadWidth(type: string): number {
     tertiary: 6,
     minor: 4,
     service: 3,
+    track: 2.4,
     path: 1.2,
   };
-  return widths[type] ?? 3;
+  const widthMeters = widths[type];
+  if (!widthMeters) return undefined;
+  const mappedSurface = String(feature.properties.surface ?? "");
+  // OpenMapTiles preserves the useful OSM distinction as paved/unpaved. Paths
+  // without a surface tag are visually closer to soil or gravel than asphalt.
+  const surface: RoadSurface = mappedSurface === "unpaved" ||
+    (mappedSurface !== "paved" && (type === "path" || type === "track"))
+    ? "unpaved"
+    : "paved";
+  return { widthMeters, surface };
+}
+
+function mergeRoads(
+  meshes: Mesh[],
+  name: string,
+  surface: RoadSurface,
+  parent: TransformNode,
+): Mesh | undefined {
+  if (meshes.length === 0) return undefined;
+  const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
+  if (!result) return undefined;
+  result.name = name;
+  result.material = createRoadMaterial(result.getScene(), name, surface);
+  result.parent = parent;
+  return result;
+}
+
+function createRoadMaterial(scene: Scene, name: string, surface: RoadSurface): StandardMaterial {
+  const material = new StandardMaterial(`${name}Material`, scene);
+  material.diffuseColor = surface === "unpaved"
+    ? new Color3(0.46, 0.39, 0.28)
+    : new Color3(0.2, 0.21, 0.2);
+  material.specularColor = surface === "unpaved"
+    ? new Color3(0.008, 0.008, 0.006)
+    : new Color3(0.018, 0.02, 0.018);
+  material.specularPower = surface === "unpaved" ? 8 : 20;
+  const texture = createRoadTexture(scene, `${name}Texture`, surface, true);
+  material.diffuseTexture = texture;
+  if (surface === "unpaved") {
+    const relief = createRoadTexture(scene, `${name}Relief`, surface, false);
+    relief.level = 0.42;
+    material.bumpTexture = relief;
+  }
+  return material;
+}
+
+/** Small deterministic texture: coarse aggregate for gravel, fine grain for asphalt. */
+function createRoadTexture(
+  scene: Scene,
+  name: string,
+  surface: RoadSurface,
+  gammaSpace: boolean,
+): RawTexture {
+  const pixels = new Uint8Array(ROAD_TEXTURE_SIZE * ROAD_TEXTURE_SIZE * 4);
+  for (let y = 0; y < ROAD_TEXTURE_SIZE; y++) {
+    for (let x = 0; x < ROAD_TEXTURE_SIZE; x++) {
+      const offset = (y * ROAD_TEXTURE_SIZE + x) * 4;
+      const fine = hashNoise(x, y);
+      const coarse = hashNoise(Math.floor(x / 4), Math.floor(y / 4));
+      const value = surface === "unpaved"
+        ? 150 + Math.round((fine - 0.5) * 70 + (coarse - 0.5) * 34)
+        : 175 + Math.round((fine - 0.5) * 24);
+      pixels[offset] = value;
+      pixels[offset + 1] = value;
+      pixels[offset + 2] = value;
+      pixels[offset + 3] = 255;
+    }
+  }
+  const texture = RawTexture.CreateRGBATexture(
+    pixels,
+    ROAD_TEXTURE_SIZE,
+    ROAD_TEXTURE_SIZE,
+    scene,
+    true,
+    false,
+    Texture.TRILINEAR_SAMPLINGMODE,
+  );
+  texture.name = name;
+  texture.gammaSpace = gammaSpace;
+  texture.wrapU = Texture.WRAP_ADDRESSMODE;
+  texture.wrapV = Texture.WRAP_ADDRESSMODE;
+  texture.anisotropicFilteringLevel = 12;
+  return texture;
+}
+
+function hashNoise(x: number, y: number): number {
+  let hash = Math.imul(x ^ 0x6d2b79f5, 0x1b873593) ^ Math.imul(y ^ 0x85ebca6b, 0xc2b2ae35);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  return (hash >>> 0) / 0xffffffff;
 }
 
 function merge(
@@ -656,16 +833,25 @@ function merge(
   return result;
 }
 
-function styleWater(meshes: Mesh[], parent: TransformNode): Mesh[] {
+function styleWater(
+  meshes: Mesh[],
+  parent: TransformNode,
+  options: MapLayerOptions,
+): Mesh[] {
   if (meshes.length === 0) return [];
-  const material = new StandardMaterial("inlandWaterMaterial", parent.getScene());
-  material.diffuseColor = new Color3(0.05, 0.32, 0.5);
-  material.specularColor = Color3.Black();
-  material.alpha = 0.82;
-  meshes.forEach((mesh, index) => {
-    mesh.name = `inlandWater-${index}`;
-    mesh.material = material;
-    mesh.parent = parent;
+  const result = meshes.length === 1
+    ? meshes[0]
+    : Mesh.MergeMeshes(meshes, true, true);
+  if (!result) return [];
+  result.name = "inlandWater";
+  result.material = createWaterSurfaceMaterial(parent.getScene(), {
+    name: "inlandWaterMaterial",
+    width: options.meshWidth,
+    height: options.meshDepth,
+    metersPerUnit: options.metersPerUnit,
+    skyReflection: options.skyReflection,
   });
-  return meshes;
+  result.isPickable = false;
+  result.parent = parent;
+  return [result];
 }

@@ -81,9 +81,45 @@ export function createWaterPlane(
     scene
   );
   waterMesh.position.y = elevation;
-  giveConstantTangentFrame(waterMesh);
+  prepareWaterSurfaceMesh(waterMesh);
 
-  const water = new PBRMaterial('waterMaterial', scene);
+  const water = createWaterSurfaceMaterial(scene, {
+    width: width * 1.2,
+    height: height * 1.2,
+    metersPerUnit,
+    skyReflection,
+  });
+
+  waterMesh.material = water;
+  waterMesh.isPickable = false;
+  waterMesh.freezeWorldMatrix();
+  return waterMesh;
+}
+
+export interface WaterSurfaceMaterialOptions {
+  width: number;
+  height: number;
+  /** Scene units are not metres; wave scale is authored in metres. */
+  metersPerUnit?: number;
+  /** Environment the surface reflects where SSR finds nothing on screen. */
+  skyReflection?: Nullable<BaseTexture>;
+  name?: string;
+}
+
+/** Creates the same reflective, animated PBR surface for oceans and lakes. */
+export function createWaterSurfaceMaterial(
+  scene: Scene,
+  options: WaterSurfaceMaterialOptions,
+): PBRMaterial {
+  const {
+    width,
+    height,
+    metersPerUnit = 1,
+    skyReflection = null,
+    name = 'waterMaterial',
+  } = options;
+
+  const water = new PBRMaterial(name, scene);
   // Deep water read as a plain gamma-space tint before; PBR shades in linear
   // space and converts on output, so convert the authored colour once here
   // instead of re-picking it by eye.
@@ -129,11 +165,7 @@ export function createWaterPlane(
   water.detailMap.isEnabled = true;
 
   animateWaves(scene, water, swell, chop);
-
-  waterMesh.material = water;
-  waterMesh.isPickable = false;
-  waterMesh.freezeWorldMatrix();
-  return waterMesh;
+  return water;
 }
 
 /**
@@ -157,7 +189,7 @@ export function disposeWaterPlane(waterMesh: Mesh): void {
  * the water. A ground plane's tangent frame is the same everywhere, so state it
  * once rather than letting the shader guess it.
  */
-function giveConstantTangentFrame(mesh: Mesh): void {
+export function prepareWaterSurfaceMesh(mesh: Mesh): void {
   const vertexCount = mesh.getTotalVertices();
   const tangents = new Float32Array(vertexCount * 4);
   for (let vertex = 0; vertex < vertexCount; vertex++) {
@@ -176,8 +208,8 @@ function tileOverPlane(
   tileUnits: number
 ): Texture {
   texture.name = name;
-  texture.uScale = Math.max(1, (width * 1.2) / tileUnits);
-  texture.vScale = Math.max(1, (height * 1.2) / tileUnits);
+  texture.uScale = Math.max(1, width / tileUnits);
+  texture.vScale = Math.max(1, height / tileUnits);
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   // The ocean runs to the horizon, so most of it is seen at a grazing angle

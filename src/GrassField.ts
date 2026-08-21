@@ -39,7 +39,9 @@ const GRASS_FADE_FAR_TILE_WIDTHS = 1.95;
 const GRASS_GROUND_COLOR_BLEND = 0.42;
 /** Average upward response of the crossed grass cards in the live model. */
 const GRASS_AMBIENT_UPWARD = 0.58;
-const GRASS_SHADOW_DARKNESS = 0.18;
+// Match the terrain receiver: full shadow removes direct sun but preserves
+// hemispheric ambient light in the vegetation shaders.
+const GRASS_SHADOW_DARKNESS = 0;
 
 type GrassFieldOptions = VegetationPlacementOptions;
 
@@ -198,7 +200,7 @@ export async function createGrassField(
     }
   }
 
-  const matrixData = packInstanceMatrices(matrices);
+  const matrixData = await packInstanceMatrices(matrices, yieldControl);
   return createVegetationFieldResult(
     root,
     [grass],

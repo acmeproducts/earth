@@ -154,8 +154,9 @@ The terrain keeps the four closest application tiles loaded as a moving 2 by 2
 window. The window changes at tile midlines, loading the next row or column in
 the background before the player reaches the outer edge. Overlapping elevation,
 WorldCover, and OpenStreetMap source requests are cached between window shifts.
-CPU-heavy terrain, map, vegetation, and LOD-index construction is spread across
-animation frames so the active window remains responsive while its replacement loads.
+CPU-heavy terrain, map, vegetation, and LOD-index construction runs in small
+post-render slices. Large terrain and vegetation GPU uploads are committed on
+separate animation frames so replacement tiles have less impact on frame rate.
 
 `?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
 from 0.25 through 1), and
@@ -165,7 +166,11 @@ can be combined, for example:
 `?render-scale=0.75&vegetation=impostors&performance-debug`
 
 Add `performance-debug` (or `perf`) to expand the top-right counter with frame
-and render time, draw calls, active meshes, and render scale.
+time, measured game-loop, movement-LOD, and render-call CPU averages/peaks, long
+animation frames (or long tasks as a fallback), the hottest attributed script,
+and a render breakdown for active-mesh evaluation, render targets, draw
+submission, GPU frame time, and shader compilation. It also shows streaming
+counts, heap use where supported, draw calls, active meshes, and render scale.
 Press `F` to toggle the expanded counter at runtime.
 
 

@@ -21,6 +21,7 @@ function createMeshStub(name) {
     thinInstanceCount: 0,
     enabled: true,
     alwaysSelectAsActiveMesh: false,
+    partialUpdateCalls: 0,
     thinInstanceSetBuffer(kind, buffer) {
       cpuBuffers.set(kind, buffer);
       gpuBuffers.set(kind, buffer.slice());
@@ -33,10 +34,12 @@ function createMeshStub(name) {
       if (cpu) gpuBuffers.get(kind).set(cpu);
     },
     thinInstancePartialBufferUpdate(kind, data, offset) {
+      this.partialUpdateCalls++;
       const gpu = gpuBuffers.get(kind);
       if (gpu) gpu.set(data, offset);
     },
     gpuBuffer(kind) { return gpuBuffers.get(kind); },
+    resetPartialUpdateCalls() { this.partialUpdateCalls = 0; },
   };
 }
 
@@ -156,6 +159,57 @@ test("incremental LOD keeps every instance drawn while the camera walks", async 
       `step ${step}`,
     );
   }
+});
+
+test("incremental LOD coalesces per-instance GPU buffer uploads", async () => {
+  const positions = [];
+  for (let x = -100; x <= 100; x += 1) {
+    for (let z = -8; z <= 8; z += 2) positions.push({ x, y: 0, z });
+  }
+  const impostorMesh = createMeshStub("impostors");
+  const modelMesh = createMeshStub("models");
+  const field = await createVegetationFieldResult(
+    { name: "test-root" },
+    [impostorMesh],
+    [modelMesh],
+    packMatrices(positions),
+    1,
+    "auto",
+  );
+
+  field.updateLod(new Vector3(0, 2, 0), 40);
+  impostorMesh.resetPartialUpdateCalls();
+  modelMesh.resetPartialUpdateCalls();
+  field.updateLod(new Vector3(1, 2, 0), 40);
+
+  const uploadCalls = impostorMesh.partialUpdateCalls + modelMesh.partialUpdateCalls;
+  assert.ok(uploadCalls > 0, "movement should update LOD buffers");
+  assert.ok(uploadCalls < 40, `expected coalesced uploads, got ${uploadCalls}`);
+});
+
+test("first full LOD layout cooperatively yields before the field commits", async () => {
+  const positions = [];
+  for (let x = -100; x <= 100; x += 2) {
+    for (let z = -20; z <= 20; z += 2) positions.push({ x, y: 0, z });
+  }
+  const impostorMesh = createMeshStub("impostors");
+  const modelMesh = createMeshStub("models");
+  const field = await createVegetationFieldResult(
+    { name: "test-root" },
+    [impostorMesh],
+    [modelMesh],
+    packMatrices(positions),
+    1,
+    "auto",
+  );
+  const camera = new Vector3(0, 2, 0);
+  let yields = 0;
+
+  await field.prepareLod(camera, 40, async () => { yields++; });
+
+  assert.ok(yields >= 4, `expected multiple LOD budget checks, got ${yields}`);
+  assert.equal(field.updateLod(camera, 40), false, "prepared camera state should not rebuild on commit");
+  assertFieldMatchesGroundTruth(impostorMesh, modelMesh, positions, camera, 40, "prepared");
 });
 
 test("incremental LOD survives direction changes and revisits", async () => {

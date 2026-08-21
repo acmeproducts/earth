@@ -11,14 +11,15 @@ import {
   TERRAIN_ALBEDO_LAYER,
   TERRAIN_DETAIL_LAYER,
   TERRAIN_NORMAL_LAYER,
-  TerrainTextureData,
-  TerrainTextureLayer,
 } from "./TerrainTextureData";
-
-/** Ground extent assumed when a caller cannot describe its own footprint. */
-const FALLBACK_UV_EXTENT_METERS = 1200;
+import type { TerrainTextureData, TerrainTextureLayer } from "./TerrainTextureData";
 
 let cachedTextureData: TerrainTextureData | undefined;
+const sceneMaterials = new WeakMap<Scene, {
+  tinted: StandardMaterial;
+  untinted: StandardMaterial;
+}>();
+const sharedMaterials = new WeakSet<Material>();
 
 /**
  * Pushes terrain a tiny distance back in the depth buffer. Vegetation keeps
@@ -36,22 +37,19 @@ export interface TerrainMaterialOptions {
    * only carry relief and grain.
    */
   usesLandCoverTint?: boolean;
-  /**
-   * Ground distance spanned by one full UV repeat of the mesh. Tiling is derived
-   * from this so each layer lands at its intended real-world size no matter how
-   * large an area the mesh covers.
-   */
-  uvWidthMeters?: number;
-  uvHeightMeters?: number;
 }
 
-/** Owns the normal terrain appearance; debug layers are applied elsewhere. */
+/**
+ * Returns the scene-owned terrain material. Terrain UVs are expressed in
+ * metres, so every tile can share both the materials and their GPU textures.
+ */
 export function createTerrainMaterial(
   scene: Scene,
   options: TerrainMaterialOptions = {},
 ): StandardMaterial {
-  const uvWidthMeters = options.uvWidthMeters ?? FALLBACK_UV_EXTENT_METERS;
-  const uvHeightMeters = options.uvHeightMeters ?? uvWidthMeters;
+  const cached = sceneMaterials.get(scene);
+  if (cached) return options.usesLandCoverTint ? cached.tinted : cached.untinted;
+
   cachedTextureData ??= createTerrainTextureData();
   const textures = cachedTextureData;
 
@@ -60,8 +58,6 @@ export function createTerrainMaterial(
     TERRAIN_ALBEDO_LAYER,
     "terrainAlbedo",
     scene,
-    uvWidthMeters,
-    uvHeightMeters,
   );
 
   const normal = createTiledTexture(
@@ -69,8 +65,6 @@ export function createTerrainMaterial(
     TERRAIN_NORMAL_LAYER,
     "terrainNormal",
     scene,
-    uvWidthMeters,
-    uvHeightMeters,
   );
   normal.level = 0.78;
 
@@ -79,26 +73,42 @@ export function createTerrainMaterial(
     TERRAIN_DETAIL_LAYER,
     "terrainDetail",
     scene,
-    uvWidthMeters,
-    uvHeightMeters,
   );
 
-  const material = new StandardMaterial("terrainMaterial", scene);
-  material.diffuseTexture = albedo;
-  material.bumpTexture = normal;
-  // One extra sampler buys both the finest grain and its micro-relief: Babylon
-  // reads red as albedo modulation around 0.5 and alpha/green as normal xy.
-  material.detailMap.texture = detail;
-  material.detailMap.diffuseBlendLevel = 0.85;
-  material.detailMap.bumpLevel = 0.9;
-  material.detailMap.isEnabled = true;
-  material.diffuseColor = options.usesLandCoverTint
-    ? Color3.White()
-    : new Color3(0.7, 0.62, 0.5);
-  material.specularColor = new Color3(0.035, 0.04, 0.03);
-  material.specularPower = 24;
-  applyTerrainDepthBias(material);
-  return material;
+  const createMaterial = (usesLandCoverTint: boolean): StandardMaterial => {
+    const material = new StandardMaterial(
+      usesLandCoverTint ? "terrainMaterialTinted" : "terrainMaterialUntinted",
+      scene,
+    );
+    material.diffuseTexture = albedo;
+    material.bumpTexture = normal;
+    // One extra sampler buys both the finest grain and its micro-relief: Babylon
+    // reads red as albedo modulation around 0.5 and alpha/green as normal xy.
+    material.detailMap.texture = detail;
+    material.detailMap.diffuseBlendLevel = 0.85;
+    material.detailMap.bumpLevel = 0.9;
+    material.detailMap.isEnabled = true;
+    material.diffuseColor = usesLandCoverTint
+      ? Color3.White()
+      : new Color3(0.7, 0.62, 0.5);
+    material.specularColor = new Color3(0.035, 0.04, 0.03);
+    material.specularPower = 24;
+    applyTerrainDepthBias(material);
+    sharedMaterials.add(material);
+    return material;
+  };
+
+  const materials = {
+    tinted: createMaterial(true),
+    untinted: createMaterial(false),
+  };
+  sceneMaterials.set(scene, materials);
+  return options.usesLandCoverTint ? materials.tinted : materials.untinted;
+}
+
+/** Shared terrain materials are disposed with their scene, not with one tile. */
+export function isSharedTerrainMaterial(material: Material | null): boolean {
+  return material !== null && sharedMaterials.has(material);
 }
 
 function createTiledTexture(
@@ -106,8 +116,6 @@ function createTiledTexture(
   layer: TerrainTextureLayer,
   name: string,
   scene: Scene,
-  uvWidthMeters: number,
-  uvHeightMeters: number,
 ): Texture {
   const texture = RawTexture.CreateRGBATexture(
     data,
@@ -123,8 +131,8 @@ function createTiledTexture(
   texture.gammaSpace = false;
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
-  texture.uScale = uvWidthMeters / layer.metersPerRepeat;
-  texture.vScale = uvHeightMeters / layer.metersPerRepeat;
+  texture.uScale = 1 / layer.metersPerRepeat;
+  texture.vScale = 1 / layer.metersPerRepeat;
   // Ground is nearly always seen at a grazing angle, where trilinear filtering
   // alone collapses these layers into mush a few metres ahead of the camera.
   texture.anisotropicFilteringLevel = 16;

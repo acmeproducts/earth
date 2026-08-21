@@ -47,3 +47,14 @@ export const EXAMPLE_LOCATIONS = [
 ] as const;
 
 export type ExampleLocation = (typeof EXAMPLE_LOCATIONS)[number];
+
+const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
+const WEB_MERCATOR_MAX_SINE = Math.sin(WEB_MERCATOR_MAX_LATITUDE * Math.PI / 180);
+
+/** Picks a world location uniformly by surface area within Web Mercator's bounds. */
+export function randomWorldLocation(random: () => number = Math.random): { lat: number; lon: number } {
+  const lon = random() * 360 - 180;
+  const latitudeSine = (random() * 2 - 1) * WEB_MERCATOR_MAX_SINE;
+  const lat = Math.asin(latitudeSine) * 180 / Math.PI;
+  return { lat, lon };
+}

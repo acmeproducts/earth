@@ -79,17 +79,19 @@ export class TerrainElevationSource {
   /**
    * Computes the raw elevation range and retains full precision for direct vertex use.
    */
-  private static processElevations(
+  private static async processElevations(
     elevations: Float32Array,
     width: number,
     height: number,
     description: string,
-  ): Pick<TerrainData, "elevations" | "minElevation" | "maxElevation" | "width" | "height"> {
+    yieldControl?: () => Promise<void>,
+  ): Promise<Pick<TerrainData, "elevations" | "minElevation" | "maxElevation" | "width" | "height">> {
     let minElevation = Infinity;
     let maxElevation = -Infinity;
     for (let i = 0; i < elevations.length; i++) {
       if (elevations[i] < minElevation) minElevation = elevations[i];
       if (elevations[i] > maxElevation) maxElevation = elevations[i];
+      if ((i & 4095) === 4095) await yieldControl?.();
     }
 
     console.log(`${description}: elevation range ${minElevation.toFixed(1)}m to ${maxElevation.toFixed(1)}m`);
@@ -115,7 +117,10 @@ export class TerrainElevationSource {
   }
 
   /** Populates an application-owned tile area from the elevation provider. */
-  static async fetchWorldArea(area: WorldTileArea): Promise<TerrainData> {
+  static async fetchWorldArea(
+    area: WorldTileArea,
+    yieldControl?: () => Promise<void>,
+  ): Promise<TerrainData> {
     // The source adapter chooses its own level and determines which provider
     // tiles overlap our requested bounds. The equality with our current grid
     // level is a quality setting, not an identity relationship.
@@ -147,6 +152,7 @@ export class TerrainElevationSource {
           stitched[(oy + row) * stitchedWidth + (ox + col)] =
             rawTiles[i].elevations[row * tileSize + col];
         }
+        await yieldControl?.();
       }
     }
 
@@ -169,17 +175,19 @@ export class TerrainElevationSource {
         ),
         row * crop.width,
       );
+      await yieldControl?.();
     }
 
     // Compute the real-world ground extent of the requested area.
     const stitchedBounds = area.bounds;
     const { widthMeters, heightMeters } = this.tileSizeMeters(stitchedBounds);
 
-    const result = this.processElevations(
+    const result = await this.processElevations(
       cropped,
       crop.width,
       crop.height,
       `World tile ${area.center.level}/${area.center.x}/${area.center.y}`,
+      yieldControl,
     );
     return {
       ...result,
