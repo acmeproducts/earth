@@ -4,10 +4,14 @@ import test from "node:test";
 
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
 const lakeSurface = readFileSync(new URL("../src/LakeSurface.ts", import.meta.url), "utf8");
+const proceduralBuildings = readFileSync(
+  new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
+  "utf8",
+);
 
 test("stages every OSM mesh out of render lists until the layer is assembled", () => {
   assert.match(openStreetMap, /function stageMapMesh<T extends Mesh>[\s\S]*?mesh\.setEnabled\(false\)/);
-  assert.match(openStreetMap, /stageMapMesh\(\s*new PolygonMeshBuilder\("building"/);
+  assert.match(proceduralBuildings, /stageBuildingMesh\(\s*new PolygonMeshBuilder\("building"/);
   assert.match(openStreetMap, /stageMapMesh\(\s*new PolygonMeshBuilder\("water"/);
   assert.match(openStreetMap, /stageMapMesh\(\s*MeshBuilder\.CreateRibbon\("road"/);
 });
@@ -54,10 +58,10 @@ test("extends lake surfaces beneath the terrain shoreline transition", () => {
     lakeSurface,
     /lakeUnderlapDistance\(point, normal, terrain, options\)/,
   );
-  assert.match(openStreetMap, /const expanded = isWater\s+\? expandLakeShoreline\(points, terrain, options\)/);
+  assert.match(openStreetMap, /const expanded = expandLakeShoreline\(points, terrain, options\)/);
   assert.match(lakeSurface, /const incoming = outwardNormal/);
   assert.match(lakeSurface, /const outgoing = outwardNormal/);
-  assert.match(openStreetMap, /const mappedFootprint = isWater \? clipPolygon\(points, clipBounds\) : clipped/);
+  assert.match(openStreetMap, /const mappedFootprint = clipPolygon\(points, clipBounds\)/);
 });
 
 test("checks the carved terrain water mask before extending a lake edge", () => {

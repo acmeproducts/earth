@@ -40,6 +40,8 @@ export interface BuildingPlan {
   roofShape: BuildingRoofShape;
   wallMaterial?: string;
   roofMaterial?: string;
+  wallColor?: string;
+  roofColor?: string;
   detailSeed: number;
 }
 
@@ -64,6 +66,15 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
     roofShape: roofShape(source.properties.roof_shape),
     wallMaterial: textProperty(source.properties.material),
     roofMaterial: textProperty(source.properties.roof_material),
+    wallColor: colorProperty(
+      source.properties.colour ??
+      source.properties.color ??
+      source.properties.building_colour ??
+      source.properties.building_color,
+    ),
+    roofColor: colorProperty(
+      source.properties.roof_colour ?? source.properties.roof_color,
+    ),
     detailSeed: hashString(source.id),
   };
 }
@@ -96,6 +107,12 @@ function nonNegativeNumber(value: unknown): number | undefined {
 }
 
 function textProperty(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function colorProperty(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   return normalized || undefined;

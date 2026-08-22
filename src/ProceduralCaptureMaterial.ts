@@ -4,6 +4,7 @@ import {
   DynamicTexture,
   HemisphericLight,
   Mesh,
+  RawTexture,
   Scene,
   ShadowDepthWrapper,
   ShaderMaterial,
@@ -42,6 +43,24 @@ export type TreeBarkStyle =
 
 const barkTextures = new WeakMap<Scene, Map<TreeBarkStyle, DynamicTexture>>();
 const textureReadiness = new WeakMap<ShaderMaterial, Promise<void>>();
+const fallbackWhiteTextures = new WeakMap<Scene, RawTexture>();
+
+function fallbackWhiteTexture(scene: Scene): RawTexture {
+  const cached = fallbackWhiteTextures.get(scene);
+  if (cached) return cached;
+  const texture = RawTexture.CreateRGBATexture(
+    new Uint8Array([255, 255, 255, 255]),
+    1,
+    1,
+    scene,
+    false,
+    false,
+    Texture.NEAREST_SAMPLINGMODE,
+  );
+  texture.name = "fallbackWhiteTexture";
+  fallbackWhiteTextures.set(scene, texture);
+  return texture;
+}
 
 const BARK_SEEDS: Record<TreeBarkStyle, number> = {
   acacia: 0x41434143,
@@ -499,7 +518,12 @@ export function createVertexColorCaptureMaterial(
       `,
     },
     {
-      attributes: ["position", "normal", "color", "uv", "vegetationColor", "instanceLodBlend"],
+      // WebGPU's ShaderMaterial path automatically adds the conventional
+      // color buffer. Listing it again assigns the same shader location twice
+      // and invalidates the pipeline.
+      attributes: scene.getEngine().isWebGPU
+        ? ["position", "normal", "uv", "vegetationColor", "instanceLodBlend"]
+        : ["position", "normal", "color", "uv", "vegetationColor", "instanceLodBlend"],
       uniforms: [
         "world",
         "viewProjection",
@@ -540,6 +564,11 @@ export function createVertexColorCaptureMaterial(
   material.shadowDepthWrapper = shadowDepthWrapper;
   material.onDisposeObservable.addOnce(() => shadowDepthWrapper.dispose());
   bindVegetationShadowReceiver(material, scene);
+  // WebGPU requires every declared sampler to have a binding even when a
+  // uniform-controlled branch does not sample it.
+  const fallbackTexture = fallbackWhiteTexture(scene);
+  material.setTexture("leafTexture", fallbackTexture);
+  material.setTexture("barkTexture", fallbackTexture);
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
   material.setFloat("modelHeight", 1);
   material.setFloat("leafTextureEnabled", 0);

@@ -1,7 +1,7 @@
 import {
+  AbstractEngine,
   ArcRotateCamera,
   Color4,
-  Engine,
   Mesh,
   MeshBuilder,
   Scene,
@@ -62,6 +62,7 @@ void main(void) {
 }`;
 
 const fragmentShader = `
+#define DISABLE_UNIFORMITY_ANALYSIS
 precision highp float;
 varying vec2 vUV;
 uniform sampler2D atlas0;
@@ -101,7 +102,7 @@ void main(void) {
 }`;
 
 export class TreeImpostorDemo {
-  private readonly engine: Engine;
+  private readonly engine: AbstractEngine;
   private readonly scene: Scene;
   private readonly camera: ArcRotateCamera;
   private readonly status: HTMLElement;
@@ -115,8 +116,8 @@ export class TreeImpostorDemo {
   private proxyMaterial?: ShaderMaterial;
   private readonly fpsCounter: FpsCounter;
 
-  constructor(canvas: HTMLCanvasElement) {
-    this.engine = new Engine(canvas, true, { preserveDrawingBuffer: true, antialias: true });
+  constructor(canvas: HTMLCanvasElement, engine: AbstractEngine) {
+    this.engine = engine;
     this.scene = new Scene(this.engine);
     this.fpsCounter = new FpsCounter(this.scene);
     this.scene.clearColor = new Color4(0.055, 0.065, 0.075, 1);

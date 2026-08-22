@@ -1,6 +1,6 @@
 import {
+  AbstractEngine,
   Color4,
-  Engine,
   FreeCamera,
   HemisphericLight,
   Matrix,
@@ -39,17 +39,13 @@ const FACE_NAMES = ["pos-x", "neg-x", "pos-y", "pos-z", "neg-z"];
 
 /** Pixel-validates the production cube against the generated atlas center frames. */
 export class TreeImpostorValidation {
-  private readonly engine: Engine;
+  private readonly engine: AbstractEngine;
   private readonly scene: Scene;
   private readonly camera: FreeCamera;
   private readonly fpsCounter: FpsCounter;
 
-  constructor(canvas: HTMLCanvasElement) {
-    this.engine = new Engine(canvas, true, {
-      preserveDrawingBuffer: true,
-      stencil: true,
-      antialias: false,
-    });
+  constructor(canvas: HTMLCanvasElement, engine: AbstractEngine) {
+    this.engine = engine;
     this.scene = new Scene(this.engine);
     this.fpsCounter = new FpsCounter(this.scene);
     this.scene.clearColor = new Color4(0.055, 0.065, 0.075, 1);
@@ -434,6 +430,7 @@ void main(void) {
 }`;
 
 const demoFragmentShader = `
+#define DISABLE_UNIFORMITY_ANALYSIS
 precision highp float;
 varying vec2 vUV;
 uniform sampler2D atlas0;

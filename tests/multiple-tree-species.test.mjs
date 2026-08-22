@@ -72,6 +72,13 @@ test("uses optional species textures with procedural-color fallback", () => {
   assert.match(captureMaterial, /setFloat\("leafTextureEnabled", 1\)/);
 });
 
+test("keeps birch foliage in a subdued green palette", () => {
+  assert.match(proceduralTrees, /const BIRCH_LEAF_TINTS = \[/);
+  assert.match(proceduralTrees, /new Color3\(0\.76, 0\.86, 0\.68\)/);
+  assert.match(proceduralTrees, /new Color3\(0\.84, 0\.91, 0\.75\)/);
+  assert.match(proceduralTrees, /new Color3\(0\.67, 0\.8, 0\.57\)/);
+});
+
 test("waits for foliage textures before capturing any impostor angle", () => {
   assert.match(captureMaterial, /export async function waitForVertexColorTextures/);
   assert.match(captureMaterial, /textureReadiness\.set\(material, ready\)/);

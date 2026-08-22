@@ -1,11 +1,16 @@
 import {
+  AbstractEngine,
   Engine,
   EngineInstrumentation,
+  Mesh,
   Scene,
   SceneInstrumentation,
 } from "@babylonjs/core";
 
 const UPDATE_INTERVAL_MS = 500;
+const FRAME_HISTORY_SIZE = 300;
+const STALL_HISTORY_SIZE = 50;
+const REPORT_VERSION = 1;
 
 export interface CpuFrameSample {
   gameMilliseconds: number;
@@ -27,7 +32,26 @@ interface LongFrameEntry extends PerformanceEntry {
 }
 
 interface MemoryPerformance extends Performance {
-  memory?: { usedJSHeapSize: number };
+  memory?: {
+    usedJSHeapSize: number;
+    totalJSHeapSize: number;
+    jsHeapSizeLimit: number;
+  };
+}
+
+interface FrameHistorySample extends CpuFrameSample {
+  recordedAtMilliseconds: number;
+}
+
+interface StallSample {
+  startTimeMilliseconds: number;
+  durationMilliseconds: number;
+  blockingMilliseconds: number;
+  scripts: Array<{ label: string; durationMilliseconds: number }>;
+}
+
+export interface RenderStatsContext {
+  [key: string]: unknown;
 }
 
 export class FpsCounter {
@@ -53,6 +77,9 @@ export class FpsCounter {
   private blockingMilliseconds = 0;
   private worstScript?: { label: string; milliseconds: number };
   private stallKind?: "LoAF" | "long task";
+  private readonly frameHistory: FrameHistorySample[] = [];
+  private frameHistoryCursor = 0;
+  private readonly stallHistory: StallSample[] = [];
 
   constructor(
     scene: Scene,
@@ -70,7 +97,7 @@ export class FpsCounter {
     this.updateAppearance();
   }
 
-  update(engine: Engine, scene?: Scene, cpu?: CpuFrameSample): void {
+  update(engine: AbstractEngine, scene?: Scene, cpu?: CpuFrameSample): void {
     if (cpu) this.recordCpuSample(cpu);
     const now = performance.now();
     if (now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
@@ -162,6 +189,27 @@ export class FpsCounter {
     this.element.remove();
   }
 
+  dumpRenderStats(
+    engine: AbstractEngine,
+    scene: Scene,
+    application: RenderStatsContext = {},
+  ): void {
+    const report = this.createRenderStatsReport(engine, scene, application);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `earth-render-stats-${timestamp}.json`;
+    const json = JSON.stringify(report, null, 2);
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const download = document.createElement("a");
+    download.href = url;
+    download.download = filename;
+    download.hidden = true;
+    document.body.appendChild(download);
+    download.click();
+    download.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    console.info(`[Render stats] Downloaded ${filename}`, report);
+  }
+
   private updateAppearance(): void {
     this.element.classList.toggle("expanded", this.expanded);
     this.element.setAttribute("aria-label", this.expanded
@@ -188,6 +236,8 @@ export class FpsCounter {
     this.instrumentation.capturePhysicsTime = enabled;
     this.instrumentation.captureParticlesRenderTime = enabled;
     this.instrumentation.captureSpritesRenderTime = enabled;
+    this.instrumentation.captureCameraRenderTime = enabled;
+    this.instrumentation.captureInterFrameTime = enabled;
     this.engineInstrumentation.captureGPUFrameTime = enabled;
     this.engineInstrumentation.captureShaderCompilationTime = enabled;
   }
@@ -204,6 +254,13 @@ export class FpsCounter {
     this.renderMilliseconds += sample.renderMilliseconds;
     this.renderPeakMilliseconds = Math.max(this.renderPeakMilliseconds, sample.renderMilliseconds);
     this.latestStreaming = sample;
+    const historySample = { ...sample, recordedAtMilliseconds: performance.now() };
+    if (this.frameHistory.length < FRAME_HISTORY_SIZE) {
+      this.frameHistory.push(historySample);
+    } else {
+      this.frameHistory[this.frameHistoryCursor] = historySample;
+    }
+    this.frameHistoryCursor = (this.frameHistoryCursor + 1) % FRAME_HISTORY_SIZE;
   }
 
   private startPerformanceObserver(): void {
@@ -229,6 +286,16 @@ export class FpsCounter {
             milliseconds: script.duration,
           };
         }
+        this.stallHistory.push({
+          startTimeMilliseconds: entry.startTime,
+          durationMilliseconds: entry.duration,
+          blockingMilliseconds: entry.blockingDuration ?? Math.max(0, entry.duration - 50),
+          scripts: (entry.scripts ?? []).map((script) => ({
+            label: formatScriptLabel(script),
+            durationMilliseconds: script.duration,
+          })),
+        });
+        if (this.stallHistory.length > STALL_HISTORY_SIZE) this.stallHistory.shift();
       }
     });
     this.performanceObserver.observe({ type: entryType, buffered: true });
@@ -247,6 +314,253 @@ export class FpsCounter {
     this.blockingMilliseconds = 0;
     this.worstScript = undefined;
   }
+
+  private createRenderStatsReport(
+    engine: AbstractEngine,
+    scene: Scene,
+    application: RenderStatsContext,
+  ): Record<string, unknown> {
+    const activeMeshCollection = scene.getActiveMeshes();
+    const activeMeshes = activeMeshCollection.data.slice(0, activeMeshCollection.length);
+    const frameHistory = this.orderedFrameHistory();
+    const memory = (performance as MemoryPerformance).memory;
+    const camera = scene.activeCamera;
+    const caps = engine.getCaps() as unknown as Record<string, unknown>;
+    const meshDetails = activeMeshes.map((mesh) => {
+      const sourceTriangles = mesh.getTotalIndices() / 3;
+      const instances = mesh instanceof Mesh ? mesh.instances.length : 0;
+      const thinInstances = mesh instanceof Mesh ? mesh.thinInstanceCount : 0;
+      return {
+        name: mesh.name,
+        id: mesh.id,
+        type: mesh.getClassName(),
+        material: mesh.material
+          ? { name: mesh.material.name, type: mesh.material.getClassName() }
+          : null,
+        vertices: mesh.getTotalVertices(),
+        indices: mesh.getTotalIndices(),
+        sourceTriangles,
+        estimatedRenderedTriangles: sourceTriangles * Math.max(1, instances + thinInstances),
+        instances,
+        thinInstances,
+        subMeshes: mesh.subMeshes?.length ?? 0,
+        vertexBuffers: mesh instanceof Mesh ? mesh.getVerticesDataKinds() : [],
+        renderingGroup: mesh.renderingGroupId,
+        visibility: mesh.visibility,
+        receivesShadows: mesh.receiveShadows,
+      };
+    }).sort((a, b) => b.estimatedRenderedTriangles - a.estimatedRenderedTriangles);
+
+    const backendInfo = engine as AbstractEngine & {
+      getInfo?: () => { vendor: string; renderer: string; version: string };
+      webGLVersion?: number;
+    };
+    return {
+      schema: "babylon-earth/render-stats",
+      version: REPORT_VERSION,
+      capturedAt: new Date().toISOString(),
+      pageUptimeMilliseconds: performance.now(),
+      application,
+      browser: {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        deviceMemoryGigabytes: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+        devicePixelRatio: window.devicePixelRatio,
+        page: `${window.location.pathname}${window.location.search}`,
+      },
+      engine: {
+        backend: engine.isWebGPU ? "webgpu" : "webgl",
+        name: engine.name,
+        version: Engine.Version,
+        webGLVersion: backendInfo.webGLVersion ?? null,
+        gpu: backendInfo.getInfo?.() ?? null,
+        hardwareScalingLevel: engine.getHardwareScalingLevel(),
+        renderWidth: engine.getRenderWidth(),
+        renderHeight: engine.getRenderHeight(),
+        canvasClientWidth: engine.getRenderingCanvas()?.clientWidth,
+        canvasClientHeight: engine.getRenderingCanvas()?.clientHeight,
+        capabilities: primitiveProperties(caps),
+      },
+      currentFrame: {
+        fps: engine.getFps(),
+        engineDeltaMilliseconds: engine.getDeltaTime(),
+        activeMeshes: activeMeshes.length,
+        activeIndices: scene.getActiveIndices(),
+        activeTriangles: scene.getActiveIndices() / 3,
+        activeBones: scene.getActiveBones(),
+        activeParticles: scene.getActiveParticles(),
+        drawCalls: counterSnapshot(this.instrumentation.drawCallsCounter),
+      },
+      timings: {
+        detailedInstrumentationEnabled: this.expanded,
+        unit: "milliseconds",
+        frame: counterSnapshot(this.instrumentation.frameTimeCounter),
+        interFrame: counterSnapshot(this.instrumentation.interFrameTimeCounter),
+        activeMeshEvaluation: counterSnapshot(
+          this.instrumentation.activeMeshesEvaluationTimeCounter,
+        ),
+        renderTargets: counterSnapshot(this.instrumentation.renderTargetsRenderTimeCounter),
+        cameraRender: counterSnapshot(this.instrumentation.cameraRenderTimeCounter),
+        drawSubmission: counterSnapshot(this.instrumentation.renderTimeCounter),
+        animations: counterSnapshot(this.instrumentation.animationsTimeCounter),
+        physics: counterSnapshot(this.instrumentation.physicsTimeCounter),
+        particles: counterSnapshot(this.instrumentation.particlesRenderTimeCounter),
+        sprites: counterSnapshot(this.instrumentation.spritesRenderTimeCounter),
+        gpuFrame: counterSnapshot(
+          this.engineInstrumentation.gpuFrameTimeCounter,
+          1 / 1_000_000,
+        ),
+        shaderCompilation: counterSnapshot(
+          this.engineInstrumentation.shaderCompilationTimeCounter,
+        ),
+      },
+      recentFrames: {
+        sampleCount: frameHistory.length,
+        windowMilliseconds: frameHistory.length > 1
+          ? frameHistory[frameHistory.length - 1].recordedAtMilliseconds -
+            frameHistory[0].recordedAtMilliseconds
+          : 0,
+        game: summarizeSamples(frameHistory.map((sample) => sample.gameMilliseconds)),
+        vegetationLod: summarizeSamples(
+          frameHistory.map((sample) => sample.vegetationMilliseconds),
+        ),
+        renderCall: summarizeSamples(frameHistory.map((sample) => sample.renderMilliseconds)),
+        samples: frameHistory,
+      },
+      stalls: {
+        observer: this.stallKind ?? "unavailable",
+        retainedEntries: this.stallHistory.length,
+        entries: this.stallHistory,
+      },
+      memory: memory
+        ? {
+          usedJSHeapBytes: memory.usedJSHeapSize,
+          totalJSHeapBytes: memory.totalJSHeapSize,
+          jsHeapLimitBytes: memory.jsHeapSizeLimit,
+        }
+        : { available: false },
+      camera: camera
+        ? {
+          name: camera.name,
+          type: camera.getClassName(),
+          position: vectorSnapshot(camera.globalPosition),
+          rotation: vectorSnapshot((camera as typeof camera & {
+            rotation?: { x: number; y: number; z: number };
+          }).rotation),
+          minZ: camera.minZ,
+          maxZ: camera.maxZ,
+          fovRadians: camera.fov,
+          mode: camera.mode,
+        }
+        : null,
+      scene: {
+        totals: {
+          meshes: scene.meshes.length,
+          transformNodes: scene.transformNodes.length,
+          geometries: scene.geometries.length,
+          materials: scene.materials.length,
+          textures: scene.textures.length,
+          lights: scene.lights.length,
+          cameras: scene.cameras.length,
+          skeletons: scene.skeletons.length,
+          particleSystems: scene.particleSystems.length,
+          animationGroups: scene.animationGroups.length,
+          totalVertices: scene.getTotalVertices(),
+        },
+        flags: {
+          collisionsEnabled: scene.collisionsEnabled,
+          fogEnabled: scene.fogEnabled,
+          fogMode: scene.fogMode,
+          shadowsEnabled: scene.shadowsEnabled,
+          particlesEnabled: scene.particlesEnabled,
+          animationsEnabled: scene.animationsEnabled,
+        },
+        materials: scene.materials.map((material) => ({
+          name: material.name,
+          id: material.id,
+          type: material.getClassName(),
+          frozen: material.isFrozen,
+          activeTextures: material.getActiveTextures().map((texture) => texture.name),
+        })),
+        textures: scene.textures.map((texture) => {
+          const size = texture.getSize();
+          return {
+            name: texture.name,
+            type: texture.getClassName(),
+            width: size.width,
+            height: size.height,
+            ready: texture.isReady(),
+            hasAlpha: texture.hasAlpha,
+          };
+        }),
+        activeMeshes: meshDetails,
+      },
+    };
+  }
+
+  private orderedFrameHistory(): FrameHistorySample[] {
+    if (this.frameHistory.length < FRAME_HISTORY_SIZE || this.frameHistoryCursor === 0) {
+      return this.frameHistory.slice();
+    }
+    return [
+      ...this.frameHistory.slice(this.frameHistoryCursor),
+      ...this.frameHistory.slice(0, this.frameHistoryCursor),
+    ];
+  }
+}
+
+interface CounterLike {
+  min: number;
+  max: number;
+  average: number;
+  lastSecAverage: number;
+  current: number;
+  total: number;
+  count: number;
+}
+
+function counterSnapshot(counter: CounterLike | null, scale = 1): Record<string, number> | null {
+  if (!counter) return null;
+  return {
+    current: counter.current * scale,
+    lastSecondAverage: counter.lastSecAverage * scale,
+    lifetimeAverage: counter.average * scale,
+    minimum: counter.min * scale,
+    maximum: counter.max * scale,
+    total: counter.total * scale,
+    samples: counter.count,
+  };
+}
+
+function summarizeSamples(values: number[]): Record<string, number> | null {
+  if (values.length === 0) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return {
+    average: total / values.length,
+    minimum: sorted[0],
+    p50: percentile(sorted, 0.5),
+    p95: percentile(sorted, 0.95),
+    p99: percentile(sorted, 0.99),
+    maximum: sorted[sorted.length - 1],
+  };
+}
+
+function percentile(sorted: number[], fraction: number): number {
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)];
+}
+
+function primitiveProperties(source: Record<string, unknown>): Record<string, boolean | number | string> {
+  return Object.fromEntries(Object.entries(source).filter(([, value]) =>
+    typeof value === "boolean" || typeof value === "number" || typeof value === "string"
+  )) as Record<string, boolean | number | string>;
+}
+
+function vectorSnapshot(
+  vector: { x: number; y: number; z: number } | undefined,
+): Record<string, number> | null {
+  return vector ? { x: vector.x, y: vector.y, z: vector.z } : null;
 }
 
 function formatScriptLabel(script: NonNullable<LongFrameEntry["scripts"]>[number]): string {

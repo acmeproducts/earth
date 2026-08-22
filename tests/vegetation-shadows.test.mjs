@@ -29,6 +29,18 @@ test("keeps grass, flowers, and bushes out of the vegetation shadow-caster list"
   assert.match(game, /setShadowCasters\(casters\)/);
 });
 
+test("roads and lake surfaces receive shadows without casting ground streaks", () => {
+  assert.match(game, /for \(const mesh of mapMeshes\) mesh\.receiveShadows = true/);
+  assert.match(game, /mapMeshes\.filter\(\(mesh\) => mesh\.name === "buildings"\)/);
+});
+
+test("WebGPU terrain receives building shadows without self-shadow acne", () => {
+  assert.match(game, /record\.terrain\.receiveShadows = true/);
+  assert.match(game, /if \(!this\.engine\.isWebGPU\) casters\.push\(record\.terrain\)/);
+  assert.match(game, /this\.solarLighting\?\.setShadowCasters\(casters\)/);
+  assert.doesNotMatch(game, /if \(casters\.length > 0\) this\.solarLighting/);
+});
+
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {
   assert.match(models, /new ShadowDepthWrapper\(material, scene/);
   assert.match(models, /if \(leafSample\.a < 0\.5\) discard/);

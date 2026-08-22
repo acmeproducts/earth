@@ -36,6 +36,11 @@ const gustFrequency = new Vector2();
 const direction = GUST_DIRECTION.clone().normalize();
 let metersPerUnit = 0;
 
+/** Copies the normalized prevailing wind direction on the world's XZ plane. */
+export function copyPrevailingWindDirectionTo(result: Vector2): void {
+  result.copyFrom(direction);
+}
+
 /** Wind is spatially periodic in meters, so it needs the scene's ground scale. */
 export function configureWindSceneScale(scenePerUnit: number): void {
   if (!Number.isFinite(scenePerUnit) || scenePerUnit <= 0) return;

@@ -24,6 +24,15 @@ const UPDATE_INTERVAL_MS = 60_000;
  */
 const SKY_PROBE_SIZE = 128;
 const MIN_AMBIENT_INTENSITY = 0.24;
+
+/** Mutable output used to share the current sky lighting without allocations. */
+export interface SolarLightingSnapshot {
+  sunDirection: Vector3;
+  sunColor: Color3;
+  skyColor: Color3;
+  groundColor: Color3;
+}
+
 /** Keeps the visible sun and scene lighting aligned with the real sky. */
 export class SolarLighting {
   private readonly skyMesh: Mesh;
@@ -35,7 +44,7 @@ export class SolarLighting {
   private readonly shadows: ShadowGenerator;
   private readonly skyMaterial: SkyMaterial;
   private readonly horizonMaterial: ShaderMaterial;
-  private readonly skyProbe: ReflectionProbe;
+  private readonly skyProbe?: ReflectionProbe;
   private latitude: number;
   private longitude: number;
   private lastUpdate = 0;
@@ -70,7 +79,9 @@ export class SolarLighting {
     // A float depth texture can also be sampled by the custom vegetation
     // receiver shaders. Poisson filtering keeps the built-in terrain receiver
     // compatible with that regular sampler path.
-    this.shadows = new ShadowGenerator(2048, this.directLight, true);
+    // Prefer packed depth on WebGPU so the shadow target stays on Babylon's
+    // most widely supported native pipeline.
+    this.shadows = new ShadowGenerator(2048, this.directLight, !scene.getEngine().isWebGPU);
     this.shadows.usePoissonSampling = true;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
@@ -151,18 +162,32 @@ export class SolarLighting {
     // a procedural dome rather than a loaded cube map. Capturing it into a
     // probe costs six small renders of three meshes, and only when the sun has
     // actually moved.
-    this.skyProbe = new ReflectionProbe("skyProbe", SKY_PROBE_SIZE, scene);
-    this.skyProbe.renderList?.push(this.skyMesh, horizonMesh, this.sunMesh);
-    this.skyProbe.cubeTexture.refreshRate =
-      RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+    if (!scene.getEngine().isWebGPU) {
+      this.skyProbe = new ReflectionProbe("skyProbe", SKY_PROBE_SIZE, scene);
+      this.skyProbe.renderList?.push(this.skyMesh, horizonMesh, this.sunMesh);
+      this.skyProbe.cubeTexture.refreshRate =
+        RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+    }
 
     this.update(new Date(), true);
     scene.onBeforeRenderObservable.add(() => this.update(this.currentLightingDate()));
   }
 
   /** The captured sky, for materials that reflect their surroundings. */
-  get skyReflectionTexture(): RenderTargetTexture {
-    return this.skyProbe.cubeTexture;
+  get skyReflectionTexture(): RenderTargetTexture | null {
+    return this.skyProbe?.cubeTexture ?? null;
+  }
+
+  /** Copies the colors used by custom sky-lit materials. */
+  copyLightingTo(result: SolarLightingSnapshot): void {
+    result.sunDirection.copyFrom(this.directLight.direction).scaleInPlace(-1).normalize();
+    if (this.directLight.isEnabled()) {
+      result.sunColor.copyFrom(this.directLight.diffuse).scaleInPlace(this.directLight.intensity);
+    } else {
+      result.sunColor.set(0, 0, 0);
+    }
+    result.skyColor.copyFrom(this.ambientLight.diffuse).scaleInPlace(this.ambientLight.intensity);
+    result.groundColor.copyFrom(this.ambientLight.groundColor).scaleInPlace(this.ambientLight.intensity);
   }
 
   setLocation(latitude: number, longitude: number): void {
@@ -251,7 +276,7 @@ export class SolarLighting {
       ? 0.7 + 0.3 * elevationFactor
       : 0.12;
     // The dome's colours were just rewritten, so the captured copy is stale.
-    this.skyProbe.cubeTexture.resetRefreshCounter();
+    this.skyProbe?.cubeTexture.resetRefreshCounter();
     this.refreshStaticShadows();
   }
 

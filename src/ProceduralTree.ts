@@ -261,10 +261,10 @@ interface GeometryBuffers {
 
 const BARK_TINT = new Color3(1, 1, 1);
 const BARK_CUT = new Color3(0.22, 0.17, 0.105);
-const LEAF_TINTS = [
-  new Color3(0.82, 0.96, 0.68),
-  new Color3(0.92, 1.0, 0.78),
-  new Color3(0.72, 0.9, 0.58),
+const BIRCH_LEAF_TINTS = [
+  new Color3(0.76, 0.86, 0.68),
+  new Color3(0.84, 0.91, 0.75),
+  new Color3(0.67, 0.8, 0.57),
 ];
 
 /** Builds one deterministic silver birch centered for directional impostor capture. */
@@ -406,7 +406,7 @@ function createBirchTree(
         cards?.aspect,
       );
       center.y = Math.min(PROCEDURAL_TREE_SOURCE_HEIGHT / 2 - halfLength, center.y);
-      const tint = LEAF_TINTS[Math.floor(random() * LEAF_TINTS.length)];
+      const tint = BIRCH_LEAF_TINTS[Math.floor(random() * BIRCH_LEAF_TINTS.length)];
       const brightness = 0.82 + random() * 0.22 + Math.max(0, center.y) * 0.025;
       addLeaf(
         buffers,

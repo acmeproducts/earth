@@ -5,19 +5,50 @@ import { planBuilding } from "../src/BuildingPlanner.ts";
 
 const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
+const proceduralBuildings = readFileSync(
+  new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
+  "utf8",
+);
 
 test("plans one semantic building description before creating geometry", () => {
   assert.match(planner, /export interface BuildingPlan/);
   assert.match(planner, /export function planBuilding/);
   assert.match(planner, /detailSeed: hashString\(source\.id\)/);
-  assert.match(openStreetMap, /createDetailedBuilding\(scene, planBuilding\(source\), terrain, options\)/);
+  assert.match(
+    openStreetMap,
+    /ProceduralBuildingRenderer\.createDetailed\([\s\S]*?planBuilding\(source\)/,
+  );
 });
 
 test("selects explicit far and detailed geometry compilers from the shared plan", () => {
   assert.match(planner, /export type BuildingDetailLevel = "far" \| "detailed"/);
   assert.match(
     openStreetMap,
-    /detail === "far"\s+\? createFarBuilding\(scene, plan, terrain, options\)\s+: createDetailedBuilding/,
+    /detail === "far"\s+\? ProceduralBuildingRenderer\.createFar\(scene, plan, terrain, options\)\s+: ProceduralBuildingRenderer\.createDetailed/,
+  );
+});
+
+test("keeps far massing cheap while detailed buildings add stable architectural character", () => {
+  assert.match(proceduralBuildings, /export class ProceduralBuildingRenderer/);
+  assert.match(proceduralBuildings, /function buildingAppearance\(/);
+  assert.match(proceduralBuildings, /parseBuildingColor\(plan\.wallColor\)/);
+  assert.match(proceduralBuildings, /function resolvedRoofShape\(/);
+  assert.match(proceduralBuildings, /function createPitchedRoof\(/);
+  assert.match(proceduralBuildings, /roofOverhangMeters\(detailSeed\) \/ options\.metersPerUnit/);
+  assert.match(proceduralBuildings, /function inferredRoofHeight\(/);
+  assert.match(proceduralBuildings, /const pitchDegrees = 32 \+ seededUnit/);
+  assert.match(proceduralBuildings, /BUILDING_ROOF_EAVE_CLEARANCE_METERS/);
+  assert.match(proceduralBuildings, /roofShape === "skillion"/);
+  assert.match(proceduralBuildings, /function varyColor\(/);
+  assert.match(proceduralBuildings, /function offsetConvexPolygon\(/);
+  assert.match(proceduralBuildings, /const longestEdge = longestPolygonEdge\(eaves\)/);
+  assert.match(proceduralBuildings, /roof\.convertToFlatShadedMesh\(\)/);
+  assert.match(proceduralBuildings, /function createRoofTrim\(/);
+  assert.match(proceduralBuildings, /function createRooftopVolume\(/);
+  assert.match(proceduralBuildings, /result\.useVertexColors = true/);
+  assert.doesNotMatch(
+    openStreetMap,
+    /function createPitchedRoof|function buildingAppearance|BUILDING_ROOF_OVERHANG_METERS/,
   );
 });
 
@@ -35,6 +66,8 @@ test("normalizes mapped attributes while preserving the source footprint", () =>
       render_min_height: 2,
       roof_shape: "GABLED",
       material: "Brick",
+      colour: " #C8B89A ",
+      roof_colour: "RED",
     },
   });
 
@@ -44,6 +77,8 @@ test("normalizes mapped attributes while preserving the source footprint", () =>
   assert.equal(plan.buildingClass, "residential");
   assert.equal(plan.roofShape, "gabled");
   assert.equal(plan.wallMaterial, "brick");
+  assert.equal(plan.wallColor, "#c8b89a");
+  assert.equal(plan.roofColor, "red");
 });
 
 test("uses stable defaults and identity-derived detail seeds", () => {

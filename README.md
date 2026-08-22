@@ -142,22 +142,43 @@ The top-right counter reports live FPS and active triangles; use
 `?vegetation=models` to force tree models or
 `?vegetation-distance=20` to change the initial Auto range.
 
-The world uses an application-owned Web Mercator grid at fixed level 14. A tile
+The sky includes distant procedural cloud impostors. Eight density variants span
+bank, clustered, broken, and tower-like formations generated at startup by
+integrating deterministic three-dimensional cloud volumes from a shallow
+underside angle. Runtime clouds are broad, thin-instanced and independently
+mirrored to make repeated captures less apparent. The billboards share a 5 km
+altitude and drift together with the prevailing wind. Their deterministic world
+grid is sampled in that moving frame so new formations remain beyond the visible
+horizon. Each geographic area receives a weighted clear, sparse, scattered, or
+dense weather regime; scattered skies are most common while clear skies and
+oversized dense banks are rarer. Grayscale density provides smooth alpha coverage
+without a screen-space dither pattern. Clouds fade out before the camera reaches
+them and through their own high-altitude haze beyond the terrain fog; use
+`?clouds=off` for a cloud-free performance comparison.
+
+The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
 the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
 coordinates are source implementation details used only to populate the app
 tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
-with latitude (a detailed tile is about 1.2 km wide around Oslo). Use `?seed=123`
+with latitude (a tile is about 307 m wide around Oslo). Use `?seed=123`
 to select another deterministic world seed.
 
 Terrain streams across a moving 17 by 17 tile window around the camera. The
-inner 5 by 5 tiles include map features and full vegetation; the outer rings
+inner 3 by 3 tiles include native terrain, map features, and full vegetation;
+the outer rings
 use coarse terrain and tree impostors so the visible horizon reaches farther
 without paying the full detail cost. Overlapping elevation, WorldCover, and
 OpenStreetMap source requests are cached between tile loads. CPU-heavy terrain,
 map, vegetation, and LOD-index construction runs in small post-render slices.
 Large terrain and vegetation GPU uploads are committed on separate animation
 frames so replacement tiles have less impact on frame rate.
+
+The scene controls can resize both streaming windows and adjust grass density
+at runtime. Numeric scene settings are remembered in local storage. The same
+settings can be initialized with `?detail-size=3`, `?terrain-size=17`, and
+`?grass-density=0.5`; explicit URL values override remembered values for that
+page load.
 
 `?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
 from 0.25 through 1), and
@@ -166,6 +187,16 @@ can be combined, for example:
 
 `?render-scale=0.75&vegetation=impostors&performance-debug`
 
+WebGL remains the default renderer. Use `?renderer=webgpu` to try Babylon's
+WebGPU engine; unsupported devices or initialization failures automatically
+fall back to WebGL. Combine it with `?performance-debug` and press `R` to
+download comparable renderer and frame-time diagnostics.
+
+The WebGPU trial starts with regular depth and without screen-space
+reflections. Use `?renderer=webgpu&reverse-depth=force` or
+`?renderer=webgpu&reflections=force` to isolate those features after validating
+the base renderer.
+
 Add `performance-debug` (or `perf`) to expand the top-right counter with frame
 time, measured game-loop, movement-LOD, and render-call CPU averages/peaks, long
 animation frames (or long tasks as a fallback), the hottest attributed script,
@@ -173,6 +204,14 @@ and a render breakdown for active-mesh evaluation, render targets, draw
 submission, GPU frame time, and shader compilation. It also shows streaming
 counts, heap use where supported, draw calls, active meshes, and render scale.
 Press `F` to toggle the expanded counter at runtime.
+
+Press `R` to download a timestamped JSON render report and mirror it to the
+browser console. Reports retain the latest 300 frame samples with percentile
+summaries, detailed Babylon CPU/GPU counters, recent long-frame attribution,
+browser and GPU capabilities, memory use, camera state, streaming and LOD
+configuration, scene resource totals, and every active mesh's geometry and
+instance counts. Enable the expanded counter with `F` at least one second before
+capturing when the detailed instrumentation is not already enabled.
 
 
 ## Project Structure

@@ -32,5 +32,6 @@ test("separately streamed water materials animate in phase", () => {
 
 test("retains the terrain carving mask for adaptive lake underlap", () => {
   assert.match(terrainData, /waterMask\?: Uint8Array/);
-  assert.match(worldCover, /terrain\.waterMask = water/);
+  assert.match(worldCover, /terrain\.waterMask = cropWaterMask\(/);
+  assert.match(worldCover, /shapeCoastlineElevations\([\s\S]*coverage,[\s\S]*water,/);
 });

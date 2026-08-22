@@ -25,11 +25,11 @@ import type { TerrainData } from "./TerrainData";
 import type { TileBounds } from "./WorldGrid";
 import {
   BuildingDetailLevel,
-  BuildingPlan,
   BuildingSource,
   LonLat,
   planBuilding,
 } from "./BuildingPlanner";
+import { ProceduralBuildingRenderer } from "./ProceduralBuildingRenderer";
 import {
   expandLakeShoreline,
   prepareLakeSurfacePiece,
@@ -44,12 +44,10 @@ export interface MapTile {
   data: VectorTile;
 }
 
-const BUILDING_GROUND_OVERLAP_METERS = 1;
 const MINIMUM_LAKE_ELEVATION_METERS = SEA_LEVEL_METERS + 1;
 /** Enough separation to avoid z-fighting without making roads hover. */
 const ROAD_SURFACE_CLEARANCE_METERS = 0.025;
 const ROAD_TEXTURE_SIZE = 64;
-
 type RoadSurface = "paved" | "unpaved";
 
 interface RoadAppearance {
@@ -87,8 +85,10 @@ interface RoadSegment {
 
 class RoadExclusionMask implements HorizontalExclusionMask {
   private readonly cells = new Map<string, RoadSegment[]>();
+  private readonly cellSize: number;
 
-  constructor(segments: RoadSegment[], private readonly cellSize: number) {
+  constructor(segments: RoadSegment[], cellSize: number) {
+    this.cellSize = cellSize;
     for (const segment of segments) {
       const minimumX = Math.floor((Math.min(segment.start.x, segment.end.x) - segment.halfWidth) / cellSize);
       const maximumX = Math.floor((Math.max(segment.start.x, segment.end.x) + segment.halfWidth) / cellSize);
@@ -174,7 +174,12 @@ export class OpenStreetMap {
 
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
-        const mesh = createDetailedBuilding(scene, planBuilding(source), terrain, options);
+        const mesh = ProceduralBuildingRenderer.createDetailed(
+          scene,
+          planBuilding(source),
+          terrain,
+          options,
+        );
         if (mesh) buildings.push(mesh);
       }
       await yieldControl?.();
@@ -197,13 +202,11 @@ export class OpenStreetMap {
             featureIndex,
             polygonIndex,
           );
-          const mesh = createPolygon(
+          const mesh = createWaterPolygon(
             scene,
             waterPolygons[polygonIndex],
             terrain,
             options,
-            0.1,
-            true,
             lakeKey,
           );
           if (mesh) water.push(mesh);
@@ -213,7 +216,7 @@ export class OpenStreetMap {
     }
 
     const meshes = [
-      merge(buildings, "buildings", new Color3(0.56, 0.53, 0.48), root),
+      ProceduralBuildingRenderer.merge(buildings, "buildings", root),
       mergeRoads(pavedRoads, "pavedRoads", "paved", root),
       mergeRoads(unpavedRoads, "unpavedRoads", "unpaved", root),
       ...styleLakeSurfaces(water, root, options),
@@ -250,14 +253,14 @@ export class OpenStreetMap {
       for (const source of buildingSources(tile)) {
         const plan = planBuilding(source);
         const mesh = detail === "far"
-          ? createFarBuilding(scene, plan, terrain, options)
-          : createDetailedBuilding(scene, plan, terrain, options);
+          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, options)
+          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, options);
         if (mesh) buildings.push(mesh);
       }
       await yieldControl?.();
     }
 
-    const merged = merge(buildings, name, new Color3(0.56, 0.53, 0.48), root);
+    const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
     const meshes = merged ? [merged] : [];
     for (const mesh of meshes) mesh.setEnabled(true);
     return { root, meshes, count: buildings.length };
@@ -292,7 +295,9 @@ export class OpenStreetMap {
   /** Disposes a streamed layer without taking down its scene-owned sky map. */
   static disposeLayer(root: TransformNode): void {
     for (const mesh of root.getChildMeshes(false)) {
-      if (mesh.material instanceof PBRMaterial) mesh.material.reflectionTexture = null;
+      if (mesh.material instanceof PBRMaterial || mesh.material instanceof StandardMaterial) {
+        mesh.material.reflectionTexture = null;
+      }
     }
     root.dispose(false, true);
   }
@@ -420,44 +425,11 @@ function polygonScenePoints(
   );
 }
 
-function createDetailedBuilding(
-  scene: Scene,
-  plan: BuildingPlan,
-  terrain: TerrainData,
-  options: MapLayerOptions,
-): Mesh | undefined {
-  return createPolygon(
-    scene,
-    plan.footprint.outer,
-    terrain,
-    options,
-    plan.heightMeters,
-  );
-}
-
-/** Cheap compiler boundary; richer facade geometry belongs only in the detailed path. */
-function createFarBuilding(
-  scene: Scene,
-  plan: BuildingPlan,
-  terrain: TerrainData,
-  options: MapLayerOptions,
-): Mesh | undefined {
-  return createPolygon(
-    scene,
-    plan.footprint.outer,
-    terrain,
-    options,
-    plan.heightMeters,
-  );
-}
-
-function createPolygon(
+function createWaterPolygon(
   scene: Scene,
   coordinates: LonLat[],
   terrain: TerrainData,
   options: MapLayerOptions,
-  heightMeters: number,
-  isWater = false,
   lakeKey?: string,
 ): Mesh | undefined {
   const points = polygonScenePoints(coordinates, terrain, options);
@@ -468,18 +440,16 @@ function createPolygon(
     minZ: -options.meshDepth / 2,
     maxZ: options.meshDepth / 2,
   };
-  const expanded = isWater
-    ? expandLakeShoreline(points, terrain, options)
-    : points;
+  const expanded = expandLakeShoreline(points, terrain, options);
   const clipped = clipPolygon(expanded, clipBounds);
   if (clipped.length < 3) return undefined;
   if (signedArea(clipped) < 0) clipped.reverse();
   // The expanded ring is only visual underlap. Sampling it would mix elevated
   // banks into the shared lake level, so prefer the real mapped footprint.
-  const mappedFootprint = isWater ? clipPolygon(points, clipBounds) : clipped;
+  const mappedFootprint = clipPolygon(points, clipBounds);
   const elevationPoints = mappedFootprint.length >= 3 ? mappedFootprint : clipped;
   const center = averagePoint(elevationPoints);
-  const elevationSource = isWater && options.lakeElevationSource
+  const elevationSource = options.lakeElevationSource
     ? options.lakeElevationSource
     : terrain.elevations;
   const centerElevation = sampleElevation(
@@ -493,25 +463,6 @@ function createPolygon(
   const boundaryElevations = elevationPoints.map((point) =>
     sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth, elevationSource)
   );
-  if (!isWater && (
-    centerElevation <= SEA_LEVEL_METERS ||
-    boundaryElevations.some((elevation) => elevation <= SEA_LEVEL_METERS)
-  )) return undefined;
-  const baseElevation = Math.max(
-    centerElevation,
-    ...boundaryElevations,
-  );
-  if (!isWater) {
-    const shape = clipped.map(({ x, z }) => new Vector2(x, z));
-    const roofElevation = baseElevation + heightMeters;
-    const bottomElevation = terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
-    const depth = (roofElevation - bottomElevation) / options.metersPerUnit;
-    const mesh = stageMapMesh(
-      new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth),
-    );
-    mesh.position.y = roofElevation / options.metersPerUnit;
-    return mesh;
-  }
   const lakeElevation = quantile([centerElevation, ...boundaryElevations], 0.25);
   // Reject coastal/sea-level OSM water polygons. The lower quartile keeps a few
   // elevated shoreline samples from making a sea-level polygon look inland.
@@ -936,24 +887,4 @@ function hashNoise(x: number, y: number): number {
   hash = Math.imul(hash, 0x85ebca6b);
   hash ^= hash >>> 13;
   return (hash >>> 0) / 0xffffffff;
-}
-
-function merge(
-  meshes: Mesh[],
-  name: string,
-  color: Color3,
-  parent: TransformNode,
-  alpha = 1,
-): Mesh | undefined {
-  if (meshes.length === 0) return undefined;
-  const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
-  if (!result) return undefined;
-  const meshMaterial = new StandardMaterial(`${name}Material`, result.getScene());
-  meshMaterial.diffuseColor = color;
-  meshMaterial.specularColor = Color3.Black();
-  meshMaterial.alpha = alpha;
-  result.name = name;
-  result.material = meshMaterial;
-  result.parent = parent;
-  return result;
 }

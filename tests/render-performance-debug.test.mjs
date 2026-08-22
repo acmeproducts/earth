@@ -21,3 +21,13 @@ test("expensive render instrumentation is disabled with the compact counter", ()
   assert.match(appearance, /this\.setDetailedInstrumentation\(true\)/);
   assert.match(appearance, /this\.setDetailedInstrumentation\(false\)/);
 });
+
+test("render stats can be dumped from the debug keyboard controls", () => {
+  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  assert.match(game, /key === "r"/);
+  assert.match(game, /dumpRenderStats\(this\.engine, this\.scene, this\.getRenderStatsContext\(\)\)/);
+  assert.match(fpsCounter, /earth-render-stats-\$\{timestamp\}\.json/);
+  assert.match(fpsCounter, /recentFrames:/);
+  assert.match(fpsCounter, /activeMeshes: meshDetails/);
+  assert.match(fpsCounter, /capabilities: primitiveProperties\(caps\)/);
+});

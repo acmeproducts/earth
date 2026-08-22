@@ -1,12 +1,32 @@
 import {
   DirectionalLight,
+  RawTexture,
   Scene,
   ShaderMaterial,
   ShadowGenerator,
+  Texture,
   Vector2,
 } from "@babylonjs/core";
 
 export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
+const fallbackShadowTextures = new WeakMap<Scene, RawTexture>();
+
+function fallbackShadowTexture(scene: Scene): RawTexture {
+  const cached = fallbackShadowTextures.get(scene);
+  if (cached) return cached;
+  const texture = RawTexture.CreateRGBATexture(
+    new Uint8Array([255, 255, 255, 255]),
+    1,
+    1,
+    scene,
+    false,
+    false,
+    Texture.NEAREST_SAMPLINGMODE,
+  );
+  texture.name = "fallbackVegetationShadowTexture";
+  fallbackShadowTextures.set(scene, texture);
+  return texture;
+}
 
 export const vegetationShadowVertexDeclaration = `
 uniform mat4 vegetationShadowMatrix;
@@ -15,6 +35,7 @@ varying vec4 vVegetationShadowPosition;
 `;
 
 export const vegetationShadowFragmentDeclaration = `
+#define DISABLE_UNIFORMITY_ANALYSIS
 varying vec4 vVegetationShadowPosition;
 uniform sampler2D vegetationShadowSampler;
 uniform vec2 vegetationShadowTexelSize;
@@ -73,6 +94,7 @@ float vegetationShadowVisibility(void) {
 
 /** Supplies Babylon's regular depth shadow texture to custom vegetation shaders. */
 export function bindVegetationShadowReceiver(material: ShaderMaterial, scene: Scene): void {
+  material.setTexture("vegetationShadowSampler", fallbackShadowTexture(scene));
   material.setFloat("vegetationShadowEnabled", 0);
   material.setFloat("vegetationShadowDarkness", 0.3);
   material.setFloat("vegetationShadowAtInstanceRoot", 0);

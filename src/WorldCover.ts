@@ -1,5 +1,6 @@
 import type { TerrainData } from "./TerrainData";
 import type { TileBounds } from "./WorldGrid";
+import { shapeCoastlineElevations } from "./Coastline";
 import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
 import * as Lerc from "lerc";
 
@@ -47,6 +48,13 @@ const SURFACE_COLORS: Readonly<Record<number, readonly [number, number, number]>
   [LandCoverClass.MossAndLichen]: [0.62, 0.68, 0.42],
 };
 
+const COASTLINE_LAND_BLEND_METERS = 80;
+const COASTLINE_WATER_BLEND_METERS = 160;
+const COASTLINE_SMOOTHING_METERS = 40;
+// Two smoothing passes can move the classified shore by twice their radius.
+const COASTLINE_CONTEXT_METERS =
+  COASTLINE_WATER_BLEND_METERS + COASTLINE_SMOOTHING_METERS * 2;
+
 export class WorldCover {
   private static readonly TILE_URL =
     "https://tiledimageservices.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/" +
@@ -80,6 +88,18 @@ export class WorldCover {
     return new WorldCover(new Map(await Promise.all(requests)), resolution);
   }
 
+  /** Loads enough classification around a terrain tile to shape shared edges consistently. */
+  static fetchForTerrain(terrain: TerrainData): Promise<WorldCover> {
+    const sampleMargin = Math.max(
+      terrain.groundWidthMeters / Math.max(1, terrain.width - 1),
+      terrain.groundHeightMeters / Math.max(1, terrain.height - 1),
+    );
+    return this.fetch(expandTerrainBounds(
+      terrain,
+      COASTLINE_CONTEXT_METERS + sampleMargin,
+    ));
+  }
+
   sample(longitude: number, latitude: number): LandCoverClass {
     const { x, y } = toWebMercator(longitude, latitude);
     const pixelX = Math.floor((x - WorldCover.ORIGIN_X) / this.resolution);
@@ -89,64 +109,88 @@ export class WorldCover {
 
   async constrainElevations(
     terrain: TerrainData,
-    shorelineWidthMeters = 30,
-    coastlineSmoothingMeters = 20,
+    shorelineWidthMeters = COASTLINE_LAND_BLEND_METERS,
+    coastlineSmoothingMeters = COASTLINE_SMOOTHING_METERS,
     yieldControl?: () => Promise<void>,
   ): Promise<void> {
-    const { bounds, elevations, width, height } = terrain;
-    let coverage: Float32Array = new Float32Array(elevations.length);
-    const water = new Uint8Array(elevations.length);
+    const { bounds, width, height } = terrain;
+    const metersPerPixelX = terrain.groundWidthMeters / Math.max(1, width - 1);
+    const metersPerPixelY = terrain.groundHeightMeters / Math.max(1, height - 1);
+    const waterBlendWidthMeters = shorelineWidthMeters * 2;
+    const contextMeters = waterBlendWidthMeters + coastlineSmoothingMeters * 2;
+    const haloX = Math.ceil(contextMeters / metersPerPixelX);
+    const haloY = Math.ceil(contextMeters / metersPerPixelY);
+    const sampleWidth = width + haloX * 2;
+    const sampleHeight = height + haloY * 2;
+    let coverage: Float32Array<ArrayBufferLike> = new Float32Array(sampleWidth * sampleHeight);
+    const water = new Uint8Array(coverage.length);
     const north = toWebMercator(0, bounds.latNorth).y;
     const south = toWebMercator(0, bounds.latSouth).y;
-    const metersPerPixel = (
-      terrain.groundWidthMeters / Math.max(1, width - 1) +
-      terrain.groundHeightMeters / Math.max(1, height - 1)
-    ) / 2;
 
-    for (let y = 0; y < height; y++) {
-      const v = y / (height - 1);
+    for (let y = 0; y < sampleHeight; y++) {
+      const v = (y - haloY) / (height - 1);
       const latitude = fromWebMercatorY(north + (south - north) * v);
-      for (let x = 0; x < width; x++) {
-        const longitude = bounds.lonWest + (bounds.lonEast - bounds.lonWest) * x / (width - 1);
-        const index = y * width + x;
+      for (let x = 0; x < sampleWidth; x++) {
+        const u = (x - haloX) / (width - 1);
+        const longitude = bounds.lonWest + (bounds.lonEast - bounds.lonWest) * u;
+        const index = y * sampleWidth + x;
         coverage[index] = this.waterCoverage(longitude, latitude);
       }
       await yieldControl?.();
     }
 
-    const smoothingRadius = Math.max(1, Math.round(coastlineSmoothingMeters / metersPerPixel));
-    coverage = await smoothCoverage(coverage, width, height, smoothingRadius, yieldControl);
+    const smoothingRadiusX = Math.max(
+      1,
+      Math.round(coastlineSmoothingMeters / metersPerPixelX),
+    );
+    const smoothingRadiusY = Math.max(
+      1,
+      Math.round(coastlineSmoothingMeters / metersPerPixelY),
+    );
+    coverage = await smoothCoverage(
+      coverage,
+      sampleWidth,
+      sampleHeight,
+      smoothingRadiusX,
+      smoothingRadiusY,
+      yieldControl,
+    );
     for (let index = 0; index < water.length; index++) {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
       if ((index & 4095) === 4095) await yieldControl?.();
     }
     // Lake surfaces use this same classification to cover the carved shore
     // transition without blindly spilling onto the opposite bank.
-    terrain.waterMask = water;
+    terrain.waterMask = cropWaterMask(
+      water,
+      sampleWidth,
+      width,
+      height,
+      haloX,
+      haloY,
+    );
 
-    const distance = await distanceFromShore(water, width, height, yieldControl);
-    const blendWidth = Math.max(1, shorelineWidthMeters / metersPerPixel);
-    const landClearance = 0.25;
-
-    terrain.minElevation = Infinity;
-    terrain.maxElevation = -Infinity;
-    for (let index = 0; index < elevations.length; index++) {
-      // Push water-classified terrain well below the water plane. The old
-      // -0.25 m clamp could become coplanar with the water's -0.01 scene-unit
-      // offset depending on map scale, exposing depth-buffer z-fighting.
-      const shorelineElevation = water[index]
-        ? SUBMERGED_TERRAIN_CEILING_METERS
-        : landClearance * (1 - 2 * coverage[index]);
-      const corrected = water[index]
-        ? Math.min(elevations[index], SUBMERGED_TERRAIN_CEILING_METERS)
-        : Math.max(elevations[index], landClearance);
-      const amount = Math.min(1, distance[index] / blendWidth);
-      const blend = amount * amount * (3 - 2 * amount);
-      elevations[index] = shorelineElevation + (corrected - shorelineElevation) * blend;
-      terrain.minElevation = Math.min(terrain.minElevation, elevations[index]);
-      terrain.maxElevation = Math.max(terrain.maxElevation, elevations[index]);
-      if ((index & 4095) === 4095) await yieldControl?.();
-    }
+    await shapeCoastlineElevations(
+      terrain,
+      {
+        coverage,
+        water,
+        width: sampleWidth,
+        height: sampleHeight,
+        terrainOffsetX: haloX,
+        terrainOffsetY: haloY,
+      },
+      {
+        metersPerPixelX,
+        metersPerPixelY,
+        landBlendWidthMeters: shorelineWidthMeters,
+        // The submerged side needs more room to reach the deep-water ceiling;
+        // otherwise that safety depth is itself rendered as a coastal wall.
+        waterBlendWidthMeters,
+        deepWaterCeilingMeters: SUBMERGED_TERRAIN_CEILING_METERS,
+      },
+      yieldControl,
+    );
   }
 
   private waterCoverage(longitude: number, latitude: number): number {
@@ -212,7 +256,6 @@ export class WorldCover {
     return [tileKey, await request];
   }
 }
-
 export function landCoverColor(landCover: LandCoverClass): readonly [number, number, number] {
   return TERRAIN_COLORS[landCover] ?? TERRAIN_COLORS[LandCoverClass.Bare];
 }
@@ -240,39 +283,38 @@ async function smoothCoverage(
   source: Float32Array,
   width: number,
   height: number,
-  radius: number,
+  radiusX: number,
+  radiusY: number,
   yieldControl?: () => Promise<void>,
 ): Promise<Float32Array> {
   let result = source;
   for (let pass = 0; pass < 2; pass++) {
     const horizontal = new Float32Array(source.length);
+    const rowPrefix = new Float64Array(width + 1);
     for (let y = 0; y < height; y++) {
+      rowPrefix[0] = 0;
       for (let x = 0; x < width; x++) {
-        let sum = 0;
-        let count = 0;
-        for (let offset = -radius; offset <= radius; offset++) {
-          const sampleX = x + offset;
-          if (sampleX < 0 || sampleX >= width) continue;
-          sum += result[y * width + sampleX];
-          count++;
-        }
-        horizontal[y * width + x] = sum / count;
+        rowPrefix[x + 1] = rowPrefix[x] + result[y * width + x];
+      }
+      for (let x = 0; x < width; x++) {
+        const start = Math.max(0, x - radiusX);
+        const end = Math.min(width, x + radiusX + 1);
+        horizontal[y * width + x] = (rowPrefix[end] - rowPrefix[start]) / (end - start);
       }
       await yieldControl?.();
     }
 
     const vertical = new Float32Array(source.length);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        let sum = 0;
-        let count = 0;
-        for (let offset = -radius; offset <= radius; offset++) {
-          const sampleY = y + offset;
-          if (sampleY < 0 || sampleY >= height) continue;
-          sum += horizontal[sampleY * width + x];
-          count++;
-        }
-        vertical[y * width + x] = sum / count;
+    const columnPrefix = new Float64Array(height + 1);
+    for (let x = 0; x < width; x++) {
+      columnPrefix[0] = 0;
+      for (let y = 0; y < height; y++) {
+        columnPrefix[y + 1] = columnPrefix[y] + horizontal[y * width + x];
+      }
+      for (let y = 0; y < height; y++) {
+        const start = Math.max(0, y - radiusY);
+        const end = Math.min(height, y + radiusY + 1);
+        vertical[y * width + x] = (columnPrefix[end] - columnPrefix[start]) / (end - start);
       }
       await yieldControl?.();
     }
@@ -281,60 +323,39 @@ async function smoothCoverage(
   return result;
 }
 
-async function distanceFromShore(
-  water: Uint8Array,
+function cropWaterMask(
+  source: Uint8Array,
+  sourceWidth: number,
   width: number,
   height: number,
-  yieldControl?: () => Promise<void>,
-): Promise<Float32Array> {
-  const distance = new Float32Array(water.length).fill(Infinity);
+  offsetX: number,
+  offsetY: number,
+): Uint8Array {
+  const result = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const index = y * width + x;
-      if (
-        (x > 0 && water[index - 1] !== water[index]) ||
-        (x + 1 < width && water[index + 1] !== water[index]) ||
-        (y > 0 && water[index - width] !== water[index]) ||
-        (y + 1 < height && water[index + width] !== water[index])
-      ) distance[index] = 0.5;
-    }
-    await yieldControl?.();
+    result.set(
+      source.subarray(
+        (y + offsetY) * sourceWidth + offsetX,
+        (y + offsetY) * sourceWidth + offsetX + width,
+      ),
+      y * width,
+    );
   }
-
-  await distancePass(distance, width, height, false, yieldControl);
-  await distancePass(distance, width, height, true, yieldControl);
-  return distance;
+  return result;
 }
 
-async function distancePass(
-  distance: Float32Array,
-  width: number,
-  height: number,
-  reverse: boolean,
-  yieldControl?: () => Promise<void>,
-): Promise<void> {
-  const diagonal = Math.SQRT2;
-  for (let row = 0; row < height; row++) {
-    const y = reverse ? height - 1 - row : row;
-    for (let column = 0; column < width; column++) {
-      const x = reverse ? width - 1 - column : column;
-      const index = y * width + x;
-      const horizontal = x + (reverse ? 1 : -1);
-      const vertical = y + (reverse ? 1 : -1);
-      if (horizontal >= 0 && horizontal < width) {
-        distance[index] = Math.min(distance[index], distance[y * width + horizontal] + 1);
-      }
-      if (vertical >= 0 && vertical < height) {
-        distance[index] = Math.min(distance[index], distance[vertical * width + x] + 1);
-        if (horizontal >= 0 && horizontal < width) {
-          distance[index] = Math.min(distance[index], distance[vertical * width + horizontal] + diagonal);
-        }
-        const otherHorizontal = x + (reverse ? -1 : 1);
-        if (otherHorizontal >= 0 && otherHorizontal < width) {
-          distance[index] = Math.min(distance[index], distance[vertical * width + otherHorizontal] + diagonal);
-        }
-      }
-    }
-    await yieldControl?.();
-  }
+function expandTerrainBounds(terrain: TerrainData, paddingMeters: number): TileBounds {
+  const longitudePadding =
+    (terrain.bounds.lonEast - terrain.bounds.lonWest) *
+    paddingMeters /
+    terrain.groundWidthMeters;
+  const north = toWebMercator(0, terrain.bounds.latNorth).y;
+  const south = toWebMercator(0, terrain.bounds.latSouth).y;
+  const projectedPadding = (north - south) * paddingMeters / terrain.groundHeightMeters;
+  return {
+    lonWest: Math.max(-180, terrain.bounds.lonWest - longitudePadding),
+    lonEast: Math.min(180, terrain.bounds.lonEast + longitudePadding),
+    latNorth: Math.min(85.05112878, fromWebMercatorY(north + projectedPadding)),
+    latSouth: Math.max(-85.05112878, fromWebMercatorY(south - projectedPadding)),
+  };
 }

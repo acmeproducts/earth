@@ -8,6 +8,7 @@ import {
   Observer,
   PBRMaterial,
   Scene,
+  StandardMaterial,
   Texture,
   VertexBuffer,
 } from '@babylonjs/core';
@@ -110,7 +111,7 @@ export interface WaterSurfaceMaterialOptions {
 export function createWaterSurfaceMaterial(
   scene: Scene,
   options: WaterSurfaceMaterialOptions,
-): PBRMaterial {
+): PBRMaterial | StandardMaterial {
   const {
     width,
     height,
@@ -119,25 +120,33 @@ export function createWaterSurfaceMaterial(
     name = 'waterMaterial',
   } = options;
 
-  const water = new PBRMaterial(name, scene);
+  const water = scene.getEngine().isWebGPU
+    ? new StandardMaterial(name, scene)
+    : new PBRMaterial(name, scene);
   // Deep water read as a plain gamma-space tint before; PBR shades in linear
   // space and converts on output, so convert the authored colour once here
   // instead of re-picking it by eye.
-  water.albedoColor = new Color3(0.05, 0.2, 0.4).toLinearSpace();
-  // Leaving metallic/roughness unset keeps the specular-glossiness workflow,
-  // where reflectivity is exactly the F0 the prepass hands to SSR.
-  water.reflectivityColor = new Color3(
-    WATER_REFLECTIVITY,
-    WATER_REFLECTIVITY,
-    WATER_REFLECTIVITY
-  );
-  water.microSurface = 0.9;
-  water.reflectionTexture = skyReflection;
-  // Wave normals are far finer than the pixels they cover at any distance;
-  // without this the sun turns the whole surface into crawling white noise.
-  water.enableSpecularAntiAliasing = true;
-  // Waves cannot reflect what is below the surface they sit on.
-  water.useHorizonOcclusion = true;
+  if (water instanceof PBRMaterial) {
+    water.albedoColor = new Color3(0.05, 0.2, 0.4).toLinearSpace();
+    // Leaving metallic/roughness unset keeps the specular-glossiness workflow,
+    // where reflectivity is exactly the F0 the prepass hands to SSR.
+    water.reflectivityColor = new Color3(
+      WATER_REFLECTIVITY,
+      WATER_REFLECTIVITY,
+      WATER_REFLECTIVITY
+    );
+    water.microSurface = 0.9;
+    water.reflectionTexture = skyReflection;
+    water.enableSpecularAntiAliasing = true;
+    water.useHorizonOcclusion = true;
+  } else {
+    // Use Babylon's native StandardMaterial WGSL path as the WebGPU baseline.
+    // Direct sun specular keeps it readable without a live reflection probe.
+    water.diffuseColor = new Color3(0.035, 0.16, 0.3);
+    water.ambientColor = new Color3(0.015, 0.055, 0.09);
+    water.specularColor = new Color3(0.65, 0.76, 0.86);
+    water.specularPower = 96;
+  }
 
   const swellTileUnits = SWELL_TILE_METERS / metersPerUnit;
   const swell = tileOverPlane(
@@ -177,7 +186,9 @@ export function createWaterSurfaceMaterial(
  */
 export function disposeWaterPlane(waterMesh: Mesh): void {
   const material = waterMesh.material;
-  if (material instanceof PBRMaterial) material.reflectionTexture = null;
+  if (material instanceof PBRMaterial || material instanceof StandardMaterial) {
+    material.reflectionTexture = null;
+  }
   waterMesh.dispose(false, true);
 }
 
@@ -280,7 +291,7 @@ function packAsDetailMap(scene: Scene, url: string): Texture {
  */
 function animateWaves(
   scene: Scene,
-  water: PBRMaterial,
+  water: PBRMaterial | StandardMaterial,
   swell: Texture,
   chop: Texture
 ): void {

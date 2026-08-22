@@ -1,6 +1,15 @@
-export const MIN_MODEL_RANGE_METERS = 0;
-export const DEFAULT_MODEL_RANGE_METERS = 50;
-export const MAX_MODEL_RANGE_METERS = 200;
+import { SCENE_SETTING_DEFINITIONS } from "./SceneSettings";
+import type {
+  SceneSettingDefinition,
+  SceneSettingKey,
+  SceneSettings,
+} from "./SceneSettings";
+
+export interface SceneControlsOptions {
+  settings: Readonly<SceneSettings>;
+  onSettingChange: (key: SceneSettingKey, value: number) => void;
+  onTimeOfDayChange: (hours: number | undefined) => void;
+}
 
 const MINUTES_PER_HOUR = 60;
 const TIME_STEP_HOURS = 0.25;
@@ -11,17 +20,22 @@ export class SceneControls {
   private readonly timeOutput: HTMLOutputElement;
   private readonly liveButton: HTMLButtonElement;
   private readonly clockTimer: number;
+  private readonly rangeControls = new Map<SceneSettingKey, RangeControl>();
   private isLiveTime = true;
 
-  constructor(
-    initialModelRangeMeters: number,
-    onModelRangeChange: (distanceMeters: number) => void,
-    onTimeOfDayChange: (hours: number | undefined) => void,
-  ) {
+  constructor(options: SceneControlsOptions) {
     this.element = document.createElement("section");
     this.element.id = "sceneControls";
     this.element.setAttribute("aria-label", "Scene controls");
-    this.element.appendChild(this.createModelRangeControl(initialModelRangeMeters, onModelRangeChange));
+    for (const definition of SCENE_SETTING_DEFINITIONS) {
+      const control = this.createRangeControl(
+        definition,
+        options.settings[definition.key],
+        (value) => options.onSettingChange(definition.key, value),
+      );
+      this.rangeControls.set(definition.key, control);
+      this.element.appendChild(control.row);
+    }
 
     const timeRow = document.createElement("label");
     timeRow.className = "scene-control-row";
@@ -43,14 +57,14 @@ export class SceneControls {
     this.liveButton.addEventListener("click", () => {
       this.isLiveTime = true;
       this.updateLiveTime();
-      onTimeOfDayChange(undefined);
+      options.onTimeOfDayChange(undefined);
     });
 
     this.timeInput.addEventListener("input", () => {
       this.isLiveTime = false;
       const hours = Number(this.timeInput.value);
       this.updateTimeDisplay(hours);
-      onTimeOfDayChange(hours);
+      options.onTimeOfDayChange(hours);
     });
 
     timeRow.append(timeLabel, this.timeInput, this.timeOutput, this.liveButton);
@@ -65,33 +79,44 @@ export class SceneControls {
     this.element.remove();
   }
 
-  private createModelRangeControl(
-    initialDistanceMeters: number,
-    onChange: (distanceMeters: number) => void,
-  ): HTMLLabelElement {
+  setSettings(settings: Readonly<SceneSettings>): void {
+    for (const definition of SCENE_SETTING_DEFINITIONS) {
+      this.rangeControls.get(definition.key)?.setValue(settings[definition.key]);
+    }
+  }
+
+  private createRangeControl(
+    definition: SceneSettingDefinition,
+    initialValue: number,
+    onChange: (value: number) => void,
+  ): RangeControl {
     const row = document.createElement("label");
     row.className = "scene-control-row";
     const label = document.createElement("span");
-    label.textContent = "Model range";
+    label.textContent = definition.label;
 
     const input = document.createElement("input");
     input.type = "range";
-    input.min = String(MIN_MODEL_RANGE_METERS);
-    input.max = String(MAX_MODEL_RANGE_METERS);
-    input.step = "1";
-    input.value = String(initialDistanceMeters);
-    input.setAttribute("aria-label", "Real model range in meters");
+    input.min = String(definition.minimum);
+    input.max = String(definition.maximum);
+    input.step = String(definition.step);
+    input.value = String(initialValue);
+    input.setAttribute("aria-label", definition.ariaLabel);
 
     const output = document.createElement("output");
-    output.value = `${initialDistanceMeters} m`;
+    const setValue = (value: number): void => {
+      input.value = String(value);
+      output.value = definition.format(value);
+    };
+    setValue(initialValue);
     input.addEventListener("input", () => {
-      const distance = Number(input.value);
-      output.value = `${distance} m`;
-      onChange(distance);
+      const value = Number(input.value);
+      output.value = definition.format(value);
+      onChange(value);
     });
 
     row.append(label, input, output);
-    return row;
+    return { row, input, setValue };
   }
 
   private updateLiveTime(): void {
@@ -110,4 +135,10 @@ export class SceneControls {
     this.liveButton.classList.toggle("active", this.isLiveTime);
     this.liveButton.setAttribute("aria-pressed", String(this.isLiveTime));
   }
+}
+
+interface RangeControl {
+  row: HTMLLabelElement;
+  input: HTMLInputElement;
+  setValue: (value: number) => void;
 }
