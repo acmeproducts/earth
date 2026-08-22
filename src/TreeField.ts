@@ -284,6 +284,21 @@ float bayer4(vec2 pixel) {
   return (4.0 * lowValue + highValue) / 16.0;
 }
 
+// The longer distance dissolve needs more coverage steps than the compact
+// masks used by LOD swaps. Expanding the same ordered pattern to 8 by 8 keeps
+// it stable in screen space while making individual steps and repeats much
+// less apparent.
+float bayer8(vec2 pixel) {
+  vec2 p = mod(floor(pixel), 8.0);
+  vec2 low = mod(p, 2.0);
+  vec2 middle = mod(floor(p * 0.5), 2.0);
+  vec2 high = floor(p * 0.25);
+  float lowValue = 2.0 * low.x + low.y * (3.0 - 4.0 * low.x);
+  float middleValue = 2.0 * middle.x + middle.y * (3.0 - 4.0 * middle.x);
+  float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
+  return (16.0 * lowValue + 4.0 * middleValue + highValue) / 64.0;
+}
+
 void main(void) {
   // Complement the model shader's screen-door mask so the two LODs blend
   // without the depth-sorting problems of translucent vegetation.
@@ -299,7 +314,7 @@ void main(void) {
     length(vViewDirection)
   );
   if (distanceFade < 0.999 &&
-      bayer4(gl_FragCoord.xy + vec2(3.0, 2.0)) >= distanceFade) discard;
+      bayer8(gl_FragCoord.xy + vec2(3.0, 2.0)) >= distanceFade) discard;
   // Select the captured silhouette from the light during shadow rendering.
   #if SM_DIRECTIONINLIGHTDATA == 1
   vec3 direction = normalize(vLocalSunDirection);
