@@ -67,7 +67,7 @@ procedural conifer silhouettes. Forest placements mix all three species in the s
 `treeDistributionAt(longitude, latitude)` in `src/TreeDistribution.ts` supplies the next-stage
 geographic species mix. It returns a broad biome, coarse tree-cover potential, and normalized ratios
 for eleven common visual tree groups. Exact forest presence should continue to come from ESA
-WorldCover; the coordinate-only distribution is an offline approximation, not a botanical survey.
+WorldCover 2021; the coordinate-only distribution is an offline approximation, not a botanical survey.
 Every group now has its own deterministic procedural source. Tree placement samples the geographic
 ratios from each tile's longitude/latitude coordinates first, then captures impostors only for the
 species that were actually encountered in that tile.
@@ -77,9 +77,11 @@ bilinearly blends the four nearest frames. `Export ZIP` writes the five face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
-The Earth view generates a tree plus grass, white/yellow flower, and bush clumps procedurally at startup
-and thin-instances them across vegetated ESA WorldCover classes. Trees use the
-five-face impostor pipeline. Grass, flowers, and bushes are rotationally symmetric, so
+The Earth view generates mature trees, saplings, grass, flowers, bushes, and fern
+undergrowth procedurally at startup and thin-instances them across suitable ESA
+WorldCover classes. Mature trees and 3.5 m saplings share the five-face tree
+impostor pipeline and geographic species groves. Grass, flowers, bushes, and
+ferns are rotationally symmetric, so
 they capture only one side and the top. Their side atlases use the optional
 upper-hemisphere mode, spending every vertical row on level-to-overhead views
 because these low vegetation types are not normally seen from below. Tree captures
@@ -96,8 +98,12 @@ can override those values for quality testing.
 Bushes are generated from procedural branches and dense curved shoots, captured
 into their own directional atlases, and scattered in noise-shaped clusters most
 densely through WorldCover shrubland with lighter placement elsewhere.
+Fern clumps use paired tapered leaflets and form rare patches predominantly
+beneath tree cover, with occasional growth in shrubland, wetlands, and
+mangroves. Saplings and ferns are created only for the
+fully detailed tile rings; distant tiles retain their cheaper mature-tree layer.
 
-Grass and bushes lean in a looping wind cycle; trees and flowers remain still.
+Grass, bushes, and ferns lean in a looping wind cycle; trees and flowers remain still.
 `src/Wind.ts` owns the shared cycle and its GLSL shear. Displacement grows
 linearly with height above the base, so roots stay planted and tips lean
 furthest. Gusts travel across the world, making an instance's position set its
@@ -119,7 +125,7 @@ gets to a silhouette smeared through every height. The technique needs slack
 around the subject inside its frame; the square captures of low vegetation have
 it, and a tightly fitted capture like the trees' would clip.
 
-`?wind=0` removes grass and bush motion; values up to 3 scale it.
+`?wind=0` removes grass, bush, and fern motion; values up to 3 scale it.
 
 Vegetation shadows remain cached and therefore do not animate with wind. The
 shadow map renders once and refreshes when the LOD packing or sun changes;
@@ -133,9 +139,9 @@ limits, faces, and symmetry, then create its provider with
 `createImpostorAssetProvider`. The tree, bush, and grass files are examples;
 they contain only model-specific geometry and descriptor values.
 
-The production view renders grass and bushes exclusively as dense impostor
-clumps. Trees can switch between impostors, automatic distance LOD, and original
-geometry. Auto mode uses a
+The production view renders grass and bushes as dense impostor clumps. Mature
+trees, saplings, and fern undergrowth can switch between impostors, automatic
+distance LOD, and original geometry. Auto mode uses a
 dithered 6 m transition around the configurable model range (50 m by default)
 to blend real models into impostors. Press `V` to cycle the tree mode.
 The top-right counter reports live FPS and active triangles; use
@@ -150,11 +156,12 @@ mirrored to make repeated captures less apparent. The billboards share a 5 km
 altitude and drift together with the prevailing wind. Their deterministic world
 grid is sampled in that moving frame so new formations remain beyond the visible
 horizon. Each geographic area receives a weighted clear, sparse, scattered, or
-dense weather regime; scattered skies are most common while clear skies and
-oversized dense banks are rarer. Grayscale density provides smooth alpha coverage
-without a screen-space dither pattern. Clouds fade out before the camera reaches
-them and through their own high-altitude haze beyond the terrain fog; use
-`?clouds=off` for a cloud-free performance comparison.
+dense weather regime. Cloud-bearing skies dominate: scattered conditions are most
+common, dense banks remain significant, and clear weather is rare. Grayscale
+density provides smooth alpha coverage without a screen-space dither pattern,
+with solid shaded cores and softer edge coverage. Clouds fade out before the
+camera reaches them and through their own high-altitude haze beyond the terrain
+fog; use `?clouds=off` for a cloud-free performance comparison.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
@@ -174,10 +181,14 @@ map, vegetation, and LOD-index construction runs in small post-render slices.
 Large terrain and vegetation GPU uploads are committed on separate animation
 frames so replacement tiles have less impact on frame rate.
 
-The scene controls can resize both streaming windows and adjust grass density
-at runtime. Numeric scene settings are remembered in local storage. The same
-settings can be initialized with `?detail-size=3`, `?terrain-size=17`, and
-`?grass-density=0.5`; explicit URL values override remembered values for that
+Click the world once to capture the pointer; looking around then follows mouse
+movement without holding a button in either movement mode. Press Escape to
+release the pointer and open the settings menu. It can resize both streaming
+windows, adjust cloud density at runtime, set the time of day, and load a new
+world location from latitude and longitude. Grass density remains fixed at 1.
+Numeric scene settings are remembered in local storage. The same settings can
+be initialized with `?detail-size=3`, `?terrain-size=17`, and
+`?cloud-density=0.5`; explicit URL values override remembered values for that
 page load.
 
 `?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
@@ -282,8 +293,11 @@ import { Texture } from '@babylonjs/core';
 material.diffuseTexture = new Texture('/terrain-texture.jpg', scene);
 ```
 
-The exact WorldCover classification debug view is toggled with `L`;
-OpenTopoMap is toggled with `P`.
+Detailed tiles refine ESA WorldCover 2021 with globally available OpenStreetMap
+land-cover and land-use polygons. OSM also supplies building-part visibility,
+road class, path and service type, surface, tunnels, and permanent waterways;
+those attributes drive building filtering, road widths and materials, vegetation
+placement, and narrow water surfaces without relying on regional data sources.
 
 ### Modifying the Scene
 

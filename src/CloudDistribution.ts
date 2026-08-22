@@ -19,12 +19,12 @@ interface WeightedCloudWeatherProfile extends CloudWeatherProfile {
   readonly weight: number;
 }
 
-// Ordinary scattered skies dominate. Clear and dense extremes are deliberately rare.
+// Cloud-bearing skies dominate; clear weather remains a distinct but rare outcome.
 const CLOUD_WEATHER_PROFILES: readonly WeightedCloudWeatherProfile[] = [
-  { kind: "clear", weight: 14, occupancy: 0, sizeScale: 1 },
-  { kind: "sparse", weight: 32, occupancy: 0.18, sizeScale: 0.85 },
-  { kind: "scattered", weight: 42, occupancy: 0.42, sizeScale: 1 },
-  { kind: "dense", weight: 12, occupancy: 0.7, sizeScale: 1.3 },
+  { kind: "clear", weight: 8, occupancy: 0, sizeScale: 1 },
+  { kind: "sparse", weight: 22, occupancy: 0.3, sizeScale: 0.9 },
+  { kind: "scattered", weight: 52, occupancy: 0.62, sizeScale: 1 },
+  { kind: "dense", weight: 18, occupancy: 0.88, sizeScale: 1.3 },
 ];
 
 export interface CloudPlacement {
@@ -44,16 +44,20 @@ export function cloudPlacementsAround(
   visibleRadiusMeters: number,
   metersPerUnit: number,
   weatherSeed: number,
+  occupancyOverride?: number,
 ): CloudPlacement[] {
   const weather = cloudWeatherForSeed(weatherSeed);
-  if (weather.occupancy === 0) return [];
+  const occupancy = occupancyOverride === undefined
+    ? weather.occupancy
+    : Math.max(0, Math.min(1, occupancyOverride));
+  if (occupancy === 0) return [];
   const radiusCells = Math.ceil(visibleRadiusMeters / CLOUD_CELL_SIZE_METERS) + 1;
   const placements: CloudPlacement[] = [];
   for (let dz = -radiusCells; dz <= radiusCells; dz++) {
     for (let dx = -radiusCells; dx <= radiusCells; dx++) {
       const cellX = centerCellX + dx;
       const cellZ = centerCellZ + dz;
-      if (cloudRandom(cellX, cellZ, weatherSeed, 0) >= weather.occupancy) continue;
+      if (cloudRandom(cellX, cellZ, weatherSeed, 0) >= occupancy) continue;
       const xMeters = (
         cellX + 0.12 + cloudRandom(cellX, cellZ, weatherSeed, 1) * 0.76
       ) * CLOUD_CELL_SIZE_METERS;

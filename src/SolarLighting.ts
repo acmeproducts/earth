@@ -42,6 +42,7 @@ export class SolarLighting {
   private readonly directLight: DirectionalLight;
   private readonly ambientLight: HemisphericLight;
   private readonly shadows: ShadowGenerator;
+  private readonly shadowOnlyCasters = new Set<Mesh>();
   private readonly skyMaterial: SkyMaterial;
   private readonly horizonMaterial: ShaderMaterial;
   private readonly skyProbe?: ReflectionProbe;
@@ -85,6 +86,17 @@ export class SolarLighting {
     this.shadows.usePoissonSampling = true;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
+    const shadowMap = this.shadows.getShadowMap();
+    shadowMap?.onBeforeRenderObservable.add(() => {
+      for (const mesh of this.shadowOnlyCasters) {
+        if (!mesh.isDisposed()) mesh.isVisible = true;
+      }
+    });
+    shadowMap?.onAfterRenderObservable.add(() => {
+      for (const mesh of this.shadowOnlyCasters) {
+        if (!mesh.isDisposed()) mesh.isVisible = false;
+      }
+    });
     this.skyMesh = MeshBuilder.CreateSphere(
       "sky",
       { diameter: SUN_DISTANCE * 1.8, segments: 32 },
@@ -205,9 +217,14 @@ export class SolarLighting {
   setShadowCasters(meshes: Mesh[]): void {
     const shadowMap = this.shadows.getShadowMap();
     if (shadowMap) shadowMap.renderList = [];
+    this.shadowOnlyCasters.clear();
 
     for (const mesh of meshes) {
       mesh.receiveShadows = true;
+      if (mesh.metadata?.shadowOnly === true) {
+        mesh.isVisible = false;
+        this.shadowOnlyCasters.add(mesh);
+      }
       this.shadows.addShadowCaster(mesh);
     }
     // Babylon caches a directional shadow transform independently of the RTT

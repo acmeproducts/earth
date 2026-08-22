@@ -1,6 +1,7 @@
 import {
   Color3,
   Material,
+  Mesh,
   RawTexture,
   Scene,
   StandardMaterial,
@@ -109,6 +110,14 @@ export function createTerrainMaterial(
 /** Shared terrain materials are disposed with their scene, not with one tile. */
 export function isSharedTerrainMaterial(material: Material | null): boolean {
   return material !== null && sharedMaterials.has(material);
+}
+
+/** Releases a terrain mesh without destroying scene-owned materials or textures. */
+export function disposeTerrainMesh(terrain: Mesh): void {
+  const material = terrain.material;
+  terrain.material = null;
+  if (material && !isSharedTerrainMaterial(material)) material.dispose(true, true);
+  terrain.dispose(false, false);
 }
 
 function createTiledTexture(

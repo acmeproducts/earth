@@ -42,10 +42,10 @@ test("weather regimes use a deliberately uneven probability distribution", () =>
     counts[cloudWeatherForSeed(seed).kind]++;
   }
   assert.ok(counts.scattered > counts.sparse);
-  assert.ok(counts.sparse > counts.clear);
-  assert.ok(counts.clear > counts.dense);
-  assert.ok(counts.clear > 1_000);
-  assert.ok(counts.dense > 800);
+  assert.ok(counts.sparse > counts.dense);
+  assert.ok(counts.dense > counts.clear);
+  assert.ok(counts.clear > 600);
+  assert.ok(counts.dense > 1_500);
 });
 
 test("clear, sparse, and dense regimes alter count and formation scale", () => {
@@ -83,9 +83,16 @@ test("clouds share one altitude and form broad banks", () => {
 
 test("volume capture retains continuous density for runtime blending", () => {
   assert.match(volumeSource, /CLOUD_CAPTURE_STEPS = 24/);
-  assert.match(volumeSource, /1 - Math\.exp\(-opticalDepth \* 2\.8\)/);
+  assert.match(volumeSource, /opticalDepthGain = lerp\([\s\S]*?4\.2,[\s\S]*?5\.8/);
+  assert.match(volumeSource, /1 - Math\.exp\(-opticalDepth \* opticalDepthGain\)/);
   assert.match(volumeSource, /pixels\[target\] = Math\.round\(clamp01\(coverage\) \* 255\)/);
   assert.doesNotMatch(volumeSource, /coverage\s*[<>]=?\s*0\.5/);
+});
+
+test("cloud bodies favor opaque mass over low-alpha mist", () => {
+  assert.match(source, /bodyCoverage = smoothstep\(0\.025, 0\.78, density\.r\)/);
+  assert.match(source, /mix\(1\.06, 0\.58, core\)/);
+  assert.match(volumeSource, /density \* \(0\.78 \+ detail \* 0\.42\) - 0\.08/);
 });
 
 test("cloud atlas contains eight distinct formation archetypes", () => {
@@ -117,11 +124,13 @@ test("cloud visibility is independent from the streamed terrain fog", () => {
   assert.doesNotMatch(source, /scene\.fogEnd \* metersPerUnit/);
 });
 
-test("clear weather skips cloud GPU resource creation", () => {
-  assert.match(
-    source,
-    /cloudWeatherForSeed\(weatherSeed\)\.occupancy === 0\) return undefined;[\s\S]*?createCloudDensityAtlas/,
-  );
+test("manual cloud density overrides seeded occupancy and updates live", () => {
+  const none = cloudPlacementsAround(0, 0, 30_000, 50, 42, 0);
+  const full = cloudPlacementsAround(0, 0, 30_000, 50, 42, 1);
+  assert.equal(none.length, 0);
+  assert.ok(full.length > 0);
+  assert.match(source, /setDensity\(nextDensity: number\)/);
+  assert.match(source, /cloudPlacementsAround\([\s\S]*?density/);
 });
 
 test("the cloud field drifts together in the prevailing wind", () => {

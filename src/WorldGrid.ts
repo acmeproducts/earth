@@ -30,6 +30,13 @@ export interface WorldTileArea {
   seed: number;
 }
 
+export interface WorldTileWindowOffsets {
+  minimumX: number;
+  maximumX: number;
+  minimumY: number;
+  maximumY: number;
+}
+
 /** Returns the canonical application tile containing a geographic position. */
 export function worldTileAtLocation(
   latitude: number,
@@ -76,17 +83,15 @@ export function worldTileAreaAtLocation(
 ): WorldTileArea {
   const size = Math.max(1, Math.min(4, Math.round(tilesAcross)));
   const center = worldTileAtLocation(latitude, longitude, level);
+  const offsets = worldTileWindowOffsetsAtLocation(
+    latitude,
+    longitude,
+    size,
+    center.level,
+  );
+  const startX = center.x + offsets.minimumX;
+  const startY = center.y + offsets.minimumY;
   const scale = 2 ** center.level;
-  const evenSize = size % 2 === 0;
-  const longitudeFraction = tileLongitudeFraction(longitude, center);
-  const latitudeFraction = tileLatitudeFraction(latitude, center);
-  const startX = center.x - Math.floor((size - 1) / 2) -
-    (evenSize && longitudeFraction < 0.5 ? 1 : 0);
-  const startY = Math.max(0, Math.min(
-    scale - size,
-    center.y - Math.floor((size - 1) / 2) -
-      (evenSize && latitudeFraction < 0.5 ? 1 : 0),
-  ));
   const endX = startX + size - 1;
   if (startX < 0 || endX >= scale) {
     throw new Error("Multi-tile areas crossing the antimeridian must be loaded tile-by-tile.");
@@ -105,6 +110,38 @@ export function worldTileAreaAtLocation(
       latSouth: southEast.latSouth,
     },
     seed: worldTileSeed(center, worldSeed),
+  };
+}
+
+/**
+ * Selects the nearest square tile window around a location. For even sizes the
+ * window changes at tile midlines, keeping the location within the closest
+ * four tiles for a two-by-two window.
+ */
+export function worldTileWindowOffsetsAtLocation(
+  latitude: number,
+  longitude: number,
+  tilesAcross: number,
+  level = WORLD_GRID_LEVEL,
+): WorldTileWindowOffsets {
+  const normalizedLevel = normalizeLevel(level);
+  const scale = 2 ** normalizedLevel;
+  const size = Math.max(1, Math.min(scale, Math.round(tilesAcross)));
+  const center = worldTileAtLocation(latitude, longitude, normalizedLevel);
+  const evenSize = size % 2 === 0;
+  const minimumX = -Math.floor((size - 1) / 2) -
+    (evenSize && tileLongitudeFraction(longitude, center) < 0.5 ? 1 : 0);
+  const requestedMinimumY = -Math.floor((size - 1) / 2) -
+    (evenSize && tileLatitudeFraction(latitude, center) < 0.5 ? 1 : 0);
+  const minimumY = Math.max(-center.y, Math.min(
+    scale - size - center.y,
+    requestedMinimumY,
+  ));
+  return {
+    minimumX,
+    maximumX: minimumX + size - 1,
+    minimumY,
+    maximumY: minimumY + size - 1,
   };
 }
 

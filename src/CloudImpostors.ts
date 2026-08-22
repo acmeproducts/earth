@@ -17,7 +17,6 @@ import type { SolarLightingSnapshot } from "./SolarLighting";
 import {
   CLOUD_CELL_SIZE_METERS,
   cloudPlacementsAround,
-  cloudWeatherForSeed,
 } from "./CloudDistribution";
 import type { CloudPlacement } from "./CloudDistribution";
 import {
@@ -38,12 +37,14 @@ const CLOUD_DRIFT_METERS_PER_SECOND = 20;
 export interface CloudLayer {
   readonly mesh: Mesh;
   update(cameraPosition: Vector3): void;
+  setDensity(density: number): void;
   dispose(): void;
 }
 
 export interface CloudLayerOptions {
   metersPerUnit: number;
   weatherSeed: number;
+  density: number;
 }
 
 const cloudVertexShader = `
@@ -121,15 +122,16 @@ void main(void) {
   float distanceToCamera = length(vViewDirection);
   float nearFade = smoothstep(nearFadeStart, nearFadeEnd, distanceToCamera);
   float farFade = 1.0 - smoothstep(farFadeStart, farFadeEnd, distanceToCamera);
-  float coverage = density.r * nearFade * farFade;
+  float bodyCoverage = smoothstep(0.025, 0.78, density.r);
+  float coverage = bodyCoverage * nearFade * farFade;
 
-  float core = smoothstep(0.16, 0.86, max(density.r, density.g));
+  float core = smoothstep(0.12, 0.8, max(density.r, density.g));
   vec3 toCamera = normalize(vViewDirection);
   float backLight = pow(max(dot(-toCamera, sunDirection), 0.0), 7.0);
   float silverLining = backLight * (1.0 - smoothstep(0.18, 0.72, density.r));
   float sunAboveHorizon = max(sunDirection.y, 0.0);
   vec3 ambient = mix(groundColor, skyColor, 0.62);
-  vec3 lighting = ambient * mix(1.08, 0.68, core)
+  vec3 lighting = ambient * mix(1.06, 0.58, core)
     + sunColor * (0.10 + 0.22 * sunAboveHorizon + 0.72 * silverLining);
   vec3 cloudColor = clamp(lighting, vec3(0.015), vec3(1.3));
   float highAltitudeHaze = smoothstep(farFadeStart, farFadeEnd, distanceToCamera) * 0.55;
@@ -145,9 +147,8 @@ export function createCloudLayer(
   scene: Scene,
   lighting: SolarLighting,
   options: CloudLayerOptions,
-): CloudLayer | undefined {
+): CloudLayer {
   const { metersPerUnit, weatherSeed } = options;
-  if (cloudWeatherForSeed(weatherSeed).occupancy === 0) return undefined;
   const atlas = createCloudDensityAtlas(scene);
   const mesh = MeshBuilder.CreatePlane("cloudImpostors", { size: 1 }, scene);
   mesh.isPickable = false;
@@ -218,6 +219,7 @@ export function createCloudLayer(
 
   let centerCellX = Number.NaN;
   let centerCellZ = Number.NaN;
+  let density = options.density;
   const driftDirection = Vector2.Zero();
   copyPrevailingWindDirectionTo(driftDirection);
   const driftStartedAt = performance.now();
@@ -242,6 +244,7 @@ export function createCloudLayer(
       CLOUD_FAR_FADE_END_METERS,
       metersPerUnit,
       weatherSeed,
+      density,
     );
     uploadCloudInstances(mesh, placements);
   };
@@ -252,6 +255,13 @@ export function createCloudLayer(
   return {
     mesh,
     update,
+    setDensity(nextDensity: number) {
+      density = Math.max(0, Math.min(1, nextDensity));
+      centerCellX = Number.NaN;
+      centerCellZ = Number.NaN;
+      const camera = scene.activeCamera;
+      if (camera) update(camera.globalPosition);
+    },
     dispose() {
       material.dispose(false, false);
       atlas.texture.dispose();

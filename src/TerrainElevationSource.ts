@@ -1,4 +1,3 @@
-import { DynamicTexture, Scene } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
 import type { TileBounds, WorldTileArea } from "./WorldGrid";
 
@@ -8,7 +7,6 @@ import type { TileBounds, WorldTileArea } from "./WorldGrid";
  */
 export class TerrainElevationSource {
   private static readonly BASE_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
-  private static readonly OPEN_TOPO_MAP_BASE_URL = "https://tile.opentopomap.org";
   private static readonly elevationCache = new Map<string, Promise<{
     elevations: Float32Array;
     width: number;
@@ -230,79 +228,6 @@ export class TerrainElevationSource {
     };
   }
 
-  /**
-   * Creates an OpenTopoMap debug texture for the terrain's geographic bounds.
-   * The result is deliberately kept separate from the normal terrain pipeline.
-   */
-  static async createOpenTopoMapTexture(
-    scene: Scene,
-    terrain: TerrainData,
-  ): Promise<DynamicTexture> {
-    const sourceLevel = Math.min(15, terrain.worldTile.level);
-    const { northWest, southEast } = providerTileRange(terrain.bounds, sourceLevel);
-    const columns = southEast.x - northWest.x + 1;
-    const rows = southEast.y - northWest.y + 1;
-    const tileUrls: string[] = [];
-    for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        tileUrls.push(
-          `${this.OPEN_TOPO_MAP_BASE_URL}/${sourceLevel}/${northWest.x + column}/${northWest.y + row}.png`,
-        );
-      }
-    }
-    const tiles = await Promise.all(tileUrls.map((url) => this.loadImage(url)));
-    const tileSize = tiles[0].width;
-    const texture = new DynamicTexture(
-      "openTopoMapDebugTexture",
-      { width: tileSize * columns, height: tileSize * rows },
-      scene,
-      false,
-    );
-    const context = texture.getContext();
-
-    tiles.forEach((tile, index) => {
-      context.drawImage(
-        tile,
-        (index % columns) * tileSize,
-        Math.floor(index / columns) * tileSize,
-      );
-    });
-    texture.update(false);
-    // Canvas tiles are drawn north-to-south; ground UVs run in the opposite V direction.
-    texture.vScale = -1;
-    texture.vOffset = 1;
-    return texture;
-  }
-
-  private static async loadImage(url: string): Promise<HTMLImageElement> {
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error(`Failed to load map tile: ${url}`));
-      image.src = url;
-    });
-    return image;
-  }
-
-}
-
-function providerTileRange(
-  bounds: TileBounds,
-  level: number,
-): { northWest: { x: number; y: number }; southEast: { x: number; y: number } } {
-  return {
-    northWest: providerTileFor(
-      bounds.latNorth - 1e-10,
-      bounds.lonWest + 1e-10,
-      level,
-    ),
-    southEast: providerTileFor(
-      bounds.latSouth + 1e-10,
-      bounds.lonEast - 1e-10,
-      level,
-    ),
-  };
 }
 
 /**
@@ -317,15 +242,6 @@ export function providerElevationTileRange(
   return {
     northWest: providerTileForSample(bounds.latNorth, bounds.lonWest, level),
     southEast: providerTileForSample(bounds.latSouth, bounds.lonEast, level),
-  };
-}
-
-function providerTileFor(latitude: number, longitude: number, level: number): { x: number; y: number } {
-  const scale = 2 ** level;
-  const latitudeRadians = latitude * Math.PI / 180;
-  return {
-    x: Math.floor((longitude + 180) / 360 * scale),
-    y: Math.floor((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale),
   };
 }
 

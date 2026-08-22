@@ -9,6 +9,7 @@ import {
   worldTileAtLocation,
   worldTileBounds,
   worldTileSeed,
+  worldTileWindowOffsetsAtLocation,
 } from "../src/WorldGrid.ts";
 
 test("maps a location into the fixed application-owned grid", () => {
@@ -61,4 +62,17 @@ test("selects the four closest tiles and changes the window at tile midlines", (
   assert.equal(west.start.x, tile.x - 1);
   assert.equal(east.start.x, tile.x);
   assert.notEqual(worldTileAreaKey(west), worldTileAreaKey(east));
+});
+
+test("describes an exact two by two streaming window", () => {
+  const tile = worldTileAtLocation(59.88, 10.59);
+  const bounds = worldTileBounds(tile);
+  const latitude = (bounds.latNorth + bounds.latSouth) / 2;
+  const longitude = bounds.lonWest + 0.75 * (bounds.lonEast - bounds.lonWest);
+  const offsets = worldTileWindowOffsetsAtLocation(latitude, longitude, 2);
+
+  assert.equal(offsets.maximumX - offsets.minimumX + 1, 2);
+  assert.equal(offsets.maximumY - offsets.minimumY + 1, 2);
+  assert.ok(offsets.minimumX <= 0 && offsets.maximumX >= 0);
+  assert.ok(offsets.minimumY <= 0 && offsets.maximumY >= 0);
 });

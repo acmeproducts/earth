@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
+const roadPlanner = readFileSync(new URL("../src/RoadPlanner.ts", import.meta.url), "utf8");
 const lakeSurface = readFileSync(new URL("../src/LakeSurface.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
   new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
@@ -42,12 +43,22 @@ test("drapes roads at a meter-scale clearance", () => {
   assert.doesNotMatch(openStreetMap, /leftElevation \/ options\.metersPerUnit \+ 0\.025/);
 });
 
-test("styles OSM unpaved roads separately from paved roads", () => {
-  assert.match(openStreetMap, /properties\.surface/);
-  assert.match(openStreetMap, /track: 2\.4/);
-  assert.match(openStreetMap, /type === "path" \|\| type === "track"/);
-  assert.match(openStreetMap, /mergeRoads\(unpavedRoads, "unpavedRoads", "unpaved"/);
+test("styles OSM road classes, path types, and surfaces separately", () => {
+  assert.match(roadPlanner, /properties\.surface/);
+  assert.match(roadPlanner, /track: 2\.4/);
+  assert.match(roadPlanner, /cycleway: 2\.2/);
+  assert.match(roadPlanner, /driveway: 2\.8/);
+  assert.match(openStreetMap, /mergeRoads\(roadMeshes\.marked, "markedRoads", "marked"/);
+  assert.match(openStreetMap, /mergeRoads\(roadMeshes\.pedestrian, "pedestrianRoads", "pedestrian"/);
+  assert.match(openStreetMap, /mergeRoads\(roadMeshes\.unpaved, "unpavedRoads", "unpaved"/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
+});
+
+test("renders permanent mapped waterways as terrain-following water ribbons", () => {
+  assert.match(openStreetMap, /forEachFeature\(tile, "waterway"/);
+  assert.match(openStreetMap, /truthy\(feature\.properties\.intermittent\)/);
+  assert.match(openStreetMap, /createWaterway\(scene, line, terrain, options, widthMeters\)/);
+  assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
 });
 
 test("extends lake surfaces beneath the terrain shoreline transition", () => {
@@ -100,7 +111,7 @@ test("preserves the shared sky reflection when a streamed lake layer is disposed
   assert.match(openStreetMap, /static disposeLayer\(root: TransformNode\)/);
   assert.match(
     openStreetMap,
-    /mesh\.material instanceof PBRMaterial\) mesh\.material\.reflectionTexture = null/,
+    /mesh\.material instanceof PBRMaterial \|\| mesh\.material instanceof StandardMaterial/,
   );
   assert.match(openStreetMap, /root\.dispose\(false, true\)/);
 });

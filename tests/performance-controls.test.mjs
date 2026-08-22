@@ -4,19 +4,22 @@ import test from "node:test";
 
 const settings = readFileSync(new URL("../src/SceneSettings.ts", import.meta.url), "utf8");
 const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url), "utf8");
+const geocoding = readFileSync(new URL("../src/Geocoding.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 
-test("defaults the fully detailed streaming window to three by three tiles", () => {
+test("defaults to three by three and allows exact even-sized detail windows", () => {
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 3/);
+  assert.match(settings, /key: "detailTilesAcross"[\s\S]*?step: 1/);
   assert.match(settings, /key: "terrainTilesAcross"[\s\S]*?defaultValue: 17/);
-  assert.match(game, /this\.sceneSettings\.value\.detailTilesAcross - 1/);
-  assert.match(game, /wantDetail = ring <= this\.detailTileRadius/);
+  assert.match(game, /worldTileWindowOffsetsAtLocation\(/);
+  assert.match(game, /dx >= detailWindow\.minimumX[\s\S]*?dy <= detailWindow\.maximumY/);
 });
 
 test("renders scene sliders from shared setting definitions", () => {
   assert.match(settings, /label: "Full detail"/);
   assert.match(settings, /label: "Far terrain"/);
-  assert.match(settings, /label: "Grass density"/);
+  assert.match(settings, /label: "Cloud density"/);
   assert.match(controls, /for \(const definition of SCENE_SETTING_DEFINITIONS\)/);
   assert.match(controls, /onSettingChange\(definition\.key, value\)/);
 });
@@ -26,15 +29,57 @@ test("restores coarse terrain outside the selected detailed window", () => {
     game,
     /!wantDetail && record\.nativeTerrain && !record\.detailed/,
   );
-  assert.match(game, /ring > this\.detailTileRadius/);
+  assert.match(game, /record\.detailed && !wantDetail/);
   assert.match(game, /ring > this\.terrainTileRadius/);
 });
 
-test("grass density ranges from zero to one and refreshes loaded fields", () => {
-  assert.match(settings, /key: "grassDensity"[\s\S]*?minimum: 0[\s\S]*?maximum: 1/);
-  assert.match(game, /densityScale: \(\) => grassDensity/);
-  assert.match(game, /private async rebuildGrassFields/);
-  assert.match(game, /densityScale: \(\) => density/);
+test("cloud density ranges from zero to one and refreshes the cloud layer", () => {
+  assert.match(settings, /key: "cloudDensity"[\s\S]*?minimum: 0[\s\S]*?maximum: 1/);
+  assert.match(game, /density: this\.cloudDensity/);
+  assert.match(game, /this\.cloudLayer\?\.setDensity\(next\.cloudDensity\)/);
+  assert.doesNotMatch(settings, /grassDensity|Grass density/);
+});
+
+test("the settings menu toggles with Escape and supports coordinate navigation", () => {
+  assert.match(controls, /event\.key !== "Escape"/);
+  assert.match(controls, /this\.setMenuOpen\(!this\.menuOpen\)/);
+  assert.match(controls, /createCoordinateInput\("Longitude", -180, 180\)/);
+  assert.match(controls, /onLocationChange\(location\)/);
+});
+
+test("location names are geocoded and passed through coordinate navigation", () => {
+  assert.match(controls, /aria-label", "Place or address"/);
+  assert.match(controls, /geocodeLocationName\(this\.placeInput\.value\)/);
+  assert.match(controls, /onLocationChange\(location\)/);
+  assert.match(geocoding, /q: normalizedQuery/);
+  assert.match(geocoding, /format: "jsonv2"/);
+  assert.match(geocoding, /limit: "1"/);
+  assert.match(geocoding, /REQUEST_INTERVAL_MS = 1_000/);
+  assert.match(geocoding, /sessionStorage\.setItem/);
+});
+
+test("gameplay uses pointer lock and only the open menu restores the cursor", () => {
+  const menuOpenHandler = game.match(
+    /private setMenuOpen\([\s\S]*?(?=\n  private setupPointerLockControls)/,
+  );
+  assert.ok(menuOpenHandler);
+  assert.match(game, /this\.canvas\.requestPointerLock\(\)/);
+  assert.match(game, /document\.addEventListener\("pointerlockchange"/);
+  assert.match(game, /this\.sceneControls\?\.setMenuOpen\(true\)/);
+  assert.match(game, /document\.exitPointerLock\(\)/);
+  assert.match(game, /classList\.toggle\("gameplay-input", !isOpen\)/);
+  assert.doesNotMatch(menuOpenHandler[0], /this\.requestPointerLock\(\)/);
+  assert.match(html, /body\.gameplay-input \*[\s\S]*?cursor: none !important/);
+});
+
+test("changing worlds discards the outgoing camera's local position offset", () => {
+  assert.match(
+    game,
+    /private async startWorld\([\s\S]*?this\.resetCameraForWorldChange\(\);[\s\S]*?this\.disposeAllTiles\(\)/,
+  );
+  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?position\.x = 0/);
+  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?position\.z = 0/);
+  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?cameraDirection\.setAll\(0\)/);
 });
 
 test("persists normalized controls through one scene settings store", () => {

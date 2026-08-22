@@ -346,10 +346,12 @@ function createBirchTree(
   }
 
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  for (let level = 3; level < trunkSegments; level++) {
-    const branchesAtLevel = level < 7 ? 2 : 3;
+  for (let level = 4; level < trunkSegments; level++) {
+    const branchesAtLevel = level === trunkSegments - 1
+      ? 3
+      : level < 6 ? 3 : 4;
     const start = trunkPoints[level];
-    const crownT = (level - 3) / (trunkSegments - 3);
+    const crownT = (level - 4) / (trunkSegments - 4);
     const branchLength = lerp(0.72, 0.32, crownT) * (0.86 + random() * 0.24);
 
     for (let branch = 0; branch < branchesAtLevel; branch++) {
@@ -359,12 +361,12 @@ function createBirchTree(
         .add(new Vector3(0, branchLength * (0.3 + random() * 0.12), 0));
       const end = start.add(horizontal.scale(branchLength))
         .add(new Vector3(0, branchLength * (0.18 + random() * 0.16), 0));
-      const branchRadius = lerp(0.04, 0.018, crownT) * (0.88 + random() * 0.2);
+      const branchRadius = lerp(0.032, 0.0125, crownT) * (0.88 + random() * 0.2);
       const collarEnd = Vector3.Lerp(start, middle, 0.14);
 
       addBranchSegment(buffers, start, collarEnd, branchRadius * 1.28, branchRadius * 0.94, 7, crownT);
       addBranchSegment(buffers, collarEnd, middle, branchRadius * 0.92, branchRadius * 0.62, 6, crownT + 0.04);
-      addBranchSegment(buffers, middle, end, branchRadius * 0.63, branchRadius * 0.27, 6, crownT + 0.12);
+      addBranchSegment(buffers, middle, end, branchRadius * 0.61, branchRadius * 0.22, 6, crownT + 0.12);
       foliageAnchors.push(end);
 
       for (const split of [-1, 1]) {
@@ -373,7 +375,7 @@ function createBirchTree(
         const twigLength = branchLength * (0.27 + random() * 0.12);
         const twigEnd = middle.add(twigDirection.scale(twigLength))
           .add(new Vector3(0, twigLength * (-0.12 + random() * 0.34), 0));
-        addBranchSegment(buffers, middle, twigEnd, branchRadius * 0.4, branchRadius * 0.14, 5, crownT + 0.18);
+        addBranchSegment(buffers, middle, twigEnd, branchRadius * 0.34, branchRadius * 0.1, 5, crownT + 0.18);
         foliageAnchors.push(twigEnd);
       }
     }

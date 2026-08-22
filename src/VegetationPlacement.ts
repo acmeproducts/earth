@@ -1,7 +1,7 @@
 import { Matrix } from "@babylonjs/core";
 import type { HorizontalExclusionMask } from "./Geo";
 import type { VegetationRenderMode } from "./VegetationField";
-import type { WorldCover } from "./WorldCover";
+import type { LandCoverSampler } from "./WorldCover";
 
 export interface VegetationPlacementOptions {
   meshWidth: number;
@@ -10,7 +10,7 @@ export interface VegetationPlacementOptions {
   seed?: number;
   spacingMeters?: number;
   waterLineMeters?: number;
-  landCover?: WorldCover;
+  landCover?: LandCoverSampler;
   exclusionMask?: HorizontalExclusionMask;
   densityScale?: (worldX: number, worldZ: number) => number;
   renderMode?: VegetationRenderMode;

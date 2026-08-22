@@ -24,9 +24,12 @@ test("grass applies the tint consistently to models and impostors", () => {
   assert.match(modelSource, /setFloat\("instanceColorCoverage", 0\)/);
 });
 
-test("distant grass dissolves into its local ground palette before the tile edge", () => {
+test("distant grass dissolves according to the active full-detail distance", () => {
   assert.match(fieldSource, /distanceFadeNear/);
   assert.match(fieldSource, /distanceFadeFar/);
+  assert.match(fieldSource, /grassDistanceFadeRange\(/);
+  assert.match(fieldSource, /\(size \+ 1\) \/ 2 - GRASS_FADE_EDGE_INSET_TILE_WIDTHS/);
+  assert.match(fieldSource, /far - width \* GRASS_FADE_TRANSITION_TILE_WIDTHS/);
   assert.match(fieldSource, /distanceGroundColor/);
   assert.match(
     impostorSource,
@@ -34,6 +37,22 @@ test("distant grass dissolves into its local ground palette before the tile edge
   );
   assert.match(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
+});
+
+test("loaded and newly committed grass fields use the current detail setting", () => {
+  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  assert.match(
+    game,
+    /kind === "grassField"[\s\S]*?setGrassFieldDetailDistance\([\s\S]*?detailTilesAcross/,
+  );
+  assert.match(
+    game,
+    /if \(detailSizeChanged\) this\.updateGrassDetailDistance\(\)/,
+  );
+  assert.match(
+    game,
+    /updateGrassDetailDistance\(\)[\s\S]*?record\.grassField[\s\S]*?setGrassFieldDetailDistance/,
+  );
 });
 
 test("grass uses ground-aware ambient light and terrain-matched shadows", () => {

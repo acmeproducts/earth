@@ -2,7 +2,7 @@ export interface SceneSettings {
   modelRangeMeters: number;
   detailTilesAcross: number;
   terrainTilesAcross: number;
-  grassDensity: number;
+  cloudDensity: number;
 }
 
 export type SceneSettingKey = keyof SceneSettings;
@@ -38,7 +38,7 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     queryParameter: "detail-size",
     minimum: 1,
     maximum: 9,
-    step: 2,
+    step: 1,
     defaultValue: 3,
     format: formatTileArea,
   },
@@ -54,14 +54,14 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     format: formatTileArea,
   },
   {
-    key: "grassDensity",
-    label: "Grass density",
-    ariaLabel: "Grass density from zero to one",
-    queryParameter: "grass-density",
+    key: "cloudDensity",
+    label: "Cloud density",
+    ariaLabel: "Cloud density from zero to one",
+    queryParameter: "cloud-density",
     minimum: 0,
     maximum: 1,
     step: 0.05,
-    defaultValue: 1,
+    defaultValue: 0.65,
     format: (value) => value.toFixed(2),
   },
 ] as const;

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="geocoder-url" content="https://nominatim.openstreetmap.org/search">
   <title>Babylon.js Earth</title>
   <style>
     * {
@@ -16,6 +17,11 @@
       height: 100%;
       overflow: hidden;
       background: #0a0a0f;
+    }
+
+    body.gameplay-input,
+    body.gameplay-input * {
+      cursor: none !important;
     }
 
     #renderCanvas {
@@ -84,21 +90,55 @@
 
     #sceneControls {
       position: fixed;
-      top: 12px;
-      left: 12px;
-      z-index: 30;
-      width: 360px;
-      padding: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.22);
-      border-radius: 6px;
-      background: rgba(10, 12, 15, 0.88);
+      inset: 0 auto 0 0;
+      z-index: 40;
+      width: min(390px, 100vw);
+      padding: 22px 20px;
+      overflow-y: auto;
+      border-right: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(12, 15, 18, 0.96);
+      box-shadow: 12px 0 30px rgba(0, 0, 0, 0.28);
       color: #f3f5f7;
-      font: 12px Arial, sans-serif;
+      font: 13px Arial, sans-serif;
+      transform: translateX(-100%);
+      visibility: hidden;
+      pointer-events: none;
+      transition: transform 180ms ease, visibility 0s linear 180ms;
+    }
+
+    #sceneControls.open {
+      transform: translateX(0);
+      visibility: visible;
+      pointer-events: auto;
+      transition-delay: 0s;
+    }
+
+    #sceneControls:focus { outline: none; }
+    #sceneControls h1 {
+      margin: 0 0 24px;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 650;
+    }
+
+    .scene-control-group + .scene-control-group {
+      margin-top: 26px;
+      padding-top: 22px;
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .scene-control-group h2 {
+      margin: 0 0 15px;
+      color: #aeb8bf;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
     }
 
     .scene-control-row {
       display: grid;
-      grid-template-columns: 92px minmax(100px, 1fr) 50px auto;
+      grid-template-columns: 96px minmax(92px, 1fr) 54px auto;
       align-items: center;
       gap: 8px;
       color: #d9dfe3;
@@ -125,11 +165,74 @@
     .scene-control-row button.active { background: #397354; color: #fff; }
     .scene-control-row button:focus-visible { outline: 2px solid #8fc4a4; outline-offset: 2px; }
 
-    @media (max-width: 520px) {
-      #sceneControls {
-        top: 52px;
-        width: calc(100% - 24px);
-      }
+    .coordinate-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      align-items: end;
+      gap: 10px;
+    }
+
+    .place-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .coordinate-field,
+    .place-field {
+      display: grid;
+      gap: 6px;
+      color: #cbd3d8;
+      font-size: 12px;
+    }
+
+    .coordinate-field input,
+    .place-field input {
+      min-width: 0;
+      width: 100%;
+      height: 34px;
+      padding: 0 8px;
+      border: 1px solid #4b555d;
+      border-radius: 4px;
+      background: #11161a;
+      color: #fff;
+      font: 13px ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .place-field input { font-family: Arial, sans-serif; }
+
+    .coordinate-go,
+    .place-go {
+      height: 34px;
+      padding: 0 14px;
+      border: 1px solid #4e8f69;
+      border-radius: 4px;
+      background: #397354;
+      color: #fff;
+      font: 600 13px Arial, sans-serif;
+      cursor: pointer;
+    }
+
+    .coordinate-go:disabled,
+    .place-go:disabled { opacity: 0.5; cursor: wait; }
+    .coordinate-field input:focus-visible,
+    .place-field input:focus-visible,
+    .coordinate-go:focus-visible,
+    .place-go:focus-visible { outline: 2px solid #8fc4a4; outline-offset: 2px; }
+    .coordinate-status {
+      display: block;
+      min-height: 16px;
+      margin-top: 10px;
+      color: #b8c3c9;
+      font-size: 12px;
+    }
+
+    @media (max-width: 420px) {
+      .coordinate-form { grid-template-columns: 1fr 1fr; }
+      .coordinate-go { grid-column: 1 / -1; }
     }
 
     #loading {
@@ -264,7 +367,7 @@
   </div>
   <canvas id="renderCanvas"></canvas>
   <div id="attribution">
-    &copy; ESA WorldCover 2020 &middot;
+    &copy; ESA WorldCover 2021 &middot;
     <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &middot;
     &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
   </div>

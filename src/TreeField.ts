@@ -8,6 +8,7 @@ import {
   Scene,
   ShadowDepthWrapper,
   ShaderMaterial,
+  StandardMaterial,
   TransformNode,
   Vector2,
   Vector3,
@@ -94,6 +95,11 @@ interface TreeFieldOptions extends VegetationPlacementOptions {
   forceLowestImpostorLod?: boolean;
   positionOffset?: Vector3;
   elevationSampler?: (x: number, z: number) => number;
+  /** Rendered height before per-instance scale variation. */
+  renderHeightMeters?: number;
+  /** Names the owning field and its per-species prototype children. */
+  rootName?: string;
+  prototypeNamePrefix?: string;
   /**
    * Seed for the species-grove noise. Pass a world-level seed (not a per-tile
    * one) so groves continue seamlessly across streamed tile boundaries.
@@ -517,9 +523,12 @@ export async function createTreeField(
     yieldControl,
     startDisabled = false,
     speciesSeed = seed,
+    renderHeightMeters = 11,
+    rootName = "treeField",
+    prototypeNamePrefix = rootName,
   } = options;
-  const treeHeight = 11 / metersPerUnit;
-  const root = new TransformNode("treeField", scene);
+  const treeHeight = renderHeightMeters / metersPerUnit;
+  const root = new TransformNode(rootName, scene);
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
   const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
@@ -643,7 +652,7 @@ export async function createTreeField(
     const prototype = await createTreeImpostorPrototype(
       scene,
       treeHeight,
-      `treeField-${species}`,
+      `${prototypeNamePrefix}-${species}`,
       species,
     );
     prototype.root.parent = root;
@@ -667,10 +676,11 @@ export async function createTreeField(
     packedSpeciesMatrices.push(await packInstanceMatrices(speciesMatrices[species], yieldControl));
   }
   const fields: VegetationFieldResult[] = [];
+  const shadowCasterMeshes: Mesh[] = [];
   for (let index = 0; index < speciesResources.length; index++) {
     const { prototype, modelMeshes } = speciesResources[index];
     const ownMatrices = packedSpeciesMatrices[index];
-    fields.push(await createVegetationFieldResult(
+    const field = await createVegetationFieldResult(
       prototype.root,
       [prototype.mesh],
       modelMeshes,
@@ -679,7 +689,16 @@ export async function createTreeField(
       renderMode,
       undefined,
       yieldControl,
+    );
+    field.shadowCasterMeshes.push(...createWebGPUTreeShadowCasters(
+      scene,
+      prototype.root,
+      modelMeshes,
+      ownMatrices,
+      speciesList[index],
     ));
+    shadowCasterMeshes.push(...field.shadowCasterMeshes);
+    fields.push(field);
     await yieldControl?.();
   }
   const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
@@ -689,6 +708,7 @@ export async function createTreeField(
     meshes: [...impostorMeshes, ...modelMeshes],
     impostorMeshes,
     modelMeshes,
+    shadowCasterMeshes,
     instanceMatrices: matrixData,
     count: matrices.length,
     setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
@@ -736,6 +756,57 @@ export async function createTreeField(
       },
     ),
   };
+}
+
+/**
+ * Reuses the procedural model geometry for native WebGPU shadow depth passes.
+ * The shadow target toggles these meshes visible only for its render pass, so
+ * they never enter the main camera draw while remaining valid scene meshes.
+ */
+function createWebGPUTreeShadowCasters(
+  scene: Scene,
+  root: TransformNode,
+  modelMeshes: readonly Mesh[],
+  matrices: Float32Array,
+  species: TreeSpecies,
+): Mesh[] {
+  if (!scene.getEngine().isWebGPU || modelMeshes.length === 0 || matrices.length === 0) return [];
+
+  const material = new StandardMaterial(`treeShadow-${species}Material`, scene);
+  material.disableLighting = true;
+  material.backFaceCulling = false;
+  const casters: Mesh[] = [];
+  for (let index = 0; index < modelMeshes.length; index++) {
+    const source = modelMeshes[index];
+    if (source.getTotalVertices() === 0) continue;
+    // Both Mesh.clone() and Geometry.applyToMesh() retain GPU vertex-buffer
+    // state shared with the visible model. Thin-instance matrix bindings then
+    // leak between the two meshes and can leave the model with no instances.
+    // Extracting forces independent geometry as well as independent instances.
+    const caster = new Mesh(`treeShadow-${species}-${index}`, scene);
+    VertexData.ExtractFromMesh(source, true, true).applyToMesh(caster, true);
+    caster.parent = root;
+    caster.position.copyFrom(source.position);
+    caster.rotation.copyFrom(source.rotation);
+    caster.rotationQuaternion = source.rotationQuaternion?.clone() ?? null;
+    caster.scaling.copyFrom(source.scaling);
+    caster.material = material;
+    caster.isPickable = false;
+    caster.receiveShadows = false;
+    caster.metadata = { ...(caster.metadata ?? {}), shadowOnly: true };
+    caster.isVisible = false;
+    caster.thinInstanceSetBuffer("matrix", matrices, 16, true);
+    caster.thinInstanceCount = matrices.length / 16;
+    caster.thinInstanceRefreshBoundingInfo(true);
+    casters.push(caster);
+  }
+  root.onDisposeObservable.addOnce(() => {
+    for (const caster of casters) {
+      if (!caster.isDisposed()) caster.dispose(false, false);
+    }
+    material.dispose(false, false);
+  });
+  return casters;
 }
 
 /** Builds the same fixed cube and material used by every forest instance. */

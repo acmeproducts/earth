@@ -15,7 +15,12 @@ test("upper-hemisphere impostors remap side capture and runtime sampling togethe
 });
 
 test("all non-tree vegetation opts in while trees retain the full range", () => {
-  for (const name of ["GrassImpostor.ts", "FlowerImpostor.ts", "BushImpostor.ts"]) {
+  for (const name of [
+    "GrassImpostor.ts",
+    "FlowerImpostor.ts",
+    "BushImpostor.ts",
+    "FernImpostor.ts",
+  ]) {
     assert.match(source(name), /upperHemisphereOnly: true/);
   }
   assert.doesNotMatch(source("TreeImpostor.ts"), /upperHemisphereOnly: true/);

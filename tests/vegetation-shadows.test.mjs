@@ -23,9 +23,12 @@ const solarLighting = readFileSync(
   "utf8",
 );
 
-test("keeps grass, flowers, and bushes out of the vegetation shadow-caster list", () => {
-  assert.match(game, /filter\(\(kind\) => kind === "treeField"\)/);
-  assert.match(game, /casters\.push\(\.\.\.field\.meshes\)/);
+test("keeps low vegetation out of the tree and sapling shadow-caster list", () => {
+  assert.match(
+    game,
+    /filter\(\(kind\) => kind === "treeField" \|\| kind === "saplingField"\)/,
+  );
+  assert.match(game, /field\.shadowCasterMeshes : field\.meshes/);
   assert.match(game, /setShadowCasters\(casters\)/);
 });
 
@@ -39,6 +42,19 @@ test("WebGPU terrain receives building shadows without self-shadow acne", () => 
   assert.match(game, /if \(!this\.engine\.isWebGPU\) casters\.push\(record\.terrain\)/);
   assert.match(game, /this\.solarLighting\?\.setShadowCasters\(casters\)/);
   assert.doesNotMatch(game, /if \(casters\.length > 0\) this\.solarLighting/);
+});
+
+test("WebGPU trees cast through native shadow-only geometry", () => {
+  assert.match(impostors, /function createWebGPUTreeShadowCasters/);
+  assert.match(impostors, /new StandardMaterial\(`treeShadow-/);
+  assert.match(impostors, /const caster = new Mesh\(`treeShadow-/);
+  assert.match(impostors, /VertexData\.ExtractFromMesh\(source, true, true\)/);
+  assert.doesNotMatch(impostors, /source\.geometry\.applyToMesh\(caster\)/);
+  assert.match(impostors, /thinInstanceSetBuffer\("matrix", matrices, 16, true\)/);
+  assert.match(impostors, /shadowOnly: true/);
+  assert.match(solarLighting, /shadowMap\?\.onBeforeRenderObservable\.add/);
+  assert.match(solarLighting, /shadowMap\?\.onAfterRenderObservable\.add/);
+  assert.match(game, /this\.engine\.isWebGPU \? field\.shadowCasterMeshes : field\.meshes/);
 });
 
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {

@@ -18,22 +18,11 @@ export enum LandCoverClass {
   MossAndLichen = 100,
 }
 
-const TERRAIN_COLORS: Readonly<Record<number, readonly [number, number, number]>> = {
-  [LandCoverClass.TreeCover]: [0.1, 0.34, 0.12],
-  [LandCoverClass.Shrubland]: [0.36, 0.44, 0.18],
-  [LandCoverClass.Grassland]: [0.42, 0.58, 0.22],
-  [LandCoverClass.Cropland]: [0.57, 0.5, 0.25],
-  [LandCoverClass.BuiltUp]: [0.42, 0.4, 0.38],
-  [LandCoverClass.Bare]: [0.48, 0.45, 0.4],
-  [LandCoverClass.SnowAndIce]: [0.92, 0.94, 0.96],
-  [LandCoverClass.Water]: [0.05, 0.24, 0.42],
-  [LandCoverClass.Wetland]: [0.16, 0.39, 0.32],
-  [LandCoverClass.Mangrove]: [0.05, 0.32, 0.18],
-  [LandCoverClass.MossAndLichen]: [0.56, 0.57, 0.42],
-};
+export interface LandCoverSampler {
+  sample(longitude: number, latitude: number): LandCoverClass;
+}
 
-// Natural material tints used by the normal terrain renderer. These are kept
-// separate from the brighter diagnostic palette above.
+// Natural material tints used by the terrain renderer.
 const SURFACE_COLORS: Readonly<Record<number, readonly [number, number, number]>> = {
   [LandCoverClass.TreeCover]: [0.42, 0.62, 0.32],
   [LandCoverClass.Shrubland]: [0.54, 0.66, 0.33],
@@ -58,13 +47,18 @@ const COASTLINE_CONTEXT_METERS =
 export class WorldCover {
   private static readonly TILE_URL =
     "https://tiledimageservices.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/" +
-    "European_Space_Agency_WorldCover_2020_Land_Cover_220202a/ImageServer/tile";
-  private static readonly LEVEL = 14;
+    "European_Space_Agency_WorldCover_2021_Land_Cover_WGS84_7/ImageServer/tile";
+  private static readonly LEVEL = 13;
   private static readonly TILE_SIZE = 256;
-  private static readonly RESOLUTION = 9.276623821756539;
-  private static readonly ORIGIN_X = -20037507.0672;
-  private static readonly ORIGIN_Y = 18807214.0967;
+  private static readonly RESOLUTION = 1 / 12_000;
+  private static readonly ORIGIN_X = -180;
+  private static readonly ORIGIN_Y = 84;
+  private static readonly MIN_LONGITUDE = -180;
+  private static readonly MAX_LONGITUDE = 180;
+  private static readonly MIN_LATITUDE = -60;
+  private static readonly MAX_LATITUDE = 84;
   private static readonly cache = new Map<string, Promise<Lerc.LercData>>();
+  private static decoderReady?: Promise<void>;
 
   private constructor(
     private readonly tiles: Map<string, Lerc.LercData>,
@@ -72,13 +66,16 @@ export class WorldCover {
   ) {}
 
   static async fetch(bounds: TileBounds, level = this.LEVEL): Promise<WorldCover> {
-    await Lerc.load({
-      locateFile: () => new URL("lerc-wasm.wasm", document.baseURI).toString(),
-    });
+    await this.loadDecoder();
     const clampedLevel = Math.max(0, Math.min(this.LEVEL, Math.round(level)));
     const resolution = this.RESOLUTION * Math.pow(2, this.LEVEL - clampedLevel);
-    const northWest = this.tileFor(bounds.lonWest, bounds.latNorth, resolution);
-    const southEast = this.tileFor(bounds.lonEast, bounds.latSouth, resolution);
+    const west = Math.max(this.MIN_LONGITUDE, bounds.lonWest);
+    const east = Math.min(this.MAX_LONGITUDE - resolution / 2, bounds.lonEast);
+    const north = Math.min(this.MAX_LATITUDE - resolution / 2, bounds.latNorth);
+    const south = Math.max(this.MIN_LATITUDE + resolution / 2, bounds.latSouth);
+    if (west > east || south > north) return new WorldCover(new Map(), resolution);
+    const northWest = this.tileFor(west, north, resolution);
+    const southEast = this.tileFor(east, south, resolution);
     const requests: Array<Promise<readonly [string, Lerc.LercData]>> = [];
     for (let row = northWest.row; row <= southEast.row; row++) {
       for (let column = northWest.column; column <= southEast.column; column++) {
@@ -101,9 +98,8 @@ export class WorldCover {
   }
 
   sample(longitude: number, latitude: number): LandCoverClass {
-    const { x, y } = toWebMercator(longitude, latitude);
-    const pixelX = Math.floor((x - WorldCover.ORIGIN_X) / this.resolution);
-    const pixelY = Math.floor((WorldCover.ORIGIN_Y - y) / this.resolution);
+    const pixelX = Math.floor((longitude - WorldCover.ORIGIN_X) / this.resolution);
+    const pixelY = Math.floor((WorldCover.ORIGIN_Y - latitude) / this.resolution);
     return this.classAtPixel(pixelX, pixelY, LandCoverClass.Bare);
   }
 
@@ -194,9 +190,8 @@ export class WorldCover {
   }
 
   private waterCoverage(longitude: number, latitude: number): number {
-    const { x, y } = toWebMercator(longitude, latitude);
-    const pixelX = (x - WorldCover.ORIGIN_X) / this.resolution - 0.5;
-    const pixelY = (WorldCover.ORIGIN_Y - y) / this.resolution - 0.5;
+    const pixelX = (longitude - WorldCover.ORIGIN_X) / this.resolution - 0.5;
+    const pixelY = (WorldCover.ORIGIN_Y - latitude) / this.resolution - 0.5;
     const x0 = Math.floor(pixelX);
     const y0 = Math.floor(pixelY);
     const fx = pixelX - x0;
@@ -225,11 +220,10 @@ export class WorldCover {
     latitude: number,
     resolution: number,
   ): { row: number; column: number } {
-    const { x, y } = toWebMercator(longitude, latitude);
     const span = this.TILE_SIZE * resolution;
     return {
-      row: Math.floor((this.ORIGIN_Y - y) / span),
-      column: Math.floor((x - this.ORIGIN_X) / span),
+      row: Math.floor((this.ORIGIN_Y - latitude) / span),
+      column: Math.floor((longitude - this.ORIGIN_X) / span),
     };
   }
 
@@ -255,11 +249,19 @@ export class WorldCover {
     }
     return [tileKey, await request];
   }
-}
-export function landCoverColor(landCover: LandCoverClass): readonly [number, number, number] {
-  return TERRAIN_COLORS[landCover] ?? TERRAIN_COLORS[LandCoverClass.Bare];
-}
 
+  private static loadDecoder(): Promise<void> {
+    if (!this.decoderReady) {
+      this.decoderReady = Lerc.load({
+        locateFile: () => new URL("lerc-wasm.wasm", document.baseURI).toString(),
+      }).catch((error: unknown) => {
+        this.decoderReady = undefined;
+        throw error;
+      });
+    }
+    return this.decoderReady;
+  }
+}
 export function landCoverSurfaceColor(
   landCover: LandCoverClass,
 ): readonly [number, number, number] {

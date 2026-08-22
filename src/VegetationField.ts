@@ -25,6 +25,8 @@ export interface VegetationFieldResult {
   meshes: Mesh[];
   impostorMeshes: Mesh[];
   modelMeshes: Mesh[];
+  /** Native depth-only geometry kept outside normal scene rendering. */
+  shadowCasterMeshes: Mesh[];
   instanceMatrices: Float32Array;
   count: number;
   setRenderMode(mode: VegetationRenderMode): void;
@@ -480,6 +482,7 @@ export async function createVegetationFieldResult(
     meshes: [...impostorMeshes, ...modelMeshes],
     impostorMeshes,
     modelMeshes,
+    shadowCasterMeshes: [],
     instanceMatrices: matrices,
     count,
     setRenderMode: applyRenderMode,

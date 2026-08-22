@@ -105,7 +105,11 @@ test("retains interior rings while adapting vector-tile buildings", () => {
 test("extracts roads into context-ready records shared by map consumers", () => {
   assert.match(openStreetMap, /interface RoadSource/);
   assert.match(openStreetMap, /for \(const source of roadSources\(tile\)\)/);
-  assert.match(openStreetMap, /roadAppearance\(source\.properties\)/);
+  assert.match(openStreetMap, /planRoad\(source\.properties\)/);
+});
+
+test("omits aggregate building outlines when OSM supplies 3D parts", () => {
+  assert.match(openStreetMap, /truthy\(feature\.properties\.hide_3d\)/);
 });
 
 test("caches provider-tile source adaptation across application tiles", () => {

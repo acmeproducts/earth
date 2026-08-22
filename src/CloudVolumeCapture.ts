@@ -47,6 +47,11 @@ export function generateCloudDensityAtlasData(): CloudDensityAtlasData {
 
 function renderCloudVariant(variant: number): Uint8Array {
   const lobes = cloudLobes(variant);
+  const opticalDepthGain = lerp(
+    4.2,
+    5.8,
+    (lobeRandom(variant, 0, 10) + lobeRandom(variant, 1, 10)) * 0.5,
+  );
   const pixels = new Uint8Array(CLOUD_TEXTURE_WIDTH * CLOUD_TEXTURE_HEIGHT * 4);
   const elevation = 25 * Math.PI / 180;
   const upY = Math.cos(elevation);
@@ -69,7 +74,7 @@ function renderCloudVariant(variant: number): Uint8Array {
         opticalDepth += density * rayStep;
         peakDensity = Math.max(peakDensity, density);
       }
-      const coverage = 1 - Math.exp(-opticalDepth * 2.8);
+      const coverage = 1 - Math.exp(-opticalDepth * opticalDepthGain);
       const target = (y * CLOUD_TEXTURE_WIDTH + x) * 4;
       pixels[target] = Math.round(clamp01(coverage) * 255);
       pixels[target + 1] = Math.round(clamp01(peakDensity) * 255);
@@ -210,9 +215,9 @@ function cloudDensity(
     const influence = 1 - radiusSquared;
     density += influence * influence * lobe.strength;
   }
-  if (density <= 0.1) return 0;
+  if (density <= 0.08) return 0;
   const detail = valueNoise3D(x * 4.2, y * 5.4, z * 4.2, variant);
-  return Math.max(0, density * (0.62 + detail * 0.58) - 0.12);
+  return Math.max(0, density * (0.78 + detail * 0.42) - 0.08);
 }
 
 function valueNoise3D(x: number, y: number, z: number, seed: number): number {

@@ -33,9 +33,10 @@ const GRASS_SPACING_METERS = 1.3;
 /** How strongly each clump adopts the hue and brightness of its local ground. */
 const GRASS_GROUND_COLOR_INFLUENCE = 1;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
-/** Radial fade stays inside the nearest edge of the square detail-tile ring. */
-const GRASS_FADE_NEAR_TILE_WIDTHS = 0.85;
-const GRASS_FADE_FAR_TILE_WIDTHS = 1.95;
+/** Keeps the established 3 x 3 fade just inside its former two-tile reach. */
+const GRASS_FADE_EDGE_INSET_TILE_WIDTHS = 0.05;
+const GRASS_FADE_TRANSITION_TILE_WIDTHS = 1.1;
+const DEFAULT_DETAIL_TILES_ACROSS = 3;
 const GRASS_GROUND_COLOR_BLEND = 0.42;
 /** Average upward response of the crossed grass cards in the live model. */
 const GRASS_AMBIENT_UPWARD = 0.58;
@@ -44,6 +45,41 @@ const GRASS_AMBIENT_UPWARD = 0.58;
 const GRASS_SHADOW_DARKNESS = 0;
 
 type GrassFieldOptions = VegetationPlacementOptions;
+
+export interface GrassDistanceFadeRange {
+  near: number;
+  far: number;
+}
+
+/** Resolves the radial grass dissolve from the active full-detail tile count. */
+export function grassDistanceFadeRange(
+  tileWidth: number,
+  detailTilesAcross: number,
+): GrassDistanceFadeRange {
+  const width = Math.max(0, tileWidth);
+  const size = Math.max(1, Math.round(detailTilesAcross));
+  const far = width * (
+    (size + 1) / 2 - GRASS_FADE_EDGE_INSET_TILE_WIDTHS
+  );
+  return {
+    near: Math.max(0, far - width * GRASS_FADE_TRANSITION_TILE_WIDTHS),
+    far,
+  };
+}
+
+/** Updates an existing field without rebuilding its grass instances. */
+export function setGrassFieldDetailDistance(
+  field: VegetationFieldResult,
+  tileWidth: number,
+  detailTilesAcross: number,
+): void {
+  const fade = grassDistanceFadeRange(tileWidth, detailTilesAcross);
+  for (const mesh of field.impostorMeshes) {
+    if (!(mesh.material instanceof ShaderMaterial)) continue;
+    mesh.material.setFloat("distanceFadeNear", fade.near);
+    mesh.material.setFloat("distanceFadeFar", fade.far);
+  }
+}
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.72,
@@ -95,9 +131,12 @@ export async function createGrassField(
     grass.material.setFloat("impostorLodNear", 40);
     grass.material.setFloat("impostorLodFar", 80);
     grass.material.setFloat("instanceColorCoverage", 1);
-    const tileWidth = Math.min(meshWidth, meshDepth);
-    grass.material.setFloat("distanceFadeNear", tileWidth * GRASS_FADE_NEAR_TILE_WIDTHS);
-    grass.material.setFloat("distanceFadeFar", tileWidth * GRASS_FADE_FAR_TILE_WIDTHS);
+    const fade = grassDistanceFadeRange(
+      Math.min(meshWidth, meshDepth),
+      DEFAULT_DETAIL_TILES_ACROSS,
+    );
+    grass.material.setFloat("distanceFadeNear", fade.near);
+    grass.material.setFloat("distanceFadeFar", fade.far);
     grass.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
     grass.material.setFloat("distanceGroundBlend", 1);
     grass.material.setFloat("impostorAmbientUpward", GRASS_AMBIENT_UPWARD);

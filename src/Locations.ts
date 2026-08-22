@@ -53,8 +53,72 @@ export interface WorldLocation {
   lon: number;
 }
 
-const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
+export const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
 const WEB_MERCATOR_MAX_SINE = Math.sin(WEB_MERCATOR_MAX_LATITUDE * Math.PI / 180);
+const LOCATION_STORAGE_KEY = "earth.location.v1";
+
+type LocationStorage = Pick<Storage, "getItem" | "setItem">;
+
+/** Restores and continuously persists the player's geographic location. */
+export class WorldLocationStore {
+  private current: WorldLocation;
+  private readonly storage?: LocationStorage;
+
+  constructor(fallback: WorldLocation, storage?: LocationStorage) {
+    this.storage = storage;
+    this.current = loadWorldLocation(fallback, storage);
+  }
+
+  get value(): Readonly<WorldLocation> {
+    return this.current;
+  }
+
+  update(location: WorldLocation): void {
+    if (!isValidWorldLocation(location)) return;
+    this.current = { ...location };
+    try {
+      this.storage?.setItem(LOCATION_STORAGE_KEY, JSON.stringify(this.current));
+    } catch {
+      // Storage may be unavailable in private or embedded browsing contexts.
+    }
+  }
+}
+
+export function createBrowserWorldLocationStore(fallback: WorldLocation): WorldLocationStore {
+  let storage: Storage | undefined;
+  try {
+    storage = window.localStorage;
+  } catch {
+    storage = undefined;
+  }
+  return new WorldLocationStore(fallback, storage);
+}
+
+function loadWorldLocation(
+  fallback: WorldLocation,
+  storage?: LocationStorage,
+): WorldLocation {
+  try {
+    const stored = storage?.getItem(LOCATION_STORAGE_KEY);
+    if (stored) {
+      const candidate = JSON.parse(stored) as Partial<WorldLocation>;
+      if (isValidWorldLocation(candidate)) return { lat: candidate.lat, lon: candidate.lon };
+    }
+  } catch {
+    // Ignore malformed or inaccessible storage and retain the fallback.
+  }
+  return { ...fallback };
+}
+
+function isValidWorldLocation(location: Partial<WorldLocation>): location is WorldLocation {
+  return typeof location.lat === "number" &&
+    Number.isFinite(location.lat) &&
+    Math.abs(location.lat) <= WEB_MERCATOR_MAX_LATITUDE &&
+    typeof location.lon === "number" &&
+    Number.isFinite(location.lon) &&
+    location.lon >= -180 &&
+    location.lon <= 180;
+}
 
 /** Picks a world location uniformly by surface area within Web Mercator's bounds. */
 export function randomWorldLocation(random: () => number = Math.random): WorldLocation {

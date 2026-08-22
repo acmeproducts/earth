@@ -23,7 +23,7 @@ test("loads defaults and normalizes linked terrain sizes", () => {
     modelRangeMeters: 50,
     detailTilesAcross: 3,
     terrainTilesAcross: 17,
-    grassDensity: 1,
+    cloudDensity: 0.65,
   });
 
   const reducedTerrain = updateSceneSetting(store.value, "terrainTilesAcross", 3);
@@ -34,12 +34,17 @@ test("loads defaults and normalizes linked terrain sizes", () => {
 test("persists normalized values and restores them", () => {
   const storage = new MemoryStorage();
   const store = new SceneSettingsStore(new URLSearchParams(), storage);
-  store.update("grassDensity", 0.33);
+  store.update("cloudDensity", 0.33);
   store.update("detailTilesAcross", 8);
 
-  assert.equal(store.value.grassDensity, 0.35);
-  assert.equal(store.value.detailTilesAcross, 9);
+  assert.equal(store.value.cloudDensity, 0.35);
+  assert.equal(store.value.detailTilesAcross, 8);
   assert.deepEqual(new SceneSettingsStore(new URLSearchParams(), storage).value, store.value);
+});
+
+test("allows a two by two full-detail terrain window", () => {
+  const store = new SceneSettingsStore(new URLSearchParams("detail-size=2"));
+  assert.equal(store.value.detailTilesAcross, 2);
 });
 
 test("URL parameters override remembered settings", () => {
@@ -48,14 +53,14 @@ test("URL parameters override remembered settings", () => {
     modelRangeMeters: 20,
     detailTilesAcross: 3,
     terrainTilesAcross: 9,
-    grassDensity: 0.25,
+    cloudDensity: 0.25,
   });
   const store = new SceneSettingsStore(new URLSearchParams(
-    "vegetation-distance=75&grass-density=0.8",
+    "vegetation-distance=75&cloud-density=0.8",
   ), storage);
 
   assert.equal(store.value.modelRangeMeters, 75);
-  assert.equal(store.value.grassDensity, 0.8);
+  assert.equal(store.value.cloudDensity, 0.8);
   assert.equal(store.value.terrainTilesAcross, 9);
 });
 
