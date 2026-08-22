@@ -99,8 +99,8 @@ export class WorldCover {
     const north = toWebMercator(0, bounds.latNorth).y;
     const south = toWebMercator(0, bounds.latSouth).y;
     const metersPerPixel = (
-      terrain.groundWidthMeters / width +
-      terrain.groundHeightMeters / height
+      terrain.groundWidthMeters / Math.max(1, width - 1) +
+      terrain.groundHeightMeters / Math.max(1, height - 1)
     ) / 2;
 
     for (let y = 0; y < height; y++) {
@@ -120,6 +120,9 @@ export class WorldCover {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
       if ((index & 4095) === 4095) await yieldControl?.();
     }
+    // Lake surfaces use this same classification to cover the carved shore
+    // transition without blindly spilling onto the opposite bank.
+    terrain.waterMask = water;
 
     const distance = await distanceFromShore(water, width, height, yieldControl);
     const blendWidth = Math.max(1, shorelineWidthMeters / metersPerPixel);

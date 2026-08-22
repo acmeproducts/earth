@@ -146,7 +146,7 @@ for (let elapsed = 0; elapsed < 240; elapsed += 5) {
   await sleep(5000);
   filled = await snapshot();
   console.log(`fill ${elapsed + 5}s: tiles=${filled.tileCount} detail=${filled.detailTiles} veg=${filled.vegetationInstances}`);
-  if (filled.tileCount >= 160 && filled.detailTiles >= 20) break;
+  if (filled.tileCount >= 280 && filled.detailTiles >= 20) break;
 }
 console.log("after fill:", JSON.stringify(filled));
 await screenshot("tiles-1-filled");

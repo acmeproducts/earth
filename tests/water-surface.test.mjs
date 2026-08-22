@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const water = readFileSync(new URL("../src/Water.ts", import.meta.url), "utf8");
+const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url), "utf8");
+const terrainData = readFileSync(new URL("../src/TerrainData.ts", import.meta.url), "utf8");
 
 test("flat water does not carry a redundant triangle grid", () => {
   assert.match(water, /subdivisions = 1/);
@@ -21,4 +23,14 @@ test("ocean and inland meshes can share the PBR water surface implementation", (
   assert.match(water, /export function createWaterSurfaceMaterial/);
   assert.match(water, /export function prepareWaterSurfaceMesh/);
   assert.match(water, /new PBRMaterial\(name, scene\)/);
+});
+
+test("separately streamed water materials animate in phase", () => {
+  assert.match(water, /const seconds = performance\.now\(\) \/ 1000/);
+  assert.doesNotMatch(water, /seconds \+= scene\.getEngine\(\)\.getDeltaTime\(\)/);
+});
+
+test("retains the terrain carving mask for adaptive lake underlap", () => {
+  assert.match(terrainData, /waterMask\?: Uint8Array/);
+  assert.match(worldCover, /terrain\.waterMask = water/);
 });

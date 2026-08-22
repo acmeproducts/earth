@@ -92,7 +92,7 @@ for (let elapsed = 0; elapsed < 120; elapsed += 5) {
     `window.__earthScene.meshes.filter((mesh) => mesh.name.startsWith("terrain ")).length`,
   );
   console.log(`${elapsed + 5}s: tiles=${tiles}`);
-  if (tiles >= 169) break;
+  if (tiles >= 289) break;
 }
 await sleep(10000);
 const { data } = await send("Page.captureScreenshot", { format: "png" });

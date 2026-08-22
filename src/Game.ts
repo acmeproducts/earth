@@ -19,12 +19,17 @@ import {
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
+import {
+  stitchTerrainEdges,
+  stitchTerrainMeshEdges,
+} from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
 import { createTreeField } from "./TreeField";
 import { createGrassField } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
-import { EXAMPLE_LOCATIONS, randomWorldLocation } from "./Locations";
+import { EXAMPLE_LOCATIONS, randomLandWorldLocation } from "./Locations";
+import type { WorldLocation } from "./Locations";
 import {
   geographicFrameOffset,
   lonLatToScene,
@@ -103,7 +108,7 @@ const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
 /** Terrain-only tiles stream out to this many rings around the camera. */
-const TERRAIN_TILE_RADIUS = 6;
+const TERRAIN_TILE_RADIUS = 8;
 /** Vegetation and map features stream out to this many rings. */
 const DETAIL_TILE_RADIUS = 2;
 /** Scene units from the camera to the outer edge of the streamed terrain. */
@@ -150,6 +155,8 @@ interface StreamedTile {
   flowerField?: VegetationFieldResult;
   bushField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
+  /** Merged building massing retained outside the detail rings. */
+  farBuildings?: TransformNode;
   /** Impostor-only tree layer carried by tiles outside the detail rings. */
   farTreeField?: VegetationFieldResult;
   /** Every detail layer is present. */
@@ -179,6 +186,7 @@ export class Game {
   private water?: Mesh;
   private readonly tiles = new Map<string, StreamedTile>();
   private readonly activeTileBuilds = new Set<string>();
+  private readonly terrainEdgeElevations = new Map<string, number>();
   private readonly activeLayerFades: LayerFade[] = [];
   private streamingGeneration = 0;
   /** Streaming CPU work yields when it has consumed its frame slice. */
@@ -350,11 +358,12 @@ export class Game {
 
   /** Clears every streamed tile and starts a fresh world around a location. */
   private async startWorld(
-    target: { lat: number; lon: number },
+    target: WorldLocation,
     onProgress?: InitializationProgress,
   ): Promise<void> {
     const generation = ++this.streamingGeneration;
     this.disposeAllTiles();
+    this.terrainEdgeElevations.clear();
     this.terrainCoordinateFrame = undefined;
     this.terrainMetersPerUnit = undefined;
     this.solarLighting?.setLocation(target.lat, target.lon);
@@ -362,7 +371,13 @@ export class Game {
     const centerTile = worldTileAtLocation(target.lat, target.lon, this.gridLevel);
     // Only the center tile is awaited; every other tile streams in from the
     // render loop, nearest first.
-    await this.streamTile(centerTile, true, generation, onProgress);
+    await this.streamTile(
+      centerTile,
+      true,
+      generation,
+      onProgress,
+      () => this.placeCameraAtLocation(target),
+    );
   }
 
   /** Brings one tile to the requested state (terrain, then optional detail). */
@@ -371,6 +386,7 @@ export class Game {
     wantDetail: boolean,
     generation: number,
     onProgress?: InitializationProgress,
+    onTerrainReady?: () => void,
   ): Promise<void> {
     const key = worldTileKey(id);
     if (this.activeTileBuilds.has(key)) return;
@@ -381,12 +397,14 @@ export class Game {
         record = await this.buildTileTerrain(id, wantDetail, generation, onProgress);
       }
       if (!record) return;
+      if (generation === this.streamingGeneration) onTerrainReady?.();
       if (wantDetail && !record.detailed) {
         await this.buildTileDetail(record, generation, onProgress);
-      } else if (!wantDetail && !record.farTreeField) {
+      } else if (!wantDetail) {
         // Runs for undetailed tiles, and for detailed tiles the scheduler
-        // queued ahead of a demotion (the stand-in commits hidden there).
-        await this.buildFarTrees(record, generation);
+        // queued ahead of a demotion (the stand-ins commit hidden there).
+        if (!record.farTreeField) await this.buildFarTrees(record, generation);
+        if (!record.farBuildings) await this.buildFarBuildings(record, generation);
       }
     } finally {
       this.activeTileBuilds.delete(key);
@@ -412,6 +430,7 @@ export class Game {
     if (generation !== this.streamingGeneration) return undefined;
     await landCover?.constrainElevations(terrainData, 30, 20, yieldControl);
     sinkSubmergedTerrain(terrainData);
+    stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
 
     // The first tile of a world anchors the stable coordinate frame; every
     // later tile is projected into it so offsets stay exact while streaming.
@@ -458,7 +477,9 @@ export class Game {
 
     const subdivisions = Math.max(
       1,
-      native ? terrainData.width : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width),
+      native
+        ? terrainData.width - 1
+        : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
     );
     await reportInitializationProgress(onProgress, "Building terrain mesh", 40);
     const terrain = await this.createTerrainMesh(`terrain ${key}`, terrainData, {
@@ -483,7 +504,11 @@ export class Game {
     // alive across that replacement; buildTileDetail will cross-fade it only
     // after the matching detailed tree field has committed.
     const carriedFarTreeField = previous?.farTreeField;
-    if (previous) previous.farTreeField = undefined;
+    const carriedFarBuildings = previous?.farBuildings;
+    if (previous) {
+      previous.farTreeField = undefined;
+      previous.farBuildings = undefined;
+    }
     const now = performance.now();
     const record: StreamedTile = {
       id: area.center,
@@ -496,6 +521,7 @@ export class Game {
       offsetZ: offset.z,
       nativeTerrain: native,
       farTreeField: carriedFarTreeField,
+      farBuildings: carriedFarBuildings,
       detailed: false,
       lastNeededMilliseconds: now,
       detailLastNeededMilliseconds: now,
@@ -543,6 +569,8 @@ export class Game {
       metersPerUnit,
       lakeElevationSource,
       skyReflection: this.solarLighting?.skyReflectionTexture,
+      worldOffsetX: record.offsetX,
+      worldOffsetZ: record.offsetZ,
       startDisabled,
     };
     const exclusionMask = await OpenStreetMap.createRoadExclusionMask(
@@ -651,6 +679,12 @@ export class Game {
     const mapRoot = mapFeatures.root;
     this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
+    if (record.farBuildings) {
+      const farBuildings = record.farBuildings;
+      record.farBuildings = undefined;
+      this.beginLayerFade(1, 0, (fade) => setMapLayerFade(farBuildings, fade),
+        () => OpenStreetMap.disposeLayer(farBuildings));
+    }
     record.detailed = true;
     this.refreshShadowCasters();
     console.log(
@@ -702,6 +736,42 @@ export class Game {
     } else {
       treeField.root.setEnabled(true);
       this.fadeFieldIn(treeField);
+    }
+  }
+
+  /** Builds one merged massing layer for buildings outside the detail rings. */
+  private async buildFarBuildings(record: StreamedTile, generation: number): Promise<void> {
+    const metersPerUnit = this.terrainMetersPerUnit;
+    if (!metersPerUnit) return;
+    const mapWays = await OpenStreetMap.fetch(record.terrainData.bounds).catch((error: unknown) => {
+      console.warn("OpenStreetMap unavailable; far buildings were skipped.", error);
+      return [];
+    });
+    if (generation !== this.streamingGeneration) return;
+    const layer = await OpenStreetMap.createBuildingLayer(
+      this.scene,
+      mapWays,
+      record.terrainData,
+      {
+        meshWidth: record.meshWidth,
+        meshDepth: record.meshDepth,
+        metersPerUnit,
+        startDisabled: true,
+      },
+      "far",
+      this.streamingYielder,
+    );
+    if (generation !== this.streamingGeneration || record.farBuildings) {
+      OpenStreetMap.disposeLayer(layer.root);
+      return;
+    }
+    setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
+    record.farBuildings = layer.root;
+    if (record.detailed) {
+      layer.root.setEnabled(false);
+    } else {
+      layer.root.setEnabled(true);
+      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(layer.root, fade));
     }
   }
 
@@ -967,6 +1037,8 @@ export class Game {
     this.disposeTileDetail(record);
     record.farTreeField?.root.dispose(false, false);
     record.farTreeField = undefined;
+    if (record.farBuildings) OpenStreetMap.disposeLayer(record.farBuildings);
+    record.farBuildings = undefined;
     this.disposeTerrainAppearance(record.terrain);
     record.terrain.dispose(false, false);
   }
@@ -982,8 +1054,7 @@ export class Game {
   }
 
   /**
-   * Cross-fades a tile leaving the detail rings back to its distant stand-in:
-   * the pre-built far trees dither in while every detail layer dithers out.
+   * Cross-fades a tile leaving the detail rings back to its distant stand-ins.
    */
   private demoteTileDetail(record: StreamedTile): void {
     const farTrees = record.farTreeField;
@@ -991,6 +1062,12 @@ export class Game {
       farTrees.setFade(0);
       farTrees.root.setEnabled(true);
       this.fadeFieldIn(farTrees);
+    }
+    const farBuildings = record.farBuildings;
+    if (farBuildings && !farBuildings.isDisposed()) {
+      setMapLayerFade(farBuildings, 0);
+      farBuildings.setEnabled(true);
+      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(farBuildings, fade));
     }
     for (const kind of VEGETATION_FIELD_KINDS) {
       const field = record[kind];
@@ -1024,9 +1101,9 @@ export class Game {
         this.disposeTile(record);
       } else if (record.detailed && ring > DETAIL_TILE_RADIUS + 1 &&
           now - record.detailLastNeededMilliseconds > DETAIL_COOLDOWN_MS &&
-          record.farTreeField) {
-        // The streaming pass pre-builds the far stand-in; demotion waits for
-        // it so the cross-fade never leaves the tile bare.
+          record.farTreeField && record.farBuildings) {
+        // The streaming pass pre-builds both stand-ins; demotion waits for
+        // them so the cross-fade never leaves the tile bare.
         this.demoteTileDetail(record);
         detailChanged = true;
       }
@@ -1164,23 +1241,39 @@ export class Game {
   }
 
   private async changeTerrainLocation(locationIndex: number): Promise<void> {
-    if (locationIndex === this.terrainLocationIndex) return;
+    if (locationIndex === this.terrainLocationIndex) {
+      this.placeCameraAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
+      return;
+    }
     this.terrainLocationIndex = locationIndex;
     console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
     await this.startWorld(EXAMPLE_LOCATIONS[locationIndex]);
   }
 
   private async changeToRandomTerrainLocation(): Promise<void> {
-    const target = randomWorldLocation();
+    const target = await randomLandWorldLocation(async (location) => {
+      const bounds = worldTileBounds(worldTileAtLocation(
+        location.lat,
+        location.lon,
+        this.gridLevel,
+      ));
+      const [landCover, elevation] = await Promise.all([
+        WorldCover.fetch(bounds),
+        TerrainElevationSource.fetchElevationAtLocation(location.lat, location.lon),
+      ]);
+      return (
+        landCover.sample(location.lon, location.lat) !== LandCoverClass.Water &&
+        elevation > 0
+      );
+    });
     this.terrainLocationIndex = -1;
     console.log(`Random location: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
-
-    const generation = this.streamingGeneration + 1;
     await this.startWorld(target);
-    if (generation !== this.streamingGeneration || !this.flyCamera || !this.terrainCoordinateFrame) {
-      return;
-    }
+  }
 
+  /** Places the player's eye exactly one standing height over loaded terrain. */
+  private placeCameraAtLocation(target: WorldLocation): void {
+    if (!this.flyCamera || !this.terrainCoordinateFrame) return;
     const position = lonLatToScene(
       target.lon,
       target.lat,
@@ -1191,9 +1284,7 @@ export class Game {
     this.flyCamera.position.x = position.x;
     this.flyCamera.position.z = position.z;
     const groundEyeHeight = this.getGroundEyeHeight(position.x, position.z);
-    if (groundEyeHeight !== undefined) {
-      this.flyCamera.position.y = Math.max(this.flyCamera.position.y, groundEyeHeight);
-    }
+    if (groundEyeHeight !== undefined) this.flyCamera.position.y = groundEyeHeight;
     this.verticalVelocityMetersPerSecond = 0;
   }
 
@@ -1249,9 +1340,10 @@ export class Game {
         // pre-built (hidden) so the demotion can cross-fade seamlessly.
         const wantsDemotion = record !== undefined && record.detailed && !wantDetail &&
           now - record.detailLastNeededMilliseconds > DETAIL_COOLDOWN_MS;
-        const needsFarTrees = !wantDetail && record !== undefined && !record.farTreeField &&
+        const needsFarLayers = !wantDetail && record !== undefined &&
+          (!record.farTreeField || !record.farBuildings) &&
           (!record.detailed || wantsDemotion);
-        if (needsTerrain || needsDetail || needsFarTrees) {
+        if (needsTerrain || needsDetail || needsFarLayers) {
           work.push({ id, detail: wantDetail, distanceSquared: dx * dx + dy * dy });
         }
       }
@@ -1623,6 +1715,12 @@ export class Game {
       }
       await yieldControl?.();
     }
+
+    stitchTerrainMeshEdges(
+      positions,
+      subdivisions,
+      Math.min(FAR_TILE_SUBDIVISIONS, subdivisions),
+    );
 
     if (surfaceColors && coverClasses) {
       const metersPerVertex = Math.min(

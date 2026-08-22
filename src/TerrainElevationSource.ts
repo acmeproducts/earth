@@ -76,6 +76,34 @@ export class TerrainElevationSource {
     return { elevations, width: canvas.width, height: canvas.height };
   }
 
+  /** Samples one raw provider elevation without building an application tile. */
+  static async fetchElevationAtLocation(
+    latitude: number,
+    longitude: number,
+    level = 10,
+  ): Promise<number> {
+    const sourceLevel = Math.max(0, Math.min(15, Math.round(level)));
+    const scale = 2 ** sourceLevel;
+    const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+    const latitudeRadians = clampedLatitude * Math.PI / 180;
+    const projectedX = (longitude + 180) / 360 * scale;
+    const projectedY = (
+      1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI
+    ) / 2 * scale;
+    const tileX = Math.max(0, Math.min(scale - 1, Math.floor(projectedX)));
+    const tileY = Math.max(0, Math.min(scale - 1, Math.floor(projectedY)));
+    const tile = await this.loadTileElevations(sourceLevel, tileX, tileY);
+    const pixelX = Math.max(0, Math.min(
+      tile.width - 1,
+      Math.floor((projectedX - tileX) * tile.width),
+    ));
+    const pixelY = Math.max(0, Math.min(
+      tile.height - 1,
+      Math.floor((projectedY - tileY) * tile.height),
+    ));
+    return tile.elevations[pixelY * tile.width + pixelX];
+  }
+
   /**
    * Computes the raw elevation range and retains full precision for direct vertex use.
    */
@@ -126,7 +154,7 @@ export class TerrainElevationSource {
     // level is a quality setting, not an identity relationship.
     const sourceLevel = Math.min(15, area.center.level);
     const { northWest: sourceNorthWest, southEast: sourceSouthEast } =
-      providerTileRange(area.bounds, sourceLevel);
+      providerElevationTileRange(area.bounds, sourceLevel);
     const sourceColumns = sourceSouthEast.x - sourceNorthWest.x + 1;
     const sourceRows = sourceSouthEast.y - sourceNorthWest.y + 1;
     const startX = sourceNorthWest.x;
@@ -158,6 +186,9 @@ export class TerrainElevationSource {
 
     // Provider tiles rarely align with our grid when its level is finer than
     // the source level, so cut the stitched grid down to the requested bounds.
+    // The crop includes both boundary samples. Adjacent application tiles
+    // therefore share one complete row or column instead of terminating on
+    // opposite sides of a provider pixel interval.
     const crop = providerPixelCrop(
       area.bounds,
       sourceLevel,
@@ -274,6 +305,21 @@ function providerTileRange(
   };
 }
 
+/**
+ * Provider tiles needed for a boundary-inclusive elevation crop.
+ * Unlike image crops, terrain needs the tile containing the south/east
+ * endpoint so neighboring meshes can reuse the exact same height samples.
+ */
+export function providerElevationTileRange(
+  bounds: TileBounds,
+  level: number,
+): { northWest: { x: number; y: number }; southEast: { x: number; y: number } } {
+  return {
+    northWest: providerTileForSample(bounds.latNorth, bounds.lonWest, level),
+    southEast: providerTileForSample(bounds.latSouth, bounds.lonEast, level),
+  };
+}
+
 function providerTileFor(latitude: number, longitude: number, level: number): { x: number; y: number } {
   const scale = 2 ** level;
   const latitudeRadians = latitude * Math.PI / 180;
@@ -283,11 +329,33 @@ function providerTileFor(latitude: number, longitude: number, level: number): { 
   };
 }
 
+function providerTileForSample(
+  latitude: number,
+  longitude: number,
+  level: number,
+): { x: number; y: number } {
+  const scale = 2 ** level;
+  const latitudeRadians = latitude * Math.PI / 180;
+  const projectedX = snapProjectedBoundary((longitude + 180) / 360 * scale);
+  const projectedY = snapProjectedBoundary(
+    (1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale,
+  );
+  return {
+    x: Math.max(0, Math.min(scale - 1, Math.floor(projectedX))),
+    y: Math.max(0, Math.min(scale - 1, Math.floor(projectedY))),
+  };
+}
+
+function snapProjectedBoundary(value: number): number {
+  const integer = Math.round(value);
+  return Math.abs(value - integer) < 1e-9 ? integer : value;
+}
+
 /**
  * Pixel window of a geographic bounds inside a stitched provider-tile grid.
- * Bounds aligned with provider tile edges resolve to the full stitched grid.
+ * Width and height are vertex-sample counts, including both boundary samples.
  */
-function providerPixelCrop(
+export function providerPixelCrop(
   bounds: TileBounds,
   level: number,
   northWestTile: { x: number; y: number },
@@ -310,15 +378,15 @@ function providerPixelCrop(
     Math.round((row(bounds.latNorth) - northWestTile.y) * tileSize),
   );
   const right = Math.min(
-    stitchedWidth,
+    stitchedWidth - 1,
     Math.round((column(bounds.lonEast) - northWestTile.x) * tileSize),
   );
   const bottom = Math.min(
-    stitchedHeight,
+    stitchedHeight - 1,
     Math.round((row(bounds.latSouth) - northWestTile.y) * tileSize),
   );
-  if (right - left < 2 || bottom - top < 2) {
+  if (right - left < 1 || bottom - top < 1) {
     throw new Error("Requested area maps to an unusably small elevation window.");
   }
-  return { left, top, width: right - left, height: bottom - top };
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
 }

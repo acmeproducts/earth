@@ -150,13 +150,14 @@ tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
 with latitude (a detailed tile is about 1.2 km wide around Oslo). Use `?seed=123`
 to select another deterministic world seed.
 
-The terrain keeps the four closest application tiles loaded as a moving 2 by 2
-window. The window changes at tile midlines, loading the next row or column in
-the background before the player reaches the outer edge. Overlapping elevation,
-WorldCover, and OpenStreetMap source requests are cached between window shifts.
-CPU-heavy terrain, map, vegetation, and LOD-index construction runs in small
-post-render slices. Large terrain and vegetation GPU uploads are committed on
-separate animation frames so replacement tiles have less impact on frame rate.
+Terrain streams across a moving 17 by 17 tile window around the camera. The
+inner 5 by 5 tiles include map features and full vegetation; the outer rings
+use coarse terrain and tree impostors so the visible horizon reaches farther
+without paying the full detail cost. Overlapping elevation, WorldCover, and
+OpenStreetMap source requests are cached between tile loads. CPU-heavy terrain,
+map, vegetation, and LOD-index construction runs in small post-render slices.
+Large terrain and vegetation GPU uploads are committed on separate animation
+frames so replacement tiles have less impact on frame rate.
 
 `?render-scale=0.75` renders at 75% of the canvas resolution (values are clamped
 from 0.25 through 1), and

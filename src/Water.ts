@@ -287,10 +287,9 @@ function animateWaves(
   const swellRepeatsPerSecond = SWELL_DRIFT_METERS_PER_SECOND / SWELL_TILE_METERS;
   const chopRepeatsPerSecond =
     (CHOP_DRIFT_METERS_PER_SECOND * CHOP_TILE_RATIO) / SWELL_TILE_METERS;
-  let seconds = 0;
-
   const observer: Nullable<Observer<Scene>> = scene.onBeforeRenderObservable.add(() => {
-    seconds += scene.getEngine().getDeltaTime() / 1000;
+    // Absolute page time keeps separately streamed lake materials in phase.
+    const seconds = performance.now() / 1000;
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
     // Different starting phases keep the two copies of the same source image

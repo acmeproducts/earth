@@ -112,7 +112,7 @@ for (let elapsed = 0; elapsed < 150; elapsed += 5) {
   const tiles = await evaluate(
     `window.__earthScene.meshes.filter((mesh) => mesh.name.startsWith("terrain ")).length`,
   );
-  if (tiles >= 169) break;
+  if (tiles >= 289) break;
   if (elapsed % 20 === 0) console.log(`${elapsed + 5}s: tiles=${tiles}`);
 }
 

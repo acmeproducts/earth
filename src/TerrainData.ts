@@ -13,4 +13,6 @@ export interface TerrainData {
   groundWidthMeters: number;
   groundHeightMeters: number;
   bounds: TileBounds;
+  /** Water classification used when carving terrain shoreline depressions. */
+  waterMask?: Uint8Array;
 }

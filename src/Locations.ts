@@ -48,13 +48,31 @@ export const EXAMPLE_LOCATIONS = [
 
 export type ExampleLocation = (typeof EXAMPLE_LOCATIONS)[number];
 
+export interface WorldLocation {
+  lat: number;
+  lon: number;
+}
+
 const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
 const WEB_MERCATOR_MAX_SINE = Math.sin(WEB_MERCATOR_MAX_LATITUDE * Math.PI / 180);
 
 /** Picks a world location uniformly by surface area within Web Mercator's bounds. */
-export function randomWorldLocation(random: () => number = Math.random): { lat: number; lon: number } {
+export function randomWorldLocation(random: () => number = Math.random): WorldLocation {
   const lon = random() * 360 - 180;
   const latitudeSine = (random() * 2 - 1) * WEB_MERCATOR_MAX_SINE;
   const lat = Math.asin(latitudeSine) * 180 / Math.PI;
   return { lat, lon };
+}
+
+/** Rejection-samples the globe until the supplied classifier confirms land. */
+export async function randomLandWorldLocation(
+  isLand: (location: WorldLocation) => boolean | Promise<boolean>,
+  random: () => number = Math.random,
+  maxAttempts = 100,
+): Promise<WorldLocation> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const location = randomWorldLocation(random);
+    if (await isLand(location)) return location;
+  }
+  throw new Error(`Could not find a land location after ${maxAttempts} attempts.`);
 }
