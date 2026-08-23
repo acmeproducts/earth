@@ -20,6 +20,7 @@ import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
 import { clamp01 } from "./MathUtils";
 import type { BuildingPlan, LonLat } from "./BuildingPlanner";
+import { buildingWindowStyle, type BuildingWindowStyle } from "./BuildingWindowStyle";
 import type { TerrainData } from "./TerrainData";
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
@@ -30,8 +31,8 @@ const BUILDING_WALL_THICKNESS_METERS = 0.24;
 const BUILDING_FLOOR_THICKNESS_METERS = 0.16;
 const BUILDING_DOOR_WIDTH_METERS = 1.15;
 const BUILDING_DOOR_HEIGHT_METERS = 2.2;
-const BUILDING_WINDOW_SILL_METERS = 0.82;
-const BUILDING_WINDOW_HEIGHT_METERS = 1.35;
+const BUILDING_WINDOW_EDGE_CLEARANCE_METERS = 0.08;
+const BUILDING_WINDOW_HEAD_CLEARANCE_METERS = 0.3;
 const BUILDING_WINDOW_CLEAR_DISTANCE_METERS = 9;
 const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 24;
 const BUILDING_WINDOW_CLOSE_ALPHA = 0.16;
@@ -83,6 +84,8 @@ interface DetailedBuildingParts {
   stairEdgeIndex?: number;
   stairEdgeIndices: number[];
   stairFlightCenters: ScenePoint[];
+  windowStyleId: string;
+  windowRegion: string;
 }
 
 interface PendingBuildingInterior {
@@ -204,6 +207,8 @@ export class ProceduralBuildingRenderer {
       buildingId: plan.id,
       enterable: true,
       windowCount: detailed.windowCount,
+      windowStyleId: detailed.windowStyleId,
+      windowRegion: detailed.windowRegion,
       interiorFloorCount: detailed.floorCount,
       stairFlightCount: detailed.stairFlightCount,
       entranceEdgeIndex: detailed.entranceEdgeIndex,
@@ -378,12 +383,19 @@ function createEnterableBuilding(
   appearance: BuildingAppearance,
   part: "exterior" | "interior",
 ): DetailedBuildingParts {
-  const usableHeight = Math.max(2.4, topElevation - baseElevation);
+  const usableHeight = Math.max(0, topElevation - baseElevation);
   const requestedFloors = plan.levels === undefined
     ? Math.max(1, Math.round(usableHeight / 3.1))
     : Math.max(1, Math.round(plan.levels));
-  const floorCount = Math.min(20, requestedFloors);
+  const floorsThatFit = Math.max(1, Math.floor(usableHeight / 2.4));
+  const floorCount = Math.min(20, requestedFloors, floorsThatFit);
   const storyHeight = usableHeight / floorCount;
+  const windowStyle = buildingWindowStyle(plan);
+  const glass = varyColor(
+    new Color3(...windowStyle.glass),
+    seededUnit(plan.detailSeed ^ 0x45f3a921) * 0.1,
+    0,
+  );
   const entranceEdge = longestPolygonEdge(outline);
   const entranceEdgeLengthMeters = pointDistance(
     outline[entranceEdge],
@@ -391,8 +403,7 @@ function createEnterableBuilding(
   ) * options.metersPerUnit;
   const entranceBayCount = facadeBayCount(
     entranceEdgeLengthMeters,
-    plan.detailSeed,
-    entranceEdge,
+    windowStyle,
   );
   const entranceBayWidth = entranceEdgeLengthMeters / entranceBayCount;
   const entranceClearance: EntranceClearance = {
@@ -446,7 +457,7 @@ function createEnterableBuilding(
     const end = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
     if (edgeLengthMeters < 0.35) continue;
-    const bayCount = facadeBayCount(edgeLengthMeters, plan.detailSeed, edgeIndex);
+    const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
     const bayWidth = edgeLengthMeters / bayCount;
 
     for (let floor = 0; floor < floorCount; floor++) {
@@ -458,54 +469,42 @@ function createEnterableBuilding(
         if (isEntrance) {
           const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
           const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28);
-          addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
-            storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+          if (doorHeight > 0.35) {
+            addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
+              storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+          } else {
+            addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
+              bayWidth, storyBottom, storyHeight, options, appearance.wall);
+          }
           continue;
         }
         const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
           (floor * 0x45d9f3b) ^ (bay * 0x119de1f3);
-        const facadeStyle = Math.floor(seededUnit(plan.detailSeed ^ 0x27d4eb2d) * 4);
-        const blankThreshold = facadeStyle === 1 ? 0.23 : facadeStyle === 3 ? 0.14 : 0.07;
         const blankBay = bayCount > 2 && !isEntrance &&
-          seededUnit(windowSeed ^ 0x68bc21eb) < blankThreshold;
+          seededUnit(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
         if (blankBay) {
           addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
             bayWidth, storyBottom, storyHeight, options, appearance.wall);
           continue;
         }
-        const widthScale = 0.43 + seededUnit(windowSeed ^ 0x2c1b3c6d) * 0.24;
-        const apertureWidth = Math.min(1.85, Math.max(0.55, bayWidth * widthScale));
-        const heightScale = 0.78 + seededUnit(windowSeed ^ 0x53a8f9d1) * 0.25;
-        const apertureHeight = Math.min(
-          BUILDING_WINDOW_HEIGHT_METERS * heightScale,
-          storyHeight - 1.12,
-        );
-        const sillHeight = Math.min(
-          BUILDING_WINDOW_SILL_METERS +
-            (seededUnit(windowSeed ^ 0x7f4a7c15) - 0.5) * 0.34,
-          storyHeight - apertureHeight - 0.3,
-        );
-        if (apertureHeight > 0.35) {
-          const availableShift = Math.max(0, bayWidth - apertureWidth);
-          const rhythmicShift = facadeStyle === 2
-            ? (floor % 2 === 0 ? -1 : 1) * availableShift * 0.2
-            : (seededUnit(windowSeed ^ 0x165667b1) - 0.5) * availableShift * 0.34;
-          const apertureOffset = Math.max(
-            0.08,
-            Math.min(bayWidth - apertureWidth - 0.08,
-              (bayWidth - apertureWidth) / 2 + rhythmicShift),
-          );
+        const apertureWidth = windowStyle.widthMeters;
+        const apertureHeight = windowStyle.heightMeters;
+        const sillHeight = windowStyle.sillMeters;
+        const windowFits = bayWidth >= apertureWidth + BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
+          storyHeight >= sillHeight + apertureHeight + BUILDING_WINDOW_HEAD_CLEARANCE_METERS;
+        if (windowFits) {
+          const apertureOffset = (bayWidth - apertureWidth) / 2;
           addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
             storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
             options, appearance.wall, apertureOffset);
-          const glass = varyColor(
-            new Color3(0.24, 0.38, 0.45),
-            seededUnit(plan.detailSeed ^ (edgeIndex * 131 + floor * 29 + bay)) * 0.18,
-            0,
-          );
           addWindowQuad(windows, start, end, edgeLengthMeters,
             bayStart + apertureOffset, apertureWidth,
-            storyBottom + sillHeight, apertureHeight, options, glass);
+            storyBottom + sillHeight, apertureHeight, options, glass,
+            BUILDING_WINDOW_CLOSE_ALPHA, -windowStyle.recessMeters);
+          addWindowMullions(
+            windows, start, end, edgeLengthMeters, bayStart + apertureOffset,
+            storyBottom + sillHeight, windowStyle, options, appearance.trim,
+          );
           windowCount++;
         } else {
           addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
@@ -527,12 +526,13 @@ function createEnterableBuilding(
     stairEdgeIndex: stairs[0]?.edgeIndex,
     stairEdgeIndices: stairs.map((stair) => stair.edgeIndex),
     stairFlightCenters: stairs.map(stairCenter),
+    windowStyleId: windowStyle.id,
+    windowRegion: windowStyle.region,
   };
 }
 
-function facadeBayCount(edgeLengthMeters: number, detailSeed: number, edgeIndex: number): number {
-  const spacing = 2.35 + seededUnit(detailSeed ^ (edgeIndex * 0x45d9f3b) ^ 0x51ed270b) * 1.35;
-  return Math.max(1, Math.min(16, Math.round(edgeLengthMeters / spacing)));
+function facadeBayCount(edgeLengthMeters: number, style: BuildingWindowStyle): number {
+  return Math.max(1, Math.min(16, Math.round(edgeLengthMeters / style.baySpacingMeters)));
 }
 
 function addWindowQuad(
@@ -546,12 +546,15 @@ function addWindowQuad(
   heightMeters: number,
   options: BuildingRenderOptions,
   color: Color3,
+  alpha = BUILDING_WINDOW_CLOSE_ALPHA,
+  depthOffsetMeters = 0,
 ): void {
   const directionX = (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters;
   const directionZ = (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters;
   const outwardX = directionZ;
   const outwardZ = -directionX;
-  const offset = BUILDING_WALL_THICKNESS_METERS * 0.56 / options.metersPerUnit;
+  const offset = (BUILDING_WALL_THICKNESS_METERS * 0.56 + depthOffsetMeters) /
+    options.metersPerUnit;
   const x0 = edgeStart.x + directionX * offsetMeters / options.metersPerUnit + outwardX * offset;
   const z0 = edgeStart.z + directionZ * offsetMeters / options.metersPerUnit + outwardZ * offset;
   const x1 = x0 + directionX * widthMeters / options.metersPerUnit;
@@ -564,7 +567,36 @@ function addWindowQuad(
   for (let vertex = 0; vertex < 4; vertex++) {
     geometry.normals.push(outwardX, 0, outwardZ);
     // Alpha below one marks window vertices for the proximity updater.
-    geometry.colors.push(color.r, color.g, color.b, BUILDING_WINDOW_CLOSE_ALPHA);
+    geometry.colors.push(color.r, color.g, color.b, alpha);
+  }
+}
+
+function addWindowMullions(
+  geometry: WindowGeometry,
+  edgeStart: ScenePoint,
+  edgeEnd: ScenePoint,
+  edgeLengthMeters: number,
+  windowOffsetMeters: number,
+  bottomElevation: number,
+  style: BuildingWindowStyle,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const frameDepth = -style.recessMeters + 0.012;
+  for (const fraction of style.verticalBars) {
+    addWindowQuad(
+      geometry, edgeStart, edgeEnd, edgeLengthMeters,
+      windowOffsetMeters + style.widthMeters * fraction - style.frameWidthMeters / 2,
+      style.frameWidthMeters, bottomElevation, style.heightMeters, options, color, 1, frameDepth,
+    );
+  }
+  for (const fraction of style.horizontalBars) {
+    addWindowQuad(
+      geometry, edgeStart, edgeEnd, edgeLengthMeters, windowOffsetMeters,
+      style.widthMeters,
+      bottomElevation + style.heightMeters * fraction - style.frameWidthMeters / 2,
+      style.frameWidthMeters, options, color, 1, frameDepth,
+    );
   }
 }
 

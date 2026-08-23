@@ -8,6 +8,7 @@ const geocoding = readFileSync(new URL("../src/Geocoding.ts", import.meta.url), 
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
+const gameTime = readFileSync(new URL("../src/GameTime.ts", import.meta.url), "utf8");
 
 test("defaults to three by three and allows exact even-sized detail windows", () => {
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 3/);
@@ -54,6 +55,14 @@ test("a URL time override fixes both the sun and the settings clock", () => {
   assert.match(game, /this\.solarLighting\.setTimeOfDay\(this\.initialTimeOfDay\)/);
   assert.match(controls, /initialTimeOfDay\?: number/);
   assert.match(controls, /this\.isLiveTime = false/);
+});
+
+test("live date and time share the accelerated game clock", () => {
+  assert.match(gameTime, /GAME_TIME_SPEED = 24/);
+  assert.match(gameTime, /new Date\(2026, 0, 1, 0, 0, 0, 0\)/);
+  assert.match(solarLighting, /const date = getGameDate\(\)/);
+  assert.match(controls, /const gameDate = getGameDate\(\)/);
+  assert.match(controls, /CLOCK_UPDATE_INTERVAL_MS = 1_000/);
 });
 
 test("the simulation date can be fixed from the settings menu or URL", () => {

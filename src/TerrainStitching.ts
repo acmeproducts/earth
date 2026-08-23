@@ -123,15 +123,34 @@ export function createTerrainSkirtGeometry(
     }
   };
 
+  const segmentOutward = (start: number, end: number): [number, number] => {
+    const dx = surfacePositions[end * 3] - surfacePositions[start * 3];
+    const dz = surfacePositions[end * 3 + 2] - surfacePositions[start * 3 + 2];
+    const length = Math.max(Number.EPSILON, Math.hypot(dx, dz));
+    return [-dz / length, dx / length];
+  };
+
+  const outerOffset = (boundaryIndex: number): [number, number] => {
+    const previous = boundary[(boundaryIndex - 1 + boundary.length) % boundary.length];
+    const current = boundary[boundaryIndex];
+    const next = boundary[(boundaryIndex + 1) % boundary.length];
+    const incoming = segmentOutward(previous, current);
+    const outgoing = segmentOutward(current, next);
+    const miterX = incoming[0] + outgoing[0];
+    const miterZ = incoming[1] + outgoing[1];
+    const projection = miterX * outgoing[0] + miterZ * outgoing[1];
+    if (Math.abs(projection) <= Number.EPSILON) {
+      return [outgoing[0] * overlap, outgoing[1] * overlap];
+    }
+    return [miterX * overlap / projection, miterZ * overlap / projection];
+  };
+
   for (let segment = 0; segment < boundary.length; segment++) {
     const start = boundary[segment];
     const end = boundary[(segment + 1) % boundary.length];
     const vertex = segment * 8;
-    const dx = surfacePositions[end * 3] - surfacePositions[start * 3];
-    const dz = surfacePositions[end * 3 + 2] - surfacePositions[start * 3 + 2];
-    const length = Math.max(Number.EPSILON, Math.hypot(dx, dz));
-    const outwardX = -dz / length * overlap;
-    const outwardZ = dx / length * overlap;
+    const startOffset = outerOffset(segment);
+    const endOffset = outerOffset((segment + 1) % boundary.length);
     copyVertex(start, vertex);
     copyVertex(end, vertex + 1);
     copyVertex(start, vertex + 2, surfacePositions[start * 3 + 1] - surfaceDrop);
@@ -140,10 +159,13 @@ export function createTerrainSkirtGeometry(
     copyVertex(end, vertex + 5, surfacePositions[end * 3 + 1] - surfaceDrop);
     copyVertex(start, vertex + 6, bottomY);
     copyVertex(end, vertex + 7, bottomY);
-    for (const outerVertex of [vertex + 2, vertex + 3, vertex + 4, vertex + 5,
-      vertex + 6, vertex + 7]) {
-      positions[outerVertex * 3] += outwardX;
-      positions[outerVertex * 3 + 2] += outwardZ;
+    for (const outerVertex of [vertex + 2, vertex + 4, vertex + 6]) {
+      positions[outerVertex * 3] += startOffset[0];
+      positions[outerVertex * 3 + 2] += startOffset[1];
+    }
+    for (const outerVertex of [vertex + 3, vertex + 5, vertex + 7]) {
+      positions[outerVertex * 3] += endOffset[0];
+      positions[outerVertex * 3 + 2] += endOffset[1];
     }
 
     const index = segment * 24;

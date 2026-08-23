@@ -808,6 +808,7 @@ export class Game {
       seed: layerSeed(terrainData.generationSeed, "trees"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
       renderMode: this.vegetationModes.trees,
+      includeFallenLogs: true,
     });
     await this.prepareTileFieldLod(
       record,

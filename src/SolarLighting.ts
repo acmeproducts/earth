@@ -15,6 +15,7 @@ import {
 import { SkyMaterial } from "@babylonjs/materials";
 import * as SunCalc from "suncalc";
 import { parseCalendarDate } from "./CalendarDate";
+import { getGameDate } from "./GameTime";
 import { Moon } from "./Moon";
 import { StarField } from "./StarField";
 
@@ -36,7 +37,7 @@ export interface SolarLightingSnapshot {
   groundColor: Color3;
 }
 
-/** Keeps the visible sun and scene lighting aligned with the real sky. */
+/** Keeps the visible sun and scene lighting aligned with the accelerated game clock. */
 export class SolarLighting {
   private readonly skyMesh: Mesh;
   private readonly sunMesh: Mesh;
@@ -220,7 +221,7 @@ export class SolarLighting {
 
   /** The local simulation timestamp currently driving the sky. */
   get currentDate(): Date {
-    const date = new Date();
+    const date = getGameDate();
     const calendarDate = this.calendarDate
       ? parseCalendarDate(this.calendarDate)
       : undefined;
@@ -241,13 +242,13 @@ export class SolarLighting {
     this.update(this.currentDate, true);
   }
 
-  /** Fixes the calendar date, or resumes today's date when omitted. */
+  /** Fixes the calendar date, or resumes the live game date when omitted. */
   setDate(date?: string): void {
     this.calendarDate = date && parseCalendarDate(date) ? date : undefined;
     this.update(this.currentDate, true);
   }
 
-  /** Fixes the sun to a clock time, or resumes the live clock when omitted. */
+  /** Fixes the sun to a clock time, or resumes the live game clock when omitted. */
   setTimeOfDay(hours?: number): void {
     this.timeOfDayHours = hours;
     this.update(this.currentDate, true);
@@ -275,7 +276,8 @@ export class SolarLighting {
   }
 
   private update(date: Date, force = false): void {
-    if (!force && date.getTime() - this.lastUpdate < UPDATE_INTERVAL_MS) return;
+    const elapsed = date.getTime() - this.lastUpdate;
+    if (!force && elapsed >= 0 && elapsed < UPDATE_INTERVAL_MS) return;
     this.lastUpdate = date.getTime();
 
     const position = SunCalc.getPosition(

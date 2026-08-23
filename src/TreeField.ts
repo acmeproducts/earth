@@ -17,6 +17,7 @@ import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import type { TerrainData } from "./TerrainData";
 import {
   acquireTreeImpostorAssets,
+  createTreeLogModel,
   createTreeModels,
   getTreeImpostorAssets,
   TREE_IMPOSTOR_FACES,
@@ -75,6 +76,10 @@ const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
 const MIN_TREE_VARIANT_SHARE = 0.08;
 /** A local forest reads more coherently and needs fewer atlases with a focused palette. */
 const MAX_TREE_SPECIES_PER_VARIANT = 3;
+/** Sparse enough to read as deadfall rather than a second tree layer. */
+const FALLEN_LOG_CHANCE = 0.015;
+/** Fallen wood is reserved for the established interior of dense forest cover. */
+const FALLEN_LOG_MINIMUM_INTERIOR_DEPTH = 0.7;
 const METERS_PER_DEGREE = 111_320;
 const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   acacia: 0.92,
@@ -104,6 +109,7 @@ interface TreeFieldOptions extends VegetationPlacementOptions {
   edgeOccupancy?: number;
   fullDensityDepthMeters?: number;
   includeModels?: boolean;
+  includeFallenLogs?: boolean;
   forceLowestImpostorLod?: boolean;
   positionOffset?: Vector3;
   elevationSampler?: (x: number, z: number) => number;
@@ -123,6 +129,7 @@ interface TreeVariantBucket {
   species: TreeSpecies;
   variant: ImpostorVariant;
   matrices: Matrix[];
+  fallenLogMatrices: Matrix[];
 }
 
 export const impostorVertexShader = `
@@ -539,6 +546,7 @@ export async function createTreeField(
     exclusionMask,
     renderMode = "impostors",
     includeModels = true,
+    includeFallenLogs = false,
     forceLowestImpostorLod = false,
     positionOffset = Vector3.Zero(),
     elevationSampler,
@@ -665,10 +673,31 @@ export async function createTreeField(
         const bucketKey = `${species}:${variant.key}`;
         let bucket = variantBuckets.get(bucketKey);
         if (!bucket) {
-          bucket = { species, variant, matrices: [] };
+          bucket = { species, variant, matrices: [], fallenLogMatrices: [] };
           variantBuckets.set(bucketKey, bucket);
         }
         bucket.matrices.push(matrix);
+        if (includeFallenLogs && depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH &&
+            random() < FALLEN_LOG_CHANCE) {
+          const logYaw = random() * Math.PI * 2;
+          const offsetDistance = (0.7 + random() * 0.9) / metersPerUnit;
+          const logX = x + Math.cos(logYaw + Math.PI / 2) * offsetDistance;
+          const logZ = z + Math.sin(logYaw + Math.PI / 2) * offsetDistance;
+          const logElevation = elevationSampler
+            ? elevationSampler(logX, logZ)
+            : sampleElevation(terrain, logX, logZ, meshWidth, meshDepth);
+          const lengthScale = (0.48 + random() * 0.3) * speciesScale;
+          const thicknessScale = (0.82 + random() * 0.3) * speciesScale;
+          bucket.fallenLogMatrices.push(Matrix.Compose(
+            new Vector3(thicknessScale, lengthScale, thicknessScale),
+            new Vector3(0, logYaw, Math.PI / 2 + (random() - 0.5) * 0.08).toQuaternion(),
+            new Vector3(
+              logX + positionOffset.x,
+              (logElevation + 0.14) / metersPerUnit + positionOffset.y,
+              logZ + positionOffset.z,
+            ),
+          ));
+        }
       }
       await yieldControl?.();
     }
@@ -682,6 +711,7 @@ export async function createTreeField(
     bucket: TreeVariantBucket;
     prototype: ImpostorPrototype;
     modelMeshes: Mesh[];
+    fallenLogModel?: Mesh;
   }> = [];
   // Impostor capture temporarily installs an orthographic scene camera. Capture
   // species one at a time so each pass restores the real gameplay camera.
@@ -704,18 +734,23 @@ export async function createTreeField(
       ? await createTreeModels(scene, treeHeight, species, variant.seed)
       : [];
     modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
+    const fallenLogModel = bucket.fallenLogMatrices.length > 0
+      ? await createTreeLogModel(scene, treeHeight, species, variant.seed)
+      : undefined;
+    if (fallenLogModel) fallenLogModel.parent = prototype.root;
     const modelMaterials = new Set(
-      modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null),
+      [...modelMeshes, ...(fallenLogModel ? [fallenLogModel] : [])]
+        .map((mesh) => mesh.material).filter((material) => material !== null),
     );
     prototype.root.onDisposeObservable.add(() => {
       modelMaterials.forEach((material) => material.dispose(true, false));
     });
-    resources.push({ bucket, prototype, modelMeshes });
+    resources.push({ bucket, prototype, modelMeshes, fallenLogModel });
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   const fields: VegetationFieldResult[] = [];
-  for (const { bucket, prototype, modelMeshes } of resources) {
+  for (const { bucket, prototype, modelMeshes, fallenLogModel } of resources) {
     const ownMatrices = await packInstanceMatrices(bucket.matrices, yieldControl);
     const field = await createVegetationFieldResult(
       prototype.root,
@@ -735,6 +770,24 @@ export async function createTreeField(
       bucket.species,
     ));
     fields.push(field);
+    if (fallenLogModel) {
+      const logMatrices = await packInstanceMatrices(bucket.fallenLogMatrices, yieldControl);
+      const logField = await createVegetationFieldResult(
+        prototype.root,
+        [],
+        [fallenLogModel],
+        logMatrices,
+        metersPerUnit,
+        "auto",
+        undefined,
+        yieldControl,
+      );
+      // Deadfall has no impostor side. It follows the normal detail distance
+      // but remains independent of the standing trees' selected render mode.
+      logField.count = 0;
+      logField.setRenderMode = () => undefined;
+      fields.push(logField);
+    }
     await yieldControl?.();
   }
   return combineVegetationFieldResults(root, fields, matrixData);
@@ -778,8 +831,17 @@ function consolidateTreeVariantBuckets(
       : dominantVariant.variant;
     const key = `${bucket.species}:${variant.key}`;
     const target = remapped.get(key);
-    if (target) target.matrices.push(...bucket.matrices);
-    else remapped.set(key, { species: bucket.species, variant, matrices: [...bucket.matrices] });
+    if (target) {
+      target.matrices.push(...bucket.matrices);
+      target.fallenLogMatrices.push(...bucket.fallenLogMatrices);
+    } else {
+      remapped.set(key, {
+        species: bucket.species,
+        variant,
+        matrices: [...bucket.matrices],
+        fallenLogMatrices: [...bucket.fallenLogMatrices],
+      });
+    }
   }
 
   const byVariant = new Map<string, TreeVariantBucket[]>();
@@ -794,6 +856,7 @@ function consolidateTreeVariantBuckets(
     const retained = group.slice(0, MAX_TREE_SPECIES_PER_VARIANT);
     for (let index = MAX_TREE_SPECIES_PER_VARIANT; index < group.length; index++) {
       retained[0].matrices.push(...group[index].matrices);
+      retained[0].fallenLogMatrices.push(...group[index].fallenLogMatrices);
     }
     for (const bucket of retained) {
       consolidated.set(`${bucket.species}:${bucket.variant.key}`, bucket);

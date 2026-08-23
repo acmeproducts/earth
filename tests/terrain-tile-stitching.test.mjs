@@ -137,7 +137,7 @@ test("builds a double-sided skirt below every terrain edge segment", () => {
   for (let row = 0; row < rowSize; row++) {
     for (let column = 0; column < rowSize; column++) {
       const vertex = row * rowSize + column;
-      positions.set([column, 10 + vertex, row], vertex * 3);
+      positions.set([column, 10 + vertex, -row], vertex * 3);
       uvs.set([column, row], vertex * 2);
     }
   }
@@ -158,7 +158,14 @@ test("builds a double-sided skirt below every terrain edge segment", () => {
     assert.equal(skirt.positions[vertex * 3 + 1], -1);
     assert.equal(skirt.positions[(vertex + 1) * 3 + 1], -1);
   }
+  // The north-west outer corner is shared by the first and last segments.
+  // Both must reach the diagonal corner of the overlap instead of leaving a
+  // square hole between their independently extruded strips.
+  assert.equal(skirt.positions[2 * 3], -0.5);
   assert.equal(skirt.positions[2 * 3 + 2], 0.5);
+  const lastSegmentOuterEnd = skirt.positions.length / 3 - 1;
+  assert.equal(skirt.positions[lastSegmentOuterEnd * 3], -0.5);
+  assert.equal(skirt.positions[lastSegmentOuterEnd * 3 + 2], 0.5);
   assert.ok(Math.abs(skirt.positions[2 * 3 + 1] - (positions[1] - 0.02)) < 1e-5);
 });
 

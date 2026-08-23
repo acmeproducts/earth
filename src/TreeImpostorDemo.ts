@@ -134,8 +134,11 @@ export class TreeImpostorDemo {
     this.setStatus("Generating source tree...");
     await measureFoliageTextures();
     const source = createProceduralTree(this.scene, { name: "treeCaptureSource" });
-    this.sourceRoot = source;
-    this.sourceMeshes = [source];
+    const sourceRoot = new TransformNode("treeCaptureSourceRoot", this.scene);
+    source.log.parent = sourceRoot;
+    source.branches.parent = sourceRoot;
+    this.sourceRoot = sourceRoot;
+    this.sourceMeshes = [source.log, source.branches];
     this.center = Vector3.Zero();
     this.diameter = PROCEDURAL_TREE_CAPTURE_DIAMETER;
     await this.scene.whenReadyAsync();

@@ -57,6 +57,30 @@ function meshBounds(mesh) {
   };
 }
 
+function windowDimensions(mesh) {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const colors = mesh.getVerticesData(VertexBuffer.ColorKind);
+  const windowVertices = [];
+  for (let vertex = 0; vertex < colors.length / 4; vertex++) {
+    if (Math.abs(colors[vertex * 4 + 3] - 0.16) < 1e-6) windowVertices.push(vertex);
+  }
+  assert.equal(windowVertices.length % 4, 0);
+  const dimensions = [];
+  for (let index = 0; index < windowVertices.length; index += 4) {
+    const first = windowVertices[index] * 3;
+    const second = windowVertices[index + 1] * 3;
+    const third = windowVertices[index + 2] * 3;
+    dimensions.push({
+      width: Math.hypot(
+        positions[second] - positions[first],
+        positions[second + 2] - positions[first + 2],
+      ),
+      height: positions[third + 1] - positions[second + 1],
+    });
+  }
+  return dimensions;
+}
+
 test("inferred roofs rise above the mapped massing without clipping its cap", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
@@ -221,6 +245,59 @@ test("one-story buildings keep a single floor and no stairs", () => {
   assert.equal(detailed.metadata.interiorFloorCount, 1);
   assert.equal(detailed.metadata.stairFlightCount, 0);
   assert.deepEqual(detailed.metadata.stairFlightCenters, []);
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("facade windows keep one coherent size per building", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(654, { render_height: 12, levels: 4 }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed);
+  const dimensions = windowDimensions(detailed);
+  assert.ok(dimensions.length > 8);
+  for (const dimension of dimensions) {
+    assert.ok(Math.abs(dimension.width - dimensions[0].width) < 1e-5);
+    assert.ok(Math.abs(dimension.height - dimensions[0].height) < 1e-5);
+  }
+
+  const neighbor = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(656, { render_height: 12, levels: 4 }),
+    terrain,
+    options,
+  );
+  assert.ok(neighbor);
+  const neighborDimensions = windowDimensions(neighbor);
+  assert.ok(neighborDimensions.length > 8);
+  assert.notDeepEqual(
+    [dimensions[0].width.toFixed(3), dimensions[0].height.toFixed(3)],
+    [neighborDimensions[0].width.toFixed(3), neighborDimensions[0].height.toFixed(3)],
+  );
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("short mapped buildings do not grow an extra facade level", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(655, { render_height: 1.8, levels: 2, roof_shape: "flat" }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed);
+  assert.equal(detailed.metadata.interiorFloorCount, 1);
+  assert.equal(detailed.metadata.windowCount, 0);
+  assert.equal(detailed.metadata.stairFlightCount, 0);
 
   scene.dispose();
   engine.dispose();

@@ -14,6 +14,12 @@ export interface ProceduralTreeOptions {
   liveLighting?: boolean;
 }
 
+/** The reusable wood and crown components of one procedural tree. */
+export interface ProceduralTreeParts {
+  log: Mesh;
+  branches: Mesh;
+}
+
 export type TreeSpecies =
   | "acacia"
   | "beech"
@@ -152,7 +158,7 @@ export abstract class ProceduralTree {
   abstract readonly sourceHeight: number;
   abstract readonly captureDiameter: number;
 
-  abstract create(scene: Scene, options?: ProceduralTreeOptions): Mesh;
+  abstract create(scene: Scene, options?: ProceduralTreeOptions): ProceduralTreeParts;
 }
 
 export class BirchTree extends ProceduralTree {
@@ -160,7 +166,7 @@ export class BirchTree extends ProceduralTree {
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   readonly captureDiameter = PROCEDURAL_TREE_CAPTURE_DIAMETER;
 
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createBirchTree(scene, options);
   }
 }
@@ -170,7 +176,7 @@ export class PineTree extends ProceduralTree {
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   readonly captureDiameter = 2.75;
 
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createConiferTree(scene, "pine", options);
   }
 }
@@ -180,7 +186,7 @@ export class SpruceTree extends ProceduralTree {
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   readonly captureDiameter = 2.6;
 
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createConiferTree(scene, "spruce", options);
   }
 }
@@ -189,7 +195,7 @@ export class FirTree extends ProceduralTree {
   readonly species = "fir" as const;
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   readonly captureDiameter = 2.65;
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createConiferTree(scene, "fir", options);
   }
 }
@@ -197,7 +203,7 @@ export class FirTree extends ProceduralTree {
 abstract class BroadleafTree extends ProceduralTree {
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   abstract readonly species: BroadleafSpecies;
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createBroadleafTree(scene, this.species, options);
   }
 }
@@ -231,7 +237,7 @@ export class PalmTree extends ProceduralTree {
   readonly species = "palm" as const;
   readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
   readonly captureDiameter = 2.85;
-  create(scene: Scene, options: ProceduralTreeOptions = {}): Mesh {
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
     return createPalmTree(scene, options);
   }
 }
@@ -271,21 +277,22 @@ const BIRCH_LEAF_TINTS = [
 export function createProceduralTree(
   scene: Scene,
   options: ProceduralTreeOptions = {},
-): Mesh {
+): ProceduralTreeParts {
   return TREE_SPECIES.birch.create(scene, options);
 }
 
 function createBirchTree(
   scene: Scene,
   options: ProceduralTreeOptions = {},
-): Mesh {
+): ProceduralTreeParts {
   const {
     seed = 0x54524545,
     name = "treeImpostorProceduralSource",
     liveLighting = false,
   } = options;
   const random = createSeededRandom(seed);
-  const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
+  const logBuffers = emptyGeometryBuffers();
+  const branchBuffers = emptyGeometryBuffers();
   const foliageAnchors: Vector3[] = [];
   const trunkPoints: Vector3[] = [];
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
@@ -303,7 +310,7 @@ function createBirchTree(
   for (let segment = 0; segment < trunkSegments; segment++) {
     const t = segment / trunkSegments;
     addBranchSegment(
-      buffers,
+      logBuffers,
       trunkPoints[segment],
       trunkPoints[segment + 1],
       lerp(0.115, 0.022, Math.pow(t, 0.82)),
@@ -320,8 +327,8 @@ function createBirchTree(
     const rootMiddle = rootStart.add(direction.scale(0.11)).add(new Vector3(0, -0.04, 0));
     const rootEnd = rootStart.add(direction.scale(0.23 + Math.sin(root * 2.1) * 0.025))
       .add(new Vector3(0, -0.075, 0));
-    addBranchSegment(buffers, rootStart, rootMiddle, 0.08, 0.05, 7, 0.02);
-    addBranchSegment(buffers, rootMiddle, rootEnd, 0.05, 0.014, 6, 0.04, true);
+    addBranchSegment(logBuffers, rootStart, rootMiddle, 0.08, 0.05, 7, 0.02);
+    addBranchSegment(logBuffers, rootMiddle, rootEnd, 0.05, 0.014, 6, 0.04, true);
   }
 
   for (const knot of [
@@ -334,7 +341,7 @@ function createBirchTree(
     const knotStart = trunkPoints[knot.level].add(direction.scale(trunkRadius * 0.78));
     const knotEnd = trunkPoints[knot.level].add(direction.scale(trunkRadius + knot.length));
     addBranchSegment(
-      buffers,
+      logBuffers,
       knotStart,
       knotEnd,
       trunkRadius * 0.38,
@@ -364,9 +371,9 @@ function createBirchTree(
       const branchRadius = lerp(0.032, 0.0125, crownT) * (0.88 + random() * 0.2);
       const collarEnd = Vector3.Lerp(start, middle, 0.14);
 
-      addBranchSegment(buffers, start, collarEnd, branchRadius * 1.28, branchRadius * 0.94, 7, crownT);
-      addBranchSegment(buffers, collarEnd, middle, branchRadius * 0.92, branchRadius * 0.62, 6, crownT + 0.04);
-      addBranchSegment(buffers, middle, end, branchRadius * 0.61, branchRadius * 0.22, 6, crownT + 0.12);
+      addBranchSegment(branchBuffers, start, collarEnd, branchRadius * 1.28, branchRadius * 0.94, 7, crownT);
+      addBranchSegment(branchBuffers, collarEnd, middle, branchRadius * 0.92, branchRadius * 0.62, 6, crownT + 0.04);
+      addBranchSegment(branchBuffers, middle, end, branchRadius * 0.61, branchRadius * 0.22, 6, crownT + 0.12);
       foliageAnchors.push(end);
 
       for (const split of [-1, 1]) {
@@ -375,7 +382,7 @@ function createBirchTree(
         const twigLength = branchLength * (0.27 + random() * 0.12);
         const twigEnd = middle.add(twigDirection.scale(twigLength))
           .add(new Vector3(0, twigLength * (-0.12 + random() * 0.34), 0));
-        addBranchSegment(buffers, middle, twigEnd, branchRadius * 0.34, branchRadius * 0.1, 5, crownT + 0.18);
+        addBranchSegment(branchBuffers, middle, twigEnd, branchRadius * 0.34, branchRadius * 0.1, 5, crownT + 0.18);
         foliageAnchors.push(twigEnd);
       }
     }
@@ -411,7 +418,7 @@ function createBirchTree(
       const tint = BIRCH_LEAF_TINTS[Math.floor(random() * BIRCH_LEAF_TINTS.length)];
       const brightness = 0.82 + random() * 0.22 + Math.max(0, center.y) * 0.025;
       addLeaf(
-        buffers,
+        branchBuffers,
         center,
         offset,
         halfWidth,
@@ -423,30 +430,13 @@ function createBirchTree(
     }
   }
 
-  applyRegionalTreeCharacter(buffers, seed);
+  applyRegionalTreeCharacter(logBuffers, seed);
+  applyRegionalTreeCharacter(branchBuffers, seed);
+  return createTreeParts(scene, name, "birch", logBuffers, branchBuffers, liveLighting);
+}
 
-  const data = new VertexData();
-  const normals = new Float32Array(buffers.positions.length);
-  VertexData.ComputeNormals(buffers.positions, buffers.indices, normals);
-  data.positions = buffers.positions;
-  data.indices = buffers.indices;
-  data.normals = normals;
-  data.colors = buffers.colors;
-  data.uvs = buffers.uvs;
-
-  const tree = new Mesh(name, scene);
-  data.applyToMesh(tree);
-  tree.isPickable = false;
-  tree.useVertexColors = true;
-  tree.material = createVertexColorCaptureMaterial(
-    scene,
-    `${name}Material`,
-    liveLighting,
-    FOLIAGE_TEXTURE_URLS.birch,
-    getTreeBarkTexture(scene, "birch"),
-    TREE_LOW_LIGHT_BRIGHTNESS.birch,
-  );
-  return tree;
+function emptyGeometryBuffers(): GeometryBuffers {
+  return { positions: [], indices: [], colors: [], uvs: [] };
 }
 
 interface BroadleafProfile {
@@ -511,7 +501,7 @@ function createBroadleafTree(
   scene: Scene,
   species: BroadleafSpecies,
   options: ProceduralTreeOptions,
-): Mesh {
+): ProceduralTreeParts {
   const profile = BROADLEAF_PROFILES[species];
   const {
     seed = profile.seed,
@@ -519,7 +509,8 @@ function createBroadleafTree(
     liveLighting = false,
   } = options;
   const random = createSeededRandom(seed);
-  const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
+  const logBuffers = emptyGeometryBuffers();
+  const branchBuffers = emptyGeometryBuffers();
   const bark = profile.bark;
   const barkCut = scaleColor(profile.bark, 0.72);
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
@@ -546,7 +537,7 @@ function createBroadleafTree(
   }
   for (let segment = 0; segment < trunkSegments; segment++) {
     addBranchSegment(
-      buffers,
+      logBuffers,
       trunkPoints[segment],
       trunkPoints[segment + 1],
       trunkRadiusAt(segment),
@@ -575,11 +566,11 @@ function createBroadleafTree(
       const end = middle.add(direction.scale(0.18)).add(new Vector3(0, -0.2, 0));
       // Arch through the old knee rather than cornering at it.
       const stilt = curvePath(start, end, middle.subtract(Vector3.Lerp(start, end, 0.5)), 4);
-      addLimbAlongPath(buffers, stilt, 0.05, 0.011, 6, 0.1, bark, barkCut);
+      addLimbAlongPath(logBuffers, stilt, 0.05, 0.011, 6, 0.1, bark, barkCut);
     }
   } else {
     addRootFlares(
-      buffers,
+      logBuffers,
       trunkPoints[0],
       species === "eucalyptus" ? 5 : 6,
       profile.trunkRadius,
@@ -589,7 +580,7 @@ function createBroadleafTree(
       random,
     );
   }
-  addTrunkKnots(buffers, trunkPoints, trunkRadiusAt, [2, 5, 8], bark, barkCut, random);
+  addTrunkKnots(logBuffers, trunkPoints, trunkRadiusAt, [2, 5, 8], bark, barkCut, random);
 
   // Broadleaf crowns fork: the trunk divides into a few rising leaders and the
   // limbs come off those. Hanging every limb on one pole is what made these
@@ -614,7 +605,7 @@ function createBroadleafTree(
       4,
     );
     addLimbAlongPath(
-      buffers,
+      branchBuffers,
       path,
       forkRadius * (0.8 - leader * 0.07),
       0.026,
@@ -657,7 +648,7 @@ function createBroadleafTree(
       3,
     );
     const branchRadius = lerp(forkRadius * 0.56, 0.024, ring);
-    addLimbAlongPath(buffers, limbPath, branchRadius, 0.012, 6, 0.6, bark, barkCut);
+    addLimbAlongPath(branchBuffers, limbPath, branchRadius, 0.012, 6, 0.6, bark, barkCut);
     tips.push(end);
 
     for (const side of [-1, 1]) {
@@ -673,7 +664,7 @@ function createBroadleafTree(
         new Vector3(0, twigLength * 0.18, 0),
         2,
       );
-      addLimbAlongPath(buffers, twigPath, branchRadius * 0.46, 0.009, 5, 0.78, bark, barkCut);
+      addLimbAlongPath(branchBuffers, twigPath, branchRadius * 0.46, 0.009, 5, 0.78, bark, barkCut);
       tips.push(twigEnd);
 
       // One more division at the ends. It costs little and it is what the eye
@@ -686,7 +677,7 @@ function createBroadleafTree(
       const spurEnd = twigEnd.add(spurDirection.scale(twigLength * (0.4 + random() * 0.24)))
         .add(new Vector3(0, (random() - 0.3) * 0.2, 0));
       addBranchSegment(
-        buffers, twigEnd, spurEnd, branchRadius * 0.3, 0.007, 5, 0.86, true, bark, barkCut,
+        branchBuffers, twigEnd, spurEnd, branchRadius * 0.3, 0.007, 5, 0.86, true, bark, barkCut,
       );
       tips.push(spurEnd);
     }
@@ -712,7 +703,7 @@ function createBroadleafTree(
       const cardWidth = (species === "eucalyptus" ? 0.035 : 0.052) * (0.82 + random() * 0.35);
       const card = shapeFoliageCard(cardWidth, cardWidth * narrow, cards?.aspect);
       addLeaf(
-        buffers,
+        branchBuffers,
         center,
         offset,
         card.halfWidth,
@@ -724,19 +715,21 @@ function createBroadleafTree(
     }
   }
 
-  applyRegionalTreeCharacter(buffers, seed);
-  return createTreeMesh(scene, name, species, buffers, liveLighting);
+  applyRegionalTreeCharacter(logBuffers, seed);
+  applyRegionalTreeCharacter(branchBuffers, seed);
+  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting);
 }
 
 /** Builds a ringed, gently leaning trunk with a radial crown of feathered fronds. */
-function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
+function createPalmTree(scene: Scene, options: ProceduralTreeOptions): ProceduralTreeParts {
   const {
     seed = 0x50414c4d,
     name = "palmImpostorProceduralSource",
     liveLighting = false,
   } = options;
   const random = createSeededRandom(seed);
-  const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
+  const logBuffers = emptyGeometryBuffers();
+  const branchBuffers = emptyGeometryBuffers();
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
   const trunkTop = new Vector3(0.14, 1.16, -0.04);
   const trunkSegments = 15;
@@ -759,11 +752,11 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
     );
     // Old frond scars ring the stem, so the profile steps rather than sliding.
     const ring = 1 + Math.sin(t * trunkSegments * Math.PI) * 0.09;
-    addBranchSegment(buffers, previous, next, stemRadiusAt(from) * ring,
+    addBranchSegment(logBuffers, previous, next, stemRadiusAt(from) * ring,
       stemRadiusAt(t) * ring, 9, t, false, bark, barkCut);
     previous = next;
   }
-  addRootFlares(buffers, trunkBase, 7, 0.115, 0.2, bark, barkCut, random);
+  addRootFlares(logBuffers, trunkBase, 7, 0.115, 0.2, bark, barkCut, random);
 
   // Stubs of shed fronds hang below the living crown on most palms.
   for (let scar = 0; scar < 5; scar++) {
@@ -772,7 +765,7 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
       .normalize();
     const start = trunkTop.add(new Vector3(0, -0.1 - random() * 0.12, 0));
     addBranchSegment(
-      buffers, start, start.add(direction.scale(0.12 + random() * 0.1)),
+      branchBuffers, start, start.add(direction.scale(0.12 + random() * 0.1)),
       0.022, 0.008, 5, 0.92, true, barkCut, barkCut,
     );
   }
@@ -787,34 +780,36 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
     // chord. Two straight segments can only corner where the arch should be.
     const rachis = curvePath(trunkTop, end, new Vector3(0, 0.21 + random() * 0.07, 0), 5);
     const frondSpine = new Color3(0.23, 0.39, 0.08);
-    addLimbAlongPath(buffers, rachis, 0.026, 0.004, 5, 0.9, frondSpine, frondSpine);
+    addLimbAlongPath(branchBuffers, rachis, 0.026, 0.004, 5, 0.9, frondSpine, frondSpine);
     for (let leaflet = 1; leaflet <= 11; leaflet++) {
       const along = leaflet / 12;
       const anchor = pointAlongPath(rachis, along);
       for (const side of [-1, 1]) {
         const lateral = new Vector3(-direction.z * side, -0.18, direction.x * side).normalize();
-        addLeaf(buffers, anchor.add(lateral.scale(0.08)), lateral, 0.045,
+        addLeaf(branchBuffers, anchor.add(lateral.scale(0.08)), lateral, 0.045,
           0.18 * (1 - Math.abs(along - 0.5) * 0.7), random,
           frondColors[frond % frondColors.length], 0.84 + random() * 0.18);
       }
     }
   }
-  applyRegionalTreeCharacter(buffers, seed);
-  return createTreeMesh(scene, name, "palm", buffers, liveLighting);
+  applyRegionalTreeCharacter(logBuffers, seed);
+  applyRegionalTreeCharacter(branchBuffers, seed);
+  return createTreeParts(scene, name, "palm", logBuffers, branchBuffers, liveLighting);
 }
 
 function createConiferTree(
   scene: Scene,
   species: "fir" | "pine" | "spruce",
   options: ProceduralTreeOptions,
-): Mesh {
+): ProceduralTreeParts {
   const {
     seed = species === "pine" ? 0x50494e45 : species === "fir" ? 0x46495221 : 0x53505255,
     name = `${species}ImpostorProceduralSource`,
     liveLighting = false,
   } = options;
   const random = createSeededRandom(seed);
-  const buffers: GeometryBuffers = { positions: [], indices: [], colors: [], uvs: [] };
+  const logBuffers = emptyGeometryBuffers();
+  const branchBuffers = emptyGeometryBuffers();
   const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
   const trunkSegments = 14;
   const trunkPoints: Vector3[] = [];
@@ -841,7 +836,7 @@ function createConiferTree(
   }
   for (let segment = 0; segment < trunkSegments; segment++) {
     addBranchSegment(
-      buffers,
+      logBuffers,
       trunkPoints[segment],
       trunkPoints[segment + 1],
       trunkRadiusAt(segment),
@@ -856,7 +851,7 @@ function createConiferTree(
 
   const cards = foliageCardShape(species);
   const firstLevel = species === "pine" ? 4 : 2;
-  addRootFlares(buffers, trunkPoints[0], 6, 0.13, 0.3, bark, barkCut, random);
+  addRootFlares(logBuffers, trunkPoints[0], 6, 0.13, 0.3, bark, barkCut, random);
   // Conifers shade out their own lower limbs and keep the dead stubs for years.
   // Below the first live whorl that bare stretch of trunk is all silhouette.
   for (let level = 1; level < firstLevel; level++) {
@@ -868,7 +863,7 @@ function createConiferTree(
       const start = trunkPoints[level].add(direction.scale(radius * 0.6));
       const end = trunkPoints[level].add(direction.scale(radius + 0.07 + random() * 0.13));
       addBranchSegment(
-        buffers, start, end, radius * 0.34, radius * 0.1, 5, level / trunkSegments,
+        logBuffers, start, end, radius * 0.34, radius * 0.1, 5, level / trunkSegments,
         true, barkCut, barkCut,
       );
     }
@@ -916,7 +911,7 @@ function createConiferTree(
         new Vector3(0, species === "spruce" ? length * 0.16 : -length * 0.1, 0),
         3,
       );
-      addLimbAlongPath(buffers, limbPath, radius, radius * 0.14, 5, heightT, bark, barkCut);
+      addLimbAlongPath(branchBuffers, limbPath, radius, radius * 0.14, 5, heightT, bark, barkCut);
 
       const sprays = species === "pine" ? 5 : species === "spruce" ? 8 : 6;
       for (let spray = 0; spray < sprays; spray++) {
@@ -932,12 +927,12 @@ function createConiferTree(
         ));
         if (species === "pine") {
           addPineNeedleTuft(
-            buffers, anchor, horizontal, needles[Math.floor(random() * needles.length)],
+            branchBuffers, anchor, horizontal, needles[Math.floor(random() * needles.length)],
             random, cards,
           );
         } else {
           addNeedleSpray(
-            buffers, anchor, horizontal, 0.12, 0.07,
+            branchBuffers, anchor, horizontal, 0.12, 0.07,
             needles[Math.floor(random() * needles.length)], random, cards,
           );
         }
@@ -994,19 +989,19 @@ function createConiferTree(
           species === "pine" || species === "spruce" ? 2 : 1,
         );
         addLimbAlongPath(
-          buffers, branchletPath, radius * 0.42, radius * 0.09, 5, heightT,
+          branchBuffers, branchletPath, radius * 0.42, radius * 0.09, 5, heightT,
           bark, barkCut,
         );
         if (species === "pine") {
           addPineNeedleTuft(
-            buffers, branchletEnd, branchletDirection,
+            branchBuffers, branchletEnd, branchletDirection,
             needles[Math.floor(random() * needles.length)], random, cards,
           );
         } else {
           const branchletSprays = species === "spruce" ? 3 : 2;
           for (let spray = 0; spray < branchletSprays; spray++) {
             addNeedleSpray(
-              buffers,
+              branchBuffers,
               pointAlongPath(
                 branchletPath,
                 0.32 + spray / branchletSprays * 0.62 + random() * 0.08,
@@ -1024,39 +1019,19 @@ function createConiferTree(
 
   if (species === "pine") {
     addPineNeedleTuft(
-      buffers, trunkPoints[trunkSegments].add(new Vector3(0, -0.06, 0)),
+      branchBuffers, trunkPoints[trunkSegments].add(new Vector3(0, -0.06, 0)),
       Vector3.Up(), needles[1], random, cards, 1.18,
     );
   } else {
     addNeedleSpray(
-      buffers, trunkPoints[trunkSegments].add(new Vector3(0, -0.06, 0)),
+      branchBuffers, trunkPoints[trunkSegments].add(new Vector3(0, -0.06, 0)),
       Vector3.Up(), 0.14, 0.075, needles[1], random, cards,
     );
   }
 
-  applyRegionalTreeCharacter(buffers, seed);
-
-  const data = new VertexData();
-  const normals = new Float32Array(buffers.positions.length);
-  VertexData.ComputeNormals(buffers.positions, buffers.indices, normals);
-  data.positions = buffers.positions;
-  data.indices = buffers.indices;
-  data.normals = normals;
-  data.colors = buffers.colors;
-  data.uvs = buffers.uvs;
-  const tree = new Mesh(name, scene);
-  data.applyToMesh(tree);
-  tree.isPickable = false;
-  tree.useVertexColors = true;
-  tree.material = createVertexColorCaptureMaterial(
-    scene,
-    `${name}Material`,
-    liveLighting,
-    FOLIAGE_TEXTURE_URLS[species],
-    getTreeBarkTexture(scene, species),
-    TREE_LOW_LIGHT_BRIGHTNESS[species],
-  );
-  return tree;
+  applyRegionalTreeCharacter(logBuffers, seed);
+  applyRegionalTreeCharacter(branchBuffers, seed);
+  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting);
 }
 
 /** Gives sister variants a different large-scale silhouette, not just different twigs. */
@@ -1101,12 +1076,33 @@ function smoothstep01(value: number): number {
   return clamped * clamped * (3 - 2 * clamped);
 }
 
-function createTreeMesh(
+function createTreeParts(
   scene: Scene,
   name: string,
   species: TreeSpecies,
-  buffers: GeometryBuffers,
+  logBuffers: GeometryBuffers,
+  branchBuffers: GeometryBuffers,
   liveLighting: boolean,
+): ProceduralTreeParts {
+  const material = createVertexColorCaptureMaterial(
+    scene,
+    `${name}Material`,
+    liveLighting,
+    FOLIAGE_TEXTURE_URLS[species],
+    getTreeBarkTexture(scene, species),
+    TREE_LOW_LIGHT_BRIGHTNESS[species],
+  );
+  return {
+    log: createTreePartMesh(scene, `${name}Log`, logBuffers, material),
+    branches: createTreePartMesh(scene, `${name}Branches`, branchBuffers, material),
+  };
+}
+
+function createTreePartMesh(
+  scene: Scene,
+  name: string,
+  buffers: GeometryBuffers,
+  material: ReturnType<typeof createVertexColorCaptureMaterial>,
 ): Mesh {
   const data = new VertexData();
   const normals = new Float32Array(buffers.positions.length);
@@ -1116,19 +1112,12 @@ function createTreeMesh(
   data.normals = normals;
   data.colors = buffers.colors;
   data.uvs = buffers.uvs;
-  const tree = new Mesh(name, scene);
-  data.applyToMesh(tree);
-  tree.isPickable = false;
-  tree.useVertexColors = true;
-  tree.material = createVertexColorCaptureMaterial(
-    scene,
-    `${name}Material`,
-    liveLighting,
-    FOLIAGE_TEXTURE_URLS[species],
-    getTreeBarkTexture(scene, species),
-    TREE_LOW_LIGHT_BRIGHTNESS[species],
-  );
-  return tree;
+  const part = new Mesh(name, scene);
+  data.applyToMesh(part);
+  part.isPickable = false;
+  part.useVertexColors = true;
+  part.material = material;
+  return part;
 }
 
 function addNeedleSpray(

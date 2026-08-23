@@ -183,8 +183,9 @@ camera reaches them and through their own high-altitude haze beyond the terrain
 fog; use `?clouds=off` for a cloud-free performance comparison.
 Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
 shadows, and `?date=2026-08-23` to hold the simulation on a specific local
-calendar date. The settings menu's Live and Today buttons restore the current
-local time and date.
+calendar date. Live game time starts at `2026-01-01 00:00` and advances at 24x
+real time, so one real hour spans one game day. The settings menu's Live and
+Today buttons restore the live game time and date.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from

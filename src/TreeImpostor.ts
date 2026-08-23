@@ -28,10 +28,13 @@ function createTreeProvider(species: TreeSpecies) {
   return createImpostorAssetProvider({
     name: `${species}TreeImpostor`,
     queryPrefix: species === "birch" ? "tree-impostor" : `${species}-tree-impostor`,
-    createSource: (scene, variant) => tree.create(
-      scene,
-      variant.seed === undefined ? undefined : { seed: variant.seed },
-    ),
+    createSource: (scene, variant) => {
+      const parts = tree.create(
+        scene,
+        variant.seed === undefined ? undefined : { seed: variant.seed },
+      );
+      return [parts.log, parts.branches];
+    },
     sourceHeight: tree.sourceHeight,
     captureDiameter: tree.captureDiameter,
     boundsPadding: 1.04,
@@ -89,22 +92,52 @@ export async function createTreeModels(
 ): Promise<Mesh[]> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
-  const tree = treeDefinition.create(scene, {
+  const parts = treeDefinition.create(scene, {
     name: `${species}TreeModels`,
     liveLighting: true,
     ...(seed === undefined ? {} : { seed }),
   });
-  const positions = tree.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error("Procedural tree has no position data.");
-
   const renderScale = renderHeight / treeDefinition.sourceHeight;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= renderScale;
-    positions[index + 1] = positions[index + 1] * renderScale + renderHeight / 2;
-    positions[index + 2] *= renderScale;
+  const meshes = [parts.log, parts.branches];
+  for (const mesh of meshes) {
+    scaleTreeMesh(mesh, renderScale, renderHeight / 2, renderHeight);
   }
-  tree.setVerticesData(VertexBuffer.PositionKind, positions);
-  tree.refreshBoundingInfo();
-  setVertexColorModelHeight(tree, renderHeight);
-  return [tree];
+  return meshes;
+}
+
+/** Builds only the species trunk, centered so it can be rotated onto the ground. */
+export async function createTreeLogModel(
+  scene: Scene,
+  renderHeight: number,
+  species: TreeSpecies,
+  seed?: number,
+): Promise<Mesh> {
+  await measureFoliageTextures();
+  const treeDefinition = TREE_SPECIES[species];
+  const parts = treeDefinition.create(scene, {
+    name: `${species}FallenLog`,
+    liveLighting: true,
+    ...(seed === undefined ? {} : { seed }),
+  });
+  parts.branches.dispose(false, false);
+  scaleTreeMesh(parts.log, renderHeight / treeDefinition.sourceHeight, 0, renderHeight);
+  return parts.log;
+}
+
+function scaleTreeMesh(
+  mesh: Mesh,
+  scale: number,
+  yOffset: number,
+  modelHeight: number,
+): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) throw new Error("Procedural tree part has no position data.");
+  for (let index = 0; index < positions.length; index += 3) {
+    positions[index] *= scale;
+    positions[index + 1] = positions[index + 1] * scale + yOffset;
+    positions[index + 2] *= scale;
+  }
+  mesh.setVerticesData(VertexBuffer.PositionKind, positions);
+  mesh.refreshBoundingInfo();
+  setVertexColorModelHeight(mesh, modelHeight);
 }

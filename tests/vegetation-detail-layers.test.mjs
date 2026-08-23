@@ -69,3 +69,22 @@ test("saplings and ferns belong to the detailed tile lifecycle only", () => {
   assert.doesNotMatch(farSource, /createSaplingField|createFernField/);
   assert.match(game, /"saplingField"[\s\S]*?"fernField"/);
 });
+
+test("mature detailed forests include sparse species-matched fallen logs", () => {
+  const trees = source("TreeField.ts");
+  const proceduralTrees = source("ProceduralTree.ts");
+  const treeImpostors = source("TreeImpostor.ts");
+
+  assert.match(proceduralTrees, /interface ProceduralTreeParts \{[\s\S]*?log: Mesh;[\s\S]*?branches: Mesh;/);
+  assert.match(treeImpostors, /return \[parts\.log, parts\.branches\]/);
+  assert.match(treeImpostors, /export async function createTreeLogModel/);
+  assert.match(trees, /depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH/);
+  assert.match(trees, /random\(\) < FALLEN_LOG_CHANCE/);
+  assert.match(trees, /createTreeLogModel\(scene, treeHeight, species, variant\.seed\)/);
+  assert.match(trees, /createVegetationFieldResult\([\s\S]*?\[\],[\s\S]*?\[fallenLogModel\],[\s\S]*?"auto"/);
+  assert.match(game, /includeFallenLogs: true/);
+
+  const farStart = game.indexOf("private async buildFarTrees");
+  const farSource = game.slice(farStart, game.indexOf("private async buildFarBuildings", farStart));
+  assert.doesNotMatch(farSource, /includeFallenLogs/);
+});

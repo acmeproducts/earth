@@ -2,6 +2,7 @@ import { WEB_MERCATOR_MAX_LATITUDE } from "./Locations";
 import type { WorldLocation } from "./Locations";
 import { formatCalendarDate } from "./CalendarDate";
 import { geocodeLocationName } from "./Geocoding";
+import { getGameDate } from "./GameTime";
 import { SCENE_SETTING_DEFINITIONS } from "./SceneSettings";
 import type {
   SceneSettingDefinition,
@@ -23,6 +24,7 @@ export interface SceneControlsOptions {
 
 const MINUTES_PER_HOUR = 60;
 const TIME_STEP_HOURS = 0.25;
+const CLOCK_UPDATE_INTERVAL_MS = 1_000;
 
 export class SceneControls {
   private readonly element: HTMLElement;
@@ -87,7 +89,7 @@ export class SceneControls {
     this.todayButton = document.createElement("button");
     this.todayButton.type = "button";
     this.todayButton.textContent = "Today";
-    this.todayButton.title = "Use today's date";
+    this.todayButton.title = "Use the current game date";
     this.todayButton.addEventListener("click", () => {
       this.isLiveDate = true;
       this.updateLiveDate();
@@ -120,7 +122,7 @@ export class SceneControls {
     this.liveButton = document.createElement("button");
     this.liveButton.type = "button";
     this.liveButton.textContent = "Live";
-    this.liveButton.title = "Use the current time";
+    this.liveButton.title = "Use the accelerated game time";
     this.liveButton.addEventListener("click", () => {
       this.isLiveTime = true;
       this.updateLiveTime();
@@ -208,9 +210,10 @@ export class SceneControls {
       this.updateTimeDisplay(options.initialTimeOfDay);
     }
     this.clockTimer = window.setInterval(() => {
-      this.updateLiveDate();
-      this.updateLiveTime();
-    }, 60_000);
+      const gameDate = getGameDate();
+      this.updateLiveDate(gameDate);
+      this.updateLiveTime(gameDate);
+    }, CLOCK_UPDATE_INTERVAL_MS);
   }
 
   get isOpen(): boolean {
@@ -377,17 +380,16 @@ export class SceneControls {
     return { row, input, setValue };
   }
 
-  private updateLiveTime(): void {
+  private updateLiveTime(gameDate = getGameDate()): void {
     if (!this.isLiveTime) return;
-    const now = new Date();
-    const hours = now.getHours() + now.getMinutes() / MINUTES_PER_HOUR;
+    const hours = gameDate.getHours() + gameDate.getMinutes() / MINUTES_PER_HOUR;
     this.timeInput.value = String(hours);
     this.updateTimeDisplay(hours);
   }
 
-  private updateLiveDate(): void {
+  private updateLiveDate(gameDate = getGameDate()): void {
     if (!this.isLiveDate) return;
-    this.dateInput.value = formatCalendarDate(new Date());
+    this.dateInput.value = formatCalendarDate(gameDate);
     this.updateDateState();
   }
 
