@@ -1,5 +1,6 @@
 import {
   Color3,
+  Material,
   Mesh,
   MeshBuilder,
   PolygonMeshBuilder,
@@ -27,6 +28,13 @@ const BUILDING_DOOR_HEIGHT_METERS = 2.2;
 const BUILDING_WINDOW_SILL_METERS = 0.82;
 const BUILDING_WINDOW_HEIGHT_METERS = 1.35;
 const BUILDING_WINDOW_SPACING_METERS = 3;
+const BUILDING_WINDOW_CLEAR_DISTANCE_METERS = 9;
+const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 24;
+const BUILDING_WINDOW_CLOSE_ALPHA = 0.16;
+const BUILDING_STAIR_WIDTH_METERS = 1.15;
+const BUILDING_STAIR_MIN_RUN_METERS = 2.4;
+const BUILDING_STAIR_MAX_RUN_METERS = 4.2;
+const BUILDING_STAIR_WALL_CLEARANCE_METERS = 0.42;
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -61,6 +69,15 @@ interface DetailedBuildingParts {
   parts: Mesh[];
   windowCount: number;
   floorCount: number;
+  stairFlightCount: number;
+}
+
+interface StairLayout {
+  start: ScenePoint;
+  direction: ScenePoint;
+  inward: ScenePoint;
+  runMeters: number;
+  widthMeters: number;
 }
 
 interface WindowGeometry {
@@ -153,6 +170,8 @@ export class ProceduralBuildingRenderer {
       enterable: true,
       windowCount: detailed.windowCount,
       interiorFloorCount: detailed.floorCount,
+      stairFlightCount: detailed.stairFlightCount,
+      metersPerUnit: options.metersPerUnit,
     };
     return stageBuildingMesh(merged);
   }
@@ -182,6 +201,7 @@ export class ProceduralBuildingRenderer {
 
   static merge(meshes: Mesh[], name: string, parent: TransformNode): Mesh | undefined {
     if (meshes.length === 0) return undefined;
+    const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
     const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
     if (!result) return undefined;
     const material = new StandardMaterial(`${name}Material`, result.getScene());
@@ -189,11 +209,19 @@ export class ProceduralBuildingRenderer {
     material.specularColor = new Color3(0.025, 0.025, 0.025);
     material.specularPower = 16;
     material.backFaceCulling = false;
+    // Keep the merged shell in the depth-writing path. Alpha blending sorts
+    // the entire building as one transparent object, which can make outward
+    // facade polygons disappear behind inward-facing geometry.
+    material.transparencyMode = Material.MATERIAL_ALPHATEST;
     result.useVertexColors = true;
+    result.hasVertexAlpha = true;
     result.name = name;
     result.material = material;
     result.parent = parent;
     result.checkCollisions = name === "buildings" || name === "detailedBuildings";
+    if (Number.isFinite(metersPerUnit)) {
+      configureProximityWindows(result, metersPerUnit);
+    }
     return result;
   }
 }
@@ -219,6 +247,7 @@ function createEnterableBuilding(
   const floorCount = Math.min(20, requestedFloors);
   const storyHeight = usableHeight / floorCount;
   const entranceEdge = longestPolygonEdge(outline);
+  const stair = floorCount > 1 ? findStairLayout(outline, options) : undefined;
   const parts: Mesh[] = [];
   const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
   let windowCount = 0;
@@ -232,9 +261,25 @@ function createEnterableBuilding(
       slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
       slabBottom,
       options,
+      floor > 0 && stair ? [stairOpening(stair, options)] : undefined,
     );
     setSolidVertexColor(slab, floorColor);
     parts.push(slab);
+  }
+
+  if (stair) {
+    for (let floor = 0; floor < floorCount - 1; floor++) {
+      createStairFlight(
+        parts,
+        scene,
+        stair,
+        baseElevation + floor * storyHeight,
+        storyHeight,
+        floor % 2 === 1,
+        options,
+        floorColor,
+      );
+    }
   }
 
   for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
@@ -245,37 +290,29 @@ function createEnterableBuilding(
     const bayCount = Math.max(1, Math.min(16, Math.round(edgeLengthMeters / BUILDING_WINDOW_SPACING_METERS)));
     const bayWidth = edgeLengthMeters / bayCount;
 
-    if (edgeIndex === entranceEdge) {
-      const doorCenter = (Math.floor(bayCount / 2) + 0.5) * bayWidth;
-      const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
-      const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, usableHeight - 0.28);
-      addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
-        doorCenter - doorWidth / 2, baseElevation, usableHeight, options, appearance.wall);
-      addFacadePanel(parts, scene, start, end, edgeLengthMeters,
-        doorCenter + doorWidth / 2, edgeLengthMeters - doorCenter - doorWidth / 2,
-        baseElevation, usableHeight, options, appearance.wall);
-      addFacadePanel(parts, scene, start, end, edgeLengthMeters,
-        doorCenter - doorWidth / 2, doorWidth, baseElevation + doorHeight,
-        usableHeight - doorHeight, options, appearance.wall);
-    } else {
-      addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
-        edgeLengthMeters, baseElevation, usableHeight, options, appearance.wall);
-    }
-
     for (let floor = 0; floor < floorCount; floor++) {
       const storyBottom = baseElevation + floor * storyHeight;
       for (let bay = 0; bay < bayCount; bay++) {
         const isEntrance = floor === 0 && edgeIndex === entranceEdge &&
           bay === Math.floor(bayCount / 2);
-        if (isEntrance) continue;
+        const bayStart = bay * bayWidth;
+        if (isEntrance) {
+          const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
+          const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28);
+          addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
+            storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+          continue;
+        }
         const apertureWidth = Math.min(1.65, Math.max(0.55, bayWidth * 0.56));
         const apertureHeight = Math.min(BUILDING_WINDOW_HEIGHT_METERS, storyHeight - 1.18);
         const sillHeight = Math.min(
           BUILDING_WINDOW_SILL_METERS,
           storyHeight - apertureHeight - 0.3,
         );
-        const bayStart = bay * bayWidth;
         if (apertureHeight > 0.35) {
+          addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
+            storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
+            options, appearance.wall);
           const glass = varyColor(
             new Color3(0.24, 0.38, 0.45),
             seededUnit(plan.detailSeed ^ (edgeIndex * 131 + floor * 29 + bay)) * 0.18,
@@ -285,6 +322,9 @@ function createEnterableBuilding(
             bayStart + (bayWidth - apertureWidth) / 2, apertureWidth,
             storyBottom + sillHeight, apertureHeight, options, glass);
           windowCount++;
+        } else {
+          addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
+            bayWidth, storyBottom, storyHeight, options, appearance.wall);
         }
       }
     }
@@ -293,7 +333,7 @@ function createEnterableBuilding(
   const windowMesh = createWindowMesh(scene, windows);
   if (windowMesh) parts.push(windowMesh);
 
-  return { parts, windowCount, floorCount };
+  return { parts, windowCount, floorCount, stairFlightCount: stair ? floorCount - 1 : 0 };
 }
 
 function addWindowQuad(
@@ -324,8 +364,40 @@ function addWindowQuad(
   geometry.indices.push(first, first + 2, first + 1, first, first + 3, first + 2);
   for (let vertex = 0; vertex < 4; vertex++) {
     geometry.normals.push(outwardX, 0, outwardZ);
-    geometry.colors.push(color.r, color.g, color.b, 1);
+    // Alpha below one marks window vertices for the proximity updater.
+    geometry.colors.push(color.r, color.g, color.b, BUILDING_WINDOW_CLOSE_ALPHA);
   }
+}
+
+function addApertureFacade(
+  parts: Mesh[],
+  scene: Scene,
+  edgeStart: ScenePoint,
+  edgeEnd: ScenePoint,
+  edgeLengthMeters: number,
+  bayStart: number,
+  bayWidth: number,
+  storyBottom: number,
+  storyHeight: number,
+  apertureWidth: number,
+  apertureHeight: number,
+  apertureBottom: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const sideWidth = Math.max(0, (bayWidth - apertureWidth) / 2);
+  addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters, bayStart,
+    sideWidth, storyBottom, storyHeight, options, color);
+  addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
+    bayStart + sideWidth + apertureWidth, sideWidth,
+    storyBottom, storyHeight, options, color);
+  addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
+    bayStart + sideWidth, apertureWidth, storyBottom,
+    apertureBottom, options, color);
+  addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
+    bayStart + sideWidth, apertureWidth,
+    storyBottom + apertureBottom + apertureHeight,
+    storyHeight - apertureBottom - apertureHeight, options, color);
 }
 
 function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefined {
@@ -409,14 +481,182 @@ function createBuildingPrism(
   topElevation: number,
   bottomElevation: number,
   options: BuildingRenderOptions,
+  holes?: readonly ScenePoint[][],
 ): Mesh {
   const shape = outline.map(({ x, z }) => new Vector2(x, z));
   const depth = Math.max(0.01, (topElevation - bottomElevation) / options.metersPerUnit);
+  if (!holes || holes.length === 0) {
+    const mesh = stageBuildingMesh(
+      new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth),
+    );
+    mesh.position.y = topElevation / options.metersPerUnit;
+    return mesh;
+  }
+  const builder = new PolygonMeshBuilder("building", shape, scene, earcut);
+  for (const hole of holes) {
+    builder.addHole(hole.map(({ x, z }) => new Vector2(x, z)));
+  }
   const mesh = stageBuildingMesh(
-    new PolygonMeshBuilder("building", shape, scene, earcut).build(false, depth),
+    builder.build(false, depth),
   );
   mesh.position.y = topElevation / options.metersPerUnit;
   return mesh;
+}
+
+function findStairLayout(
+  outline: ScenePoint[],
+  options: BuildingRenderOptions,
+): StairLayout | undefined {
+  const edges = outline.map((_, index) => index).sort((a, b) =>
+    pointDistance(outline[b], outline[(b + 1) % outline.length]) -
+    pointDistance(outline[a], outline[(a + 1) % outline.length])
+  );
+  for (const edgeIndex of edges) {
+    const edgeStart = outline[edgeIndex];
+    const edgeEnd = outline[(edgeIndex + 1) % outline.length];
+    const edgeLengthMeters = pointDistance(edgeStart, edgeEnd) * options.metersPerUnit;
+    const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLengthMeters - 1.2);
+    if (runMeters < BUILDING_STAIR_MIN_RUN_METERS) continue;
+    const direction = {
+      x: (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters,
+      z: (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters,
+    };
+    const inward = { x: -direction.z, z: direction.x };
+    const alongStart = (edgeLengthMeters - runMeters) / 2;
+    const acrossCenter = BUILDING_STAIR_WALL_CLEARANCE_METERS +
+      BUILDING_STAIR_WIDTH_METERS / 2;
+    const start = {
+      x: edgeStart.x + (direction.x * alongStart + inward.x * acrossCenter) /
+        options.metersPerUnit,
+      z: edgeStart.z + (direction.z * alongStart + inward.z * acrossCenter) /
+        options.metersPerUnit,
+    };
+    const layout = {
+      start,
+      direction,
+      inward,
+      runMeters,
+      widthMeters: BUILDING_STAIR_WIDTH_METERS,
+    };
+    if (stairOpening(layout, options).every((point) => pointInPolygon(point, outline))) {
+      return layout;
+    }
+  }
+  return undefined;
+}
+
+function stairOpening(stair: StairLayout, options: BuildingRenderOptions): ScenePoint[] {
+  const halfWidth = (stair.widthMeters + 0.2) / 2;
+  const runStart = -0.1;
+  const runEnd = stair.runMeters + 0.1;
+  const point = (along: number, across: number): ScenePoint => ({
+    x: stair.start.x +
+      (stair.direction.x * along + stair.inward.x * across) / options.metersPerUnit,
+    z: stair.start.z +
+      (stair.direction.z * along + stair.inward.z * across) / options.metersPerUnit,
+  });
+  return [
+    point(runStart, -halfWidth),
+    point(runEnd, -halfWidth),
+    point(runEnd, halfWidth),
+    point(runStart, halfWidth),
+  ].reverse();
+}
+
+function createStairFlight(
+  parts: Mesh[],
+  scene: Scene,
+  stair: StairLayout,
+  floorElevation: number,
+  storyHeight: number,
+  reverse: boolean,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const stepCount = Math.max(8, Math.ceil(storyHeight / 0.19));
+  const treadMeters = stair.runMeters / stepCount;
+  const riseMeters = storyHeight / stepCount;
+  for (let step = 0; step < stepCount; step++) {
+    const along = (step + 0.5) * treadMeters;
+    const heightMeters = (step + 1) * riseMeters;
+    const signedAlong = reverse ? stair.runMeters - along : along;
+    const direction = reverse
+      ? { x: -stair.direction.x, z: -stair.direction.z }
+      : stair.direction;
+    const center = {
+      x: stair.start.x + stair.direction.x * signedAlong / options.metersPerUnit,
+      z: stair.start.z + stair.direction.z * signedAlong / options.metersPerUnit,
+    };
+    const mesh = stageBuildingMesh(MeshBuilder.CreateBox("buildingStair", {
+      width: stair.widthMeters / options.metersPerUnit,
+      height: heightMeters / options.metersPerUnit,
+      depth: treadMeters / options.metersPerUnit,
+    }, scene));
+    mesh.position.set(
+      center.x,
+      (floorElevation + BUILDING_FLOOR_THICKNESS_METERS + heightMeters / 2) /
+        options.metersPerUnit,
+      center.z,
+    );
+    mesh.rotation.y = Math.atan2(direction.x, direction.z);
+    setSolidVertexColor(mesh, color);
+    parts.push(mesh);
+  }
+}
+
+function pointInPolygon(point: ScenePoint, polygon: readonly ScenePoint[]): boolean {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    if ((a.z > point.z) !== (b.z > point.z) &&
+        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function configureProximityWindows(mesh: Mesh, metersPerUnit: number): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const colors = mesh.getVerticesData(VertexBuffer.ColorKind);
+  if (!positions || !colors) return;
+  const windowVertices: number[] = [];
+  for (let vertex = 0; vertex < colors.length / 4; vertex++) {
+    if (colors[vertex * 4 + 3] < 0.99) windowVertices.push(vertex);
+  }
+  if (windowVertices.length === 0) return;
+  mesh.markVerticesDataAsUpdatable(VertexBuffer.ColorKind, true);
+  let lastUpdateMilliseconds = -Infinity;
+  mesh.onBeforeRenderObservable.add(() => {
+    const now = performance.now();
+    if (now - lastUpdateMilliseconds < 100) return;
+    lastUpdateMilliseconds = now;
+    const camera = mesh.getScene().activeCamera;
+    if (!camera) return;
+    const world = mesh.computeWorldMatrix();
+    for (const vertex of windowVertices) {
+      const offset = vertex * 3;
+      const worldX = positions[offset] * world.m[0] + positions[offset + 1] * world.m[4] +
+        positions[offset + 2] * world.m[8] + world.m[12];
+      const worldY = positions[offset] * world.m[1] + positions[offset + 1] * world.m[5] +
+        positions[offset + 2] * world.m[9] + world.m[13];
+      const worldZ = positions[offset] * world.m[2] + positions[offset + 1] * world.m[6] +
+        positions[offset + 2] * world.m[10] + world.m[14];
+      const distanceMeters = Math.hypot(
+        worldX - camera.globalPosition.x,
+        worldY - camera.globalPosition.y,
+        worldZ - camera.globalPosition.z,
+      ) * metersPerUnit;
+      const fade = clamp01(
+        (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
+        (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
+      );
+      colors[vertex * 4 + 3] = BUILDING_WINDOW_CLOSE_ALPHA +
+        (1 - BUILDING_WINDOW_CLOSE_ALPHA) * fade;
+    }
+    mesh.updateVerticesData(VertexBuffer.ColorKind, colors, false, false);
+  });
 }
 
 function createRoofTrim(

@@ -3,6 +3,7 @@ import {
   BaseTexture,
   Constants,
   RenderTargetTexture,
+  Ray,
   Scene,
   SSRRenderingPipeline,
   UniversalCamera,
@@ -44,7 +45,7 @@ import {
 } from "./Geo";
 import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
-import type { MapTile } from "./OpenStreetMap";
+import type { LakePosition, MapTile } from "./OpenStreetMap";
 import {
   LandCoverClass,
   landCoverSurfaceColor,
@@ -137,6 +138,8 @@ const WHEEL_NOTCH_PIXELS = 100;
 const GROUND_COVER_BLEND_METERS = 12;
 const PLAYER_HEIGHT_METERS = 1.8;
 const PLAYER_RADIUS_METERS = 0.3;
+const WALK_MAX_STEP_UP_METERS = 0.35;
+const WALK_SURFACE_PROBE_DEPTH_METERS = 12;
 const WALK_SPEED_METERS_PER_SECOND = 10;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
@@ -171,8 +174,8 @@ interface StreamedTile {
   terrainData: TerrainData;
   /** Classification loaded once for coastline, terrain tint, and vegetation. */
   landCover?: WorldCover;
-  /** Provider elevations retained before coastline shaping for lake surfaces. */
-  lakeElevationSource?: Float32Array;
+  /** Provider elevations retained before coastline shaping for bridge clearance. */
+  preCarvingElevations?: Float32Array;
   /** One shared vector-tile request for every OSM-backed layer on this tile. */
   mapTiles?: Promise<MapTile[]>;
   terrain: Mesh;
@@ -189,6 +192,8 @@ interface StreamedTile {
   bushField?: VegetationFieldResult;
   fernField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
+  /** Provider seeds retained for a future terrain-derived lake boundary pass. */
+  lakePositions?: LakePosition[];
   /** Merged building massing retained outside the detail rings. */
   farBuildings?: TransformNode;
   /** Impostor-only tree layer carried by tiles outside the detail rings. */
@@ -540,7 +545,7 @@ export class Game {
         return undefined;
       });
     if (generation !== this.streamingGeneration) return undefined;
-    const lakeElevationSource = native ? terrainData.elevations.slice() : undefined;
+    const preCarvingElevations = native ? terrainData.elevations.slice() : undefined;
     if (landCover) {
       await landCover.constrainElevations(
         terrainData,
@@ -664,7 +669,7 @@ export class Game {
       key,
       terrainData,
       landCover,
-      lakeElevationSource,
+      preCarvingElevations,
       mapTiles,
       terrain,
       meshWidth,
@@ -707,13 +712,11 @@ export class Game {
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
       metersPerUnit,
-      lakeElevationSource: record.lakeElevationSource,
+      preCarvingElevations: record.preCarvingElevations,
       skyReflection: this.solarLighting?.skyReflectionTexture,
-      worldOffsetX: record.offsetX,
-      worldOffsetZ: record.offsetZ,
       startDisabled,
     };
-    const exclusionMask = await OpenStreetMap.createRoadExclusionMask(
+    const exclusionMask = await OpenStreetMap.createVegetationExclusionMask(
       mapWays,
       terrainData,
       mapOptions,
@@ -835,6 +838,7 @@ export class Game {
     const mapRoot = mapFeatures.root;
     this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
+    record.lakePositions = mapFeatures.lakePositions;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
       record.farBuildings = undefined;
@@ -1078,7 +1082,7 @@ export class Game {
         const mapMeshes = record.mapFeatures.getChildMeshes(false).filter(
           (mesh): mesh is Mesh => mesh instanceof Mesh,
         );
-        // Roads and lake surfaces sit only centimetres above the terrain.
+        // Roads and waterways sit only centimetres above the terrain.
         // Casting them creates long, thin shadow streaks, but they should
         // still receive shadows from real elevated geometry.
         for (const mesh of mapMeshes) mesh.receiveShadows = true;
@@ -1232,6 +1236,7 @@ export class Game {
     }
     if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
     record.mapFeatures = undefined;
+    record.lakePositions = undefined;
     record.detailed = false;
   }
 
@@ -1279,6 +1284,7 @@ export class Game {
     const mapFeatures = record.mapFeatures;
     if (mapFeatures) {
       record.mapFeatures = undefined;
+      record.lakePositions = undefined;
       this.beginLayerFade(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
         () => OpenStreetMap.disposeLayer(mapFeatures), true);
     }
@@ -1816,6 +1822,7 @@ export class Game {
     const groundEyeHeightBeforeMove = this.getGroundEyeHeight(
       camera.position.x,
       camera.position.z,
+      camera.position.y,
     );
     const forward = Number(this.heldMovementKeys.has("w")) - Number(this.heldMovementKeys.has("s"));
     const right = Number(this.heldMovementKeys.has("d")) - Number(this.heldMovementKeys.has("a"));
@@ -1837,7 +1844,11 @@ export class Game {
       eyeHeight: camera.position.y,
       verticalVelocityMetersPerSecond: this.verticalVelocityMetersPerSecond,
       groundEyeHeightBeforeMove,
-      groundEyeHeightAfterMove: this.getGroundEyeHeight(camera.position.x, camera.position.z),
+      groundEyeHeightAfterMove: this.getGroundEyeHeight(
+        camera.position.x,
+        camera.position.z,
+        camera.position.y,
+      ),
       metersPerUnit,
       deltaSeconds,
       jumpRequested,
@@ -1866,7 +1877,11 @@ export class Game {
     return this.tiles.get(worldTileKey(worldTileAtLocation(lat, lon, this.gridLevel)));
   }
 
-  private getGroundEyeHeight(x: number, z: number): number | undefined {
+  private getGroundEyeHeight(
+    x: number,
+    z: number,
+    referenceEyeHeight = this.flyCamera?.position.y,
+  ): number | undefined {
     const record = this.tileAtScenePosition(x, z);
     const metersPerUnit = this.terrainMetersPerUnit;
     if (!record || !metersPerUnit) return undefined;
@@ -1896,7 +1911,26 @@ export class Game {
         ),
       );
     }
-    return (elevationMeters + PLAYER_HEIGHT_METERS) / metersPerUnit;
+    const terrainEyeHeight = (elevationMeters + PLAYER_HEIGHT_METERS) / metersPerUnit;
+    if (referenceEyeHeight === undefined) return terrainEyeHeight;
+
+    // Probe only slightly above the player's feet. This finds stair treads and
+    // interior slabs without selecting a roof or ceiling above the walker.
+    const probeStartY = referenceEyeHeight - PLAYER_HEIGHT_METERS / metersPerUnit +
+      WALK_MAX_STEP_UP_METERS / metersPerUnit;
+    const hit = this.scene.pickWithRay(
+      new Ray(
+        new Vector3(x, probeStartY, z),
+        Vector3.Down(),
+        WALK_SURFACE_PROBE_DEPTH_METERS / metersPerUnit,
+      ),
+      (mesh) => mesh.checkCollisions && mesh.isEnabled(),
+      false,
+    );
+    const structureEyeHeight = hit?.pickedPoint
+      ? hit.pickedPoint.y + PLAYER_HEIGHT_METERS / metersPerUnit
+      : -Infinity;
+    return Math.max(terrainEyeHeight, structureEyeHeight);
   }
 
   private configureCameraCollisionBody(): void {

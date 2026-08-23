@@ -64,6 +64,113 @@ export interface HorizontalExclusionMask {
   intersects(x: number, z: number, radius: number): boolean;
 }
 
+export interface HorizontalPolygon {
+  outer: ReadonlyArray<{ x: number; z: number }>;
+  holes?: ReadonlyArray<ReadonlyArray<{ x: number; z: number }>>;
+}
+
+/** Combines mapped surfaces without coupling vegetation placement to their source. */
+export function combineHorizontalExclusionMasks(
+  masks: readonly HorizontalExclusionMask[],
+): HorizontalExclusionMask {
+  return {
+    intersects: (x, z, radius) => masks.some((mask) => mask.intersects(x, z, radius)),
+  };
+}
+
+/** Excludes circular object footprints from filled polygons while preserving holes. */
+export class PolygonExclusionMask implements HorizontalExclusionMask {
+  private readonly cells = new Map<string, HorizontalPolygon[]>();
+  private readonly cellSize: number;
+
+  constructor(polygons: readonly HorizontalPolygon[], cellSize = 20) {
+    this.cellSize = cellSize;
+    for (const polygon of polygons) {
+      if (polygon.outer.length === 0) continue;
+      const xs = polygon.outer.map((point) => point.x);
+      const zs = polygon.outer.map((point) => point.z);
+      const minimumX = Math.floor(Math.min(...xs) / cellSize);
+      const maximumX = Math.floor(Math.max(...xs) / cellSize);
+      const minimumZ = Math.floor(Math.min(...zs) / cellSize);
+      const maximumZ = Math.floor(Math.max(...zs) / cellSize);
+      for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
+        for (let cellX = minimumX; cellX <= maximumX; cellX++) {
+          const key = `${cellX},${cellZ}`;
+          const cell = this.cells.get(key);
+          if (cell) cell.push(polygon);
+          else this.cells.set(key, [polygon]);
+        }
+      }
+    }
+  }
+
+  intersects(x: number, z: number, radius: number): boolean {
+    const radiusSquared = radius * radius;
+    const candidates = new Set<HorizontalPolygon>();
+    const minimumX = Math.floor((x - radius) / this.cellSize);
+    const maximumX = Math.floor((x + radius) / this.cellSize);
+    const minimumZ = Math.floor((z - radius) / this.cellSize);
+    const maximumZ = Math.floor((z + radius) / this.cellSize);
+    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
+      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
+        for (const polygon of this.cells.get(`${cellX},${cellZ}`) ?? []) {
+          candidates.add(polygon);
+        }
+      }
+    }
+    for (const polygon of candidates) {
+      if (pointInHorizontalRing(x, z, polygon.outer) &&
+          !(polygon.holes ?? []).some((hole) => pointInHorizontalRing(x, z, hole))) {
+        return true;
+      }
+      const rings = [polygon.outer, ...(polygon.holes ?? [])];
+      if (rings.some((ring) => horizontalRingDistanceSquared(x, z, ring) <= radiusSquared)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+function pointInHorizontalRing(
+  x: number,
+  z: number,
+  ring: ReadonlyArray<{ x: number; z: number }>,
+): boolean {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
+    const a = ring[index];
+    const b = ring[previous];
+    if ((a.z > z) !== (b.z > z) &&
+        x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function horizontalRingDistanceSquared(
+  x: number,
+  z: number,
+  ring: ReadonlyArray<{ x: number; z: number }>,
+): number {
+  let closest = Infinity;
+  for (let index = 0; index < ring.length; index++) {
+    const start = ring[index];
+    const end = ring[(index + 1) % ring.length];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const lengthSquared = dx * dx + dz * dz;
+    const amount = lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
+    const offsetX = x - (start.x + dx * amount);
+    const offsetZ = z - (start.z + dz * amount);
+    closest = Math.min(closest, offsetX * offsetX + offsetZ * offsetZ);
+  }
+  return closest;
+}
+
 const mercatorY = (latitude: number): number =>
   Math.asinh(Math.tan((latitude * Math.PI) / 180));
 

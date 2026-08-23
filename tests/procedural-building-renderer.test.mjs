@@ -151,7 +151,10 @@ test("detailed buildings contain streamed interiors, windows, and an entrance", 
   assert.ok(detailed && far);
   assert.equal(detailed.metadata.enterable, true);
   assert.equal(detailed.metadata.interiorFloorCount, 3);
+  assert.equal(detailed.metadata.stairFlightCount, 2);
   assert.ok(detailed.metadata.windowCount >= 8);
+  const colors = detailed.getVerticesData(VertexBuffer.ColorKind);
+  assert.ok(colors.some((_, index) => index % 4 === 3 && colors[index] < 0.5));
   assert.ok(detailed.getTotalVertices() > far.getTotalVertices() * 4);
 
   scene.dispose();

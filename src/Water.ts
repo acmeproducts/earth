@@ -2,6 +2,7 @@ import {
   BaseTexture,
   Color3,
   DynamicTexture,
+  Material,
   Mesh,
   MeshBuilder,
   Nullable,
@@ -107,7 +108,7 @@ export interface WaterSurfaceMaterialOptions {
   name?: string;
 }
 
-/** Creates the same reflective, animated PBR surface for oceans and lakes. */
+/** Creates the shared reflective, animated material used by water meshes. */
 export function createWaterSurfaceMaterial(
   scene: Scene,
   options: WaterSurfaceMaterialOptions,
@@ -123,6 +124,11 @@ export function createWaterSurfaceMaterial(
   const water = scene.getEngine().isWebGPU
     ? new StandardMaterial(name, scene)
     : new PBRMaterial(name, scene);
+  // Custom vegetation shaders render into the scene color and depth buffers,
+  // but not into SSR's reflectivity attachment. Draw water in Babylon's alpha
+  // test queue (while leaving it fully opaque) so foliage depth is established
+  // first and water cannot leave reflectivity behind beneath accepted leaves.
+  water.transparencyMode = Material.MATERIAL_ALPHATEST;
   // Deep water read as a plain gamma-space tint before; PBR shades in linear
   // space and converts on output, so convert the authored colour once here
   // instead of re-picking it by eye.
@@ -299,7 +305,7 @@ function animateWaves(
   const chopRepeatsPerSecond =
     (CHOP_DRIFT_METERS_PER_SECOND * CHOP_TILE_RATIO) / SWELL_TILE_METERS;
   const observer: Nullable<Observer<Scene>> = scene.onBeforeRenderObservable.add(() => {
-    // Absolute page time keeps separately streamed lake materials in phase.
+    // Absolute page time keeps separately streamed water materials in phase.
     const seconds = performance.now() / 1000;
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.

@@ -25,12 +25,16 @@ test("ocean and inland meshes can share the PBR water surface implementation", (
   assert.match(water, /new PBRMaterial\(name, scene\)/);
 });
 
+test("water waits for alpha-cut foliage depth before writing SSR reflectivity", () => {
+  assert.match(water, /water\.transparencyMode = Material\.MATERIAL_ALPHATEST/);
+});
+
 test("separately streamed water materials animate in phase", () => {
   assert.match(water, /const seconds = performance\.now\(\) \/ 1000/);
   assert.doesNotMatch(water, /seconds \+= scene\.getEngine\(\)\.getDeltaTime\(\)/);
 });
 
-test("retains the terrain carving mask for adaptive lake underlap", () => {
+test("retains the terrain carving mask for terrain-derived inland water", () => {
   assert.match(terrainData, /waterMask\?: Uint8Array/);
   assert.match(worldCover, /terrain\.waterMask = cropWaterMask\(/);
   assert.match(worldCover, /shapeCoastlineElevations\([\s\S]*coverage,[\s\S]*water,/);

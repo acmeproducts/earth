@@ -4,7 +4,6 @@ import test from "node:test";
 
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
 const roadPlanner = readFileSync(new URL("../src/RoadPlanner.ts", import.meta.url), "utf8");
-const lakeSurface = readFileSync(new URL("../src/LakeSurface.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
   new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
   "utf8",
@@ -12,8 +11,7 @@ const proceduralBuildings = readFileSync(
 
 test("stages every OSM mesh out of render lists until the layer is assembled", () => {
   assert.match(openStreetMap, /function stageMapMesh<T extends Mesh>[\s\S]*?mesh\.setEnabled\(false\)/);
-  assert.match(proceduralBuildings, /stageBuildingMesh\(\s*new PolygonMeshBuilder\("building"/);
-  assert.match(openStreetMap, /stageMapMesh\(\s*new PolygonMeshBuilder\("water"/);
+  assert.match(proceduralBuildings, /return stageBuildingMesh\(merged\)/);
   assert.match(openStreetMap, /stageMapMesh\(\s*MeshBuilder\.CreateRibbon\("road"/);
 });
 
@@ -41,6 +39,14 @@ test("drapes roads at a meter-scale clearance", () => {
     /\(leftElevation \+ clearanceMeters\) \/ options\.metersPerUnit/,
   );
   assert.doesNotMatch(openStreetMap, /leftElevation \/ options\.metersPerUnit \+ 0\.025/);
+});
+
+test("renders surface roads with decal-style depth bias over terrain", () => {
+  assert.match(openStreetMap, /const ROAD_SURFACE_DEPTH_BIAS = -2/);
+  assert.match(openStreetMap, /const ROAD_SHOULDER_DEPTH_BIAS = -1/);
+  assert.match(openStreetMap, /material\.zOffset = depthBias/);
+  assert.match(openStreetMap, /material\.zOffsetUnits = depthBias/);
+  assert.match(openStreetMap, /visualStyle !== "bridgeDeck"/);
 });
 
 test("styles OSM road classes, path types, and surfaces separately", () => {
@@ -71,57 +77,14 @@ test("renders permanent mapped waterways as terrain-following water ribbons", ()
   assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
 });
 
-test("extends lake surfaces beneath the terrain shoreline transition", () => {
-  assert.match(lakeSurface, /const LAKE_MAX_UNDERLAP_METERS = 80/);
-  assert.match(lakeSurface, /const LAKE_TERRAIN_TRANSITION_MARGIN_METERS = 35/);
-  assert.match(lakeSurface, /const LAKE_FALLBACK_UNDERLAP_METERS = 8/);
-  assert.match(
-    lakeSurface,
-    /lakeUnderlapDistance\(point, normal, terrain, options\)/,
-  );
-  assert.match(openStreetMap, /const expanded = expandLakeShoreline\(points, terrain, options\)/);
-  assert.match(lakeSurface, /const incoming = outwardNormal/);
-  assert.match(lakeSurface, /const outgoing = outwardNormal/);
-  assert.match(openStreetMap, /const mappedFootprint = clipPolygon\(points, clipBounds\)/);
-});
-
-test("checks the carved terrain water mask before extending a lake edge", () => {
-  assert.match(lakeSurface, /if \(!terrain\.waterMask\) return fallback/);
-  assert.match(lakeSurface, /function sampleWaterMask/);
-  assert.match(lakeSurface, /if \(u < 0 \|\| u > 1 \|\| v < 0 \|\| v > 1\) return false/);
-  assert.match(lakeSurface, /furthestWater \+ margin/);
-});
-
-test("merges inland water and gives it the reflective ocean material", () => {
-  const styleStart = lakeSurface.indexOf("export function styleLakeSurfaces(");
-  const styleWater = lakeSurface.slice(styleStart);
-  assert.match(styleWater, /Mesh\.MergeMeshes\(pieces, true, true\)/);
-  assert.match(styleWater, /createWaterSurfaceMaterial\(parent\.getScene\(\)/);
-  assert.match(styleWater, /skyReflection: options\.skyReflection/);
-  assert.doesNotMatch(styleWater, /material\.alpha|new StandardMaterial/);
-});
-
-test("levels and textures every provider fragment as one continuous lake", () => {
+test("retains mapped lake positions without rendering provider polygons", () => {
   assert.match(openStreetMap, /function waterFeatureSourceId/);
   assert.match(openStreetMap, /`water\/\$\{tile\.zoom\}\/\$\{String\(feature\.id\)\}`/);
-  assert.match(lakeSurface, /const lakeLevels = new Map<string, LakeLevelState>/);
-  assert.match(lakeSurface, /state\.observations\.set\(observationKey/);
-  assert.match(lakeSurface, /surface\.mesh\.position\.y =/);
-  assert.match(lakeSurface, /positions\[vertex \* 3\] \+ worldOffsetX/);
-});
-
-test("keeps lake implementation out of the OSM source adapter", () => {
-  assert.match(openStreetMap, /from "\.\/LakeSurface"/);
-  assert.match(openStreetMap, /prepareLakeSurfacePiece\(/);
-  assert.match(openStreetMap, /styleLakeSurfaces\(water, root, options\)/);
-  assert.doesNotMatch(openStreetMap, /function lakeUnderlapDistance|const lakeLevels|function setWaterUvs/);
-});
-
-test("preserves the shared sky reflection when a streamed lake layer is disposed", () => {
-  assert.match(openStreetMap, /static disposeLayer\(root: TransformNode\)/);
-  assert.match(
+  assert.match(openStreetMap, /lakePositions\.push\(\{/);
+  assert.match(openStreetMap, /sourceId: waterFeatureSourceId/);
+  assert.match(openStreetMap, /lakePositions: LakePosition\[\]/);
+  assert.doesNotMatch(
     openStreetMap,
-    /mesh\.material instanceof PBRMaterial \|\| mesh\.material instanceof StandardMaterial/,
+    /createWaterPolygon|expandLakeShoreline|prepareLakeSurfacePiece|styleLakeSurfaces|inlandWater/,
   );
-  assert.match(openStreetMap, /root\.dispose\(false, true\)/);
 });

@@ -13,12 +13,15 @@ import {
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
+import type { BaseTexture } from "@babylonjs/core";
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
 import earcut from "earcut";
 import {
+  combineHorizontalExclusionMasks,
   HorizontalExclusionMask,
   lonLatToScene,
+  PolygonExclusionMask,
   sampleElevation,
   SEA_LEVEL_METERS,
 } from "./Geo";
@@ -31,12 +34,6 @@ import {
   planBuilding,
 } from "./BuildingPlanner";
 import { ProceduralBuildingRenderer } from "./ProceduralBuildingRenderer";
-import {
-  expandLakeShoreline,
-  prepareLakeSurfacePiece,
-  styleLakeSurfaces,
-} from "./LakeSurface";
-import type { LakeSurfaceOptions } from "./LakeSurface";
 import {
   createWaterSurfaceMaterial,
   prepareWaterSurfaceMesh,
@@ -59,10 +56,12 @@ export interface MapTile {
   data: VectorTile;
 }
 
-const MINIMUM_LAKE_ELEVATION_METERS = SEA_LEVEL_METERS + 1;
 /** Enough separation to avoid z-fighting without making roads hover. */
 const ROAD_SURFACE_CLEARANCE_METERS = 0.025;
 const ROAD_SHOULDER_CLEARANCE_METERS = 0.012;
+/** Polygon offset makes terrain-conforming roads render as decals over the ground. */
+const ROAD_SURFACE_DEPTH_BIAS = -2;
+const ROAD_SHOULDER_DEPTH_BIAS = -1;
 const BRIDGE_DECK_THICKNESS_METERS = 0.32;
 const BRIDGE_EDGE_WIDTH_METERS = 0.45;
 const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
@@ -81,8 +80,13 @@ interface RoadSource {
 const buildingSourceCache = new WeakMap<VectorTile, readonly BuildingSource[]>();
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
-interface MapLayerOptions extends LakeSurfaceOptions {
-  lakeElevationSource?: Float32Array;
+interface MapLayerOptions {
+  meshWidth: number;
+  meshDepth: number;
+  metersPerUnit: number;
+  skyReflection?: BaseTexture | null;
+  /** Provider elevations retained before coastline shaping for bridge clearance. */
+  preCarvingElevations?: Float32Array;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
 }
@@ -146,7 +150,15 @@ class RoadExclusionMask implements HorizontalExclusionMask {
 export interface MapFeatureLayer {
   root: TransformNode;
   meshes: Mesh[];
+  lakePositions: LakePosition[];
   counts: { buildings: number; roads: number; water: number };
+}
+
+/** Approximate provider position retained as a seed for terrain-derived lakes. */
+export interface LakePosition {
+  sourceId: string;
+  x: number;
+  z: number;
 }
 
 interface CreatedRoad {
@@ -213,7 +225,7 @@ export class OpenStreetMap {
     };
     const bridgeDecks: Mesh[] = [];
     const junctionCandidates: RoadJunctionCandidate[] = [];
-    const water: Mesh[] = [];
+    const lakePositions: LakePosition[] = [];
     const waterways: Mesh[] = [];
 
     for (const tile of tiles) {
@@ -257,20 +269,16 @@ export class OpenStreetMap {
         if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
         const waterPolygons = polygons(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
-          const lakeKey = waterFeatureSourceId(
-            feature,
-            tile,
-            featureIndex,
-            polygonIndex,
-          );
-          const mesh = createWaterPolygon(
-            scene,
+          const position = lakePosition(
             waterPolygons[polygonIndex],
             terrain,
             options,
-            lakeKey,
           );
-          if (mesh) water.push(mesh);
+          if (!position) continue;
+          lakePositions.push({
+            sourceId: waterFeatureSourceId(feature, tile, featureIndex, polygonIndex),
+            ...position,
+          });
         }
       });
       forEachFeature(tile, "waterway", (feature) => {
@@ -304,7 +312,6 @@ export class OpenStreetMap {
       mergeRoads(roadMeshes.unpaved, "unpavedRoads", "unpaved", root),
       mergeRoads(roadMeshes.ford, "fordRoads", "ford", root),
       mergeWaterways(waterways, root, options),
-      ...styleLakeSurfaces(water, root, options),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
     // Source meshes are disabled as soon as they are constructed so yielding
     // between feature batches cannot expose them at the scene origin. The
@@ -314,10 +321,11 @@ export class OpenStreetMap {
     return {
       root,
       meshes,
+      lakePositions,
       counts: {
         buildings: buildings.length,
         roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
-        water: water.length + waterways.length,
+        water: lakePositions.length + waterways.length,
       },
     };
   }
@@ -377,6 +385,40 @@ export class OpenStreetMap {
       await yieldControl?.();
     }
     return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
+  }
+
+  /** Keeps vegetation clear of both road surfaces and occupied building footprints. */
+  static async createVegetationExclusionMask(
+    tiles: MapTile[],
+    terrain: TerrainData,
+    options: MapLayerOptions,
+    yieldControl?: () => Promise<void>,
+  ): Promise<HorizontalExclusionMask> {
+    const roadMask = await this.createRoadExclusionMask(
+      tiles,
+      terrain,
+      options,
+      yieldControl,
+    );
+    const buildings = [];
+    for (const tile of tiles) {
+      for (const source of buildingSources(tile)) {
+        const project = ([lon, lat]: LonLat) =>
+          lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+        buildings.push({
+          outer: source.polygon.outer.map(project),
+          holes: source.polygon.holes.map((hole) => hole.map(project)),
+        });
+      }
+      await yieldControl?.();
+    }
+    return combineHorizontalExclusionMasks([
+      roadMask,
+      new PolygonExclusionMask(
+        buildings,
+        Math.max(0.25, 20 / options.metersPerUnit),
+      ),
+    ]);
   }
 
   static async conformTerrainToRoads(
@@ -564,70 +606,28 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
   return [];
 }
 
-function polygonScenePoints(
+function lakePosition(
   coordinates: LonLat[],
   terrain: TerrainData,
   options: MapLayerOptions,
-): Array<{ x: number; z: number }> {
-  return coordinates.map(([lon, lat]) =>
-    lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
+): { x: number; z: number } | undefined {
+  const uniqueCoordinates = coordinates.length > 1 &&
+      coordinates[0][0] === coordinates[coordinates.length - 1][0] &&
+      coordinates[0][1] === coordinates[coordinates.length - 1][1]
+    ? coordinates.slice(0, -1)
+    : coordinates;
+  if (uniqueCoordinates.length === 0) return undefined;
+  const sum = uniqueCoordinates.reduce(
+    (total, [lon, lat]) => ({ lon: total.lon + lon, lat: total.lat + lat }),
+    { lon: 0, lat: 0 },
   );
-}
-
-function createWaterPolygon(
-  scene: Scene,
-  coordinates: LonLat[],
-  terrain: TerrainData,
-  options: MapLayerOptions,
-  lakeKey?: string,
-): Mesh | undefined {
-  const points = polygonScenePoints(coordinates, terrain, options);
-  if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-  const clipBounds = {
-    minX: -options.meshWidth / 2,
-    maxX: options.meshWidth / 2,
-    minZ: -options.meshDepth / 2,
-    maxZ: options.meshDepth / 2,
-  };
-  const expanded = expandLakeShoreline(points, terrain, options);
-  const clipped = clipPolygon(expanded, clipBounds);
-  if (clipped.length < 3) return undefined;
-  if (signedArea(clipped) < 0) clipped.reverse();
-  // The expanded ring is only visual underlap. Sampling it would mix elevated
-  // banks into the shared lake level, so prefer the real mapped footprint.
-  const mappedFootprint = clipPolygon(points, clipBounds);
-  const elevationPoints = mappedFootprint.length >= 3 ? mappedFootprint : clipped;
-  const center = averagePoint(elevationPoints);
-  const elevationSource = options.lakeElevationSource
-    ? options.lakeElevationSource
-    : terrain.elevations;
-  const centerElevation = sampleElevation(
-    terrain,
-    center.x,
-    center.z,
+  return lonLatToScene(
+    sum.lon / uniqueCoordinates.length,
+    sum.lat / uniqueCoordinates.length,
+    terrain.bounds,
     options.meshWidth,
     options.meshDepth,
-    elevationSource,
   );
-  const boundaryElevations = elevationPoints.map((point) =>
-    sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth, elevationSource)
-  );
-  const lakeElevation = quantile([centerElevation, ...boundaryElevations], 0.25);
-  // Reject coastal/sea-level OSM water polygons. The lower quartile keeps a few
-  // elevated shoreline samples from making a sea-level polygon look inland.
-  if (lakeElevation < MINIMUM_LAKE_ELEVATION_METERS) return undefined;
-  const shape = clipped.map(({ x, z }) => new Vector2(x, z));
-  const mesh = stageMapMesh(
-    new PolygonMeshBuilder("water", shape, scene, earcut).build(false),
-  );
-  prepareLakeSurfacePiece(
-    mesh,
-    terrain,
-    options,
-    lakeKey ?? `water/${terrain.worldTile.level}/${terrain.worldTile.x}/${terrain.worldTile.y}`,
-    lakeElevation,
-  );
-  return mesh;
 }
 
 function createRoad(
@@ -775,14 +775,14 @@ function bridgeElevationProfile(
       options.meshWidth,
       options.meshDepth,
     ) || ground <= SEA_LEVEL_METERS;
-    const obstacle = water && options.lakeElevationSource
+    const obstacle = water && options.preCarvingElevations
       ? sampleElevation(
         terrain,
         point.x,
         point.z,
         options.meshWidth,
         options.meshDepth,
-        options.lakeElevationSource,
+        options.preCarvingElevations,
       )
       : ground;
     return { obstacle, clearance: water ? BRIDGE_WATER_CLEARANCE_METERS : BRIDGE_TERRAIN_CLEARANCE_METERS };
@@ -1161,23 +1161,6 @@ function tileFor(longitude: number, latitude: number, zoom: number): { x: number
   };
 }
 
-function averagePoint(points: Array<{ x: number; z: number }>): { x: number; z: number } {
-  const total = points.reduce(
-    (sum, point) => ({ x: sum.x + point.x, z: sum.z + point.z }),
-    { x: 0, z: 0 },
-  );
-  return { x: total.x / points.length, z: total.z / points.length };
-}
-
-function quantile(values: number[], amount: number): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const position = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * amount));
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  const blend = position - lower;
-  return sorted[lower] * (1 - blend) + sorted[upper] * blend;
-}
-
 function mergeRoads(
   meshes: Mesh[],
   name: string,
@@ -1233,6 +1216,13 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
       ? new Color3(0.08, 0.09, 0.085)
       : new Color3(0.018, 0.02, 0.018);
   material.specularPower = looseSurface ? 8 : visualStyle === "ford" ? 48 : 20;
+  if (visualStyle !== "bridgeDeck") {
+    const depthBias = visualStyle === "pavedShoulder" || visualStyle === "unpavedShoulder"
+      ? ROAD_SHOULDER_DEPTH_BIAS
+      : ROAD_SURFACE_DEPTH_BIAS;
+    material.zOffset = depthBias;
+    material.zOffsetUnits = depthBias;
+  }
   const texture = createRoadTexture(scene, `${name}Texture`, visualStyle, true);
   material.diffuseTexture = texture;
   if (looseSurface) {

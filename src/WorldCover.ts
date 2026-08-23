@@ -155,8 +155,8 @@ export class WorldCover {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
       if ((index & 4095) === 4095) await yieldControl?.();
     }
-    // Lake surfaces use this same classification to cover the carved shore
-    // transition without blindly spilling onto the opposite bank.
+    // Retain the terrain-aligned crop so terrain-derived inland water and
+    // bridge clearance can use the same classification as coastline shaping.
     terrain.waterMask = cropWaterMask(
       water,
       sampleWidth,

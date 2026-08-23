@@ -36,7 +36,7 @@ test("keeps low vegetation out of the tree and sapling shadow-caster list", () =
   assert.match(game, /setShadowCasters\(casters\)/);
 });
 
-test("roads and lake surfaces receive shadows without casting ground streaks", () => {
+test("roads and waterways receive shadows without casting ground streaks", () => {
   assert.match(game, /for \(const mesh of mapMeshes\) mesh\.receiveShadows = true/);
   assert.match(game, /mapMeshes\.filter\(\(mesh\) => mesh\.name === "buildings"\)/);
 });

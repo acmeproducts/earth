@@ -12,9 +12,9 @@ const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 test("streamed tiles own one provider-backed data bundle", () => {
   assert.match(game, /landCover\?: WorldCover/);
-  assert.match(game, /lakeElevationSource\?: Float32Array/);
+  assert.match(game, /preCarvingElevations\?: Float32Array/);
   assert.match(game, /mapTiles\?: Promise<MapTile\[\]>/);
-  assert.match(game, /const lakeElevationSource = native \? terrainData\.elevations\.slice\(\)/);
+  assert.match(game, /const preCarvingElevations = native \? terrainData\.elevations\.slice\(\)/);
   assert.match(game, /record\.mapTiles \?\?= this\.requestMapTiles\(record\.terrainData\.bounds\)/);
   assert.match(game, /mapTiles \?\?= this\.requestMapTiles\(terrainData\.bounds\)/);
   assert.equal((game.match(/TerrainElevationSource\.fetchWorldArea\(/g) ?? []).length, 1);
@@ -34,7 +34,7 @@ test("detail and distant layers reuse their tile's online data", () => {
 
   assert.match(detail, /const mapWays = await this\.loadMapTiles\(record\)/);
   assert.match(detail, /record\.landCover/);
-  assert.match(detail, /lakeElevationSource: record\.lakeElevationSource/);
+  assert.match(detail, /preCarvingElevations: record\.preCarvingElevations/);
   assert.match(farTrees, /const mapWays = await this\.loadMapTiles\(record\)/);
   assert.match(farTrees, /record\.landCover/);
   assert.match(farBuildings, /const mapWays = await this\.loadMapTiles\(record\)/);
