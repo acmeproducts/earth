@@ -164,6 +164,15 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   assert.equal(detailed.metadata.interiorFloorCount, 3);
   assert.equal(detailed.metadata.stairFlightCount, 2);
   assert.notEqual(detailed.metadata.stairEdgeIndex, detailed.metadata.entranceEdgeIndex);
+  assert.equal(detailed.metadata.stairFlightCenters.length, 2);
+  assert.notDeepEqual(
+    detailed.metadata.stairFlightCenters[0],
+    detailed.metadata.stairFlightCenters[1],
+  );
+  assert.ok(Math.hypot(
+    detailed.metadata.stairFlightCenters[1].x - detailed.metadata.stairFlightCenters[0].x,
+    detailed.metadata.stairFlightCenters[1].z - detailed.metadata.stairFlightCenters[0].z,
+  ) > 4.5);
   assert.ok(detailed.metadata.windowCount >= 8);
   const colors = detailed.getVerticesData(VertexBuffer.ColorKind);
   assert.ok(colors.some((_, index) => index % 4 === 3 && colors[index] < 0.5));
@@ -202,7 +211,30 @@ test("one-story buildings keep a single floor and no stairs", () => {
   assert.ok(detailed);
   assert.equal(detailed.metadata.interiorFloorCount, 1);
   assert.equal(detailed.metadata.stairFlightCount, 0);
+  assert.deepEqual(detailed.metadata.stairFlightCenters, []);
 
+  scene.dispose();
+  engine.dispose();
+});
+
+test("stable building seeds produce varied facade rhythms", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const windowCounts = new Set();
+
+  for (let id = 700; id < 716; id++) {
+    const detailed = ProceduralBuildingRenderer.createDetailed(
+      scene,
+      plan(id, { render_height: 12, levels: 4 }),
+      terrain,
+      options,
+    );
+    assert.ok(detailed);
+    windowCounts.add(detailed.metadata.windowCount);
+    detailed.dispose(false, true);
+  }
+
+  assert.ok(windowCounts.size >= 4);
   scene.dispose();
   engine.dispose();
 });

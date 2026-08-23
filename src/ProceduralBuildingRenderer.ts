@@ -32,7 +32,6 @@ const BUILDING_DOOR_WIDTH_METERS = 1.15;
 const BUILDING_DOOR_HEIGHT_METERS = 2.2;
 const BUILDING_WINDOW_SILL_METERS = 0.82;
 const BUILDING_WINDOW_HEIGHT_METERS = 1.35;
-const BUILDING_WINDOW_SPACING_METERS = 3;
 const BUILDING_WINDOW_CLEAR_DISTANCE_METERS = 9;
 const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 24;
 const BUILDING_WINDOW_CLOSE_ALPHA = 0.16;
@@ -82,6 +81,8 @@ interface DetailedBuildingParts {
   stairFlightCount: number;
   entranceEdgeIndex: number;
   stairEdgeIndex?: number;
+  stairEdgeIndices: number[];
+  stairFlightCenters: ScenePoint[];
 }
 
 interface PendingBuildingInterior {
@@ -202,6 +203,8 @@ export class ProceduralBuildingRenderer {
       stairFlightCount: detailed.stairFlightCount,
       entranceEdgeIndex: detailed.entranceEdgeIndex,
       stairEdgeIndex: detailed.stairEdgeIndex,
+      stairEdgeIndices: detailed.stairEdgeIndices,
+      stairFlightCenters: detailed.stairFlightCenters,
       metersPerUnit: options.metersPerUnit,
       skyReflection: options.skyReflection,
       interiorsLoaded: false,
@@ -373,9 +376,10 @@ function createEnterableBuilding(
     outline[entranceEdge],
     outline[(entranceEdge + 1) % outline.length],
   ) * options.metersPerUnit;
-  const entranceBayCount = Math.max(
-    1,
-    Math.min(16, Math.round(entranceEdgeLengthMeters / BUILDING_WINDOW_SPACING_METERS)),
+  const entranceBayCount = facadeBayCount(
+    entranceEdgeLengthMeters,
+    plan.detailSeed,
+    entranceEdge,
   );
   const entranceBayWidth = entranceEdgeLengthMeters / entranceBayCount;
   const entranceClearance: EntranceClearance = {
@@ -383,9 +387,9 @@ function createEnterableBuilding(
     centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
     widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
   };
-  const stair = floorCount > 1
-    ? findStairLayout(outline, options, entranceClearance)
-    : undefined;
+  const stairs = floorCount > 1
+    ? findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
+    : [];
   const parts: Mesh[] = [];
   const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
   let windowCount = 0;
@@ -400,18 +404,20 @@ function createEnterableBuilding(
         slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
         slabBottom,
         options,
-        floor > 0 && stair ? [stairOpening(stair, options)] : undefined,
+        floor > 0 && stairs[floor - 1]
+          ? [stairOpening(stairs[floor - 1], options)]
+          : undefined,
       );
       setSolidVertexColor(slab, floorColor);
       parts.push(slab);
     }
 
-    if (stair) {
-      for (let floor = 0; floor < floorCount - 1; floor++) {
+    if (stairs.length > 0) {
+      for (let floor = 0; floor < stairs.length; floor++) {
         createStairFlight(
           parts,
           scene,
-          stair,
+          stairs[floor],
           baseElevation + floor * storyHeight,
           storyHeight,
           floor % 2 === 1,
@@ -427,7 +433,7 @@ function createEnterableBuilding(
     const end = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
     if (edgeLengthMeters < 0.35) continue;
-    const bayCount = Math.max(1, Math.min(16, Math.round(edgeLengthMeters / BUILDING_WINDOW_SPACING_METERS)));
+    const bayCount = facadeBayCount(edgeLengthMeters, plan.detailSeed, edgeIndex);
     const bayWidth = edgeLengthMeters / bayCount;
 
     for (let floor = 0; floor < floorCount; floor++) {
@@ -443,23 +449,49 @@ function createEnterableBuilding(
             storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
           continue;
         }
-        const apertureWidth = Math.min(1.65, Math.max(0.55, bayWidth * 0.56));
-        const apertureHeight = Math.min(BUILDING_WINDOW_HEIGHT_METERS, storyHeight - 1.18);
+        const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
+          (floor * 0x45d9f3b) ^ (bay * 0x119de1f3);
+        const facadeStyle = Math.floor(seededUnit(plan.detailSeed ^ 0x27d4eb2d) * 4);
+        const blankThreshold = facadeStyle === 1 ? 0.23 : facadeStyle === 3 ? 0.14 : 0.07;
+        const blankBay = bayCount > 2 && !isEntrance &&
+          seededUnit(windowSeed ^ 0x68bc21eb) < blankThreshold;
+        if (blankBay) {
+          addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
+            bayWidth, storyBottom, storyHeight, options, appearance.wall);
+          continue;
+        }
+        const widthScale = 0.43 + seededUnit(windowSeed ^ 0x2c1b3c6d) * 0.24;
+        const apertureWidth = Math.min(1.85, Math.max(0.55, bayWidth * widthScale));
+        const heightScale = 0.78 + seededUnit(windowSeed ^ 0x53a8f9d1) * 0.25;
+        const apertureHeight = Math.min(
+          BUILDING_WINDOW_HEIGHT_METERS * heightScale,
+          storyHeight - 1.12,
+        );
         const sillHeight = Math.min(
-          BUILDING_WINDOW_SILL_METERS,
+          BUILDING_WINDOW_SILL_METERS +
+            (seededUnit(windowSeed ^ 0x7f4a7c15) - 0.5) * 0.34,
           storyHeight - apertureHeight - 0.3,
         );
         if (apertureHeight > 0.35) {
+          const availableShift = Math.max(0, bayWidth - apertureWidth);
+          const rhythmicShift = facadeStyle === 2
+            ? (floor % 2 === 0 ? -1 : 1) * availableShift * 0.2
+            : (seededUnit(windowSeed ^ 0x165667b1) - 0.5) * availableShift * 0.34;
+          const apertureOffset = Math.max(
+            0.08,
+            Math.min(bayWidth - apertureWidth - 0.08,
+              (bayWidth - apertureWidth) / 2 + rhythmicShift),
+          );
           addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
             storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
-            options, appearance.wall);
+            options, appearance.wall, apertureOffset);
           const glass = varyColor(
             new Color3(0.24, 0.38, 0.45),
             seededUnit(plan.detailSeed ^ (edgeIndex * 131 + floor * 29 + bay)) * 0.18,
             0,
           );
           addWindowQuad(windows, start, end, edgeLengthMeters,
-            bayStart + (bayWidth - apertureWidth) / 2, apertureWidth,
+            bayStart + apertureOffset, apertureWidth,
             storyBottom + sillHeight, apertureHeight, options, glass);
           windowCount++;
         } else {
@@ -477,10 +509,17 @@ function createEnterableBuilding(
     parts,
     windowCount,
     floorCount,
-    stairFlightCount: stair ? floorCount - 1 : 0,
+    stairFlightCount: stairs.length,
     entranceEdgeIndex: entranceEdge,
-    stairEdgeIndex: stair?.edgeIndex,
+    stairEdgeIndex: stairs[0]?.edgeIndex,
+    stairEdgeIndices: stairs.map((stair) => stair.edgeIndex),
+    stairFlightCenters: stairs.map(stairCenter),
   };
+}
+
+function facadeBayCount(edgeLengthMeters: number, detailSeed: number, edgeIndex: number): number {
+  const spacing = 2.35 + seededUnit(detailSeed ^ (edgeIndex * 0x45d9f3b) ^ 0x51ed270b) * 1.35;
+  return Math.max(1, Math.min(16, Math.round(edgeLengthMeters / spacing)));
 }
 
 function addWindowQuad(
@@ -531,18 +570,20 @@ function addApertureFacade(
   apertureBottom: number,
   options: BuildingRenderOptions,
   color: Color3,
+  apertureOffset = (bayWidth - apertureWidth) / 2,
 ): void {
-  const sideWidth = Math.max(0, (bayWidth - apertureWidth) / 2);
+  const leftWidth = Math.max(0, apertureOffset);
+  const rightWidth = Math.max(0, bayWidth - apertureOffset - apertureWidth);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters, bayStart,
-    sideWidth, storyBottom, storyHeight, options, color);
+    leftWidth, storyBottom, storyHeight, options, color);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
-    bayStart + sideWidth + apertureWidth, sideWidth,
+    bayStart + apertureOffset + apertureWidth, rightWidth,
     storyBottom, storyHeight, options, color);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
-    bayStart + sideWidth, apertureWidth, storyBottom,
+    bayStart + apertureOffset, apertureWidth, storyBottom,
     apertureBottom, options, color);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
-    bayStart + sideWidth, apertureWidth,
+    bayStart + apertureOffset, apertureWidth,
     storyBottom + apertureBottom + apertureHeight,
     storyHeight - apertureBottom - apertureHeight, options, color);
 }
@@ -650,16 +691,19 @@ function createBuildingPrism(
   return mesh;
 }
 
-function findStairLayout(
+function findStairLayouts(
   outline: ScenePoint[],
   options: BuildingRenderOptions,
   entrance: EntranceClearance,
-): StairLayout | undefined {
+  flightCount: number,
+  detailSeed: number,
+): StairLayout[] {
   const edges = outline.map((_, index) => index).sort((a, b) =>
     Number(a === entrance.edgeIndex) - Number(b === entrance.edgeIndex) ||
     pointDistance(outline[b], outline[(b + 1) % outline.length]) -
     pointDistance(outline[a], outline[(a + 1) % outline.length])
   );
+  const candidates: StairLayout[] = [];
   for (const edgeIndex of edges) {
     const edgeStart = outline[edgeIndex];
     const edgeEnd = outline[(edgeIndex + 1) % outline.length];
@@ -674,9 +718,13 @@ function findStairLayout(
     const acrossCenter = BUILDING_STAIR_WALL_CLEARANCE_METERS +
       BUILDING_STAIR_WIDTH_METERS / 2;
     const centeredStart = (edgeLengthMeters - runMeters) / 2;
-    const alongStarts = edgeIndex === entrance.edgeIndex
-      ? [0.6, edgeLengthMeters - runMeters - 0.6]
-      : [centeredStart];
+    const alongStarts = [
+      centeredStart,
+      0.6,
+      edgeLengthMeters - runMeters - 0.6,
+    ].filter((value, index, values) =>
+      values.findIndex((candidate) => Math.abs(candidate - value) < 0.1) === index
+    );
     for (const alongStart of alongStarts) {
       if (alongStart < 0.35 || alongStart + runMeters > edgeLengthMeters - 0.35) continue;
       if (edgeIndex === entrance.edgeIndex) {
@@ -699,11 +747,45 @@ function findStairLayout(
         widthMeters: BUILDING_STAIR_WIDTH_METERS,
       };
       if (stairOpening(layout, options).every((point) => pointInPolygon(point, outline))) {
-        return layout;
+        candidates.push(layout);
       }
     }
   }
-  return undefined;
+  if (candidates.length === 0) return [];
+
+  const layouts: StairLayout[] = [];
+  for (let flight = 0; flight < flightCount; flight++) {
+    const previous = layouts[flight - 1];
+    const separated = previous
+      ? candidates.filter((candidate) => !stairLayoutsOverlap(candidate, previous, options))
+      : candidates;
+    const choices = separated.length > 0 ? separated : candidates;
+    const choiceIndex = Math.floor(
+      seededUnit(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
+    );
+    layouts.push(choices[Math.min(choiceIndex, choices.length - 1)]);
+  }
+  return layouts;
+}
+
+function stairCenter(stair: StairLayout): ScenePoint {
+  return {
+    x: stair.start.x + stair.direction.x * stair.runMeters / 2,
+    z: stair.start.z + stair.direction.z * stair.runMeters / 2,
+  };
+}
+
+function stairLayoutsOverlap(
+  first: StairLayout,
+  second: StairLayout,
+  options: BuildingRenderOptions,
+): boolean {
+  const a = stairCenter(first);
+  const b = stairCenter(second);
+  const distanceMeters = pointDistance(a, b) * options.metersPerUnit;
+  const firstRadius = Math.hypot(first.runMeters, first.widthMeters) / 2;
+  const secondRadius = Math.hypot(second.runMeters, second.widthMeters) / 2;
+  return distanceMeters < firstRadius + secondRadius + 0.35;
 }
 
 function stairOpening(stair: StairLayout, options: BuildingRenderOptions): ScenePoint[] {
