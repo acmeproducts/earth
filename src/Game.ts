@@ -118,6 +118,18 @@ const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
   "bushField",
   "fernField",
 ];
+interface VegetationFieldConfig {
+  category: VegetationCategory;
+  lodDistanceCapMeters: number;
+}
+const VEGETATION_FIELD_CONFIG: Readonly<Record<VegetationFieldKind, VegetationFieldConfig>> = {
+  treeField: { category: "trees", lodDistanceCapMeters: Number.POSITIVE_INFINITY },
+  saplingField: { category: "trees", lodDistanceCapMeters: 14 },
+  grassField: { category: "grass", lodDistanceCapMeters: 8 },
+  flowerField: { category: "grass", lodDistanceCapMeters: 8 },
+  bushField: { category: "bushes", lodDistanceCapMeters: 16 },
+  fernField: { category: "grass", lodDistanceCapMeters: 7 },
+};
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
@@ -125,7 +137,7 @@ const WHEEL_NOTCH_PIXELS = 100;
 const GROUND_COVER_BLEND_METERS = 12;
 const PLAYER_HEIGHT_METERS = 1.8;
 const PLAYER_RADIUS_METERS = 0.3;
-const WALK_SPEED_METERS_PER_SECOND = 8;
+const WALK_SPEED_METERS_PER_SECOND = 10;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
 /** Share of that horizon the view stays clear before fog takes over. */
@@ -224,6 +236,7 @@ export class Game {
   private solarLighting?: SolarLighting;
   private cloudLayer?: CloudLayer;
   private readonly cloudsEnabled: boolean;
+  private readonly initialTimeOfDay?: number;
   private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
   private sceneControls?: SceneControls;
@@ -236,6 +249,7 @@ export class Game {
   private terrainMetersPerUnit?: number;
   private readonly heldMovementKeys = new Set<string>();
   private verticalVelocityMetersPerSecond = 0;
+  private walkerJumpRequested = false;
   private lastVegetationLodDebugLogMilliseconds = 0;
   private pointerLockWasActive = false;
 
@@ -279,6 +293,7 @@ export class Game {
 
   private readonly handleWindowBlur = (): void => {
     this.heldMovementKeys.clear();
+    this.walkerJumpRequested = false;
   };
 
   constructor(canvas: HTMLCanvasElement, engine: AbstractEngine) {
@@ -334,6 +349,9 @@ export class Game {
     this.cloudsEnabled = !["0", "off", "false"].includes(
       query.get("clouds")?.toLowerCase() ?? "",
     );
+    this.initialTimeOfDay = query.has("time")
+      ? queryNumber(query, "time", 12, 0, 23.75)
+      : undefined;
   }
 
   private get terrainTileRadius(): number {
@@ -386,6 +404,11 @@ export class Game {
       if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
         if (["w", "a", "s", "d"].includes(key)) this.heldMovementKeys.add(key);
         if (key === "g" && !(kbInfo.event as KeyboardEvent).repeat) this.toggleMovementMode();
+        if (this.movementMode === "walk" && kbInfo.event.code === "Space"
+            && !(kbInfo.event as KeyboardEvent).repeat) {
+          this.walkerJumpRequested = true;
+          kbInfo.event.preventDefault();
+        }
         if (this.movementMode !== "fly") return;
         if (kbInfo.event.key === "q" || kbInfo.event.key === "Q") {
           camera.position.y -= verticalSpeed;
@@ -407,6 +430,7 @@ export class Game {
       location.lat,
       location.lon,
     );
+    this.solarLighting.setTimeOfDay(this.initialTimeOfDay);
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
 
     // Load terrain at the active example location. Only the center tile
@@ -416,6 +440,7 @@ export class Game {
     this.sceneControls = new SceneControls({
       settings: this.sceneSettings.value,
       initialLocation: location,
+      initialTimeOfDay: this.initialTimeOfDay,
       onSettingChange: (key, value) => this.changeSceneSetting(key, value),
       onTimeOfDayChange: (hours) => this.solarLighting?.setTimeOfDay(hours),
       onLocationChange: (target) => this.changeToCoordinates(target),
@@ -578,6 +603,21 @@ export class Game {
       meshDepth,
     });
 
+    let mapTiles = previous?.mapTiles;
+    if (native) {
+      await reportInitializationProgress(onProgress, "Preparing road terrain", 34);
+      mapTiles ??= this.requestMapTiles(terrainData.bounds);
+      const roads = await mapTiles;
+      if (generation !== this.streamingGeneration) return undefined;
+      await OpenStreetMap.conformTerrainToRoads(
+        roads,
+        terrainData,
+        { meshWidth, meshDepth, metersPerUnit },
+        yieldControl,
+      );
+      if (generation !== this.streamingGeneration) return undefined;
+    }
+
     const subdivisions = Math.max(
       1,
       native
@@ -618,7 +658,7 @@ export class Game {
       terrainData,
       landCover,
       lakeElevationSource,
-      mapTiles: previous?.mapTiles,
+      mapTiles,
       terrain,
       meshWidth,
       meshDepth,
@@ -673,125 +713,100 @@ export class Game {
       yieldControl,
     );
     if (generation !== this.streamingGeneration) return;
-
-    await reportInitializationProgress(onProgress, "Planting trees", 58);
-    const treeField = await createTreeField(this.scene, terrainData, {
+    const fieldOptions = {
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
       metersPerUnit,
-      seed: layerSeed(terrainData.generationSeed, "trees"),
-      speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
       landCover: placementLandCover,
       exclusionMask,
-      renderMode: this.vegetationModes.trees,
+      modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       yieldControl,
+      impostorCaptureMode: onProgress ? "fast" as const : "cooperative" as const,
       startDisabled,
+    };
+
+    await reportInitializationProgress(onProgress, "Planting trees", 58);
+    const treeField = await createTreeField(this.scene, terrainData, {
+      ...fieldOptions,
+      seed: layerSeed(terrainData.generationSeed, "trees"),
+      speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+      renderMode: this.vegetationModes.trees,
     });
     await this.prepareTileFieldLod(
       record,
       treeField,
-      this.vegetationLodDistanceMeters,
+      this.fieldLodDistance("treeField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "treeField", treeField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Planting saplings", 63);
     const saplingField = await createSaplingField(this.scene, terrainData, {
-      meshWidth: record.meshWidth,
-      meshDepth: record.meshDepth,
-      metersPerUnit,
+      ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "saplings"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
-      landCover: placementLandCover,
-      exclusionMask,
       renderMode: this.vegetationModes.trees,
-      yieldControl,
-      startDisabled,
     });
     await this.prepareTileFieldLod(
       record,
       saplingField,
-      Math.min(this.vegetationLodDistanceMeters, 14),
+      this.fieldLodDistance("saplingField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "saplingField", saplingField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing grass", 68);
     const grassField = await createGrassField(this.scene, terrainData, {
-      meshWidth: record.meshWidth,
-      meshDepth: record.meshDepth,
-      metersPerUnit,
+      ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "grass"),
-      landCover: placementLandCover,
-      exclusionMask,
       renderMode: this.vegetationModes.grass,
-      yieldControl,
-      startDisabled,
     });
     await this.prepareTileFieldLod(
       record,
       grassField,
-      Math.min(this.vegetationLodDistanceMeters, 8),
+      this.fieldLodDistance("grassField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "grassField", grassField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding flowers", 73);
     const flowerField = await createFlowerField(this.scene, terrainData, {
-      meshWidth: record.meshWidth,
-      meshDepth: record.meshDepth,
-      metersPerUnit,
+      ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "flowers"),
-      landCover: placementLandCover,
-      exclusionMask,
       renderMode: this.vegetationModes.grass,
-      yieldControl,
-      startDisabled,
     });
     await this.prepareTileFieldLod(
       record,
       flowerField,
-      Math.min(this.vegetationLodDistanceMeters, 8),
+      this.fieldLodDistance("flowerField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "flowerField", flowerField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding bushes", 78);
     const bushField = await createBushField(this.scene, terrainData, {
-      meshWidth: record.meshWidth,
-      meshDepth: record.meshDepth,
-      metersPerUnit,
+      ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "bushes"),
-      landCover: placementLandCover,
-      exclusionMask,
       renderMode: this.vegetationModes.bushes,
-      yieldControl,
-      startDisabled,
     });
     await this.prepareTileFieldLod(
       record,
       bushField,
-      Math.min(this.vegetationLodDistanceMeters, 16),
+      this.fieldLodDistance("bushField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "bushField", bushField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing undergrowth", 82);
     const fernField = await createFernField(this.scene, terrainData, {
-      meshWidth: record.meshWidth,
-      meshDepth: record.meshDepth,
-      metersPerUnit,
+      ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "ferns"),
-      landCover: placementLandCover,
-      exclusionMask,
       renderMode: this.vegetationModes.grass,
-      yieldControl,
-      startDisabled,
     });
     await this.prepareTileFieldLod(
       record,
       fernField,
-      Math.min(this.vegetationLodDistanceMeters, 7),
+      this.fieldLodDistance("fernField"),
       yieldControl,
     );
     if (!this.commitTileField(record, "fernField", fernField, generation)) return;
@@ -849,6 +864,7 @@ export class Game {
       metersPerUnit,
       seed: layerSeed(record.terrainData.generationSeed, "trees"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+      modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       landCover: placementLandCover,
       spacingMeters: FAR_TREE_SPACING_METERS,
       occupancy: FAR_TREE_OCCUPANCY,
@@ -912,11 +928,15 @@ export class Game {
   }
 
   private loadMapTiles(record: StreamedTile): Promise<MapTile[]> {
-    record.mapTiles ??= OpenStreetMap.fetch(record.terrainData.bounds).catch((error: unknown) => {
+    record.mapTiles ??= this.requestMapTiles(record.terrainData.bounds);
+    return record.mapTiles;
+  }
+
+  private requestMapTiles(bounds: TerrainData["bounds"]): Promise<MapTile[]> {
+    return OpenStreetMap.fetch(bounds).catch((error: unknown) => {
       console.warn("OpenStreetMap unavailable; map-backed layers were skipped.", error);
       return [];
     });
-    return record.mapTiles;
   }
 
   /** Starts one layer transition; the render loop advances and completes it. */
@@ -1041,8 +1061,10 @@ export class Game {
       // terrain as a receiver while leaving self-shadowing to WebGL.
       if (!this.engine.isWebGPU) casters.push(record.terrain);
       for (const field of fields) {
+        // Dedicated casters retain every tree in the detail ring even when
+        // its visible mesh has switched to a medium-range impostor.
         casters.push(...(
-          this.engine.isWebGPU ? field.shadowCasterMeshes : field.meshes
+          field.shadowCasterMeshes.length > 0 ? field.shadowCasterMeshes : field.meshes
         ));
       }
       if (record.mapFeatures) {
@@ -1326,16 +1348,10 @@ export class Game {
     if ((category === "grass" || category === "bushes") && mode === "models") mode = "auto";
     this.vegetationModes[category] = mode;
     for (const record of this.tiles.values()) {
-      const field = category === "trees"
-        ? record.treeField
-        : category === "grass"
-          ? record.grassField
-          : record.bushField;
-      field?.setRenderMode(mode);
-      if (category === "trees") record.saplingField?.setRenderMode(mode);
-      if (category === "grass") {
-        record.flowerField?.setRenderMode(mode);
-        record.fernField?.setRenderMode(mode);
+      for (const kind of VEGETATION_FIELD_KINDS) {
+        if (VEGETATION_FIELD_CONFIG[kind].category === category) {
+          record[kind]?.setRenderMode(mode);
+        }
       }
     }
     this.solarLighting?.refreshShadows();
@@ -1395,14 +1411,19 @@ export class Game {
     }
   }
 
+  private fieldLodDistance(kind: VegetationFieldKind): number {
+    return Math.min(
+      this.vegetationLodDistanceMeters,
+      VEGETATION_FIELD_CONFIG[kind].lodDistanceCapMeters,
+    );
+  }
+
   private updateVegetationLod(): void {
     const camera = this.scene.activeCamera;
     const metersPerUnit = this.terrainMetersPerUnit;
     if (!camera || !metersPerUnit) return;
 
     const cameraPosition = camera.globalPosition;
-    const grassDistanceMeters = Math.min(this.vegetationLodDistanceMeters, 8);
-    const bushDistanceMeters = Math.min(this.vegetationLodDistanceMeters, 16);
     // Fields sit at per-tile offsets in the stable frame; LOD runs in each
     // field's local space. Reuse one vector because updateLod stores a clone.
     const localPosition = new Vector3();
@@ -1413,10 +1434,7 @@ export class Game {
       field.updateLod(localPosition, distanceMeters);
     };
     for (const record of this.tiles.values()) {
-      if (!record.treeField && !record.saplingField && !record.grassField &&
-          !record.flowerField && !record.bushField && !record.fernField) {
-        continue;
-      }
+      if (!VEGETATION_FIELD_KINDS.some((kind) => record[kind])) continue;
       // A freshly built field already renders as pure impostors, and instances
       // beyond the model range stay impostors. Only tiles the model range can
       // actually reach need per-frame LOD work; one final update settles a
@@ -1428,16 +1446,10 @@ export class Game {
       const withinReach = dx * dx + dz * dz <= reachUnits * reachUnits;
       if (!withinReach && record.lodResolved) continue;
       record.lodResolved = !withinReach;
-      if (record.treeField) {
-        updateField(record.treeField, this.vegetationLodDistanceMeters);
+      for (const kind of VEGETATION_FIELD_KINDS) {
+        const field = record[kind];
+        if (field) updateField(field, this.fieldLodDistance(kind));
       }
-      if (record.saplingField) {
-        updateField(record.saplingField, Math.min(this.vegetationLodDistanceMeters, 14));
-      }
-      if (record.grassField) updateField(record.grassField, grassDistanceMeters);
-      if (record.flowerField) updateField(record.flowerField, grassDistanceMeters);
-      if (record.bushField) updateField(record.bushField, bushDistanceMeters);
-      if (record.fernField) updateField(record.fernField, grassDistanceMeters);
     }
     // Camera-relative LOD changes buffer contents but do not change the world
     // caster set, so the cached static shadow map remains valid.
@@ -1760,6 +1772,7 @@ export class Game {
 
     this.movementMode = this.movementMode === "fly" ? "walk" : "fly";
     this.verticalVelocityMetersPerSecond = 0;
+    this.walkerJumpRequested = false;
     this.flyCamera.cameraDirection.setAll(0);
     this.flyCamera.cameraRotation.setAll(0);
     this.heldMovementKeys.clear();
@@ -1811,6 +1824,8 @@ export class Game {
       ) * distance / inputLength;
     }
 
+    const jumpRequested = this.walkerJumpRequested;
+    this.walkerJumpRequested = false;
     const verticalMotion = advanceWalkerVerticalMotion({
       eyeHeight: camera.position.y,
       verticalVelocityMetersPerSecond: this.verticalVelocityMetersPerSecond,
@@ -1818,6 +1833,7 @@ export class Game {
       groundEyeHeightAfterMove: this.getGroundEyeHeight(camera.position.x, camera.position.z),
       metersPerUnit,
       deltaSeconds,
+      jumpRequested,
     });
     camera.position.y = verticalMotion.eyeHeight;
     this.verticalVelocityMetersPerSecond = verticalMotion.verticalVelocityMetersPerSecond;

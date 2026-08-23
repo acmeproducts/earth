@@ -8,20 +8,32 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { createGrassModel, getGrassImpostorAssets } from "./GrassImpostor";
+import { clamp } from "./MathUtils";
+import {
+  acquireGrassImpostorAssets,
+  createGrassModel,
+  grassRenderedCaptureSize,
+} from "./GrassImpostor";
 import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
-import { createImpostorPrototypeFromAssets } from "./TreeField";
 import type { TerrainData } from "./TerrainData";
-import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
+import {
+  combineVegetationFieldResults,
+  createVegetationFieldResult,
+  VegetationFieldResult,
+} from "./VegetationField";
+import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { LandCoverClass, landCoverSurfaceColor } from "./WorldCover";
 import { varyGroundColor } from "./GroundVariation";
 import { createSeededRandom } from "./Random";
 import {
   createPlacementGrid,
+  addProceduralVariantPlacement,
   packInstanceMatrices,
+  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
+import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 
 /** Keeps the broad grass patch above small terrain interpolation differences. */
 const GRASS_GROUND_OFFSET_METERS = 0.07;
@@ -104,6 +116,7 @@ export async function createGrassField(
     meshDepth,
     metersPerUnit,
     seed = 0x47524153,
+    modelVariantSeed = DEFAULT_WORLD_SEED,
     spacingMeters = GRASS_SPACING_METERS,
     waterLineMeters = 0,
     landCover,
@@ -116,59 +129,6 @@ export async function createGrassField(
   const grassHeight = GRASS_HEIGHT_METERS / metersPerUnit;
   const root = new TransformNode("grassField", scene);
   if (startDisabled) root.setEnabled(false);
-  const assets = await getGrassImpostorAssets(scene);
-  const prototype = createImpostorPrototypeFromAssets(
-    scene,
-    assets,
-    grassHeight,
-    root,
-    "grassImpostors",
-  );
-  const grass = prototype.mesh;
-  if (grass.material instanceof ShaderMaterial) {
-    // Grass occupies few pixels much sooner than trees. Retain the detailed
-    // 128 px atlas through the middle distance before blending to 20 px.
-    grass.material.setFloat("impostorLodNear", 40);
-    grass.material.setFloat("impostorLodFar", 80);
-    grass.material.setFloat("instanceColorCoverage", 1);
-    const fade = grassDistanceFadeRange(
-      Math.min(meshWidth, meshDepth),
-      DEFAULT_DETAIL_TILES_ACROSS,
-    );
-    grass.material.setFloat("distanceFadeNear", fade.near);
-    grass.material.setFloat("distanceFadeFar", fade.far);
-    grass.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
-    grass.material.setFloat("distanceGroundBlend", 1);
-    grass.material.setFloat("impostorAmbientUpward", GRASS_AMBIENT_UPWARD);
-    grass.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    grass.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
-    grass.material.setColor3(
-      "distanceGroundColor",
-      Color3.FromArray(GRASSLAND_REFERENCE_COLOR),
-    );
-  }
-  const grassModel = createGrassModel(scene, grassHeight);
-  // Grass is rotationally symmetric, so its atlas cannot hold a directional
-  // sway. A shear needs no atlas frames at all: the impostor warps its proxy
-  // and the live model displaces its vertices by the same linear amount.
-  setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
-  grassModel.parent = root;
-  grassModel.isPickable = false;
-  if (grassModel.material instanceof ShaderMaterial) {
-    grassModel.material.setFloat("instanceColorCoverage", 1);
-    grassModel.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
-    grassModel.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    grassModel.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
-    grassModel.material.setColor3(
-      "distanceGroundColor",
-      Color3.FromArray(GRASSLAND_REFERENCE_COLOR),
-    );
-  }
-  // Never force-dispose this material's textures: the bound shadow sampler is
-  // the scene's shared shadow map, and destroying it blanks all vegetation
-  // after a terrain rebuild. The material disposes its own textures itself.
-  root.onDisposeObservable.add(() => grassModel.material?.dispose(true, false));
-  const captureSize = prototype.captureSize;
   const random = createSeededRandom(seed);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
@@ -176,9 +136,9 @@ export async function createGrassField(
     spacingMeters,
     metersPerUnit,
   );
-  const maximumHalfWidth = captureSize * 0.72;
+  const maximumHalfWidth = grassRenderedCaptureSize(grassHeight) * 0.72;
   const matrices: Matrix[] = [];
-  const colors: number[] = [];
+  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
@@ -222,8 +182,7 @@ export async function createGrassField(
         );
         const tilt = new Quaternion(normal.z, 0, -normal.x, 1 + normal.y).normalize();
         const rotation = tilt.multiply(Quaternion.RotationAxis(Vector3.Up(), yaw));
-        matrices.push(
-          Matrix.Compose(
+        const matrix = Matrix.Compose(
             new Vector3(widthScale, heightScale, widthScale),
             rotation,
             new Vector3(
@@ -231,25 +190,85 @@ export async function createGrassField(
               (elevation + GRASS_GROUND_OFFSET_METERS) / metersPerUnit,
               z,
             ),
-          ),
+          );
+        const color = grassGroundColorMultiplier(lon, lat, coverClass);
+        matrices.push(matrix);
+        addProceduralVariantPlacement(
+          variantBuckets,
+          "grass",
+          lon,
+          lat,
+          modelVariantSeed,
+          matrix,
+          color,
         );
-        colors.push(...grassGroundColorMultiplier(lon, lat, coverClass));
       }
       await yieldControl?.();
     }
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  return createVegetationFieldResult(
-    root,
-    [grass],
-    [grassModel],
-    matrixData,
-    metersPerUnit,
-    renderMode,
-    new Float32Array(colors),
-    yieldControl,
-  );
+  const fields: VegetationFieldResult[] = [];
+  for (const bucket of variantBuckets.values()) {
+    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
+    const { root: variantRoot, impostor: grass, model: grassModel } =
+      await createVegetationFieldRenderers(scene, {
+        rootName: `grassField-${suffix}`,
+        impostorName: `grassImpostors-${suffix}`,
+        renderHeight: grassHeight,
+        loadAssets: () => acquireGrassImpostorAssets(scene, bucket.variant),
+        createModel: () => createGrassModel(scene, grassHeight, bucket.variant.seed),
+      });
+    variantRoot.parent = root;
+    configureGrassRenderers(grass, grassModel, meshWidth, meshDepth);
+    fields.push(await createVegetationFieldResult(
+      variantRoot,
+      [grass],
+      [grassModel],
+      await packInstanceMatrices(bucket.matrices, yieldControl),
+      metersPerUnit,
+      renderMode,
+      new Float32Array(bucket.colors),
+      yieldControl,
+    ));
+  }
+  return combineVegetationFieldResults(root, fields, matrixData);
+}
+
+function configureGrassRenderers(
+  grass: import("@babylonjs/core").Mesh,
+  grassModel: import("@babylonjs/core").Mesh,
+  meshWidth: number,
+  meshDepth: number,
+): void {
+  if (grass.material instanceof ShaderMaterial) {
+    grass.material.setFloat("impostorLodNear", 40);
+    grass.material.setFloat("impostorLodFar", 80);
+    grass.material.setFloat("instanceColorCoverage", 1);
+    const fade = grassDistanceFadeRange(
+      Math.min(meshWidth, meshDepth),
+      DEFAULT_DETAIL_TILES_ACROSS,
+    );
+    grass.material.setFloat("distanceFadeNear", fade.near);
+    grass.material.setFloat("distanceFadeFar", fade.far);
+    grass.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
+    grass.material.setFloat("distanceGroundBlend", 1);
+    grass.material.setFloat("impostorAmbientUpward", GRASS_AMBIENT_UPWARD);
+    grass.material.setFloat("vegetationShadowAtInstanceRoot", 1);
+    grass.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
+    grass.material.setColor3("distanceGroundColor", Color3.FromArray(GRASSLAND_REFERENCE_COLOR));
+  }
+  setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
+  if (grassModel.material instanceof ShaderMaterial) {
+    grassModel.material.setFloat("instanceColorCoverage", 1);
+    grassModel.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
+    grassModel.material.setFloat("vegetationShadowAtInstanceRoot", 1);
+    grassModel.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
+    grassModel.material.setColor3(
+      "distanceGroundColor",
+      Color3.FromArray(GRASSLAND_REFERENCE_COLOR),
+    );
+  }
 }
 
 /**
@@ -273,10 +292,6 @@ export function grassGroundColorMultiplier(
     const ratio = channel / GRASSLAND_REFERENCE_COLOR[index];
     return clamp(1 + (ratio - 1) * GRASS_GROUND_COLOR_INFLUENCE, 0.55, 1.35);
   }) as [number, number, number];
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function sampleTerrainNormal(

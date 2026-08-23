@@ -33,16 +33,30 @@ test("clusters forest species with simplex noise", () => {
 });
 
 test("captures resources only after discovering species in the tile", () => {
-  const discovery = treeField.indexOf("TREE_SPECIES_LIST.filter((species) => speciesMatrices[species].length > 0)");
-  const capture = treeField.indexOf("for (const species of speciesList)");
+  const discovery = treeField.indexOf("variantBuckets.set(bucketKey, bucket)");
+  const capture = treeField.indexOf("for (const bucket of variantBuckets.values())");
   assert.ok(discovery >= 0);
   assert.ok(capture > discovery);
-  assert.doesNotMatch(treeField, /const speciesList: TreeSpecies\[\] =/);
+  assert.match(treeField, /bucketKey = `\$\{species\}:\$\{variant\.key\}`/);
+});
+
+test("ignores insignificant regional tails and caps each local species palette", () => {
+  assert.match(treeField, /MIN_TREE_VARIANT_SHARE = 0\.08/);
+  assert.match(treeField, /MAX_TREE_SPECIES_PER_VARIANT = 3/);
+  assert.match(treeField, /variantBuckets = consolidateTreeVariantBuckets\(variantBuckets\)/);
+  assert.match(treeField, /value\.count \/ total >= MIN_TREE_VARIANT_SHARE/);
+  assert.match(treeField, /group\.slice\(0, MAX_TREE_SPECIES_PER_VARIANT\)/);
 });
 
 test("captures species sequentially so the gameplay camera is restored", () => {
-  assert.match(treeField, /for \(const species of speciesList\)/);
-  assert.doesNotMatch(treeField, /Promise\.all\(speciesList\.map/);
+  assert.match(treeField, /for \(const bucket of variantBuckets\.values\(\)\)/);
+  assert.doesNotMatch(treeField, /Promise\.all\(\[\.\.\.variantBuckets/);
+});
+
+test("uses the same regional seed for each tree model and impostor", () => {
+  assert.match(treeField, /proceduralVariantAtLocation\([\s\S]*?"trees"/);
+  assert.match(treeField, /createTreeImpostorPrototype\([\s\S]*?variant/);
+  assert.match(treeField, /createTreeModels\(scene, treeHeight, species, variant\.seed\)/);
 });
 
 test("keeps lazy capture sources and cameras out of gameplay frames", () => {

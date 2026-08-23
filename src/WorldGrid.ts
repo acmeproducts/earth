@@ -37,21 +37,44 @@ export interface WorldTileWindowOffsets {
   maximumY: number;
 }
 
+export interface WorldTileCoordinates {
+  /** Continuous wrapped column in the application grid. */
+  x: number;
+  /** Continuous clamped row in the application grid. */
+  y: number;
+}
+
+/** Projects a location into continuous application-tile coordinates. */
+export function worldTileCoordinatesAtLocation(
+  latitude: number,
+  longitude: number,
+  level = WORLD_GRID_LEVEL,
+): WorldTileCoordinates {
+  const normalizedLevel = normalizeLevel(level);
+  const scale = 2 ** normalizedLevel;
+  const latitudeRadians = clampLatitude(latitude) * Math.PI / 180;
+  return {
+    x: wrap(((longitude + 180) / 360) * scale, scale),
+    y: Math.max(0, Math.min(
+      scale - 1e-9,
+      (1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale,
+    )),
+  };
+}
+
 /** Returns the canonical application tile containing a geographic position. */
 export function worldTileAtLocation(
   latitude: number,
   longitude: number,
   level = WORLD_GRID_LEVEL,
 ): WorldTileId {
-  const scale = 2 ** normalizeLevel(level);
-  const latitudeRadians = clampLatitude(latitude) * Math.PI / 180;
+  const normalizedLevel = normalizeLevel(level);
+  const scale = 2 ** normalizedLevel;
+  const coordinates = worldTileCoordinatesAtLocation(latitude, longitude, normalizedLevel);
   return {
-    level: normalizeLevel(level),
-    x: wrap(Math.floor(((longitude + 180) / 360) * scale), scale),
-    y: Math.max(0, Math.min(
-      scale - 1,
-      Math.floor((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale),
-    )),
+    level: normalizedLevel,
+    x: Math.floor(coordinates.x),
+    y: Math.floor(coordinates.y),
   };
 }
 

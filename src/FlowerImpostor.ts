@@ -2,7 +2,9 @@ import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylon
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  ImpostorAssetLease,
   ImpostorAssets,
+  ImpostorVariant,
 } from "./Impostor";
 import {
   createVertexColorCaptureMaterial,
@@ -14,6 +16,10 @@ export type FlowerImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 0.68;
 const CAPTURE_DIAMETER = 2.4;
+
+export function flowerRenderedCaptureSize(renderHeight: number): number {
+  return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
 const STEM = new Color3(0.12, 0.36, 0.08);
 const LEAF = new Color3(0.18, 0.47, 0.1);
 const CENTER = new Color3(1, 0.67, 0.035);
@@ -23,7 +29,7 @@ const PETAL_SHADOW = new Color3(0.78, 0.8, 0.7);
 const flowerImpostors = createImpostorAssetProvider({
   name: "flowerImpostor",
   queryPrefix: "flower-impostor",
-  createSource: createFlowerSource,
+  createSource: (scene, variant) => createFlowerSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
@@ -37,16 +43,26 @@ const flowerImpostors = createImpostorAssetProvider({
   },
 });
 
-export function getFlowerImpostorAssets(scene: Scene): Promise<FlowerImpostorAssets> {
-  return flowerImpostors.getAssets(scene);
+export function getFlowerImpostorAssets(
+  scene: Scene,
+  variant?: ImpostorVariant,
+): Promise<FlowerImpostorAssets> {
+  return flowerImpostors.getAssets(scene, undefined, variant);
+}
+
+export function acquireFlowerImpostorAssets(
+  scene: Scene,
+  variant: ImpostorVariant,
+): Promise<ImpostorAssetLease> {
+  return flowerImpostors.acquireAssets(scene, undefined, variant);
 }
 
 /** Builds a neutral daisy patch tinted per instance by the render shader. */
-function createFlowerSource(scene: Scene, liveLighting = false): Mesh {
+function createFlowerSource(scene: Scene, liveLighting = false, seed = 0x464c4f57): Mesh {
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
-  const random = createSeededRandom(0x464c4f57);
+  const random = createSeededRandom(seed);
 
   const addVertex = (position: Vector3, color: Color3): number => {
     positions.push(position.x, position.y, position.z);
@@ -140,8 +156,8 @@ function createFlowerSource(scene: Scene, liveLighting = false): Mesh {
 }
 
 /** Builds the flower patch as live geometry for nearby instances. */
-export function createFlowerModel(scene: Scene, renderHeight: number): Mesh {
-  const flowers = createFlowerSource(scene, true);
+export function createFlowerModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
+  const flowers = createFlowerSource(scene, true, seed);
   flowers.name = "flowerModels";
   const positions = flowers.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Flower model has no position data.");

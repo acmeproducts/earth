@@ -11,6 +11,7 @@ import type {
 export interface SceneControlsOptions {
   settings: Readonly<SceneSettings>;
   initialLocation: WorldLocation;
+  initialTimeOfDay?: number;
   onSettingChange: (key: SceneSettingKey, value: number) => void;
   onTimeOfDayChange: (hours: number | undefined) => void;
   onLocationChange: (location: WorldLocation) => Promise<void>;
@@ -157,7 +158,13 @@ export class SceneControls {
     document.body.appendChild(this.element);
     document.addEventListener("keydown", this.handleKeyDown, true);
     this.setLocation(options.initialLocation);
-    this.updateLiveTime();
+    if (options.initialTimeOfDay === undefined) {
+      this.updateLiveTime();
+    } else {
+      this.isLiveTime = false;
+      this.timeInput.value = String(options.initialTimeOfDay);
+      this.updateTimeDisplay(options.initialTimeOfDay);
+    }
     this.clockTimer = window.setInterval(() => this.updateLiveTime(), 60_000);
   }
 

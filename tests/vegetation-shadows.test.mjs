@@ -44,8 +44,8 @@ test("WebGPU terrain receives building shadows without self-shadow acne", () => 
   assert.doesNotMatch(game, /if \(casters\.length > 0\) this\.solarLighting/);
 });
 
-test("WebGPU trees cast through native shadow-only geometry", () => {
-  assert.match(impostors, /function createWebGPUTreeShadowCasters/);
+test("trees cast through dedicated shadow-only geometry at every renderer", () => {
+  assert.match(impostors, /function createTreeShadowCasters/);
   assert.match(impostors, /new StandardMaterial\(`treeShadow-/);
   assert.match(impostors, /const caster = new Mesh\(`treeShadow-/);
   assert.match(impostors, /VertexData\.ExtractFromMesh\(source, true, true\)/);
@@ -54,7 +54,21 @@ test("WebGPU trees cast through native shadow-only geometry", () => {
   assert.match(impostors, /shadowOnly: true/);
   assert.match(solarLighting, /shadowMap\?\.onBeforeRenderObservable\.add/);
   assert.match(solarLighting, /shadowMap\?\.onAfterRenderObservable\.add/);
-  assert.match(game, /this\.engine\.isWebGPU \? field\.shadowCasterMeshes : field\.meshes/);
+  assert.doesNotMatch(impostors, /getEngine\(\)\.isWebGPU \|\| modelMeshes\.length/);
+  assert.match(
+    game,
+    /field\.shadowCasterMeshes\.length > 0 \? field\.shadowCasterMeshes : field\.meshes/,
+  );
+});
+
+test("medium-range tree shadows use the full field instead of visual LOD buffers", () => {
+  assert.match(impostors, /createTreeShadowCasters\([\s\S]*?ownMatrices/);
+  assert.match(impostors, /thinInstanceSetBuffer\("matrix", matrices, 16, true\)/);
+  const shadowRefresh = game.slice(
+    game.indexOf("private refreshShadowCasters"),
+    game.indexOf("private enableWaterReflections"),
+  );
+  assert.doesNotMatch(shadowRefresh, /modelMeshes|impostorMeshes|modelRangeMeters/);
 });
 
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {

@@ -1,17 +1,29 @@
 import { Matrix, Quaternion, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { createFlowerModel, getFlowerImpostorAssets } from "./FlowerImpostor";
+import { smoothstep } from "./MathUtils";
+import {
+  acquireFlowerImpostorAssets,
+  createFlowerModel,
+  flowerRenderedCaptureSize,
+} from "./FlowerImpostor";
 import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
-import { createImpostorPrototypeFromAssets } from "./TreeField";
-import { createVegetationFieldResult, VegetationFieldResult } from "./VegetationField";
+import {
+  combineVegetationFieldResults,
+  createVegetationFieldResult,
+  VegetationFieldResult,
+} from "./VegetationField";
+import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
 import {
   createPlacementGrid,
+  addProceduralVariantPlacement,
   packInstanceMatrices,
+  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
+import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 
 type FlowerFieldOptions = VegetationPlacementOptions;
 
@@ -34,6 +46,7 @@ export async function createFlowerField(
     meshDepth,
     metersPerUnit,
     seed = 0x464c4f57,
+    modelVariantSeed = DEFAULT_WORLD_SEED,
     spacingMeters = 2.35,
     waterLineMeters = 0,
     landCover,
@@ -45,25 +58,6 @@ export async function createFlowerField(
   const flowerHeight = 0.92 / metersPerUnit;
   const root = new TransformNode("flowerField", scene);
   if (startDisabled) root.setEnabled(false);
-  const assets = await getFlowerImpostorAssets(scene);
-  const prototype = createImpostorPrototypeFromAssets(
-    scene,
-    assets,
-    flowerHeight,
-    root,
-    "flowerImpostors",
-  );
-  if (prototype.mesh.material instanceof ShaderMaterial) {
-    prototype.mesh.material.setFloat("impostorLodNear", 20);
-    prototype.mesh.material.setFloat("impostorLodFar", 50);
-  }
-  const flowerModel = createFlowerModel(scene, flowerHeight);
-  flowerModel.parent = root;
-  flowerModel.isPickable = false;
-  // Never force-dispose this material's textures: the bound shadow sampler is
-  // the scene's shared shadow map, and destroying it blanks all vegetation
-  // after a terrain rebuild. The material disposes its own textures itself.
-  root.onDisposeObservable.add(() => flowerModel.material?.dispose(true, false));
   const random = createSeededRandom(seed);
   const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
   const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
@@ -77,9 +71,9 @@ export async function createFlowerField(
   const patchScale = 28 / metersPerUnit;
   const regionScale = 180 / metersPerUnit;
   const colorScale = 1.25 / metersPerUnit;
-  const maximumHalfWidth = prototype.captureSize * 0.68;
+  const maximumHalfWidth = flowerRenderedCaptureSize(flowerHeight) * 0.68;
   const matrices: Matrix[] = [];
-  const colors: number[] = [];
+  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
@@ -116,28 +110,56 @@ export async function createFlowerField(
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
         const scale = 0.9 + random() * 0.28;
-        matrices.push(Matrix.Compose(
+        const matrix = Matrix.Compose(
           new Vector3(scale * (0.9 + random() * 0.2), scale, scale * (0.9 + random() * 0.2)),
           Quaternion.RotationAxis(Vector3.Up(), random() * Math.PI * 2),
           new Vector3(x, elevation / metersPerUnit, z),
-        ));
-        colors.push(...sampleFlowerColor(colorNoise, x / colorScale, z / colorScale));
+        );
+        const color = sampleFlowerColor(colorNoise, x / colorScale, z / colorScale);
+        matrices.push(matrix);
+        addProceduralVariantPlacement(
+          variantBuckets,
+          "flowers",
+          lon,
+          lat,
+          modelVariantSeed,
+          matrix,
+          color,
+        );
       }
       await yieldControl?.();
     }
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  return createVegetationFieldResult(
-    root,
-    [prototype.mesh],
-    [flowerModel],
-    matrixData,
-    metersPerUnit,
-    renderMode,
-    new Float32Array(colors),
-    yieldControl,
-  );
+  const fields: VegetationFieldResult[] = [];
+  for (const bucket of variantBuckets.values()) {
+    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
+    const { root: variantRoot, impostor: flower, model: flowerModel } =
+      await createVegetationFieldRenderers(scene, {
+        rootName: `flowerField-${suffix}`,
+        impostorName: `flowerImpostors-${suffix}`,
+        renderHeight: flowerHeight,
+        loadAssets: () => acquireFlowerImpostorAssets(scene, bucket.variant),
+        createModel: () => createFlowerModel(scene, flowerHeight, bucket.variant.seed),
+      });
+    variantRoot.parent = root;
+    if (flower.material instanceof ShaderMaterial) {
+      flower.material.setFloat("impostorLodNear", 20);
+      flower.material.setFloat("impostorLodFar", 50);
+    }
+    fields.push(await createVegetationFieldResult(
+      variantRoot,
+      [flower],
+      [flowerModel],
+      await packInstanceMatrices(bucket.matrices, yieldControl),
+      metersPerUnit,
+      renderMode,
+      new Float32Array(bucket.colors),
+      yieldControl,
+    ));
+  }
+  return combineVegetationFieldResults(root, fields, matrixData);
 }
 
 /** High-frequency simplex phases avoid runs of identically colored neighbors. */
@@ -159,9 +181,4 @@ function sampleFlowerColor(noise: SimplexNoise2D, x: number, z: number): readonl
 
 function fract(value: number): number {
   return value - Math.floor(value);
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
 }

@@ -2,12 +2,16 @@ import { Matrix } from "@babylonjs/core";
 import type { HorizontalExclusionMask } from "./Geo";
 import type { VegetationRenderMode } from "./VegetationField";
 import type { LandCoverSampler } from "./WorldCover";
+import type { ProceduralRegionFamily, ProceduralVariant } from "./ProceduralRegions";
+import { proceduralVariantAtLocation } from "./ProceduralRegions";
 
 export interface VegetationPlacementOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
   seed?: number;
+  /** World-level seed used for location-bound procedural model variants. */
+  modelVariantSeed?: number;
   spacingMeters?: number;
   waterLineMeters?: number;
   landCover?: LandCoverSampler;
@@ -16,6 +20,8 @@ export interface VegetationPlacementOptions {
   renderMode?: VegetationRenderMode;
   /** Optional cooperative yield used while streaming large placement grids. */
   yieldControl?: () => Promise<void>;
+  /** Startup may capture immediately; streamed atlas work stays frame-budgeted. */
+  impostorCaptureMode?: "fast" | "cooperative";
   /** Creates the field hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
 }
@@ -54,4 +60,35 @@ export async function packInstanceMatrices(
     if ((index & 511) === 511) await yieldControl?.();
   }
   return packed;
+}
+
+export interface ProceduralPlacementBucket {
+  variant: ProceduralVariant;
+  matrices: Matrix[];
+  colors: number[];
+}
+
+/** Adds one placement to its stable spatial model-variant bucket. */
+export function addProceduralVariantPlacement(
+  buckets: Map<string, ProceduralPlacementBucket>,
+  family: ProceduralRegionFamily,
+  longitude: number,
+  latitude: number,
+  modelVariantSeed: number,
+  matrix: Matrix,
+  color?: readonly number[],
+): void {
+  const variant = proceduralVariantAtLocation(
+    family,
+    longitude,
+    latitude,
+    modelVariantSeed,
+  );
+  let bucket = buckets.get(variant.key);
+  if (!bucket) {
+    bucket = { variant, matrices: [], colors: [] };
+    buckets.set(variant.key, bucket);
+  }
+  bucket.matrices.push(matrix);
+  if (color) bucket.colors.push(...color);
 }

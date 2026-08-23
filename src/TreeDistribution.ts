@@ -1,4 +1,5 @@
 import type { TreeSpecies } from "./ProceduralTree";
+import { clamp01, smoothstep } from "./MathUtils";
 
 /**
  * A deliberately small set of globally common tree groups. These are visual
@@ -261,11 +262,6 @@ function smoothUnion(influences: readonly number[]): number {
   return 1 - influences.reduce((outside, influence) => outside * (1 - clamp01(influence)), 1);
 }
 
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  const t = clamp01((value - edge0) / (edge1 - edge0));
-  return t * t * (3 - 2 * t);
-}
-
 function assertCoordinates(longitude: number, latitude: number): void {
   if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
     throw new RangeError("longitude must be between -180 and 180 degrees.");
@@ -277,8 +273,4 @@ function assertCoordinates(longitude: number, latitude: number): void {
 
 function wrapLongitude(longitude: number): number {
   return longitude === 180 ? -180 : longitude;
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }

@@ -4,9 +4,13 @@ import { planRoad } from "../src/RoadPlanner.ts";
 
 test("plans major roads with lane-marking visuals", () => {
   assert.deepEqual(planRoad({ class: "primary", surface: "paved" }), {
+    roadClass: "primary",
     widthMeters: 8,
+    shoulderWidthMeters: 1.75,
     surface: "paved",
     visualStyle: "marked",
+    structure: "surface",
+    layer: 0,
     isTunnel: false,
   });
 });
@@ -22,6 +26,16 @@ test("separates pedestrian, unpaved, and tunnel rendering decisions", () => {
   assert.equal(planRoad({ class: "path", subclass: "footway" })?.visualStyle, "unpaved");
   assert.equal(planRoad({ class: "track", surface: "paved" })?.visualStyle, "paved");
   assert.equal(planRoad({ class: "secondary", brunnel: "tunnel" })?.isTunnel, true);
+  assert.equal(planRoad({ class: "secondary", brunnel: "bridge" })?.structure, "bridge");
+  assert.equal(planRoad({ class: "track", brunnel: "ford" })?.visualStyle, "ford");
+});
+
+test("plans shoulders, ramps, construction, and vertical layers", () => {
+  assert.equal(planRoad({ class: "motorway" })?.shoulderWidthMeters, 2.5);
+  assert.equal(planRoad({ class: "path" })?.shoulderWidthMeters, 0.3);
+  assert.equal(planRoad({ class: "primary", ramp: 1 })?.widthMeters, 5.76);
+  assert.equal(planRoad({ class: "secondary_construction" })?.surface, "unpaved");
+  assert.equal(planRoad({ class: "minor", layer: "2" })?.layer, 2);
 });
 
 test("ignores unsupported transport classes", () => {

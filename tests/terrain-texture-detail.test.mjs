@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
+import { register } from "node:module";
+
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   createTerrainTextureData,
   metersPerTexel,
   TERRAIN_ALBEDO_LAYER,
   TERRAIN_DETAIL_LAYER,
   TERRAIN_NORMAL_LAYER,
-} from "../src/TerrainTextureData.ts";
+} = await import("../src/TerrainTextureData.ts");
 
 const LAYERS = [TERRAIN_ALBEDO_LAYER, TERRAIN_NORMAL_LAYER, TERRAIN_DETAIL_LAYER];
 

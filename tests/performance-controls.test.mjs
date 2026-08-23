@@ -47,6 +47,14 @@ test("the settings menu toggles with Escape and supports coordinate navigation",
   assert.match(controls, /onLocationChange\(location\)/);
 });
 
+test("a URL time override fixes both the sun and the settings clock", () => {
+  assert.match(game, /query\.has\("time"\)/);
+  assert.match(game, /queryNumber\(query, "time", 12, 0, 23\.75\)/);
+  assert.match(game, /this\.solarLighting\.setTimeOfDay\(this\.initialTimeOfDay\)/);
+  assert.match(controls, /initialTimeOfDay\?: number/);
+  assert.match(controls, /this\.isLiveTime = false/);
+});
+
 test("location names are geocoded and passed through coordinate navigation", () => {
   assert.match(controls, /aria-label", "Place or address"/);
   assert.match(controls, /geocodeLocationName\(this\.placeInput\.value\)/);

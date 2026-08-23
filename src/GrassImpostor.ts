@@ -9,7 +9,9 @@ import {
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  ImpostorAssetLease,
   ImpostorAssets,
+  ImpostorVariant,
 } from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
@@ -20,6 +22,10 @@ const SOURCE_HEIGHT = 0.85;
 // Keeping the patch compact and relatively tall lets its blades use the square
 // capture efficiently instead of collapsing into a thin strip of pixels.
 const CAPTURE_DIAMETER = 3.8;
+
+export function grassRenderedCaptureSize(renderHeight: number): number {
+  return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
 // Keep grass in the same cool-green family as the tree canopy, but bias the
 // blades toward muted olive tones. Highly green tips become neon once direct
 // sun and the local ground multiplier are both applied.
@@ -32,7 +38,7 @@ const GRASS_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
 const grassImpostors = createImpostorAssetProvider({
   name: "grassImpostor",
   queryPrefix: "grass-impostor",
-  createSource: (scene) => createGrassSource(scene),
+  createSource: (scene, variant) => createGrassSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
@@ -52,17 +58,25 @@ export function getGrassImpostorAssets(
   horizontalSamples = grassImpostors.getDefaultSampling().horizontalSamples,
   verticalSamples = grassImpostors.getDefaultSampling().verticalSamples,
   resolution = grassImpostors.getDefaultSampling().resolution,
+  variant?: ImpostorVariant,
 ): Promise<GrassImpostorAssets> {
   return grassImpostors.getAssets(scene, {
     horizontalSamples,
     verticalSamples,
     resolution,
-  });
+  }, variant);
+}
+
+export function acquireGrassImpostorAssets(
+  scene: Scene,
+  variant: ImpostorVariant,
+): Promise<ImpostorAssetLease> {
+  return grassImpostors.acquireAssets(scene, undefined, variant);
 }
 
 /** Builds a dense clump from tapered, curved blade strips without external assets. */
-function createGrassSource(scene: Scene, liveLighting = false): Mesh {
-  const random = createSeededRandom(0x47524153);
+function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153): Mesh {
+  const random = createSeededRandom(seed);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -155,8 +169,8 @@ function createGrassSource(scene: Scene, liveLighting = false): Mesh {
 }
 
 /** Builds the captured procedural clump as live geometry for nearby instances. */
-export function createGrassModel(scene: Scene, renderHeight: number): Mesh {
-  const grass = createGrassSource(scene, true);
+export function createGrassModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
+  const grass = createGrassSource(scene, true, seed);
   grass.name = "grassModels";
   scaleSourceToHeight(grass, renderHeight, SOURCE_HEIGHT);
   if (grass.material instanceof ShaderMaterial) {

@@ -4,6 +4,7 @@ export const WALK_CAMERA_INERTIA = 0;
 const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;
 const GROUND_CONTACT_TOLERANCE_METERS = 0.05;
 const MAX_STEP_DOWN_METERS = 0.75;
+export const WALKER_JUMP_SPEED_METERS_PER_SECOND = 5.5;
 
 export interface WalkerVerticalMotionInput {
   eyeHeight: number;
@@ -12,6 +13,7 @@ export interface WalkerVerticalMotionInput {
   groundEyeHeightAfterMove?: number;
   metersPerUnit: number;
   deltaSeconds: number;
+  jumpRequested?: boolean;
 }
 
 export interface WalkerVerticalMotion {
@@ -39,6 +41,16 @@ export function advanceWalkerVerticalMotion(
     && groundEyeHeightAfterMove !== undefined
     ? (groundEyeHeightBeforeMove - groundEyeHeightAfterMove) * metersPerUnit
     : Infinity;
+
+  if (wasGrounded && input.jumpRequested) {
+    const verticalVelocityMetersPerSecond = WALKER_JUMP_SPEED_METERS_PER_SECOND
+      - GRAVITY_METERS_PER_SECOND_SQUARED * deltaSeconds;
+    return {
+      eyeHeight: eyeHeight
+        + verticalVelocityMetersPerSecond * deltaSeconds / metersPerUnit,
+      verticalVelocityMetersPerSecond,
+    };
+  }
 
   if (wasGrounded && groundEyeHeightAfterMove !== undefined
       && stepDownMeters <= MAX_STEP_DOWN_METERS) {

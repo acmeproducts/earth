@@ -1,10 +1,15 @@
 export type RoadSurface = "paved" | "unpaved";
-export type RoadVisualStyle = RoadSurface | "marked" | "pedestrian";
+export type RoadVisualStyle = RoadSurface | "marked" | "pedestrian" | "ford";
+export type RoadStructure = "surface" | "bridge" | "tunnel" | "ford";
 
 export interface RoadPlan {
+  roadClass: string;
   widthMeters: number;
+  shoulderWidthMeters: number;
   surface: RoadSurface;
   visualStyle: RoadVisualStyle;
+  structure: RoadStructure;
+  layer: number;
   isTunnel: boolean;
 }
 
@@ -40,29 +45,56 @@ const SERVICE_WIDTH_METERS: Readonly<Record<string, number>> = {
 const MARKED_CLASSES = new Set(["motorway", "trunk", "primary", "secondary", "tertiary"]);
 const PAVED_PATHS = new Set(["corridor", "cycleway", "pedestrian", "platform", "steps"]);
 
+const CLASS_SHOULDER_WIDTH_METERS: Readonly<Record<string, number>> = {
+  motorway: 2.5,
+  trunk: 2.25,
+  primary: 1.75,
+  secondary: 1.5,
+  tertiary: 1.25,
+  minor: 0.9,
+  service: 0.65,
+  track: 0.55,
+  path: 0.3,
+};
+
 /** Converts provider road attributes into one renderer-independent description. */
 export function planRoad(properties: Readonly<Record<string, unknown>>): RoadPlan | undefined {
-  const roadClass = text(properties.class);
-  if (!roadClass) return undefined;
+  const mappedClass = text(properties.class);
+  if (!mappedClass) return undefined;
+  const isConstruction = mappedClass.endsWith("_construction");
+  const roadClass = isConstruction
+    ? mappedClass.slice(0, -"_construction".length)
+    : mappedClass;
   const baseWidth = CLASS_WIDTH_METERS[roadClass];
   if (!baseWidth) return undefined;
 
   const subclass = text(properties.subclass);
   const service = text(properties.service);
-  const widthMeters = roadClass === "path" && subclass
+  const mappedWidth = roadClass === "path" && subclass
     ? PATH_WIDTH_METERS[subclass] ?? baseWidth
     : roadClass === "service" && service
       ? SERVICE_WIDTH_METERS[service] ?? baseWidth
       : baseWidth;
+  const widthMeters = truthy(properties.ramp) ? mappedWidth * 0.72 : mappedWidth;
   const mappedSurface = text(properties.surface);
-  const surface: RoadSurface = mappedSurface === "unpaved" ||
+  const surface: RoadSurface = isConstruction || mappedSurface === "unpaved" ||
       (mappedSurface !== "paved" && (
         roadClass === "track" ||
         (roadClass === "path" && !PAVED_PATHS.has(subclass ?? ""))
       ))
     ? "unpaved"
     : "paved";
-  const visualStyle: RoadVisualStyle = surface === "unpaved"
+  const brunnel = text(properties.brunnel);
+  const structure: RoadStructure = brunnel === "bridge"
+    ? "bridge"
+    : brunnel === "tunnel"
+      ? "tunnel"
+      : brunnel === "ford"
+        ? "ford"
+        : "surface";
+  const visualStyle: RoadVisualStyle = structure === "ford"
+    ? "ford"
+    : surface === "unpaved"
     ? "unpaved"
     : roadClass === "path" || subclass === "pedestrian"
       ? "pedestrian"
@@ -71,10 +103,14 @@ export function planRoad(properties: Readonly<Record<string, unknown>>): RoadPla
         : "paved";
 
   return {
+    roadClass,
     widthMeters,
+    shoulderWidthMeters: CLASS_SHOULDER_WIDTH_METERS[roadClass],
     surface,
     visualStyle,
-    isTunnel: text(properties.brunnel) === "tunnel",
+    structure,
+    layer: numeric(properties.layer) ?? 0,
+    isTunnel: structure === "tunnel",
   };
 }
 
@@ -82,4 +118,13 @@ function text(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   return normalized || undefined;
+}
+
+function numeric(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function truthy(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
 }

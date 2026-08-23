@@ -14,6 +14,8 @@ import {
 } from "@babylonjs/core";
 import { SkyMaterial } from "@babylonjs/materials";
 import * as SunCalc from "suncalc";
+import { Moon } from "./Moon";
+import { StarField } from "./StarField";
 
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
@@ -45,6 +47,8 @@ export class SolarLighting {
   private readonly shadowOnlyCasters = new Set<Mesh>();
   private readonly skyMaterial: SkyMaterial;
   private readonly horizonMaterial: ShaderMaterial;
+  private readonly moon: Moon;
+  private readonly starField: StarField;
   private readonly skyProbe?: ReflectionProbe;
   private latitude: number;
   private longitude: number;
@@ -121,6 +125,9 @@ export class SolarLighting {
     );
     horizonMesh.isPickable = false;
     horizonMesh.infiniteDistance = true;
+    // Transparent sky layers render by alphaIndex. Keep atmospheric haze in
+    // front of the stars so the horizon does not remain unnaturally crisp.
+    horizonMesh.alphaIndex = 1;
     this.horizonMaterial = new ShaderMaterial(
       "fogHorizonMaterial",
       scene,
@@ -169,6 +176,8 @@ export class SolarLighting {
     material.fogEnabled = false;
     material.emissiveColor = new Color3(1, 0.78, 0.36);
     this.sunMesh.material = material;
+    this.starField = new StarField(scene);
+    this.moon = new Moon(scene);
 
     // Reflective surfaces need the sky as an environment, and the sky here is
     // a procedural dome rather than a loaded cube map. Capturing it into a
@@ -176,7 +185,12 @@ export class SolarLighting {
     // actually moved.
     if (!scene.getEngine().isWebGPU) {
       this.skyProbe = new ReflectionProbe("skyProbe", SKY_PROBE_SIZE, scene);
-      this.skyProbe.renderList?.push(this.skyMesh, horizonMesh, this.sunMesh);
+      this.skyProbe.renderList?.push(
+        this.skyMesh,
+        this.starField.mesh,
+        horizonMesh,
+        this.sunMesh,
+      );
       this.skyProbe.cubeTexture.refreshRate =
         RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
     }
@@ -271,6 +285,13 @@ export class SolarLighting {
     this.directLight.forceProjectionMatrixCompute();
 
     const elevationDegrees = position.altitude;
+    this.moon.update(date, towardSun, elevationDegrees);
+    this.starField.update(
+      date,
+      this.latitude,
+      this.longitude,
+      elevationDegrees,
+    );
     const daylight = elevationDegrees > 0;
     const elevationFactor = Math.max(0, Math.sin(altitude));
     this.directLight.setEnabled(daylight);

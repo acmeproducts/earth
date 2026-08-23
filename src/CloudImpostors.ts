@@ -24,8 +24,10 @@ import {
   CLOUD_TEXTURE_GUTTER,
   CLOUD_TEXTURE_HEIGHT,
   CLOUD_TEXTURE_WIDTH,
+  CLOUD_VIEW_COUNT,
   generateCloudDensityAtlasData,
 } from "./CloudVolumeCapture";
+import { createCloudShadowProjector } from "./CloudShadows";
 import { copyPrevailingWindDirectionTo } from "./Wind";
 
 const CLOUD_NEAR_FADE_START_METERS = 2_500;
@@ -61,6 +63,7 @@ uniform vec3 cameraPosition;
 varying vec2 vUV;
 varying vec3 vViewDirection;
 varying float vCloudVariant;
+varying float vCloudView;
 
 void main(void) {
   #include<instancesVertex>
@@ -82,9 +85,13 @@ void main(void) {
   #ifdef THIN_INSTANCES
   vUV = vec2(mix(uv.x, 1.0 - uv.x, cloudMirror), uv.y);
   vCloudVariant = cloudVariant;
+  float viewAngle = atan(vViewDirection.x, vViewDirection.z);
+  viewAngle = mix(viewAngle, -viewAngle, cloudMirror);
+  vCloudView = mod(viewAngle / 6.28318530718 + 1.0, 1.0) * ${CLOUD_VIEW_COUNT}.0;
   #else
   vUV = uv;
   vCloudVariant = 0.0;
+  vCloudView = 0.0;
   #endif
   gl_Position = viewProjection * vec4(worldPosition, 1.0);
 }`;
@@ -94,6 +101,7 @@ precision highp float;
 varying vec2 vUV;
 varying vec3 vViewDirection;
 varying float vCloudVariant;
+varying float vCloudView;
 uniform sampler2D cloudAtlas;
 uniform vec2 atlasDimensions;
 uniform vec2 atlasTileStride;
@@ -110,14 +118,26 @@ uniform float nearFadeEnd;
 uniform float farFadeStart;
 uniform float farFadeEnd;
 
-void main(void) {
-  float variant = floor(vCloudVariant + 0.5);
-  vec2 cell = vec2(mod(variant, atlasColumns), floor(variant / atlasColumns));
+vec2 sampleCloudDensity(float variant, float view) {
+  float wrappedView = mod(view, ${CLOUD_VIEW_COUNT}.0);
+  float tileIndex = variant * ${CLOUD_VIEW_COUNT}.0 + wrappedView;
+  vec2 cell = vec2(mod(tileIndex, atlasColumns), floor(tileIndex / atlasColumns));
   vec2 atlasPixel = cell * atlasTileStride
     + vec2(atlasGutter)
     + vUV * (atlasTileSize - vec2(1.0))
     + vec2(0.5);
-  vec2 density = texture2D(cloudAtlas, atlasPixel / atlasDimensions).rg;
+  return texture2D(cloudAtlas, atlasPixel / atlasDimensions).rg;
+}
+
+void main(void) {
+  float variant = floor(vCloudVariant + 0.5);
+  float firstView = floor(vCloudView);
+  float viewBlend = smoothstep(0.2, 0.8, fract(vCloudView));
+  vec2 density = mix(
+    sampleCloudDensity(variant, firstView),
+    sampleCloudDensity(variant, firstView + 1.0),
+    viewBlend
+  );
 
   float distanceToCamera = length(vViewDirection);
   float nearFade = smoothstep(nearFadeStart, nearFadeEnd, distanceToCamera);
@@ -150,6 +170,7 @@ export function createCloudLayer(
 ): CloudLayer {
   const { metersPerUnit, weatherSeed } = options;
   const atlas = createCloudDensityAtlas(scene);
+  const shadowProjector = createCloudShadowProjector(scene, metersPerUnit);
   const mesh = MeshBuilder.CreatePlane("cloudImpostors", { size: 1 }, scene);
   mesh.isPickable = false;
   mesh.receiveShadows = false;
@@ -230,6 +251,9 @@ export function createCloudLayer(
     const driftX = driftDirection.x * driftDistance;
     const driftZ = driftDirection.y * driftDistance;
     mesh.position.set(driftX, 0, driftZ);
+    shadowProjector.setDrift(driftX, driftZ);
+    lighting.copyLightingTo(lightingSnapshot);
+    shadowProjector.update(cameraPosition, lightingSnapshot.sunDirection);
 
     // Select cells in the field's moving frame so its edges remain beyond the fade.
     const nextCellX = Math.floor((cameraPosition.x - driftX) / cellSize);
@@ -247,6 +271,7 @@ export function createCloudLayer(
       density,
     );
     uploadCloudInstances(mesh, placements);
+    shadowProjector.upload(placements);
   };
 
   const initialCamera = scene.activeCamera;
@@ -265,6 +290,7 @@ export function createCloudLayer(
     dispose() {
       material.dispose(false, false);
       atlas.texture.dispose();
+      shadowProjector.dispose();
       mesh.dispose(false, false);
     },
   };

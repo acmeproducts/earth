@@ -616,6 +616,63 @@ function partialUpdateArray(
   for (const mesh of meshes) mesh.thinInstancePartialBufferUpdate(kind, data, offset);
 }
 
+/** Combines independently rendered regional variants behind one streamed field API. */
+export function combineVegetationFieldResults(
+  root: TransformNode,
+  fields: readonly VegetationFieldResult[],
+  instanceMatrices: Float32Array,
+): VegetationFieldResult {
+  const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
+  const modelMeshes = fields.flatMap((field) => field.modelMeshes);
+  const shadowCasterMeshes = fields.flatMap((field) => field.shadowCasterMeshes);
+  return {
+    root,
+    meshes: [...impostorMeshes, ...modelMeshes],
+    impostorMeshes,
+    modelMeshes,
+    shadowCasterMeshes,
+    instanceMatrices,
+    count: fields.reduce((sum, field) => sum + field.count, 0),
+    setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
+    setFade: (fade) => fields.forEach((field) => field.setFade(fade)),
+    prepareLod: async (cameraPosition, distanceMeters, yieldControl) => {
+      let changed = false;
+      for (const field of fields) {
+        changed = await field.prepareLod(cameraPosition, distanceMeters, yieldControl) || changed;
+      }
+      return changed;
+    },
+    updateLod: (cameraPosition, distanceMeters) => fields.reduce(
+      (changed, field) => field.updateLod(cameraPosition, distanceMeters) || changed,
+      false,
+    ),
+    consumeLodDebugStats: () => fields.reduce<VegetationLodDebugStats>(
+      (total, field) => {
+        const stats = field.consumeLodDebugStats();
+        total.totalInstances += stats.totalInstances;
+        total.updates += stats.updates;
+        total.processedInstances += stats.processedInstances;
+        total.peakProcessedInstances += stats.peakProcessedInstances;
+        total.currentGridCandidates += stats.currentGridCandidates;
+        total.currentTransitionInstances += stats.currentTransitionInstances;
+        total.membershipChanges += stats.membershipChanges;
+        total.fullRebuilds += stats.fullRebuilds;
+        return total;
+      },
+      {
+        totalInstances: 0,
+        updates: 0,
+        processedInstances: 0,
+        peakProcessedInstances: 0,
+        currentGridCandidates: 0,
+        currentTransitionInstances: 0,
+        membershipChanges: 0,
+        fullRebuilds: 0,
+      },
+    ),
+  };
+}
+
 async function updateMeshBuffersOverFrames(
   meshes: Mesh[],
   updateInstanceData: boolean,

@@ -12,6 +12,7 @@ import {
 } from "@babylonjs/core";
 import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
+import { clamp01 } from "./MathUtils";
 import type { BuildingPlan, LonLat } from "./BuildingPlanner";
 import type { TerrainData } from "./TerrainData";
 
@@ -481,9 +482,9 @@ function colorBuildingMass(mesh: Mesh, appearance: BuildingAppearance): void {
       ? 1
       : Math.max(0.7, Math.min(1.03, 0.84 + normalX * 0.11 - normalZ * 0.07));
     colors.push(
-      clampColor(base.r * light),
-      clampColor(base.g * light),
-      clampColor(base.b * light),
+      clamp01(base.r * light),
+      clamp01(base.g * light),
+      clamp01(base.b * light),
       1,
     );
   }
@@ -708,14 +709,10 @@ function mixColor(a: Color3, b: Color3, amount: number): Color3 {
 function varyColor(color: Color3, tone: number, warmth: number): Color3 {
   const light = 1 + tone * 0.16;
   return new Color3(
-    clampColor(color.r * light + warmth * 0.035),
-    clampColor(color.g * light + warmth * 0.008),
-    clampColor(color.b * light - warmth * 0.025),
+    clamp01(color.r * light + warmth * 0.035),
+    clamp01(color.g * light + warmth * 0.008),
+    clamp01(color.b * light - warmth * 0.025),
   );
-}
-
-function clampColor(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
 
 function stageBuildingMesh<T extends Mesh>(mesh: T): T {

@@ -139,6 +139,19 @@ limits, faces, and symmetry, then create its provider with
 `createImpostorAssetProvider`. The tree, bush, and grass files are examples;
 they contain only model-specific geometry and descriptor values.
 
+Procedural vegetation models are location-bound through virtual 128 by 128
+application-tile regions. Trees, bushes, grass, flowers, and ferns use
+independently shifted region grids, so their model captures normally change at
+different locations. A four-tile-per-side border band assigns nearby placements to either
+neighbor with deterministic spatial weights; this creates a gradual population
+transition without drawing two models per plant. Mature trees and saplings share
+the tree grid. Regions select from four deterministic sister models per family,
+so long-distance travel reuses a bounded atlas bank instead of continuously
+capturing new geometry. Regional model and impostor sources use the same seed,
+while leased per-scene atlas caches retain active regions and evict older captures.
+Use `?procedural-region-size=8` to make boundaries frequent during testing; the
+value is normalized to a power of two so regions wrap cleanly at the date line.
+
 The production view renders grass and bushes as dense impostor clumps. Mature
 trees, saplings, and fern undergrowth can switch between impostors, automatic
 distance LOD, and original geometry. Auto mode uses a
@@ -150,10 +163,16 @@ The top-right counter reports live FPS and active triangles; use
 
 The sky includes distant procedural cloud impostors. Eight density variants span
 bank, clustered, broken, and tower-like formations generated at startup by
-integrating deterministic three-dimensional cloud volumes from a shallow
-underside angle. Runtime clouds are broad, thin-instanced and independently
-mirrored to make repeated captures less apparent. The billboards share a 5 km
-altitude and drift together with the prevailing wind. Their deterministic world
+integrating deterministic three-dimensional cloud volumes. Each formation is
+captured from eight azimuths and blends between adjacent views at runtime, so it
+retains the low draw cost of a thin-instanced billboard while its silhouette
+changes like a volume as the camera moves around it. Runtime clouds use compact
+cumulus-like proportions and are independently mirrored to make repeated
+captures less apparent. A separate top-down density capture projects the four
+cloud footprints nearest the visible terrain directly along the current sun
+direction. The terrain samples these impostors in world space without expanding
+or continuously invalidating the local tree and building shadow map. Clouds share a 7 km altitude and drift
+together with the prevailing wind; their shadows follow the same drift. Their deterministic world
 grid is sampled in that moving frame so new formations remain beyond the visible
 horizon. Each geographic area receives a weighted clear, sparse, scattered, or
 dense weather regime. Cloud-bearing skies dominate: scattered conditions are most
@@ -162,6 +181,8 @@ density provides smooth alpha coverage without a screen-space dither pattern,
 with solid shaded cores and softer edge coverage. Clouds fade out before the
 camera reaches them and through their own high-altitude haze beyond the terrain
 fog; use `?clouds=off` for a cloud-free performance comparison.
+Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
+shadows; the settings menu's Live button returns to the current local time.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
@@ -248,6 +269,7 @@ earth/
 - **G**: Switch between fly and walker modes
 - **W/A/S/D**: Move forward, left, backward, and right
 - **Q/E**: Fly down and up (fly mode only)
+- **Space**: Jump (walker mode only)
 - **Mouse + Drag**: Look around
 - **Mouse Wheel**: Increase or decrease fly speed (fly mode only)
 

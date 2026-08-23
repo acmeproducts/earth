@@ -8,6 +8,7 @@ import {
   worldTileAreaKey,
   worldTileAtLocation,
   worldTileBounds,
+  worldTileCoordinatesAtLocation,
   worldTileSeed,
   worldTileWindowOffsetsAtLocation,
 } from "../src/WorldGrid.ts";
@@ -62,6 +63,17 @@ test("selects the four closest tiles and changes the window at tile midlines", (
   assert.equal(west.start.x, tile.x - 1);
   assert.equal(east.start.x, tile.x);
   assert.notEqual(worldTileAreaKey(west), worldTileAreaKey(east));
+});
+
+test("projects continuous application-tile coordinates", () => {
+  const tile = worldTileAtLocation(59.88, 10.59);
+  const coordinates = worldTileCoordinatesAtLocation(59.88, 10.59);
+  assert.equal(Math.floor(coordinates.x), tile.x);
+  assert.equal(Math.floor(coordinates.y), tile.y);
+  assert.deepEqual(
+    worldTileCoordinatesAtLocation(0, -180),
+    worldTileCoordinatesAtLocation(0, 180),
+  );
 });
 
 test("describes an exact two by two streaming window", () => {

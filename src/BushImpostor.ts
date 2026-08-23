@@ -6,7 +6,9 @@ import {
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  ImpostorAssetLease,
   ImpostorAssets,
+  ImpostorVariant,
 } from "./Impostor";
 import { createSeededRandom } from "./Random";
 
@@ -14,6 +16,10 @@ export type BushImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
+
+export function bushRenderedCaptureSize(renderHeight: number): number {
+  return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
 const ROTATIONAL_SYMMETRY_ORDER = 12;
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
@@ -25,7 +31,7 @@ const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
 const bushImpostors = createImpostorAssetProvider({
   name: "bushImpostor",
   queryPrefix: "bush-impostor",
-  createSource: (scene) => createBushSource(scene),
+  createSource: (scene, variant) => createBushSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
@@ -45,16 +51,24 @@ export function getBushImpostorAssets(
   horizontalSamples = bushImpostors.getDefaultSampling().horizontalSamples,
   verticalSamples = bushImpostors.getDefaultSampling().verticalSamples,
   resolution = bushImpostors.getDefaultSampling().resolution,
+  variant?: ImpostorVariant,
 ): Promise<BushImpostorAssets> {
   return bushImpostors.getAssets(scene, {
     horizontalSamples,
     verticalSamples,
     resolution,
-  });
+  }, variant);
 }
 
-function createBushSource(scene: Scene, liveLighting = false): Mesh {
-  const random = createSeededRandom(0x42555348);
+export function acquireBushImpostorAssets(
+  scene: Scene,
+  variant: ImpostorVariant,
+): Promise<ImpostorAssetLease> {
+  return bushImpostors.acquireAssets(scene, undefined, variant);
+}
+
+function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348): Mesh {
+  const random = createSeededRandom(seed);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -168,8 +182,8 @@ function createBushSource(scene: Scene, liveLighting = false): Mesh {
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */
-export function createBushModel(scene: Scene, renderHeight: number): Mesh {
-  const bush = createBushSource(scene, true);
+export function createBushModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
+  const bush = createBushSource(scene, true, seed);
   bush.name = "bushModels";
   const positions = bush.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Bush model has no position data.");

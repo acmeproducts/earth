@@ -10,6 +10,8 @@
  * every viewing distance supplied with real detail.
  */
 
+import { clamp01, smoothstep } from "./MathUtils";
+
 const NOISE_SEED = 0x6d2b79f5;
 
 export interface TerrainTextureLayer {
@@ -277,15 +279,6 @@ function random2d(x: number, y: number, seed: number): number {
 
 function fade(value: number): number {
   return value * value * (3 - 2 * value);
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
 
 function mix(a: number, b: number, amount: number): number {

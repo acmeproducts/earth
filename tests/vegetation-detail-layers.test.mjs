@@ -37,6 +37,19 @@ test("undergrowth is restricted to plausible WorldCover classes", () => {
   assert.match(field, /TreeCover\]: 0\.24/);
   assert.match(field, /Shrubland\]: 0\.035/);
   assert.match(field, /const FERN_SPACING_METERS = 3\.8/);
+  assert.match(field, /const FERN_CLUSTER_MIN_COUNT = 3/);
+  assert.match(field, /const FERN_CLUSTER_MAX_COUNT = 5/);
+  assert.match(field, /addFern\(x, z, 1\)/);
+});
+
+test("fern patches use broad fronds and overlapping satellite plants", () => {
+  const capture = source("FernImpostor.ts");
+  const field = source("FernField.ts");
+
+  assert.match(capture, /const rachisWidth = 0\.017 \+ random\(\) \* 0\.01/);
+  assert.match(capture, /0\.034 \+ leafletLength \* 0\.2/);
+  assert.match(field, /const FERN_CLUSTER_RADIUS_METERS = 1\.8/);
+  assert.match(field, /for \(let member = 1; member < clusterCount; member\+\+\)/);
 });
 
 test("saplings and ferns belong to the detailed tile lifecycle only", () => {

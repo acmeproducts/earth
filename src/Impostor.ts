@@ -38,8 +38,9 @@ export interface ImpostorAssets {
   captureHeight: number;
 }
 
-/** Capture work per yielded frame, decoupling atlas speed from display refresh. */
-const CAPTURE_FRAME_BUDGET_MS = 12;
+/** Runtime capture work per frame; editor/demo captures retain their faster path. */
+const RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2;
+const OFFLINE_CAPTURE_FRAME_BUDGET_MS = 12;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
@@ -83,6 +84,8 @@ export interface ImpostorCaptureOptions {
   rotationalSymmetryOrder?: number;
   /** Captures side faces from level through overhead; top faces retain their full range. */
   upperHemisphereOnly?: boolean;
+  /** Prioritizes stable gameplay frames over total capture duration. */
+  cooperative?: boolean;
   onProgress?: (
     completed: number,
     total: number,
@@ -98,6 +101,23 @@ export interface ImpostorSampling {
   resolution: number;
 }
 
+export interface ImpostorVariant {
+  /** Stable spatial identity included in the per-scene atlas cache key. */
+  key: string;
+  /** Seed supplied to the procedural source. Omitted by legacy static captures. */
+  seed?: number;
+}
+
+export interface ImpostorAssetRequestOptions {
+  /** Overrides whether a newly required atlas is spread across gameplay frames. */
+  cooperative?: boolean;
+}
+
+export interface ImpostorAssetLease {
+  assets: ImpostorAssets;
+  release(): void;
+}
+
 export interface ImpostorParameter {
   default: number;
   minimum: number;
@@ -109,7 +129,7 @@ export interface ImpostorDefinition {
   name: string;
   /** Defaults to `name`; useful when resource names and public parameters differ. */
   queryPrefix?: string;
-  createSource(scene: Scene): Mesh | Mesh[] | Promise<Mesh | Mesh[]>;
+  createSource(scene: Scene, variant: ImpostorVariant): Mesh | Mesh[] | Promise<Mesh | Mesh[]>;
   sourceHeight: number;
   captureDiameter: number;
   captureWidth?: number;
@@ -131,9 +151,32 @@ export interface ImpostorDefinition {
 }
 
 export interface ImpostorAssetProvider {
-  getAssets(scene: Scene, sampling?: Partial<ImpostorSampling>): Promise<ImpostorAssets>;
+  getAssets(
+    scene: Scene,
+    sampling?: Partial<ImpostorSampling>,
+    variant?: ImpostorVariant,
+    requestOptions?: ImpostorAssetRequestOptions,
+  ): Promise<ImpostorAssets>;
+  acquireAssets(
+    scene: Scene,
+    sampling?: Partial<ImpostorSampling>,
+    variant?: ImpostorVariant,
+    requestOptions?: ImpostorAssetRequestOptions,
+  ): Promise<ImpostorAssetLease>;
   getDefaultSampling(): ImpostorSampling;
 }
+
+interface ImpostorCacheEntry {
+  promise: Promise<ImpostorAssets>;
+  references: number;
+  pinned: boolean;
+  lastUsed: number;
+}
+
+const DEFAULT_IMPOSTOR_VARIANT: ImpostorVariant = { key: "default" };
+/** Four corner variants, the legacy default, and one recently used neighbor. */
+const MAX_CACHED_IMPOSTOR_VARIANTS = 6;
+const sceneCaptureTails = new WeakMap<Scene, Promise<void>>();
 
 /**
  * Turns a procedural source descriptor into a lazy, per-scene atlas provider.
@@ -142,8 +185,9 @@ export interface ImpostorAssetProvider {
 export function createImpostorAssetProvider(
   definition: ImpostorDefinition,
 ): ImpostorAssetProvider {
-  const sceneAssets = new WeakMap<Scene, Map<string, Promise<ImpostorAssets>>>();
+  const sceneAssets = new WeakMap<Scene, Map<string, ImpostorCacheEntry>>();
   const queryPrefix = definition.queryPrefix ?? definition.name;
+  let accessCounter = 0;
 
   const getDefaultSampling = (): ImpostorSampling => ({
     horizontalSamples: queryParameter(
@@ -160,41 +204,126 @@ export function createImpostorAssetProvider(
     ),
   });
 
+  const getEntry = (
+    scene: Scene,
+    overrides: Partial<ImpostorSampling>,
+    variant: ImpostorVariant,
+    requestOptions: ImpostorAssetRequestOptions,
+  ): { cache: Map<string, ImpostorCacheEntry>; entry: ImpostorCacheEntry } => {
+    const sampling = { ...getDefaultSampling(), ...overrides };
+    validateSampling(definition, sampling);
+    let cache = sceneAssets.get(scene);
+    if (!cache) {
+      cache = new Map();
+      sceneAssets.set(scene, cache);
+    }
+
+    const key = [
+      variant.key,
+      variant.seed ?? "static",
+      sampling.horizontalSamples,
+      sampling.verticalSamples,
+      sampling.resolution,
+    ].join(":");
+    const existing = cache.get(key);
+    if (existing) {
+      existing.lastUsed = ++accessCounter;
+      return { cache, entry: existing };
+    }
+
+    const capture = enqueueImpostorCapture(
+      scene,
+      () => captureDefinition(
+        scene,
+        definition,
+        sampling,
+        variant,
+        requestOptions.cooperative,
+      ),
+    );
+    const entry: ImpostorCacheEntry = {
+      promise: capture,
+      references: 0,
+      pinned: false,
+      lastUsed: ++accessCounter,
+    };
+    cache.set(key, entry);
+    capture.catch(() => {
+      if (cache?.get(key) === entry) cache.delete(key);
+    });
+    return { cache, entry };
+  };
+
   return {
     getDefaultSampling,
-    getAssets(scene, overrides = {}) {
-      const sampling = { ...getDefaultSampling(), ...overrides };
-      validateSampling(definition, sampling);
-      let cache = sceneAssets.get(scene);
-      if (!cache) {
-        cache = new Map();
-        sceneAssets.set(scene, cache);
+    getAssets(scene, overrides = {}, variant = DEFAULT_IMPOSTOR_VARIANT, requestOptions = {}) {
+      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions);
+      // Legacy callers do not expose a lifetime, so their capture must remain valid.
+      entry.pinned = true;
+      pruneCache(cache);
+      return entry.promise;
+    },
+    async acquireAssets(
+      scene,
+      overrides = {},
+      variant = DEFAULT_IMPOSTOR_VARIANT,
+      requestOptions = {},
+    ) {
+      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions);
+      entry.references++;
+      pruneCache(cache);
+      let assets: ImpostorAssets;
+      try {
+        assets = await entry.promise;
+      } catch (error) {
+        entry.references--;
+        throw error;
       }
-
-      const key = [
-        sampling.horizontalSamples,
-        sampling.verticalSamples,
-        sampling.resolution,
-      ].join(":");
-      const existing = cache.get(key);
-      if (existing) return existing;
-
-      const capture = captureDefinition(scene, definition, sampling);
-      cache.set(key, capture);
-      capture.catch(() => {
-        if (cache?.get(key) === capture) cache.delete(key);
-      });
-      return capture;
+      let released = false;
+      return {
+        assets,
+        release() {
+          if (released) return;
+          released = true;
+          entry.references = Math.max(0, entry.references - 1);
+          entry.lastUsed = ++accessCounter;
+          pruneCache(cache);
+        },
+      };
     },
   };
+
+  function pruneCache(cache: Map<string, ImpostorCacheEntry>): void {
+    if (cache.size <= MAX_CACHED_IMPOSTOR_VARIANTS) return;
+    const evictable = [...cache.entries()]
+      .filter(([, entry]) => entry.references === 0 && !entry.pinned)
+      .sort((left, right) => left[1].lastUsed - right[1].lastUsed);
+    while (cache.size > MAX_CACHED_IMPOSTOR_VARIANTS && evictable.length > 0) {
+      const [key, entry] = evictable.shift()!;
+      if (cache.get(key) !== entry) continue;
+      cache.delete(key);
+      void entry.promise.then(disposeImpostorAssets, () => undefined);
+    }
+  }
+}
+
+function enqueueImpostorCapture<T>(scene: Scene, capture: () => Promise<T>): Promise<T> {
+  const previous = sceneCaptureTails.get(scene) ?? Promise.resolve();
+  const next = previous.then(capture, capture);
+  sceneCaptureTails.set(scene, next.then(() => undefined, () => undefined));
+  return next;
 }
 
 async function captureDefinition(
   scene: Scene,
   definition: ImpostorDefinition,
   sampling: ImpostorSampling,
+  variant: ImpostorVariant,
+  cooperativeOverride?: boolean,
 ): Promise<ImpostorAssets> {
-  const created = await definition.createSource(scene);
+  const cooperative = cooperativeOverride ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
+  if (cooperative) await nextFrame();
+  const created = await definition.createSource(scene, variant);
   const meshes = Array.isArray(created) ? created : [created];
   if (meshes.length === 0) throw new Error(`${definition.name} created no source meshes.`);
 
@@ -223,7 +352,9 @@ async function captureDefinition(
       : sampling.resolution;
 
     const assets = await captureImpostorAtlases(scene, {
-      name: definition.name,
+      name: variant.key === DEFAULT_IMPOSTOR_VARIANT.key
+        ? definition.name
+        : `${definition.name}-${resourceKey(variant.key)}`,
       meshes,
       gridWidth: sampling.horizontalSamples,
       gridHeight: sampling.verticalSamples,
@@ -238,6 +369,7 @@ async function captureDefinition(
       rotationallySymmetric: definition.rotationallySymmetric,
       rotationalSymmetryOrder: definition.rotationalSymmetryOrder,
       upperHemisphereOnly: definition.upperHemisphereOnly,
+      cooperative,
     });
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
@@ -248,6 +380,19 @@ async function captureDefinition(
     // useful to live models after the temporary source material is gone.
     materials.forEach((material) => material.dispose(true, false));
   }
+}
+
+function disposeImpostorAssets(assets: ImpostorAssets): void {
+  const textures = new Set([...assets.textures, ...assets.lowResolutionTextures]);
+  textures.forEach((texture) => texture.dispose());
+  for (const canvas of assets.atlasCanvases) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+function resourceKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
 
 function sourceDimensions(meshes: readonly Mesh[]): Vector3 {
@@ -306,6 +451,7 @@ export async function captureImpostorAtlases(
     rotationallySymmetric = false,
     rotationalSymmetryOrder = 0,
     upperHemisphereOnly = false,
+    cooperative = false,
     onProgress,
   } = options;
   const atlasWidth = gridWidth * resolutionWidth;
@@ -361,8 +507,16 @@ export async function captureImpostorAtlases(
   const total = faces.length * gridWidth * gridHeight;
   let completed = 0;
   let sliceStart = performance.now();
+  let viewsThisFrame = 0;
+  const frameBudget = cooperative
+    ? RUNTIME_CAPTURE_FRAME_BUDGET_MS
+    : OFFLINE_CAPTURE_FRAME_BUDGET_MS;
 
   try {
+    if (cooperative) {
+      await nextFrame();
+      sliceStart = performance.now();
+    }
     for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
       const face = faces[faceIndex];
       const context = canvases[faceIndex].getContext("2d", { alpha: true })!;
@@ -372,6 +526,11 @@ export async function captureImpostorAtlases(
       clearPending = true;
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
+          if (cooperative && viewsThisFrame >= 1) {
+            await nextFrame();
+            sliceStart = performance.now();
+            viewsThisFrame = 0;
+          }
           const u = gridWidth === 1 ? 0 : (x / (gridWidth - 1)) * 2 - 1;
           const fullRangeV = gridHeight === 1 ? 0 : (y / (gridHeight - 1)) * 2 - 1;
           const isSideFace = Math.abs(face.normal.y) <= 0.5;
@@ -397,18 +556,27 @@ export async function captureImpostorAtlases(
             meshes.forEach((mesh) => { mesh.isVisible = false; });
           }
           completed++;
+          viewsThisFrame++;
           onProgress?.(completed, total, faceIndex, x, y);
-          if (performance.now() - sliceStart > CAPTURE_FRAME_BUDGET_MS) {
+          if (!cooperative && performance.now() - sliceStart > frameBudget) {
             await nextFrame();
             sliceStart = performance.now();
+            viewsThisFrame = 0;
           }
         }
       }
+      if (cooperative) await nextFrame();
       const pixels = await target.readPixels();
       if (!pixels) throw new Error(`${name} GPU readback failed.`);
-      context.putImageData(binaryImage(pixels, atlasWidth, atlasHeight, context), 0, 0);
+      if (cooperative) await nextFrame();
+      context.putImageData(
+        await binaryImage(pixels, atlasWidth, atlasHeight, context, cooperative),
+        0,
+        0,
+      );
       await nextFrame();
       sliceStart = performance.now();
+      viewsThisFrame = 0;
     }
   } finally {
     meshes.forEach((mesh, index) => { mesh.isVisible = sourceVisibility[index]; });
@@ -434,10 +602,10 @@ export async function captureImpostorAtlases(
     captureDiameter,
     captureWidth,
     captureHeight,
-  });
+  }, cooperative);
 }
 
-function createImpostorTextures(
+async function createImpostorTextures(
   scene: Scene,
   name: string,
   canvases: HTMLCanvasElement[],
@@ -445,10 +613,14 @@ function createImpostorTextures(
     ImpostorAssets,
     "textures" | "atlasCanvases" | "lowResolutionTextures" | "gridSize"
   >,
-): ImpostorAssets {
+  cooperative: boolean,
+): Promise<ImpostorAssets> {
   const atlasWidth = metadata.gridWidth * metadata.resolutionWidth;
   const atlasHeight = metadata.gridHeight * metadata.resolutionHeight;
-  const textures = canvases.map((canvas, index) => {
+  const textures: Texture[] = [];
+  for (let index = 0; index < canvases.length; index++) {
+    if (cooperative) await nextFrame();
+    const canvas = canvases[index];
     const image = canvas.getContext("2d", { alpha: true })!.getImageData(
       0,
       0,
@@ -459,14 +631,16 @@ function createImpostorTextures(
     // commonly turns RGB under zero alpha black. Thin grass silhouettes then
     // acquire a dark line when bilinear filtering reaches across their edge.
     // RawTexture keeps this two-pixel, per-frame color gutter intact.
-    dilateTransparentTileEdgeColors(
+    await dilateTransparentTileEdgeColors(
       image,
       metadata.gridWidth,
       metadata.gridHeight,
       metadata.resolutionWidth,
       metadata.resolutionHeight,
       2,
+      cooperative,
     );
+    if (cooperative) await nextFrame();
     const texture = new RawTexture(
       image.data,
       atlasWidth,
@@ -482,18 +656,22 @@ function createImpostorTextures(
     texture.hasAlpha = true;
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
-    return texture;
-  });
-  const lowResolutionTextures = canvases.map((canvas, index) => {
-    const lowImage = downsampleAtlasTiles(
-      canvas,
+    textures.push(texture);
+  }
+  const lowResolutionTextures: Texture[] = [];
+  for (let index = 0; index < canvases.length; index++) {
+    if (cooperative) await nextFrame();
+    const lowImage = await downsampleAtlasTiles(
+      canvases[index],
       metadata.gridWidth,
       metadata.gridHeight,
       metadata.resolutionWidth,
       metadata.resolutionHeight,
       metadata.lowResolutionWidth,
       metadata.lowResolutionHeight,
+      cooperative,
     );
+    if (cooperative) await nextFrame();
     const texture = new RawTexture(
       lowImage.data,
       lowImage.width,
@@ -509,8 +687,8 @@ function createImpostorTextures(
     texture.hasAlpha = true;
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
-    return texture;
-  });
+    lowResolutionTextures.push(texture);
+  }
   return {
     textures,
     atlasCanvases: canvases,
@@ -521,15 +699,17 @@ function createImpostorTextures(
 }
 
 /** Extends opaque RGB just far enough to cover the bilinear footprint. */
-function dilateTransparentTileEdgeColors(
+async function dilateTransparentTileEdgeColors(
   image: ImageData,
   gridWidth: number,
   gridHeight: number,
   tileWidth: number,
   tileHeight: number,
   radius: number,
-): void {
+  cooperative: boolean,
+): Promise<void> {
   const source = new Uint8ClampedArray(image.data);
+  const slice = captureWorkSlice();
   for (let tileY = 0; tileY < gridHeight; tileY++) {
     for (let tileX = 0; tileX < gridWidth; tileX++) {
       const startX = tileX * tileWidth;
@@ -567,13 +747,14 @@ function dilateTransparentTileEdgeColors(
             image.data[destination + 2] = source[nearest + 2];
           }
         }
+        await yieldCaptureWorkIfNeeded(cooperative, slice);
       }
     }
   }
 }
 
 /** Downsamples frames independently so neighboring atlas tiles cannot bleed together. */
-function downsampleAtlasTiles(
+async function downsampleAtlasTiles(
   source: HTMLCanvasElement,
   gridWidth: number,
   gridHeight: number,
@@ -581,7 +762,8 @@ function downsampleAtlasTiles(
   sourceTileHeight: number,
   targetTileWidth: number,
   targetTileHeight: number,
-): ImageData {
+  cooperative: boolean,
+): Promise<ImageData> {
   const target = document.createElement("canvas");
   target.width = gridWidth * targetTileWidth;
   target.height = gridHeight * targetTileHeight;
@@ -608,36 +790,43 @@ function downsampleAtlasTiles(
   // At low resolution, retaining averaged fractional coverage produces a conspicuous Bayer
   // pattern of holes. Preserve the filtered color but make meaningful distant
   // coverage solid so sub-pixel leaves merge into a stable canopy.
-  for (let offset = 0; offset < pixels.data.length; offset += 4) {
-    pixels.data[offset + 3] = pixels.data[offset + 3] >= LOW_RESOLUTION_ALPHA_THRESHOLD
-      ? 255
-      : 0;
+  const slice = captureWorkSlice();
+  for (let y = 0; y < pixels.height; y++) {
+    for (let x = 0; x < pixels.width; x++) {
+      const alpha = (y * pixels.width + x) * 4 + 3;
+      pixels.data[alpha] = pixels.data[alpha] >= LOW_RESOLUTION_ALPHA_THRESHOLD ? 255 : 0;
+    }
+    await yieldCaptureWorkIfNeeded(cooperative, slice);
   }
-  dilateTransparentTileColors(
+  await dilateTransparentTileColors(
     pixels,
     gridWidth,
     gridHeight,
     targetTileWidth,
     targetTileHeight,
+    cooperative,
   );
-  fillDistantSilhouetteRows(
+  await fillDistantSilhouetteRows(
     pixels,
     gridWidth,
     gridHeight,
     targetTileWidth,
     targetTileHeight,
+    cooperative,
   );
   return pixels;
 }
 
 /** Removes distracting foliage holes while retaining each row's outer silhouette. */
-function fillDistantSilhouetteRows(
+async function fillDistantSilhouetteRows(
   image: ImageData,
   gridWidth: number,
   gridHeight: number,
   tileWidth: number,
   tileHeight: number,
-): void {
+  cooperative: boolean,
+): Promise<void> {
+  const slice = captureWorkSlice();
   for (let tileY = 0; tileY < gridHeight; tileY++) {
     for (let tileX = 0; tileX < gridWidth; tileX++) {
       const startX = tileX * tileWidth;
@@ -655,6 +844,7 @@ function fillDistantSilhouetteRows(
         for (let localX = firstCovered; localX <= lastCovered; localX++) {
           image.data[(y * image.width + startX + localX) * 4 + 3] = 255;
         }
+        await yieldCaptureWorkIfNeeded(cooperative, slice);
       }
     }
   }
@@ -665,14 +855,16 @@ function fillDistantSilhouetteRows(
  * preserves RGB under zero alpha; Canvas textures do not, which causes either
  * bright fringes or dark quantization spots at this very small resolution.
  */
-function dilateTransparentTileColors(
+async function dilateTransparentTileColors(
   image: ImageData,
   gridWidth: number,
   gridHeight: number,
   tileWidth: number,
   tileHeight: number,
-): void {
+  cooperative: boolean,
+): Promise<void> {
   const source = new Uint8ClampedArray(image.data);
+  const slice = captureWorkSlice();
   for (let tileY = 0; tileY < gridHeight; tileY++) {
     for (let tileX = 0; tileX < gridWidth; tileX++) {
       const startX = tileX * tileWidth;
@@ -705,19 +897,22 @@ function dilateTransparentTileColors(
             image.data[destination + 2] = source[nearest + 2];
           }
         }
+        await yieldCaptureWorkIfNeeded(cooperative, slice);
       }
     }
   }
 }
 
-function binaryImage(
+async function binaryImage(
   pixels: ArrayBufferView,
   width: number,
   height: number,
   context: CanvasRenderingContext2D,
-): ImageData {
+  cooperative: boolean,
+): Promise<ImageData> {
   const input = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
   const output = context.createImageData(width, height);
+  const slice = captureWorkSlice();
   for (let y = 0; y < height; y++) {
     const sourceY = height - 1 - y;
     for (let x = 0; x < width; x++) {
@@ -729,10 +924,28 @@ function binaryImage(
       output.data[destination + 2] = alpha ? input[source + 2] : 0;
       output.data[destination + 3] = alpha;
     }
+    await yieldCaptureWorkIfNeeded(cooperative, slice);
   }
   return output;
 }
 
+interface CaptureWorkSlice {
+  startedAt: number;
+}
+
+function captureWorkSlice(): CaptureWorkSlice {
+  return { startedAt: performance.now() };
+}
+
+async function yieldCaptureWorkIfNeeded(
+  cooperative: boolean,
+  slice: CaptureWorkSlice,
+): Promise<void> {
+  if (!cooperative || performance.now() - slice.startedAt < RUNTIME_CAPTURE_FRAME_BUDGET_MS) return;
+  await nextFrame();
+  slice.startedAt = performance.now();
+}
+
 function nextFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }

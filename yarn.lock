@@ -1113,6 +1113,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"astronomy-engine@npm:^2.1.19":
+  version: 2.1.19
+  resolution: "astronomy-engine@npm:2.1.19"
+  checksum: 10c0/585ee4a1fc220713660413369922f0be59ce287a4941364fb8072282b88c1bc366b6eda1a96e0b10057c8e135af5f74fb5b6de6cd6b3f8a0c7bb8f973f61db7b
+  languageName: node
+  linkType: hard
+
 "async-function@npm:^1.0.0":
   version: 1.0.0
   resolution: "async-function@npm:1.0.0"
@@ -1137,6 +1144,7 @@ __metadata:
     "@types/earcut": "npm:^3.0.0"
     "@types/node": "npm:^20.10.0"
     "@types/suncalc": "npm:^1.9.2"
+    astronomy-engine: "npm:^2.1.19"
     earcut: "npm:^3.2.3"
     html-webpack-plugin: "npm:^5.6.0"
     lerc: "npm:^4.2.0"

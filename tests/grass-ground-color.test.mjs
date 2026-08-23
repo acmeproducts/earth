@@ -12,8 +12,9 @@ const modelSource = readFileSync(
 test("grass instances inherit their local rendered ground color", () => {
   assert.match(fieldSource, /varyGroundColor\(/);
   assert.match(fieldSource, /landCoverSurfaceColor\(landCover\)/);
-  assert.match(fieldSource, /colors\.push\(\.\.\.grassGroundColorMultiplier/);
-  assert.match(fieldSource, /new Float32Array\(colors\)/);
+  assert.match(fieldSource, /const color = grassGroundColorMultiplier/);
+  assert.match(fieldSource, /addProceduralVariantPlacement\([\s\S]*?matrix,[\s\S]*?color/);
+  assert.match(fieldSource, /new Float32Array\(bucket\.colors\)/);
 });
 
 test("grass applies the tint consistently to models and impostors", () => {

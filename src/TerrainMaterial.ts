@@ -14,6 +14,7 @@ import {
   TERRAIN_NORMAL_LAYER,
 } from "./TerrainTextureData";
 import type { TerrainTextureData, TerrainTextureLayer } from "./TerrainTextureData";
+import { createCloudShadowTerrainMaterial } from "./CloudShadows";
 
 let cachedTextureData: TerrainTextureData | undefined;
 const sceneMaterials = new WeakMap<Scene, {
@@ -77,10 +78,11 @@ export function createTerrainMaterial(
   );
 
   const createMaterial = (usesLandCoverTint: boolean): StandardMaterial => {
-    const material = new StandardMaterial(
-      usesLandCoverTint ? "terrainMaterialTinted" : "terrainMaterialUntinted",
-      scene,
-    );
+    const name = usesLandCoverTint
+      ? "terrainMaterialTinted"
+      : "terrainMaterialUntinted";
+    const material = createCloudShadowTerrainMaterial(name, scene)
+      ?? new StandardMaterial(name, scene);
     material.diffuseTexture = albedo;
     material.bumpTexture = normal;
     // One extra sampler buys both the finest grain and its micro-relief: Babylon

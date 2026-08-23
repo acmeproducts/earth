@@ -6,7 +6,9 @@ import {
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  ImpostorAssetLease,
   ImpostorAssets,
+  ImpostorVariant,
 } from "./Impostor";
 import { createSeededRandom } from "./Random";
 
@@ -14,6 +16,10 @@ export type FernImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 1.2;
 const CAPTURE_DIAMETER = 2.7;
+
+export function fernRenderedCaptureSize(renderHeight: number): number {
+  return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
 const ROTATIONAL_SYMMETRY_ORDER = 8;
 const DARK_GREEN = new Color3(0.055, 0.18, 0.07);
 const MID_GREEN = new Color3(0.12, 0.34, 0.1);
@@ -22,7 +28,7 @@ const TIP_GREEN = new Color3(0.26, 0.5, 0.15);
 const fernImpostors = createImpostorAssetProvider({
   name: "fernImpostor",
   queryPrefix: "fern-impostor",
-  createSource: (scene) => createFernSource(scene),
+  createSource: (scene, variant) => createFernSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
   faces: AXISYMMETRIC_IMPOSTOR_FACES,
@@ -42,17 +48,25 @@ export function getFernImpostorAssets(
   horizontalSamples = fernImpostors.getDefaultSampling().horizontalSamples,
   verticalSamples = fernImpostors.getDefaultSampling().verticalSamples,
   resolution = fernImpostors.getDefaultSampling().resolution,
+  variant?: ImpostorVariant,
 ): Promise<FernImpostorAssets> {
   return fernImpostors.getAssets(scene, {
     horizontalSamples,
     verticalSamples,
     resolution,
-  });
+  }, variant);
+}
+
+export function acquireFernImpostorAssets(
+  scene: Scene,
+  variant: ImpostorVariant,
+): Promise<ImpostorAssetLease> {
+  return fernImpostors.acquireAssets(scene, undefined, variant);
 }
 
 /** Builds a radial clump of arched stems and paired, tapered fern leaflets. */
-function createFernSource(scene: Scene, liveLighting = false): Mesh {
-  const random = createSeededRandom(0x4645524e);
+function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e): Mesh {
+  const random = createSeededRandom(seed);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
@@ -69,7 +83,7 @@ function createFernSource(scene: Scene, liveLighting = false): Mesh {
     const rise = lowLayer
       ? 0.5 + random() * 0.18
       : 0.82 + random() * 0.18;
-    const rachisWidth = 0.012 + random() * 0.008;
+    const rachisWidth = 0.017 + random() * 0.01;
     const brightness = 0.82 + random() * 0.24;
 
     for (let copy = 0; copy < ROTATIONAL_SYMMETRY_ORDER; copy++) {
@@ -102,7 +116,7 @@ function createFernSource(scene: Scene, liveLighting = false): Mesh {
         // as ground-covering foliage instead of a narrow stem with a top fan.
         const fullness = Math.pow(Math.sin(Math.PI * t), 0.5) * (1 - t * 0.28);
         const leafletLength = (0.1 + reach * 0.2) * fullness;
-        const leafletWidth = (0.022 + leafletLength * 0.13) * fullness;
+        const leafletWidth = (0.034 + leafletLength * 0.2) * fullness;
         const center = centers[segment];
         const color = Color3.Lerp(MID_GREEN, TIP_GREEN, t * 0.72);
         addLeaflet(center, sideways, outward, leafletLength, leafletWidth, color, brightness);
@@ -161,8 +175,8 @@ function createFernSource(scene: Scene, liveLighting = false): Mesh {
 }
 
 /** Builds the captured fern clump as live geometry for nearby instances. */
-export function createFernModel(scene: Scene, renderHeight: number): Mesh {
-  const fern = createFernSource(scene, true);
+export function createFernModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
+  const fern = createFernSource(scene, true, seed);
   fern.name = "fernModels";
   const positions = fern.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Fern model has no position data.");

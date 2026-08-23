@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { register } from "node:module";
+
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   sampleWorldTreeSpecies,
   treeDistributionAt,
-} from "../src/TreeDistribution.ts";
+} = await import("../src/TreeDistribution.ts");
 
 test("returns normalized ratios for representative forest regions", () => {
   for (const [lon, lat] of [[-63, -4], [25, 0], [105, 10], [10, 50], [25, 65]]) {

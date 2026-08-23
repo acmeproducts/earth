@@ -15,7 +15,9 @@ import {
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
+  ImpostorAssetLease,
   ImpostorAssets,
+  ImpostorVariant,
 } from "./Impostor";
 
 export type TreeImpostorAssets = ImpostorAssets;
@@ -26,7 +28,10 @@ function createTreeProvider(species: TreeSpecies) {
   return createImpostorAssetProvider({
     name: `${species}TreeImpostor`,
     queryPrefix: species === "birch" ? "tree-impostor" : `${species}-tree-impostor`,
-    createSource: (scene) => tree.create(scene),
+    createSource: (scene, variant) => tree.create(
+      scene,
+      variant.seed === undefined ? undefined : { seed: variant.seed },
+    ),
     sourceHeight: tree.sourceHeight,
     captureDiameter: tree.captureDiameter,
     boundsPadding: 1.04,
@@ -52,6 +57,7 @@ export async function getTreeImpostorAssets(
   verticalSamples = treeImpostors.birch.getDefaultSampling().verticalSamples,
   resolution = treeImpostors.birch.getDefaultSampling().resolution,
   species: TreeSpecies = "birch",
+  variant?: ImpostorVariant,
 ): Promise<TreeImpostorAssets> {
   // The capture source is foliage geometry, so its cards need the leaf image's
   // proportions before this species is built and baked into an atlas.
@@ -60,7 +66,18 @@ export async function getTreeImpostorAssets(
     horizontalSamples,
     verticalSamples,
     resolution,
-  });
+  }, variant);
+}
+
+/** Acquires a regional tree atlas until its streamed field is disposed. */
+export async function acquireTreeImpostorAssets(
+  scene: Scene,
+  species: TreeSpecies,
+  variant: ImpostorVariant,
+  cooperative = true,
+): Promise<ImpostorAssetLease> {
+  await measureFoliageTextures();
+  return treeImpostors[species].acquireAssets(scene, undefined, variant, { cooperative });
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */
@@ -68,12 +85,14 @@ export async function createTreeModels(
   scene: Scene,
   renderHeight: number,
   species: TreeSpecies = "birch",
+  seed?: number,
 ): Promise<Mesh[]> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
   const tree = treeDefinition.create(scene, {
     name: `${species}TreeModels`,
     liveLighting: true,
+    ...(seed === undefined ? {} : { seed }),
   });
   const positions = tree.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Procedural tree has no position data.");

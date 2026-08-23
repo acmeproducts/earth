@@ -12,6 +12,14 @@ const volumeSource = readFileSync(
   new URL("../src/CloudVolumeCapture.ts", import.meta.url),
   "utf8",
 );
+const shadowSource = readFileSync(
+  new URL("../src/CloudShadows.ts", import.meta.url),
+  "utf8",
+);
+const terrainMaterialSource = readFileSync(
+  new URL("../src/TerrainMaterial.ts", import.meta.url),
+  "utf8",
+);
 
 test("cloud cells generate stable field-space placements", () => {
   const placements = cloudPlacementsAround(3, -2, 10_000, 50, 42);
@@ -74,11 +82,19 @@ test("clouds share one altitude and form broad banks", () => {
   assert.equal(new Set(placements.map((cloud) => cloud.y)).size, 1);
   const weather = cloudWeatherForSeed(42);
   assert.ok(placements.every(
-    (cloud) => cloud.width * metersPerUnit >= 10_000 * weather.sizeScale,
+    (cloud) => cloud.width * metersPerUnit >= 9_000 * weather.sizeScale,
   ));
   assert.ok(placements.every(
-    (cloud) => cloud.height * metersPerUnit >= 3_000 * weather.sizeScale,
+    (cloud) => cloud.height * metersPerUnit >= 9_000 / 2.15 * weather.sizeScale,
   ));
+  assert.ok(placements.every((cloud) => {
+    const aspectRatio = cloud.width / cloud.height;
+    return aspectRatio >= 1.65 && aspectRatio <= 2.15;
+  }));
+  assert.ok(placements.every((cloud) => cloud.y * metersPerUnit === 7_000));
+  assert.ok(placements.every((cloud) => (
+    cloud.depth / cloud.width >= 0.42 && cloud.depth / cloud.width <= 0.62
+  )));
 });
 
 test("volume capture retains continuous density for runtime blending", () => {
@@ -115,7 +131,14 @@ test("cloud impostors blend captured density without screen-space dithering", ()
   assert.match(source, /gl_FragColor = vec4\([\s\S]*?, coverage\)/);
   assert.match(source, /mesh\.thinInstanceSetBuffer\("matrix"/);
   assert.match(source, /mesh\.thinInstanceSetBuffer\("cloudMirror"/);
-  assert.match(source, /mod\(variant, atlasColumns\)/);
+  assert.match(source, /mod\(tileIndex, atlasColumns\)/);
+});
+
+test("cloud impostors blend adjacent azimuth captures for 3D view changes", () => {
+  assert.match(volumeSource, /CLOUD_VIEW_COUNT = 8/);
+  assert.match(volumeSource, /variant \* CLOUD_VIEW_COUNT \+ view/);
+  assert.match(source, /atan\(vViewDirection\.x, vViewDirection\.z\)/);
+  assert.match(source, /sampleCloudDensity\(variant, firstView \+ 1\.0\)/);
 });
 
 test("cloud visibility is independent from the streamed terrain fog", () => {
@@ -138,4 +161,22 @@ test("the cloud field drifts together in the prevailing wind", () => {
   assert.match(source, /mesh\.position\.set\(driftX, 0, driftZ\)/);
   assert.match(source, /cameraPosition\.x - driftX/);
   assert.match(source, /cameraPosition\.z - driftZ/);
+});
+
+test("cloud shadows project the nearest top-down impostors onto terrain", () => {
+  assert.match(volumeSource, /generateCloudShadowAtlasData/);
+  assert.match(shadowSource, /TERRAIN_CLOUD_SHADOW_COUNT = 4/);
+  assert.match(shadowSource, /cloud\.x \+ driftX - sunDirection\.x \* projectionDistance/);
+  assert.match(shadowSource, /smoothstep\(0\.04, 0\.18, sunDirection\.y\)/);
+  assert.match(shadowSource, /1 \/ candidate\.cloud\.width/);
+  assert.doesNotMatch(shadowSource, /RenderTargetTexture/);
+  assert.doesNotMatch(shadowSource, /ShadowGenerator/);
+});
+
+test("terrain samples nearby cloud density directly in world space", () => {
+  assert.match(terrainMaterialSource, /createCloudShadowTerrainMaterial/);
+  assert.match(shadowSource, /vCloudShadowWorldXZ = worldPos\.xz/);
+  assert.match(shadowSource, /sampleProjectedCloudShadow/);
+  assert.match(shadowSource, /texture2D\([\s\S]*?cloudShadowAtlas/);
+  assert.match(shadowSource, /cloudShadowCoverage \* cloudShadowLighting\.x \* 0\.52/);
 });

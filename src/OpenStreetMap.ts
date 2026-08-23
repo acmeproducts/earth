@@ -11,6 +11,7 @@ import {
   TransformNode,
   Vector2,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
@@ -43,8 +44,10 @@ import {
 import {
   planRoad,
   RoadPlan,
+  RoadSurface,
   RoadVisualStyle,
 } from "./RoadPlanner";
+import { conformTerrainToRoads as stampRoadTerrain } from "./RoadTerrain";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 
@@ -58,8 +61,15 @@ export interface MapTile {
 const MINIMUM_LAKE_ELEVATION_METERS = SEA_LEVEL_METERS + 1;
 /** Enough separation to avoid z-fighting without making roads hover. */
 const ROAD_SURFACE_CLEARANCE_METERS = 0.025;
+const ROAD_SHOULDER_CLEARANCE_METERS = 0.012;
+const BRIDGE_DECK_THICKNESS_METERS = 0.32;
+const BRIDGE_EDGE_WIDTH_METERS = 0.45;
+const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
+const BRIDGE_WATER_CLEARANCE_METERS = 3;
 const WATERWAY_SURFACE_CLEARANCE_METERS = 0.08;
 const ROAD_TEXTURE_SIZE = 64;
+
+type RoadMaterialStyle = RoadVisualStyle | "pavedShoulder" | "unpavedShoulder" | "bridgeDeck";
 
 interface RoadSource {
   id: string;
@@ -138,6 +148,21 @@ export interface MapFeatureLayer {
   counts: { buildings: number; roads: number; water: number };
 }
 
+interface CreatedRoad {
+  surfaces: Mesh[];
+  shoulders: Mesh[];
+  bridgeDecks: Mesh[];
+  paths: Array<Array<{ x: number; z: number }>>;
+}
+
+interface RoadJunctionCandidate {
+  sourceId: string;
+  point: { x: number; z: number };
+  halfWidth: number;
+  layer: number;
+  visualStyle: RoadVisualStyle;
+}
+
 export interface BuildingFeatureLayer {
   root: TransformNode;
   meshes: Mesh[];
@@ -179,7 +204,14 @@ export class OpenStreetMap {
       paved: [],
       pedestrian: [],
       unpaved: [],
+      ford: [],
     };
+    const roadShoulders: Record<RoadSurface, Mesh[]> = {
+      paved: [],
+      unpaved: [],
+    };
+    const bridgeDecks: Mesh[] = [];
+    const junctionCandidates: RoadJunctionCandidate[] = [];
     const water: Mesh[] = [];
     const waterways: Mesh[] = [];
 
@@ -199,7 +231,24 @@ export class OpenStreetMap {
         if (!appearance || appearance.isTunnel) continue;
         const target = roadMeshes[appearance.visualStyle];
         for (const line of source.paths) {
-          target.push(...createRoad(scene, line, terrain, options, appearance));
+          const created = createRoad(scene, line, terrain, options, appearance);
+          target.push(...created.surfaces);
+          roadShoulders[appearance.surface].push(...created.shoulders);
+          bridgeDecks.push(...created.bridgeDecks);
+          if (appearance.structure === "surface" || appearance.structure === "ford") {
+            for (const path of created.paths) {
+              if (path.length < 2) continue;
+              for (const point of [path[0], path[path.length - 1]]) {
+                junctionCandidates.push({
+                  sourceId: source.id,
+                  point,
+                  halfWidth: appearance.widthMeters / options.metersPerUnit / 2,
+                  layer: appearance.layer,
+                  visualStyle: appearance.visualStyle,
+                });
+              }
+            }
+          }
         }
       }
       await yieldControl?.();
@@ -234,12 +283,25 @@ export class OpenStreetMap {
       await yieldControl?.();
     }
 
+    for (const junction of createRoadJunctions(
+      scene,
+      junctionCandidates,
+      terrain,
+      options,
+    )) {
+      roadMeshes[junction.visualStyle].push(junction.mesh);
+    }
+
     const meshes = [
       ProceduralBuildingRenderer.merge(buildings, "buildings", root),
+      mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
+      mergeRoads(roadShoulders.unpaved, "unpavedRoadShoulders", "unpavedShoulder", root),
+      mergeRoads(bridgeDecks, "bridgeDecks", "bridgeDeck", root),
       mergeRoads(roadMeshes.marked, "markedRoads", "marked", root),
       mergeRoads(roadMeshes.paved, "pavedRoads", "paved", root),
       mergeRoads(roadMeshes.pedestrian, "pedestrianRoads", "pedestrian", root),
       mergeRoads(roadMeshes.unpaved, "unpavedRoads", "unpaved", root),
+      mergeRoads(roadMeshes.ford, "fordRoads", "ford", root),
       mergeWaterways(waterways, root, options),
       ...styleLakeSurfaces(water, root, options),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
@@ -299,7 +361,9 @@ export class OpenStreetMap {
       for (const source of roadSources(tile)) {
         const appearance = planRoad(source.properties);
         if (!appearance || appearance.isTunnel) continue;
-        const halfWidth = appearance.widthMeters / options.metersPerUnit / 2;
+        const halfWidth = (
+          appearance.widthMeters / 2 + appearance.shoulderWidthMeters
+        ) / options.metersPerUnit;
         for (const coordinates of source.paths) {
           const points = coordinates.map(([lon, lat]) =>
             lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
@@ -312,6 +376,40 @@ export class OpenStreetMap {
       await yieldControl?.();
     }
     return new RoadExclusionMask(segments, Math.max(0.25, 20 / options.metersPerUnit));
+  }
+
+  static async conformTerrainToRoads(
+    tiles: MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    yieldControl?: () => Promise<void>,
+  ): Promise<number> {
+    const paths = [];
+    for (const tile of tiles) {
+      for (const source of roadSources(tile)) {
+        const appearance = planRoad(source.properties);
+        if (!appearance || appearance.isTunnel || appearance.structure === "bridge") continue;
+        for (const coordinates of source.paths) {
+          const scenePoints = coordinates.map(([lon, lat]) =>
+            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
+          );
+          for (const points of clipPolyline(
+            scenePoints,
+            options.meshWidth / 2,
+            options.meshDepth / 2,
+          )) {
+            paths.push({
+              points,
+              widthMeters: appearance.widthMeters,
+              shoulderWidthMeters: appearance.shoulderWidthMeters,
+              structure: appearance.structure,
+            });
+          }
+        }
+      }
+      await yieldControl?.();
+    }
+    return stampRoadTerrain(terrain, paths, options, yieldControl);
   }
 
   static createLandCoverSampler(
@@ -517,12 +615,12 @@ function createRoad(
   terrain: TerrainData,
   options: MapLayerOptions,
   appearance: RoadPlan,
-): Mesh[] {
+): CreatedRoad {
   const points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
   );
   const halfWidth = appearance.widthMeters / options.metersPerUnit / 2;
-  const paths = clipPolyline(
+  const clippedPaths = clipPolyline(
     points,
     options.meshWidth / 2,
     options.meshDepth / 2,
@@ -531,16 +629,48 @@ function createRoad(
     options.meshWidth / Math.max(1, terrain.width - 1),
     options.meshDepth / Math.max(1, terrain.height - 1),
   ) / 2;
-  return paths.flatMap((path) =>
-    createRoadMeshes(
+  const paths = clippedPaths.map((path) => resamplePath(path, sampleSpacing));
+  const surfaces: Mesh[] = [];
+  const shoulders: Mesh[] = [];
+  const bridgeDecks: Mesh[] = [];
+  for (const path of paths) {
+    const bridgeElevations = appearance.structure === "bridge"
+      ? bridgeElevationProfile(path, terrain, options)
+      : undefined;
+    surfaces.push(...createRoadMeshes(
       scene,
-      resamplePath(path, sampleSpacing),
+      path,
       terrain,
       options,
       halfWidth,
       appearance.visualStyle,
-    )
-  );
+      ROAD_SURFACE_CLEARANCE_METERS,
+      bridgeElevations,
+    ));
+    if (bridgeElevations) {
+      bridgeDecks.push(...createRoadMeshes(
+        scene,
+        path,
+        terrain,
+        options,
+        halfWidth + BRIDGE_EDGE_WIDTH_METERS / options.metersPerUnit,
+        "paved",
+        -BRIDGE_DECK_THICKNESS_METERS,
+        bridgeElevations,
+      ));
+    } else {
+      shoulders.push(...createRoadMeshes(
+        scene,
+        path,
+        terrain,
+        options,
+        halfWidth + appearance.shoulderWidthMeters / options.metersPerUnit,
+        appearance.surface,
+        ROAD_SHOULDER_CLEARANCE_METERS,
+      ));
+    }
+  }
+  return { surfaces, shoulders, bridgeDecks, paths };
 }
 
 function createRoadMeshes(
@@ -550,6 +680,8 @@ function createRoadMeshes(
   options: MapLayerOptions,
   halfWidth: number,
   visualStyle: RoadVisualStyle,
+  clearanceMeters: number,
+  centerElevations?: readonly number[],
 ): Mesh[] {
   const meshes: Mesh[] = [];
   let left: Vector3[] = [];
@@ -572,33 +704,176 @@ function createRoadMeshes(
     const length = Math.hypot(dx, dz) || 1;
     const offsetX = (-dz / length) * halfWidth;
     const offsetZ = (dx / length) * halfWidth;
-    const leftElevation = sampleElevation(
-      terrain,
-      points[index].x + offsetX,
-      points[index].z + offsetZ,
-      options.meshWidth,
-      options.meshDepth,
-    );
-    const rightElevation = sampleElevation(
-      terrain,
-      points[index].x - offsetX,
-      points[index].z - offsetZ,
-      options.meshWidth,
-      options.meshDepth,
-    );
+    const leftElevation = centerElevations?.[index] ?? sampleElevation(
+        terrain,
+        points[index].x + offsetX,
+        points[index].z + offsetZ,
+        options.meshWidth,
+        options.meshDepth,
+      );
+    const rightElevation = centerElevations?.[index] ?? sampleElevation(
+        terrain,
+        points[index].x - offsetX,
+        points[index].z - offsetZ,
+        options.meshWidth,
+        options.meshDepth,
+      );
     left.push(new Vector3(
       points[index].x + offsetX,
-      (leftElevation + ROAD_SURFACE_CLEARANCE_METERS) / options.metersPerUnit,
+      (leftElevation + clearanceMeters) / options.metersPerUnit,
       points[index].z + offsetZ,
     ));
     right.push(new Vector3(
       points[index].x - offsetX,
-      (rightElevation + ROAD_SURFACE_CLEARANCE_METERS) / options.metersPerUnit,
+      (rightElevation + clearanceMeters) / options.metersPerUnit,
       points[index].z - offsetZ,
     ));
   }
   finishPath();
   return meshes;
+}
+
+function bridgeElevationProfile(
+  points: readonly { x: number; z: number }[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+): number[] {
+  if (points.length === 0) return [];
+  const observations = points.map((point) => {
+    const ground = sampleElevation(
+      terrain,
+      point.x,
+      point.z,
+      options.meshWidth,
+      options.meshDepth,
+    );
+    const water = sampleTerrainWaterMask(
+      terrain,
+      point.x,
+      point.z,
+      options.meshWidth,
+      options.meshDepth,
+    ) || ground <= SEA_LEVEL_METERS;
+    const obstacle = water && options.lakeElevationSource
+      ? sampleElevation(
+        terrain,
+        point.x,
+        point.z,
+        options.meshWidth,
+        options.meshDepth,
+        options.lakeElevationSource,
+      )
+      : ground;
+    return { obstacle, clearance: water ? BRIDGE_WATER_CLEARANCE_METERS : BRIDGE_TERRAIN_CLEARANCE_METERS };
+  });
+  const startElevation = observations[0].obstacle;
+  const endElevation = observations[observations.length - 1].obstacle;
+  const baseline = observations.map((_, index) => {
+    const amount = index / Math.max(1, observations.length - 1);
+    return startElevation + (endElevation - startElevation) * amount;
+  });
+  const lift = observations.reduce(
+    (maximum, observation, index) =>
+      Math.max(maximum, observation.obstacle + observation.clearance - baseline[index]),
+    0,
+  );
+  return baseline.map((elevation) => elevation + lift);
+}
+
+function sampleTerrainWaterMask(
+  terrain: TerrainData,
+  x: number,
+  z: number,
+  meshWidth: number,
+  meshDepth: number,
+): boolean {
+  if (!terrain.waterMask) return false;
+  const u = x / meshWidth + 0.5;
+  const v = 0.5 - z / meshDepth;
+  if (u < 0 || u > 1 || v < 0 || v > 1) return false;
+  const column = Math.round(u * (terrain.width - 1));
+  const row = Math.round(v * (terrain.height - 1));
+  return terrain.waterMask[row * terrain.width + column] === 1;
+}
+
+function createRoadJunctions(
+  scene: Scene,
+  candidates: readonly RoadJunctionCandidate[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+): Array<{ mesh: Mesh; visualStyle: RoadVisualStyle }> {
+  const tolerance = Math.max(1e-6, 0.25 / options.metersPerUnit);
+  const groups = new Map<string, RoadJunctionCandidate[]>();
+  for (const candidate of candidates) {
+    const key = [
+      Math.round(candidate.point.x / tolerance),
+      Math.round(candidate.point.z / tolerance),
+      candidate.layer,
+    ].join("/");
+    const group = groups.get(key);
+    if (group) group.push(candidate);
+    else groups.set(key, [candidate]);
+  }
+
+  const clipBounds = {
+    minX: -options.meshWidth / 2,
+    maxX: options.meshWidth / 2,
+    minZ: -options.meshDepth / 2,
+    maxZ: options.meshDepth / 2,
+  };
+  const junctions: Array<{ mesh: Mesh; visualStyle: RoadVisualStyle }> = [];
+  for (const group of groups.values()) {
+    if (new Set(group.map((candidate) => candidate.sourceId)).size < 2) continue;
+    const center = group[0].point;
+    const radius = Math.max(...group.map((candidate) => candidate.halfWidth)) +
+      0.08 / options.metersPerUnit;
+    const circle = Array.from({ length: 16 }, (_, index) => {
+      const angle = index / 16 * Math.PI * 2;
+      return {
+        x: center.x + Math.cos(angle) * radius,
+        z: center.z + Math.sin(angle) * radius,
+      };
+    });
+    const clipped = clipPolygon(circle, clipBounds);
+    if (clipped.length < 3) continue;
+    if (signedArea(clipped) < 0) clipped.reverse();
+    const mesh = new PolygonMeshBuilder(
+      "roadJunction",
+      clipped.map(({ x, z }) => new Vector2(x, z)),
+      scene,
+      earcut,
+    ).build(true);
+    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+    if (!positions) {
+      mesh.dispose();
+      continue;
+    }
+    for (let index = 0; index < positions.length; index += 3) {
+      positions[index + 1] = (
+        sampleElevation(
+          terrain,
+          positions[index],
+          positions[index + 2],
+          options.meshWidth,
+          options.meshDepth,
+        ) + ROAD_SURFACE_CLEARANCE_METERS
+      ) / options.metersPerUnit;
+    }
+    mesh.updateVerticesData(VertexBuffer.PositionKind, positions);
+    mesh.refreshBoundingInfo();
+    junctions.push({
+      mesh: stageMapMesh(mesh),
+      visualStyle: junctionVisualStyle(group),
+    });
+  }
+  return junctions;
+}
+
+function junctionVisualStyle(candidates: readonly RoadJunctionCandidate[]): RoadVisualStyle {
+  if (candidates.some((candidate) => candidate.visualStyle === "ford")) return "ford";
+  if (candidates.every((candidate) => candidate.visualStyle === "unpaved")) return "unpaved";
+  if (candidates.every((candidate) => candidate.visualStyle === "pedestrian")) return "pedestrian";
+  return "paved";
 }
 
 function createWaterway(
@@ -676,7 +951,7 @@ function roadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "unpaved" ? 1.5 : 4;
+  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford" ? 1.5 : 4;
   const leftUvs = [new Vector2(0, 0)];
   const rightUvs = [new Vector2(0, 1)];
   let distanceMeters = 0;
@@ -885,7 +1160,7 @@ function quantile(values: number[], amount: number): number {
 function mergeRoads(
   meshes: Mesh[],
   name: string,
-  visualStyle: RoadVisualStyle,
+  visualStyle: RoadMaterialStyle,
   parent: TransformNode,
 ): Mesh | undefined {
   if (meshes.length === 0) return undefined;
@@ -918,22 +1193,28 @@ function mergeWaterways(
   result.parent = parent;
   return result;
 }
-function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadVisualStyle): StandardMaterial {
+function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMaterialStyle): StandardMaterial {
   const material = new StandardMaterial(`${name}Material`, scene);
-  material.diffuseColor = visualStyle === "unpaved"
-    ? new Color3(0.46, 0.39, 0.28)
-    : visualStyle === "marked"
-      ? new Color3(0.72, 0.72, 0.68)
-      : visualStyle === "pedestrian"
-        ? new Color3(0.38, 0.36, 0.33)
-        : new Color3(0.2, 0.21, 0.2);
-  material.specularColor = visualStyle === "unpaved"
+  switch (visualStyle) {
+    case "unpaved": material.diffuseColor = new Color3(0.46, 0.39, 0.28); break;
+    case "marked": material.diffuseColor = new Color3(0.72, 0.72, 0.68); break;
+    case "pedestrian": material.diffuseColor = new Color3(0.38, 0.36, 0.33); break;
+    case "ford": material.diffuseColor = new Color3(0.28, 0.32, 0.31); break;
+    case "pavedShoulder": material.diffuseColor = new Color3(0.3, 0.29, 0.27); break;
+    case "unpavedShoulder": material.diffuseColor = new Color3(0.4, 0.34, 0.25); break;
+    case "bridgeDeck": material.diffuseColor = new Color3(0.16, 0.17, 0.17); break;
+    default: material.diffuseColor = new Color3(0.2, 0.21, 0.2); break;
+  }
+  const looseSurface = visualStyle === "unpaved" || visualStyle === "unpavedShoulder";
+  material.specularColor = looseSurface
     ? new Color3(0.008, 0.008, 0.006)
-    : new Color3(0.018, 0.02, 0.018);
-  material.specularPower = visualStyle === "unpaved" ? 8 : 20;
+    : visualStyle === "ford"
+      ? new Color3(0.08, 0.09, 0.085)
+      : new Color3(0.018, 0.02, 0.018);
+  material.specularPower = looseSurface ? 8 : visualStyle === "ford" ? 48 : 20;
   const texture = createRoadTexture(scene, `${name}Texture`, visualStyle, true);
   material.diffuseTexture = texture;
-  if (visualStyle === "unpaved") {
+  if (looseSurface) {
     const relief = createRoadTexture(scene, `${name}Relief`, visualStyle, false);
     relief.level = 0.42;
     material.bumpTexture = relief;
@@ -945,7 +1226,7 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadVisualS
 function createRoadTexture(
   scene: Scene,
   name: string,
-  visualStyle: RoadVisualStyle,
+  visualStyle: RoadMaterialStyle,
   gammaSpace: boolean,
 ): RawTexture {
   const pixels = new Uint8Array(ROAD_TEXTURE_SIZE * ROAD_TEXTURE_SIZE * 4);
@@ -961,11 +1242,17 @@ function createRoadTexture(
         ? 235
         : visualStyle === "marked"
           ? 55 + Math.round((fine - 0.5) * 10)
-          : visualStyle === "unpaved"
+          : visualStyle === "unpaved" || visualStyle === "unpavedShoulder"
             ? 150 + Math.round((fine - 0.5) * 70 + (coarse - 0.5) * 34)
             : visualStyle === "pedestrian"
               ? 185 + Math.round((fine - 0.5) * 18 + (coarse - 0.5) * 8)
-              : 175 + Math.round((fine - 0.5) * 24);
+              : visualStyle === "ford"
+                ? 132 + Math.round((fine - 0.5) * 28 + (coarse - 0.5) * 12)
+                : visualStyle === "pavedShoulder"
+                  ? 148 + Math.round((fine - 0.5) * 28 + (coarse - 0.5) * 10)
+                  : visualStyle === "bridgeDeck"
+                    ? 118 + Math.round((fine - 0.5) * 16)
+                    : 175 + Math.round((fine - 0.5) * 24);
       pixels[offset] = value;
       pixels[offset + 1] = value;
       pixels[offset + 2] = value;

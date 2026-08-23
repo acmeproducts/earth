@@ -38,7 +38,7 @@ test("drapes roads at a meter-scale clearance", () => {
   assert.match(openStreetMap, /const ROAD_SURFACE_CLEARANCE_METERS = 0\.025/);
   assert.match(
     openStreetMap,
-    /\(leftElevation \+ ROAD_SURFACE_CLEARANCE_METERS\) \/ options\.metersPerUnit/,
+    /\(leftElevation \+ clearanceMeters\) \/ options\.metersPerUnit/,
   );
   assert.doesNotMatch(openStreetMap, /leftElevation \/ options\.metersPerUnit \+ 0\.025/);
 });
@@ -51,7 +51,17 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.marked, "markedRoads", "marked"/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.pedestrian, "pedestrianRoads", "pedestrian"/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.unpaved, "unpavedRoads", "unpaved"/);
+  assert.match(openStreetMap, /mergeRoads\(roadMeshes\.ford, "fordRoads", "ford"/);
+  assert.match(openStreetMap, /mergeRoads\(roadShoulders\.paved, "pavedRoadShoulders", "pavedShoulder"/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
+});
+
+test("profiles bridges independently and closes shared road endpoints", () => {
+  assert.match(openStreetMap, /function bridgeElevationProfile/);
+  assert.match(openStreetMap, /BRIDGE_WATER_CLEARANCE_METERS = 3/);
+  assert.match(openStreetMap, /mergeRoads\(bridgeDecks, "bridgeDecks", "bridgeDeck"/);
+  assert.match(openStreetMap, /function createRoadJunctions/);
+  assert.match(openStreetMap, /new PolygonMeshBuilder\(\s*"roadJunction"/);
 });
 
 test("renders permanent mapped waterways as terrain-following water ribbons", () => {

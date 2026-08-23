@@ -1,11 +1,11 @@
 export const CLOUD_CELL_SIZE_METERS = 8_000;
 export const CLOUD_VARIANT_COUNT = 8;
 
-const CLOUD_ALTITUDE_METERS = 5_000;
-const CLOUD_WIDTH_MIN_METERS = 10_000;
-const CLOUD_WIDTH_MAX_METERS = 18_000;
-const CLOUD_HEIGHT_MIN_METERS = 3_000;
-const CLOUD_HEIGHT_MAX_METERS = 5_000;
+const CLOUD_ALTITUDE_METERS = 7_000;
+const CLOUD_WIDTH_MIN_METERS = 9_000;
+const CLOUD_WIDTH_MAX_METERS = 15_000;
+const CLOUD_ASPECT_RATIO_MIN = 1.65;
+const CLOUD_ASPECT_RATIO_MAX = 2.15;
 
 export type CloudWeatherKind = "clear" | "sparse" | "scattered" | "dense";
 
@@ -33,6 +33,7 @@ export interface CloudPlacement {
   z: number;
   width: number;
   height: number;
+  depth: number;
   variant: number;
   mirrored: boolean;
 }
@@ -68,7 +69,7 @@ export function cloudPlacementsAround(
         cloudRandom(cellX, cellZ, weatherSeed, 3),
         cloudRandom(cellX, cellZ, weatherSeed, 6),
       );
-      const heightVariation = average(
+      const aspectVariation = average(
         cloudRandom(cellX, cellZ, weatherSeed, 4),
         cloudRandom(cellX, cellZ, weatherSeed, 7),
       );
@@ -77,17 +78,23 @@ export function cloudPlacementsAround(
         CLOUD_WIDTH_MAX_METERS,
         widthVariation,
       ) * weather.sizeScale;
-      const height = lerp(
-        CLOUD_HEIGHT_MIN_METERS,
-        CLOUD_HEIGHT_MAX_METERS,
-        heightVariation,
-      ) * weather.sizeScale;
+      const aspectRatio = lerp(
+        CLOUD_ASPECT_RATIO_MIN,
+        CLOUD_ASPECT_RATIO_MAX,
+        aspectVariation,
+      );
+      const height = width / aspectRatio;
       placements.push({
         x: xMeters / metersPerUnit,
         y: CLOUD_ALTITUDE_METERS / metersPerUnit,
         z: zMeters / metersPerUnit,
         width: width / metersPerUnit,
         height: height / metersPerUnit,
+        depth: width * lerp(
+          0.42,
+          0.62,
+          cloudRandom(cellX, cellZ, weatherSeed, 9),
+        ) / metersPerUnit,
         variant: Math.floor(
           cloudRandom(cellX, cellZ, weatherSeed, 5) * CLOUD_VARIANT_COUNT,
         ),

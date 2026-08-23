@@ -17,15 +17,16 @@ import {
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import type { TerrainData } from "./TerrainData";
 import {
+  acquireTreeImpostorAssets,
   createTreeModels,
   getTreeImpostorAssets,
   TREE_IMPOSTOR_FACES,
 } from "./TreeImpostor";
-import { ImpostorAssets } from "./Impostor";
+import { ImpostorAssets, ImpostorVariant } from "./Impostor";
 import {
+  combineVegetationFieldResults,
   createVegetationFieldResult,
   VegetationFieldResult,
-  VegetationLodDebugStats,
 } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
 import { createSeededRandom } from "./Random";
@@ -59,10 +60,16 @@ import {
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
 } from "./Wind";
+import { proceduralVariantAtLocation } from "./ProceduralRegions";
+import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
 const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
+/** Avoid baking a full atlas for a barely represented transition tail. */
+const MIN_TREE_VARIANT_SHARE = 0.08;
+/** A local forest reads more coherently and needs fewer atlases with a focused palette. */
+const MAX_TREE_SPECIES_PER_VARIANT = 3;
 const METERS_PER_DEGREE = 111_320;
 const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   acacia: 0.92,
@@ -105,6 +112,12 @@ interface TreeFieldOptions extends VegetationPlacementOptions {
    * one) so groves continue seamlessly across streamed tile boundaries.
    */
   speciesSeed?: number;
+}
+
+interface TreeVariantBucket {
+  species: TreeSpecies;
+  variant: ImpostorVariant;
+  matrices: Matrix[];
 }
 
 export const impostorVertexShader = `
@@ -507,6 +520,7 @@ export async function createTreeField(
     meshDepth,
     metersPerUnit,
     seed = 0x4f534c4f,
+    modelVariantSeed = DEFAULT_WORLD_SEED,
     spacingMeters = DEFAULT_TREE_SPACING_METERS,
     occupancy = 0.52,
     edgeOccupancy = 0.12,
@@ -521,6 +535,7 @@ export async function createTreeField(
     elevationSampler,
     densityScale,
     yieldControl,
+    impostorCaptureMode = "cooperative",
     startDisabled = false,
     speciesSeed = seed,
     renderHeightMeters = 11,
@@ -544,9 +559,7 @@ export async function createTreeField(
     return definition.captureDiameter * treeHeight / definition.sourceHeight;
   })) * 0.55;
   const matrices: Matrix[] = [];
-  const speciesMatrices = Object.fromEntries(
-    TREE_SPECIES_LIST.map((species) => [species, [] as Matrix[]]),
-  ) as Record<TreeSpecies, Matrix[]>;
+  let variantBuckets = new Map<string, TreeVariantBucket>();
 
   if (landCover) {
     const forestMask = new Uint8Array(rows * columns);
@@ -633,33 +646,54 @@ export async function createTreeField(
           ),
         );
         matrices.push(matrix);
-        speciesMatrices[species].push(matrix);
+        const region = proceduralVariantAtLocation(
+          "trees",
+          location.lon,
+          location.lat,
+          modelVariantSeed,
+        );
+        const variant = { ...region, seed: layerSeed(region.seed, species) };
+        const bucketKey = `${species}:${variant.key}`;
+        let bucket = variantBuckets.get(bucketKey);
+        if (!bucket) {
+          bucket = { species, variant, matrices: [] };
+          variantBuckets.set(bucketKey, bucket);
+        }
+        bucket.matrices.push(matrix);
       }
       await yieldControl?.();
     }
   }
 
+  variantBuckets = consolidateTreeVariantBuckets(variantBuckets);
+
   // Only species that placement actually encountered in this lon/lat tile get
   // model geometry and an impostor capture. This avoids global up-front atlases.
-  const speciesList = TREE_SPECIES_LIST.filter((species) => speciesMatrices[species].length > 0);
-  const speciesResources: Array<{
+  const resources: Array<{
+    bucket: TreeVariantBucket;
     prototype: ImpostorPrototype;
     modelMeshes: Mesh[];
   }> = [];
   // Impostor capture temporarily installs an orthographic scene camera. Capture
   // species one at a time so each pass restores the real gameplay camera.
-  for (const species of speciesList) {
+  for (const bucket of variantBuckets.values()) {
+    const { species, variant } = bucket;
+    const suffix = `${species}-${variant.key.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
     const prototype = await createTreeImpostorPrototype(
       scene,
       treeHeight,
-      `${prototypeNamePrefix}-${species}`,
+      `${prototypeNamePrefix}-${suffix}`,
       species,
+      variant,
+      impostorCaptureMode === "cooperative",
     );
     prototype.root.parent = root;
     if (prototype.mesh.material instanceof ShaderMaterial) {
       prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
     }
-    const modelMeshes = includeModels ? await createTreeModels(scene, treeHeight, species) : [];
+    const modelMeshes = includeModels
+      ? await createTreeModels(scene, treeHeight, species, variant.seed)
+      : [];
     modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
     const modelMaterials = new Set(
       modelMeshes.map((mesh) => mesh.material).filter((material) => material !== null),
@@ -667,19 +701,13 @@ export async function createTreeField(
     prototype.root.onDisposeObservable.add(() => {
       modelMaterials.forEach((material) => material.dispose(true, false));
     });
-    speciesResources.push({ prototype, modelMeshes });
+    resources.push({ bucket, prototype, modelMeshes });
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const packedSpeciesMatrices: Float32Array[] = [];
-  for (const species of speciesList) {
-    packedSpeciesMatrices.push(await packInstanceMatrices(speciesMatrices[species], yieldControl));
-  }
   const fields: VegetationFieldResult[] = [];
-  const shadowCasterMeshes: Mesh[] = [];
-  for (let index = 0; index < speciesResources.length; index++) {
-    const { prototype, modelMeshes } = speciesResources[index];
-    const ownMatrices = packedSpeciesMatrices[index];
+  for (const { bucket, prototype, modelMeshes } of resources) {
+    const ownMatrices = await packInstanceMatrices(bucket.matrices, yieldControl);
     const field = await createVegetationFieldResult(
       prototype.root,
       [prototype.mesh],
@@ -690,87 +718,95 @@ export async function createTreeField(
       undefined,
       yieldControl,
     );
-    field.shadowCasterMeshes.push(...createWebGPUTreeShadowCasters(
+    field.shadowCasterMeshes.push(...createTreeShadowCasters(
       scene,
       prototype.root,
       modelMeshes,
       ownMatrices,
-      speciesList[index],
+      bucket.species,
     ));
-    shadowCasterMeshes.push(...field.shadowCasterMeshes);
     fields.push(field);
     await yieldControl?.();
   }
-  const impostorMeshes = fields.flatMap((field) => field.impostorMeshes);
-  const modelMeshes = fields.flatMap((field) => field.modelMeshes);
-  return {
-    root,
-    meshes: [...impostorMeshes, ...modelMeshes],
-    impostorMeshes,
-    modelMeshes,
-    shadowCasterMeshes,
-    instanceMatrices: matrixData,
-    count: matrices.length,
-    setRenderMode: (mode) => fields.forEach((field) => field.setRenderMode(mode)),
-    setFade: (fade) => fields.forEach((field) => field.setFade(fade)),
-    prepareLod: async (cameraPosition, distanceMeters, prepareYieldControl) => {
-      let changed = false;
-      for (const field of fields) {
-        changed = await field.prepareLod(
-          cameraPosition,
-          distanceMeters,
-          prepareYieldControl,
-        ) || changed;
-      }
-      return changed;
-    },
-    updateLod: (cameraPosition, distanceMeters) => {
-      let changed = false;
-      fields.forEach((field) => {
-        changed = field.updateLod(cameraPosition, distanceMeters) || changed;
-      });
-      return changed;
-    },
-    consumeLodDebugStats: () => fields.reduce<VegetationLodDebugStats>(
-      (total, field) => {
-        const stats = field.consumeLodDebugStats();
-        total.totalInstances += stats.totalInstances;
-        total.updates += stats.updates;
-        total.processedInstances += stats.processedInstances;
-        total.peakProcessedInstances += stats.peakProcessedInstances;
-        total.currentGridCandidates += stats.currentGridCandidates;
-        total.currentTransitionInstances += stats.currentTransitionInstances;
-        total.membershipChanges += stats.membershipChanges;
-        total.fullRebuilds += stats.fullRebuilds;
-        return total;
-      },
-      {
-        totalInstances: 0,
-        updates: 0,
-        processedInstances: 0,
-        peakProcessedInstances: 0,
-        currentGridCandidates: 0,
-        currentTransitionInstances: 0,
-        membershipChanges: 0,
-        fullRebuilds: 0,
-      },
-    ),
-  };
+  return combineVegetationFieldResults(root, fields, matrixData);
 }
 
 /**
- * Reuses the procedural model geometry for native WebGPU shadow depth passes.
- * The shadow target toggles these meshes visible only for its render pass, so
- * they never enter the main camera draw while remaining valid scene meshes.
+ * Prevents tiny blend tails and low-probability biome species from each
+ * allocating a complete atlas. Matrices are retained and folded into the
+ * dominant compatible bucket, so consolidation never removes vegetation.
  */
-function createWebGPUTreeShadowCasters(
+function consolidateTreeVariantBuckets(
+  buckets: ReadonlyMap<string, TreeVariantBucket>,
+): Map<string, TreeVariantBucket> {
+  if (buckets.size <= 1) return new Map(buckets);
+
+  const variants = new Map<string, { variant: ImpostorVariant; count: number }>();
+  let total = 0;
+  for (const bucket of buckets.values()) {
+    total += bucket.matrices.length;
+    const existing = variants.get(bucket.variant.key);
+    if (existing) existing.count += bucket.matrices.length;
+    else variants.set(bucket.variant.key, {
+      variant: bucket.variant,
+      count: bucket.matrices.length,
+    });
+  }
+  const dominantVariant = [...variants.values()].reduce((left, right) => (
+    right.count > left.count ? right : left
+  ));
+  const retainedVariants = new Set(
+    [...variants.entries()]
+      .filter(([, value]) => value.count / total >= MIN_TREE_VARIANT_SHARE)
+      .map(([key]) => key),
+  );
+  retainedVariants.add(dominantVariant.variant.key);
+
+  const remapped = new Map<string, TreeVariantBucket>();
+  for (const bucket of buckets.values()) {
+    const variant = retainedVariants.has(bucket.variant.key)
+      ? bucket.variant
+      : dominantVariant.variant;
+    const key = `${bucket.species}:${variant.key}`;
+    const target = remapped.get(key);
+    if (target) target.matrices.push(...bucket.matrices);
+    else remapped.set(key, { species: bucket.species, variant, matrices: [...bucket.matrices] });
+  }
+
+  const byVariant = new Map<string, TreeVariantBucket[]>();
+  for (const bucket of remapped.values()) {
+    const group = byVariant.get(bucket.variant.key);
+    if (group) group.push(bucket);
+    else byVariant.set(bucket.variant.key, [bucket]);
+  }
+  const consolidated = new Map<string, TreeVariantBucket>();
+  for (const group of byVariant.values()) {
+    group.sort((left, right) => right.matrices.length - left.matrices.length);
+    const retained = group.slice(0, MAX_TREE_SPECIES_PER_VARIANT);
+    for (let index = MAX_TREE_SPECIES_PER_VARIANT; index < group.length; index++) {
+      retained[0].matrices.push(...group[index].matrices);
+    }
+    for (const bucket of retained) {
+      consolidated.set(`${bucket.species}:${bucket.variant.key}`, bucket);
+    }
+  }
+  return consolidated;
+}
+
+/**
+ * Reuses the procedural model geometry for stable tree shadow depth passes.
+ * The shadow target toggles these meshes visible only for its render pass, so
+ * they never enter the main camera draw. Their instance set does not follow
+ * visual LOD, which keeps tree shadows across the medium-distance detail ring.
+ */
+function createTreeShadowCasters(
   scene: Scene,
   root: TransformNode,
   modelMeshes: readonly Mesh[],
   matrices: Float32Array,
   species: TreeSpecies,
 ): Mesh[] {
-  if (!scene.getEngine().isWebGPU || modelMeshes.length === 0 || matrices.length === 0) return [];
+  if (modelMeshes.length === 0 || matrices.length === 0) return [];
 
   const material = new StandardMaterial(`treeShadow-${species}Material`, scene);
   material.disableLighting = true;
@@ -815,17 +851,36 @@ export async function createTreeImpostorPrototype(
   treeHeight: number,
   rootName = "treeImpostorPrototype",
   species: TreeSpecies = "birch",
+  variant?: ImpostorVariant,
+  cooperativeCapture = true,
 ): Promise<ImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
-  const assets = await getTreeImpostorAssets(scene, undefined, undefined, undefined, species);
-  const prototype = createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
-  if (prototype.mesh.material instanceof ShaderMaterial) {
-    prototype.mesh.material.setFloat(
-      "lowLightAlbedoScale",
-      TREE_LOW_LIGHT_BRIGHTNESS[species],
+  let lease: Awaited<ReturnType<typeof acquireTreeImpostorAssets>> | undefined;
+  try {
+    lease = variant
+      ? await acquireTreeImpostorAssets(scene, species, variant, cooperativeCapture)
+      : undefined;
+    const assets = lease?.assets ?? await getTreeImpostorAssets(
+      scene,
+      undefined,
+      undefined,
+      undefined,
+      species,
     );
+    const prototype = createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+    if (prototype.mesh.material instanceof ShaderMaterial) {
+      prototype.mesh.material.setFloat(
+        "lowLightAlbedoScale",
+        TREE_LOW_LIGHT_BRIGHTNESS[species],
+      );
+    }
+    if (lease) root.onDisposeObservable.addOnce(() => lease?.release());
+    return prototype;
+  } catch (error) {
+    lease?.release();
+    root.dispose(false, false);
+    throw error;
   }
-  return prototype;
 }
 
 /** Uses broad simplex regions with a finer octave to form soft-edged species groves. */

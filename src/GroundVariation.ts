@@ -1,5 +1,6 @@
 import { SimplexNoise2D } from "./SimplexNoise";
 import { LandCoverClass } from "./WorldCover";
+import { clamp01 } from "./MathUtils";
 
 /**
  * Ground color variation coarser than the terrain textures can carry.
@@ -103,8 +104,4 @@ function groundMeters(
       Math.cos(latitude * Math.PI / 180),
     y: latitude * metersPerDegreeLatitude,
   };
-}
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
