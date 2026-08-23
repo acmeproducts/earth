@@ -465,18 +465,42 @@ void main(void) {
   // CPU transition ring are needed to reach the reduced source.
   float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
   float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
-  vec4 color;
+  vec2 selectedTile;
   if (choice < weights.x) {
-    color = frame(face, low, imageUV, lodBlend);
+    selectedTile = low;
   } else if (choice < weights.x + weights.y) {
-    color = frame(face, vec2(high.x, low.y), imageUV, lodBlend);
+    selectedTile = vec2(high.x, low.y);
   } else if (choice < weights.x + weights.y + weights.z) {
-    color = frame(face, vec2(low.x, high.y), imageUV, lodBlend);
+    selectedTile = vec2(low.x, high.y);
   } else {
-    color = frame(face, high, imageUV, lodBlend);
+    selectedTile = high;
   }
+  vec4 color = frame(face, selectedTile, imageUV, lodBlend);
 
+  #if SM_DIRECTIONINLIGHTDATA == 1
+  // A captured canopy otherwise writes one dense, hard-edged slab into the
+  // shadow map. Filter only its depth-pass coverage over roughly one source
+  // texel, then leave a little open foliage for the existing Poisson receiver
+  // to turn into a restrained penumbra. Visible impostors are unaffected.
+  vec2 shadowTexel = tileInset * 2.5;
+  float softShadowAlpha = color.a * 0.5;
+  softShadowAlpha += frame(
+    face, selectedTile, clamp(imageUV + vec2(shadowTexel.x, 0.0), 0.0, 1.0), lodBlend
+  ).a * 0.125;
+  softShadowAlpha += frame(
+    face, selectedTile, clamp(imageUV - vec2(shadowTexel.x, 0.0), 0.0, 1.0), lodBlend
+  ).a * 0.125;
+  softShadowAlpha += frame(
+    face, selectedTile, clamp(imageUV + vec2(0.0, shadowTexel.y), 0.0, 1.0), lodBlend
+  ).a * 0.125;
+  softShadowAlpha += frame(
+    face, selectedTile, clamp(imageUV - vec2(0.0, shadowTexel.y), 0.0, 1.0), lodBlend
+  ).a * 0.125;
+  color.a = clamp(softShadowAlpha * 0.9 - 0.02, 0.0, 1.0);
+  float alphaChoice = bayer8(gl_FragCoord.xy + vec2(1.0, 2.0));
+  #else
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
+  #endif
   if (color.a <= alphaChoice) discard;
   vec3 straightColor = color.rgb;
   float sceneBrightness = max(

@@ -645,14 +645,17 @@ export class Game {
         terrainData,
         { meshWidth, meshDepth },
       );
-      await OpenStreetMap.conformTerrainToRoads(
+      // Level foundations first. Their broad blend aprons can overlap nearby
+      // carriageways, so roads must be the final terrain deformation pass or
+      // those aprons can lift ground back through the road ribbons up close.
+      await OpenStreetMap.conformTerrainToBuildings(
         roads,
         terrainData,
         { meshWidth, meshDepth, metersPerUnit },
         yieldControl,
       );
       if (generation !== this.streamingGeneration) return undefined;
-      await OpenStreetMap.conformTerrainToBuildings(
+      await OpenStreetMap.conformTerrainToRoads(
         roads,
         terrainData,
         { meshWidth, meshDepth, metersPerUnit },
@@ -943,6 +946,17 @@ export class Game {
       mapWays,
       record.landCover,
     );
+    const exclusionMask = await OpenStreetMap.createVegetationExclusionMask(
+      mapWays,
+      record.terrainData,
+      {
+        meshWidth: record.meshWidth,
+        meshDepth: record.meshDepth,
+        metersPerUnit,
+      },
+      this.streamingYielder,
+    );
+    if (generation !== this.streamingGeneration) return;
     const treeField = await createTreeField(this.scene, record.terrainData, {
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
@@ -951,6 +965,7 @@ export class Game {
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       landCover: placementLandCover,
+      exclusionMask,
       spacingMeters: FAR_TREE_SPACING_METERS,
       occupancy: FAR_TREE_OCCUPANCY,
       edgeOccupancy: FAR_TREE_EDGE_OCCUPANCY,

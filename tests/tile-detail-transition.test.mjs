@@ -12,6 +12,15 @@ test("keeps far-tree impostors visible through the native terrain upgrade", () =
   assert.match(game, /farTreeField: carriedFarTreeField,/);
 });
 
+test("applies the mapped vegetation exclusions to distant trees", () => {
+  const farTreeBuild = game.slice(
+    game.indexOf("private async buildFarTrees"),
+    game.indexOf("private async buildFarBuildings"),
+  );
+  assert.match(farTreeBuild, /OpenStreetMap\.createVegetationExclusionMask\(/);
+  assert.match(farTreeBuild, /createTreeField[\s\S]*?exclusionMask,/);
+});
+
 test("keeps far building massing visible through the native terrain upgrade", () => {
   assert.match(game, /const carriedFarBuildings = previous\?\.farBuildings;/);
   assert.match(game, /farBuildings: carriedFarBuildings,/);

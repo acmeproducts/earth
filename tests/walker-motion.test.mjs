@@ -70,7 +70,7 @@ test("an airborne walker cannot jump again", () => {
   assert.ok(result.verticalVelocityMetersPerSecond > 0);
 });
 
-test("only fly mode uses camera inertia", () => {
+test("camera input is immediate in both movement modes", () => {
   assert.equal(WALK_CAMERA_INERTIA, 0);
-  assert.ok(FLY_CAMERA_INERTIA > 0);
+  assert.equal(FLY_CAMERA_INERTIA, 0);
 });

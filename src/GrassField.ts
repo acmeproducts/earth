@@ -52,9 +52,10 @@ const DEFAULT_DETAIL_TILES_ACROSS = 3;
 const GRASS_GROUND_COLOR_BLEND = 0.42;
 /** Average upward response of the crossed grass cards in the live model. */
 const GRASS_AMBIENT_UPWARD = 0.58;
-// Match the terrain receiver: full shadow removes direct sun but preserves
-// hemispheric ambient light in the vegetation shaders.
-const GRASS_SHADOW_DARKNESS = 0;
+// Crossed blade cards have more self-darkening than the comparatively flat
+// terrain. Retain a little direct fill in full shadow so grass settles into
+// the shaded ground instead of forming an unnaturally darker carpet over it.
+const GRASS_SHADOW_DARKNESS = 0.3;
 
 type GrassFieldOptions = VegetationPlacementOptions;
 

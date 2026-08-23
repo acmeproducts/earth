@@ -1,4 +1,7 @@
-export const FLY_CAMERA_INERTIA = 0.9;
+// Pointer deltas already describe the full movement since the previous input
+// event. Camera inertia replays part of those deltas on later render frames,
+// which adds visible look latency and makes the decay depend on frame rate.
+export const FLY_CAMERA_INERTIA = 0;
 export const WALK_CAMERA_INERTIA = 0;
 
 const GRAVITY_METERS_PER_SECOND_SQUARED = 9.81;

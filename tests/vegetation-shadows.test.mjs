@@ -26,6 +26,7 @@ const solarLighting = readFileSync(
   new URL("../src/SolarLighting.ts", import.meta.url),
   "utf8",
 );
+const grass = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
 
 test("keeps low vegetation out of the tree and sapling shadow-caster list", () => {
   assert.match(
@@ -106,6 +107,20 @@ test("keeps foliage alpha and LOD masks in model and impostor shadow passes", ()
   assert.match(impostors, /#if SM_DIRECTIONINLIGHTDATA == 1\s+vec3 direction = normalize\(vLocalSunDirection\)/);
 });
 
+test("softens dense impostor canopies only while writing shadow depth", () => {
+  assert.match(
+    impostors,
+    /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?vec2 shadowTexel = tileInset \* 2\.5/,
+  );
+  assert.match(impostors, /float softShadowAlpha = color\.a \* 0\.5/);
+  assert.match(impostors, /color\.a = clamp\(softShadowAlpha \* 0\.9 - 0\.02, 0\.0, 1\.0\)/);
+  assert.match(impostors, /float alphaChoice = bayer8\(gl_FragCoord\.xy/);
+  assert.match(
+    impostors,
+    /#else\s+float alphaChoice = bayer4\(gl_FragCoord\.xy/,
+  );
+});
+
 test("does not rerender the static shadow map for camera-relative LOD changes", () => {
   const lodUpdate = game.slice(
     game.indexOf("private updateVegetationLod"),
@@ -127,6 +142,14 @@ test("grass models and impostors share terrain-root shadow sampling", () => {
   assert.match(models, /vegetationShadowAtInstanceRoot/);
   assert.match(impostors, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
   assert.match(models, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
+});
+
+test("shadowed grass retains enough fill to sit on the shaded terrain", () => {
+  assert.match(grass, /const GRASS_SHADOW_DARKNESS = 0\.3/);
+  const shadowFloorAssignments = grass.match(
+    /setFloat\("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS\)/g,
+  ) ?? [];
+  assert.equal(shadowFloorAssignments.length, 2);
 });
 
 test("shadows custom vegetation direct light while preserving ambient light", () => {

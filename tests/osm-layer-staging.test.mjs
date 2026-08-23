@@ -49,6 +49,14 @@ test("renders surface roads with decal-style depth bias over terrain", () => {
   assert.match(openStreetMap, /visualStyle !== "bridgeDeck"/);
 });
 
+test("stamps roads after building aprons so terrain cannot rise through them", () => {
+  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const buildings = game.indexOf("OpenStreetMap.conformTerrainToBuildings(");
+  const roads = game.indexOf("OpenStreetMap.conformTerrainToRoads(");
+
+  assert.ok(buildings >= 0 && roads > buildings);
+});
+
 test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(roadPlanner, /properties\.surface/);
   assert.match(roadPlanner, /track: 2\.4/);
