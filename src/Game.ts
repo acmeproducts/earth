@@ -1192,7 +1192,9 @@ export class Game {
         // Casting them creates long, thin shadow streaks, but they should
         // still receive shadows from real elevated geometry.
         for (const mesh of mapMeshes) mesh.receiveShadows = true;
-        casters.push(...mapMeshes.filter((mesh) => mesh.name === "buildings"));
+        casters.push(...mapMeshes.filter(
+          (mesh) => mesh.metadata?.buildingShadowCaster === true,
+        ));
       }
     }
     // An empty list must clear casters retained from a previous streamed tile.

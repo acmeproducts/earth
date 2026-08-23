@@ -112,6 +112,11 @@ interface WindowGeometry {
   colors: number[];
 }
 
+interface BuildingShadowRange {
+  indexStart: number;
+  indexCount: number;
+}
+
 /** Compiles semantic building plans into deterministic Babylon geometry. */
 export class ProceduralBuildingRenderer {
   static createDetailed(
@@ -274,7 +279,15 @@ export class ProceduralBuildingRenderer {
     result.parent = parent;
     result.checkCollisions = name === "buildings" || name === "detailedBuildings";
     if (Number.isFinite(metersPerUnit)) {
-      configureBuildingSurfaceMaterials(result, metersPerUnit, material, skyReflection);
+      const shadowRanges = configureBuildingSurfaceMaterials(
+        result,
+        metersPerUnit,
+        material,
+        skyReflection,
+      );
+      if (name === "buildings" || name === "detailedBuildings") {
+        createBuildingShadowCaster(result, parent, material, shadowRanges);
+      }
       configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
     }
     return result;
@@ -865,11 +878,11 @@ function configureBuildingSurfaceMaterials(
   metersPerUnit: number,
   solidMaterial: StandardMaterial,
   skyReflection: BaseTexture | null | undefined,
-): void {
+): BuildingShadowRange[] {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const colors = mesh.getVerticesData(VertexBuffer.ColorKind);
   const indices = mesh.getIndices();
-  if (!positions || !colors || !indices) return;
+  if (!positions || !colors || !indices) return [];
   const windowVertices: number[] = [];
   const reflectiveVertices = new Set<number>();
   for (let vertex = 0; vertex < colors.length / 4; vertex++) {
@@ -880,7 +893,9 @@ function configureBuildingSurfaceMaterials(
       colors[vertex * 4 + 3] = 1;
     }
   }
-  if (windowVertices.length === 0 && reflectiveVertices.size === 0) return;
+  if (windowVertices.length === 0 && reflectiveVertices.size === 0) {
+    return [{ indexStart: 0, indexCount: indices.length }];
+  }
 
   const solidIndices: number[] = [];
   const windowIndices: number[] = [];
@@ -931,7 +946,18 @@ function configureBuildingSurfaceMaterials(
   addSurface(reflectiveIndices, reflectiveMaterial);
   mesh.material = materials;
 
-  if (windowVertices.length === 0) return;
+  const shadowRanges: BuildingShadowRange[] = [];
+  if (solidIndices.length > 0) {
+    shadowRanges.push({ indexStart: 0, indexCount: solidIndices.length });
+  }
+  if (reflectiveIndices.length > 0) {
+    shadowRanges.push({
+      indexStart: solidIndices.length + windowIndices.length,
+      indexCount: reflectiveIndices.length,
+    });
+  }
+
+  if (windowVertices.length === 0) return shadowRanges;
   mesh.markVerticesDataAsUpdatable(VertexBuffer.ColorKind, true);
   let lastUpdateMilliseconds = -Infinity;
   mesh.onBeforeRenderObservable.add(() => {
@@ -963,6 +989,29 @@ function configureBuildingSurfaceMaterials(
     }
     mesh.updateVerticesData(VertexBuffer.ColorKind, colors, false, false);
   });
+  return shadowRanges;
+}
+
+function createBuildingShadowCaster(
+  source: Mesh,
+  parent: TransformNode,
+  material: StandardMaterial,
+  ranges: readonly BuildingShadowRange[],
+): Mesh | undefined {
+  if (!source.geometry || ranges.length === 0) return undefined;
+  const caster = new Mesh("buildingShadows", source.getScene());
+  source.geometry.applyToMesh(caster);
+  caster.releaseSubMeshes();
+  for (const range of ranges) {
+    SubMesh.CreateFromIndices(0, range.indexStart, range.indexCount, caster);
+  }
+  caster.material = material;
+  caster.parent = parent;
+  caster.isPickable = false;
+  caster.receiveShadows = false;
+  caster.isVisible = false;
+  caster.metadata = { buildingShadowCaster: true, shadowOnly: true };
+  return caster;
 }
 
 function configureLazyInteriors(

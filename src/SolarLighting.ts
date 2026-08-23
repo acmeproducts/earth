@@ -259,8 +259,9 @@ export class SolarLighting {
     this.shadowOnlyCasters.clear();
 
     for (const mesh of meshes) {
-      mesh.receiveShadows = true;
-      if (mesh.metadata?.shadowOnly === true) {
+      const shadowOnly = mesh.metadata?.shadowOnly === true;
+      mesh.receiveShadows = !shadowOnly;
+      if (shadowOnly) {
         mesh.isVisible = false;
         this.shadowOnlyCasters.add(mesh);
       }

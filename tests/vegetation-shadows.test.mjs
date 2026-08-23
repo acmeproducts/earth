@@ -38,7 +38,18 @@ test("keeps low vegetation out of the tree and sapling shadow-caster list", () =
 
 test("roads and waterways receive shadows without casting ground streaks", () => {
   assert.match(game, /for \(const mesh of mapMeshes\) mesh\.receiveShadows = true/);
-  assert.match(game, /mapMeshes\.filter\(\(mesh\) => mesh\.name === "buildings"\)/);
+  assert.match(game, /mesh\.metadata\?\.buildingShadowCaster === true/);
+});
+
+test("buildings cast stable opaque geometry without proximity-fading windows", () => {
+  const buildings = readFileSync(
+    new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(buildings, /function createBuildingShadowCaster\(/);
+  assert.match(buildings, /shadowRanges\.push\(\{ indexStart: 0, indexCount: solidIndices\.length \}\)/);
+  assert.match(buildings, /solidIndices\.length \+ windowIndices\.length/);
+  assert.match(buildings, /buildingShadowCaster: true, shadowOnly: true/);
 });
 
 test("WebGPU terrain receives building shadows without self-shadow acne", () => {

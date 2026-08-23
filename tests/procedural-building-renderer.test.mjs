@@ -188,6 +188,15 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   assert.equal(merged.subMeshes.length, 2);
   assert.equal(merged.material.subMaterials[0].transparencyMode, Material.MATERIAL_OPAQUE);
   assert.equal(merged.material.subMaterials[1].transparencyMode, Material.MATERIAL_ALPHABLEND);
+  const shadowCaster = scene.getMeshByName("buildingShadows");
+  assert.ok(shadowCaster);
+  assert.equal(shadowCaster.geometry, merged.geometry);
+  assert.equal(shadowCaster.metadata.shadowOnly, true);
+  assert.equal(shadowCaster.isVisible, false);
+  assert.ok(
+    shadowCaster.subMeshes.reduce((sum, subMesh) => sum + subMesh.indexCount, 0) <
+      merged.getTotalIndices(),
+  );
 
   scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
   merged.onBeforeRenderObservable.notifyObservers(merged);
