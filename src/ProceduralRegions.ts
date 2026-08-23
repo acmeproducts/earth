@@ -26,7 +26,7 @@ export interface ProceduralRegionSpec {
   offsetY: number;
 }
 
-const DEFAULT_SPAN_TILES = 128;
+const DEFAULT_SPAN_TILES = 256;
 /** A small reusable bank prevents unbounded runtime atlas generation during travel. */
 export const PROCEDURAL_VARIANTS_PER_FAMILY = 4;
 let cachedConfiguredSpanTiles: number | undefined;

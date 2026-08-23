@@ -18,6 +18,10 @@ const receivers = readFileSync(
   new URL("../src/VegetationShadowReceiver.ts", import.meta.url),
   "utf8",
 );
+const cloudReceivers = readFileSync(
+  new URL("../src/CloudShadows.ts", import.meta.url),
+  "utf8",
+);
 const solarLighting = readFileSync(
   new URL("../src/SolarLighting.ts", import.meta.url),
   "utf8",
@@ -44,13 +48,13 @@ test("WebGPU terrain receives building shadows without self-shadow acne", () => 
   assert.doesNotMatch(game, /if \(casters\.length > 0\) this\.solarLighting/);
 });
 
-test("trees cast through dedicated shadow-only geometry at every renderer", () => {
+test("trees cast through dedicated impostor shadow geometry at every renderer", () => {
   assert.match(impostors, /function createTreeShadowCasters/);
-  assert.match(impostors, /new StandardMaterial\(`treeShadow-/);
   assert.match(impostors, /const caster = new Mesh\(`treeShadow-/);
   assert.match(impostors, /VertexData\.ExtractFromMesh\(source, true, true\)/);
   assert.doesNotMatch(impostors, /source\.geometry\.applyToMesh\(caster\)/);
   assert.match(impostors, /thinInstanceSetBuffer\("matrix", matrices, 16, true\)/);
+  assert.match(impostors, /"instanceLodBlend",[\s\S]*?new Float32Array\(matrices\.length \/ 16\)/);
   assert.match(impostors, /shadowOnly: true/);
   assert.match(solarLighting, /shadowMap\?\.onBeforeRenderObservable\.add/);
   assert.match(solarLighting, /shadowMap\?\.onAfterRenderObservable\.add/);
@@ -69,6 +73,17 @@ test("medium-range tree shadows use the full field instead of visual LOD buffers
     game.indexOf("private enableWaterReflections"),
   );
   assert.doesNotMatch(shadowRefresh, /modelMeshes|impostorMeshes|modelRangeMeters/);
+});
+
+test("low vegetation commits do not rebuild the expensive shadow caster list", () => {
+  const commit = game.slice(
+    game.indexOf("private commitTileField"),
+    game.indexOf("private refreshShadowCasters"),
+  );
+  assert.match(
+    commit,
+    /if \(kind === "treeField" \|\| kind === "saplingField"\) this\.refreshShadowCasters\(\)/,
+  );
 });
 
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {
@@ -118,6 +133,27 @@ test("shadows custom vegetation direct light while preserving ambient light", ()
   assert.match(receivers, /SM_DIRECTIONINLIGHTDATA == 1/);
   assert.match(receivers, /scene\.onBeforeRenderObservable\.add\(updateShadowUniforms\)/);
   assert.doesNotMatch(receivers, /material\.onBindObservable\.add/);
+});
+
+test("cloud footprints shadow both vegetation models and impostors", () => {
+  for (const shader of [impostors, models]) {
+    assert.match(shader, /cloudShadowVertexDeclaration/);
+    assert.match(shader, /cloudShadowFragmentDeclaration/);
+    assert.match(shader, /vCloudShadowWorldXZ = instanceOrigin\.xz/);
+    assert.match(shader, /bindCloudShadowReceiver\(material, scene\)/);
+  }
+  assert.match(impostors, /lighting \*= vegetationCloudShadowVisibility\(\)/);
+  assert.match(
+    models,
+    /lighting \*= mix\(1\.0, vegetationCloudShadowVisibility\(\), lightingEnabled\)/,
+  );
+  assert.match(cloudReceivers, /uniform sampler2D cloudShadowAtlas/);
+  assert.match(cloudReceivers, /CLOUD_SHADOW_DARKNESS = 0\.36/);
+  assert.match(
+    cloudReceivers,
+    /coverage \* cloudShadowLighting\.x \* \$\{CLOUD_SHADOW_DARKNESS\}/,
+  );
+  assert.match(cloudReceivers, /material\.setTexture\("cloudShadowAtlas", texture\)/);
 });
 
 test("unpacks Babylon's unsigned-byte fallback before comparing grass shadows", () => {

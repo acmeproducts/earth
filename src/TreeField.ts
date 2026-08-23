@@ -8,7 +8,6 @@ import {
   Scene,
   ShadowDepthWrapper,
   ShaderMaterial,
-  StandardMaterial,
   TransformNode,
   Vector2,
   Vector3,
@@ -47,6 +46,12 @@ import {
   packInstanceMatrices,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
+import {
+  bindCloudShadowReceiver,
+  cloudShadowFragmentDeclaration,
+  cloudShadowVertexDeclaration,
+  CLOUD_SHADOW_UNIFORMS,
+} from "./CloudShadows";
 import {
   bindVegetationShadowReceiver,
   vegetationShadowFragmentDeclaration,
@@ -132,6 +137,7 @@ uniform vec3 cameraPosition;
 uniform float captureCenterY;
 uniform vec3 sunDirection;
 ${vegetationShadowVertexDeclaration}
+${cloudShadowVertexDeclaration}
 ${windPhaseVertexDeclaration}
 ${windShearVertexDeclaration}
 #include<instancesDeclaration>
@@ -147,6 +153,7 @@ void main(void) {
   #include<instancesVertex>
   vec3 instanceOrigin = finalWorld[3].xyz;
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
+  vCloudShadowWorldXZ = instanceOrigin.xz;
   vec4 shadowWorldPosition = mix(
     worldPosition,
     finalWorld * vec4(0.0, 0.0, 0.0, 1.0),
@@ -242,6 +249,7 @@ uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
 ${vegetationShadowFragmentDeclaration}
+${cloudShadowFragmentDeclaration}
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -505,6 +513,7 @@ void main(void) {
   float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
   // Preserve enough ambient response for foliage to remain readable after sunset.
   lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
+  lighting *= vegetationCloudShadowVisibility();
   float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
   gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
 }`;
@@ -721,7 +730,7 @@ export async function createTreeField(
     field.shadowCasterMeshes.push(...createTreeShadowCasters(
       scene,
       prototype.root,
-      modelMeshes,
+      prototype.mesh,
       ownMatrices,
       bucket.species,
     ));
@@ -794,55 +803,54 @@ function consolidateTreeVariantBuckets(
 }
 
 /**
- * Reuses the procedural model geometry for stable tree shadow depth passes.
- * The shadow target toggles these meshes visible only for its render pass, so
- * they never enter the main camera draw. Their instance set does not follow
- * visual LOD, which keeps tree shadows across the medium-distance detail ring.
+ * Reuses the inexpensive impostor geometry for stable tree shadow depth passes.
+ * The impostor material's shadow wrapper selects the sun-facing atlas view and
+ * preserves its alpha silhouette. An independent all-tree instance buffer keeps
+ * shadows across the detail ring without submitting full procedural tree models.
  */
 function createTreeShadowCasters(
   scene: Scene,
   root: TransformNode,
-  modelMeshes: readonly Mesh[],
+  source: Mesh,
   matrices: Float32Array,
   species: TreeSpecies,
 ): Mesh[] {
-  if (modelMeshes.length === 0 || matrices.length === 0) return [];
+  if (source.getTotalVertices() === 0 || matrices.length === 0) return [];
 
-  const material = new StandardMaterial(`treeShadow-${species}Material`, scene);
-  material.disableLighting = true;
-  material.backFaceCulling = false;
-  const casters: Mesh[] = [];
-  for (let index = 0; index < modelMeshes.length; index++) {
-    const source = modelMeshes[index];
-    if (source.getTotalVertices() === 0) continue;
-    // Both Mesh.clone() and Geometry.applyToMesh() retain GPU vertex-buffer
-    // state shared with the visible model. Thin-instance matrix bindings then
-    // leak between the two meshes and can leave the model with no instances.
-    // Extracting forces independent geometry as well as independent instances.
-    const caster = new Mesh(`treeShadow-${species}-${index}`, scene);
-    VertexData.ExtractFromMesh(source, true, true).applyToMesh(caster, true);
-    caster.parent = root;
-    caster.position.copyFrom(source.position);
-    caster.rotation.copyFrom(source.rotation);
-    caster.rotationQuaternion = source.rotationQuaternion?.clone() ?? null;
-    caster.scaling.copyFrom(source.scaling);
-    caster.material = material;
-    caster.isPickable = false;
-    caster.receiveShadows = false;
-    caster.metadata = { ...(caster.metadata ?? {}), shadowOnly: true };
-    caster.isVisible = false;
-    caster.thinInstanceSetBuffer("matrix", matrices, 16, true);
-    caster.thinInstanceCount = matrices.length / 16;
-    caster.thinInstanceRefreshBoundingInfo(true);
-    casters.push(caster);
-  }
+  // Extracting gives the caster independent geometry and instance bindings;
+  // sharing a geometry would let its fixed buffers overwrite visible LOD data.
+  const caster = new Mesh(`treeShadow-${species}`, scene);
+  VertexData.ExtractFromMesh(source, true, true).applyToMesh(caster, true);
+  caster.parent = root;
+  caster.position.copyFrom(source.position);
+  caster.rotation.copyFrom(source.rotation);
+  caster.rotationQuaternion = source.rotationQuaternion?.clone() ?? null;
+  caster.scaling.copyFrom(source.scaling);
+  caster.material = source.material;
+  caster.isPickable = false;
+  caster.receiveShadows = false;
+  caster.metadata = { ...(caster.metadata ?? {}), shadowOnly: true };
+  caster.isVisible = false;
+  caster.thinInstanceSetBuffer("matrix", matrices, 16, true);
+  caster.thinInstanceSetBuffer(
+    "vegetationColor",
+    new Float32Array((matrices.length / 16) * 3).fill(1),
+    3,
+    true,
+  );
+  // Zero selects the impostor side of the complementary LOD depth mask.
+  caster.thinInstanceSetBuffer(
+    "instanceLodBlend",
+    new Float32Array(matrices.length / 16),
+    1,
+    true,
+  );
+  caster.thinInstanceCount = matrices.length / 16;
+  caster.thinInstanceRefreshBoundingInfo(true);
   root.onDisposeObservable.addOnce(() => {
-    for (const caster of casters) {
-      if (!caster.isDisposed()) caster.dispose(false, false);
-    }
-    material.dispose(false, false);
+    if (!caster.isDisposed()) caster.dispose(false, false);
   });
-  return casters;
+  return [caster];
 }
 
 /** Builds the same fixed cube and material used by every forest instance. */
@@ -953,8 +961,8 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
-      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler"],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
+      samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler", "cloudShadowAtlas"],
       needAlphaBlending: false,
     },
   );
@@ -967,6 +975,7 @@ export function createImpostorMaterial(
   material.shadowDepthWrapper = shadowDepthWrapper;
   material.onDisposeObservable.addOnce(() => shadowDepthWrapper.dispose());
   bindVegetationShadowReceiver(material, scene);
+  bindCloudShadowReceiver(material, scene);
   material.setFloat("captureCenterY", renderHeight / 2);
   material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));

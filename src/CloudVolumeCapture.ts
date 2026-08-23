@@ -9,6 +9,9 @@ export const CLOUD_VIEW_COUNT = 8;
 export const CLOUD_SHADOW_TEXTURE_SIZE = 96;
 
 const CLOUD_CAPTURE_STEPS = 24;
+const CLOUD_SHADOW_CAPTURE_PADDING = 1.02;
+const CLOUD_MEAN_HEIGHT_TO_WIDTH = 1 / 1.9;
+const CLOUD_MEAN_HEIGHT_TO_DEPTH = CLOUD_MEAN_HEIGHT_TO_WIDTH / 0.52;
 
 interface CloudLobe {
   x: number;
@@ -26,6 +29,26 @@ export interface CloudDensityAtlasData {
   height: number;
   tileStrideX: number;
   tileStrideY: number;
+}
+
+export interface CloudShadowFootprintScale {
+  readonly x: number;
+  readonly z: number;
+}
+
+/** Expansion caused by sunlight crossing the cloud's finite vertical depth. */
+export function cloudShadowFootprintScale(
+  sunDirection: Readonly<{ x: number; y: number; z: number }>,
+): CloudShadowFootprintScale {
+  const projectionY = Math.max(sunDirection.y, 0.08);
+  const raySlopeX = sunDirection.x / projectionY * CLOUD_MEAN_HEIGHT_TO_WIDTH;
+  const raySlopeZ = sunDirection.z / projectionY * CLOUD_MEAN_HEIGHT_TO_DEPTH;
+  return {
+    x: (CLOUD_SHADOW_CAPTURE_PADDING + Math.abs(raySlopeX))
+      / CLOUD_SHADOW_CAPTURE_PADDING,
+    z: (CLOUD_SHADOW_CAPTURE_PADDING + Math.abs(raySlopeZ))
+      / CLOUD_SHADOW_CAPTURE_PADDING,
+  };
 }
 
 /** Integrates several deterministic 3D density fields into one view atlas. */
@@ -53,7 +76,9 @@ export function generateCloudDensityAtlasData(): CloudDensityAtlasData {
 }
 
 /** Captures the same volume from above for the inexpensive ground projector. */
-export function generateCloudShadowAtlasData(): CloudDensityAtlasData {
+export function generateCloudShadowAtlasData(
+  sunDirection: Readonly<{ x: number; y: number; z: number }> = { x: 0, y: 1, z: 0 },
+): CloudDensityAtlasData {
   const tileStrideX = CLOUD_SHADOW_TEXTURE_SIZE + CLOUD_TEXTURE_GUTTER * 2;
   const tileStrideY = tileStrideX;
   const width = tileStrideX * CLOUD_ATLAS_COLUMNS;
@@ -63,7 +88,7 @@ export function generateCloudShadowAtlasData(): CloudDensityAtlasData {
     writeAtlasTile(
       pixels,
       width,
-      renderCloudShadowVariant(variant),
+      renderCloudShadowVariant(variant, sunDirection),
       (variant % CLOUD_ATLAS_COLUMNS) * tileStrideX,
       Math.floor(variant / CLOUD_ATLAS_COLUMNS) * tileStrideY,
       CLOUD_SHADOW_TEXTURE_SIZE,
@@ -120,24 +145,37 @@ function renderCloudVariant(variant: number, view: number): Uint8Array {
   return pixels;
 }
 
-function renderCloudShadowVariant(variant: number): Uint8Array {
+function renderCloudShadowVariant(
+  variant: number,
+  sunDirection: Readonly<{ x: number; y: number; z: number }>,
+): Uint8Array {
   const lobes = cloudLobes(variant);
   const pixels = new Uint8Array(
     CLOUD_SHADOW_TEXTURE_SIZE * CLOUD_SHADOW_TEXTURE_SIZE * 4,
   );
   const rayStep = 2 / CLOUD_CAPTURE_STEPS;
+  const projectionY = Math.max(sunDirection.y, 0.08);
+  // Placements vary slightly, but these mean proportions align the shared
+  // atlas closely with the ray through a typical cloud bank.
+  const raySlopeX = sunDirection.x / projectionY * CLOUD_MEAN_HEIGHT_TO_WIDTH;
+  const raySlopeZ = sunDirection.z / projectionY * CLOUD_MEAN_HEIGHT_TO_DEPTH;
+  const footprintScale = cloudShadowFootprintScale(sunDirection);
+  const captureExtentX = CLOUD_SHADOW_CAPTURE_PADDING * footprintScale.x;
+  const captureExtentZ = CLOUD_SHADOW_CAPTURE_PADDING * footprintScale.z;
   for (let z = 0; z < CLOUD_SHADOW_TEXTURE_SIZE; z++) {
-    const sampleZ = ((z + 0.5) / CLOUD_SHADOW_TEXTURE_SIZE * 2 - 1) * 1.02;
+    const baseZ = ((z + 0.5) / CLOUD_SHADOW_TEXTURE_SIZE * 2 - 1)
+      * captureExtentZ;
     for (let x = 0; x < CLOUD_SHADOW_TEXTURE_SIZE; x++) {
-      const sampleX = ((x + 0.5) / CLOUD_SHADOW_TEXTURE_SIZE * 2 - 1) * 1.02;
+      const baseX = ((x + 0.5) / CLOUD_SHADOW_TEXTURE_SIZE * 2 - 1)
+        * captureExtentX;
       let opticalDepth = 0;
       for (let step = 0; step < CLOUD_CAPTURE_STEPS; step++) {
         const sampleY = -1 + (step + 0.5) * rayStep;
         opticalDepth += cloudDensity(
           lobes,
-          sampleX,
+          baseX + raySlopeX * sampleY,
           sampleY,
-          sampleZ,
+          baseZ + raySlopeZ * sampleY,
           variant,
         ) * rayStep;
       }

@@ -20,6 +20,13 @@ const BUILDING_GROUND_OVERLAP_METERS = 1;
 const BUILDING_ROOF_TRIM_METERS = 0.32;
 const BUILDING_ROOF_OVERHANG_METERS = 0.45;
 const BUILDING_ROOF_EAVE_CLEARANCE_METERS = 0.2;
+const BUILDING_WALL_THICKNESS_METERS = 0.24;
+const BUILDING_FLOOR_THICKNESS_METERS = 0.16;
+const BUILDING_DOOR_WIDTH_METERS = 1.15;
+const BUILDING_DOOR_HEIGHT_METERS = 2.2;
+const BUILDING_WINDOW_SILL_METERS = 0.82;
+const BUILDING_WINDOW_HEIGHT_METERS = 1.35;
+const BUILDING_WINDOW_SPACING_METERS = 3;
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -50,6 +57,19 @@ interface Bounds {
   maxZ: number;
 }
 
+interface DetailedBuildingParts {
+  parts: Mesh[];
+  windowCount: number;
+  floorCount: number;
+}
+
+interface WindowGeometry {
+  positions: number[];
+  indices: number[];
+  normals: number[];
+  colors: number[];
+}
+
 /** Compiles semantic building plans into deterministic Babylon geometry. */
 export class ProceduralBuildingRenderer {
   static createDetailed(
@@ -77,19 +97,16 @@ export class ProceduralBuildingRenderer {
     const wallTopElevation = prepared.baseElevation + plan.heightMeters -
       (plan.roofHeightMeters === undefined ? 0 : roofHeightMeters);
     const roofEaveElevation = wallTopElevation + BUILDING_ROOF_EAVE_CLEARANCE_METERS;
-    const bottomElevation = plan.minimumHeightMeters > 0
-      ? prepared.baseElevation + plan.minimumHeightMeters
-      : terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
-    const body = createBuildingPrism(
+    const detailed = createEnterableBuilding(
       scene,
+      plan,
       prepared.outline,
+      prepared.baseElevation,
       wallTopElevation,
-      bottomElevation,
       options,
+      appearance,
     );
-    colorBuildingMass(body, appearance);
-
-    const parts = [body];
+    const parts = detailed.parts;
     const trim = createRoofTrim(
       scene,
       prepared.outline,
@@ -125,13 +142,18 @@ export class ProceduralBuildingRenderer {
       if (rooftop) parts.push(rooftop);
     }
 
-    if (parts.length === 1) return body;
     const merged = Mesh.MergeMeshes(parts, false, true);
     if (!merged) {
-      for (const part of parts.slice(1)) part.dispose(false, true);
-      return body;
+      for (const part of parts) part.dispose(false, true);
+      return undefined;
     }
     for (const part of parts) part.dispose(false, true);
+    merged.metadata = {
+      buildingId: plan.id,
+      enterable: true,
+      windowCount: detailed.windowCount,
+      interiorFloorCount: detailed.floorCount,
+    };
     return stageBuildingMesh(merged);
   }
 
@@ -171,8 +193,189 @@ export class ProceduralBuildingRenderer {
     result.name = name;
     result.material = material;
     result.parent = parent;
+    result.checkCollisions = name === "buildings" || name === "detailedBuildings";
     return result;
   }
+}
+
+/**
+ * Builds a hollow near-field shell. Facades are assembled around real window
+ * and doorway apertures, while floor slabs make the volume read as an interior
+ * from both the entrance and the windows.
+ */
+function createEnterableBuilding(
+  scene: Scene,
+  plan: BuildingPlan,
+  outline: ScenePoint[],
+  baseElevation: number,
+  topElevation: number,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+): DetailedBuildingParts {
+  const usableHeight = Math.max(2.4, topElevation - baseElevation);
+  const requestedFloors = plan.levels === undefined
+    ? Math.max(1, Math.round(usableHeight / 3.1))
+    : Math.max(1, Math.round(plan.levels));
+  const floorCount = Math.min(20, requestedFloors);
+  const storyHeight = usableHeight / floorCount;
+  const entranceEdge = longestPolygonEdge(outline);
+  const parts: Mesh[] = [];
+  const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
+  let windowCount = 0;
+
+  const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
+  for (let floor = 0; floor < floorCount; floor++) {
+    const slabBottom = baseElevation + floor * storyHeight;
+    const slab = createBuildingPrism(
+      scene,
+      outline,
+      slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
+      slabBottom,
+      options,
+    );
+    setSolidVertexColor(slab, floorColor);
+    parts.push(slab);
+  }
+
+  for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
+    const start = outline[edgeIndex];
+    const end = outline[(edgeIndex + 1) % outline.length];
+    const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
+    if (edgeLengthMeters < 0.35) continue;
+    const bayCount = Math.max(1, Math.min(16, Math.round(edgeLengthMeters / BUILDING_WINDOW_SPACING_METERS)));
+    const bayWidth = edgeLengthMeters / bayCount;
+
+    if (edgeIndex === entranceEdge) {
+      const doorCenter = (Math.floor(bayCount / 2) + 0.5) * bayWidth;
+      const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
+      const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, usableHeight - 0.28);
+      addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
+        doorCenter - doorWidth / 2, baseElevation, usableHeight, options, appearance.wall);
+      addFacadePanel(parts, scene, start, end, edgeLengthMeters,
+        doorCenter + doorWidth / 2, edgeLengthMeters - doorCenter - doorWidth / 2,
+        baseElevation, usableHeight, options, appearance.wall);
+      addFacadePanel(parts, scene, start, end, edgeLengthMeters,
+        doorCenter - doorWidth / 2, doorWidth, baseElevation + doorHeight,
+        usableHeight - doorHeight, options, appearance.wall);
+    } else {
+      addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
+        edgeLengthMeters, baseElevation, usableHeight, options, appearance.wall);
+    }
+
+    for (let floor = 0; floor < floorCount; floor++) {
+      const storyBottom = baseElevation + floor * storyHeight;
+      for (let bay = 0; bay < bayCount; bay++) {
+        const isEntrance = floor === 0 && edgeIndex === entranceEdge &&
+          bay === Math.floor(bayCount / 2);
+        if (isEntrance) continue;
+        const apertureWidth = Math.min(1.65, Math.max(0.55, bayWidth * 0.56));
+        const apertureHeight = Math.min(BUILDING_WINDOW_HEIGHT_METERS, storyHeight - 1.18);
+        const sillHeight = Math.min(
+          BUILDING_WINDOW_SILL_METERS,
+          storyHeight - apertureHeight - 0.3,
+        );
+        const bayStart = bay * bayWidth;
+        if (apertureHeight > 0.35) {
+          const glass = varyColor(
+            new Color3(0.24, 0.38, 0.45),
+            seededUnit(plan.detailSeed ^ (edgeIndex * 131 + floor * 29 + bay)) * 0.18,
+            0,
+          );
+          addWindowQuad(windows, start, end, edgeLengthMeters,
+            bayStart + (bayWidth - apertureWidth) / 2, apertureWidth,
+            storyBottom + sillHeight, apertureHeight, options, glass);
+          windowCount++;
+        }
+      }
+    }
+  }
+
+  const windowMesh = createWindowMesh(scene, windows);
+  if (windowMesh) parts.push(windowMesh);
+
+  return { parts, windowCount, floorCount };
+}
+
+function addWindowQuad(
+  geometry: WindowGeometry,
+  edgeStart: ScenePoint,
+  edgeEnd: ScenePoint,
+  edgeLengthMeters: number,
+  offsetMeters: number,
+  widthMeters: number,
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const directionX = (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters;
+  const directionZ = (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters;
+  const outwardX = directionZ;
+  const outwardZ = -directionX;
+  const offset = BUILDING_WALL_THICKNESS_METERS * 0.56 / options.metersPerUnit;
+  const x0 = edgeStart.x + directionX * offsetMeters / options.metersPerUnit + outwardX * offset;
+  const z0 = edgeStart.z + directionZ * offsetMeters / options.metersPerUnit + outwardZ * offset;
+  const x1 = x0 + directionX * widthMeters / options.metersPerUnit;
+  const z1 = z0 + directionZ * widthMeters / options.metersPerUnit;
+  const y0 = bottomElevation / options.metersPerUnit;
+  const y1 = (bottomElevation + heightMeters) / options.metersPerUnit;
+  const first = geometry.positions.length / 3;
+  geometry.positions.push(x0, y0, z0, x1, y0, z1, x1, y1, z1, x0, y1, z0);
+  geometry.indices.push(first, first + 2, first + 1, first, first + 3, first + 2);
+  for (let vertex = 0; vertex < 4; vertex++) {
+    geometry.normals.push(outwardX, 0, outwardZ);
+    geometry.colors.push(color.r, color.g, color.b, 1);
+  }
+}
+
+function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefined {
+  if (geometry.indices.length === 0) return undefined;
+  const mesh = stageBuildingMesh(new Mesh("buildingWindows", scene));
+  const data = new VertexData();
+  data.positions = geometry.positions;
+  data.indices = geometry.indices;
+  data.normals = geometry.normals;
+  data.colors = geometry.colors;
+  data.uvs = new Array<number>((geometry.positions.length / 3) * 2).fill(0);
+  data.applyToMesh(mesh);
+  mesh.useVertexColors = true;
+  return mesh;
+}
+
+function addFacadePanel(
+  parts: Mesh[],
+  scene: Scene,
+  edgeStart: ScenePoint,
+  edgeEnd: ScenePoint,
+  edgeLengthMeters: number,
+  offsetMeters: number,
+  widthMeters: number,
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+  thicknessMeters = BUILDING_WALL_THICKNESS_METERS,
+  outwardOffsetMeters = 0,
+): void {
+  if (widthMeters <= 0.02 || heightMeters <= 0.02) return;
+  const directionX = (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters;
+  const directionZ = (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters;
+  const centerAlongMeters = offsetMeters + widthMeters / 2;
+  const panel = stageBuildingMesh(MeshBuilder.CreateBox("buildingFacadePanel", {
+    width: widthMeters / options.metersPerUnit,
+    height: heightMeters / options.metersPerUnit,
+    depth: thicknessMeters / options.metersPerUnit,
+  }, scene));
+  panel.position.set(
+    edgeStart.x + directionX * centerAlongMeters / options.metersPerUnit +
+      directionZ * outwardOffsetMeters / options.metersPerUnit,
+    (bottomElevation + heightMeters / 2) / options.metersPerUnit,
+    edgeStart.z + directionZ * centerAlongMeters / options.metersPerUnit -
+      directionX * outwardOffsetMeters / options.metersPerUnit,
+  );
+  panel.rotation.y = -Math.atan2(directionZ, directionX);
+  setSolidVertexColor(panel, color);
+  parts.push(panel);
 }
 
 function prepareBuildingFootprint(

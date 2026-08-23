@@ -27,6 +27,10 @@ test("procedural families use staggered grids", () => {
   assert.ok(specs.every((spec) => spec.spanTiles === 128));
 });
 
+test("default procedural regions span 256 application tiles", () => {
+  assert.equal(proceduralRegionSpec("trees").spanTiles, 256);
+});
+
 test("family transition bands remain separated on each grid axis", () => {
   const specs = ["trees", "bushes", "grass", "flowers", "ferns"]
     .map((family) => proceduralRegionSpec(family, 128));

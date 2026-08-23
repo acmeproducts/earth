@@ -1,6 +1,7 @@
 import {
   RawTexture,
   Scene,
+  ShaderMaterial,
   Texture,
   Vector2,
   Vector3,
@@ -12,10 +13,13 @@ import {
   CLOUD_ATLAS_COLUMNS,
   CLOUD_SHADOW_TEXTURE_SIZE,
   CLOUD_TEXTURE_GUTTER,
+  cloudShadowFootprintScale,
   generateCloudShadowAtlasData,
 } from "./CloudVolumeCapture";
 
 const TERRAIN_CLOUD_SHADOW_COUNT = 4;
+const CLOUD_SHADOW_DIRECTION_REFRESH_RADIANS = 3 * Math.PI / 180;
+const CLOUD_SHADOW_DARKNESS = 0.36;
 
 interface CloudShadowSceneState {
   readonly fallback: RawTexture;
@@ -23,6 +27,7 @@ interface CloudShadowSceneState {
   readonly placements: Vector4[];
   readonly metadata: Vector2[];
   readonly receivers: Set<CustomMaterial>;
+  readonly vegetationReceivers: Set<ShaderMaterial>;
   texture: Texture;
   atlasDimensions: Vector2;
   atlasTileStride: Vector2;
@@ -37,6 +42,104 @@ export interface CloudShadowProjector {
 }
 
 const sceneStates = new WeakMap<Scene, CloudShadowSceneState>();
+
+export const cloudShadowVertexDeclaration = `
+varying vec2 vCloudShadowWorldXZ;
+`;
+
+export const cloudShadowFragmentDeclaration = `
+varying vec2 vCloudShadowWorldXZ;
+uniform sampler2D cloudShadowAtlas;
+uniform vec4 cloudShadowLighting;
+uniform vec2 cloudShadowAtlasDimensions;
+uniform vec2 cloudShadowAtlasTileStride;
+uniform vec4 cloudShadowPlacement0;
+uniform vec4 cloudShadowPlacement1;
+uniform vec4 cloudShadowPlacement2;
+uniform vec4 cloudShadowPlacement3;
+uniform vec2 cloudShadowMetadata0;
+uniform vec2 cloudShadowMetadata1;
+uniform vec2 cloudShadowMetadata2;
+uniform vec2 cloudShadowMetadata3;
+
+float sampleVegetationCloudShadow(vec4 placement, vec2 metadata) {
+  vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
+  vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
+  float placementEnabled = step(0.000001, min(placement.z, placement.w));
+  localUV.x = mix(localUV.x, 1.0 - localUV.x, metadata.y);
+  localUV = clamp(localUV, vec2(0.0), vec2(1.0));
+  float variant = floor(metadata.x + 0.5);
+  vec2 cell = vec2(
+    mod(variant, ${CLOUD_ATLAS_COLUMNS}.0),
+    floor(variant / ${CLOUD_ATLAS_COLUMNS}.0)
+  );
+  vec2 atlasPixel = cell * cloudShadowAtlasTileStride
+    + vec2(${CLOUD_TEXTURE_GUTTER}.0)
+    + localUV * vec2(${CLOUD_SHADOW_TEXTURE_SIZE - 1}.0)
+    + vec2(0.5);
+  float density = texture2D(
+    cloudShadowAtlas,
+    atlasPixel / cloudShadowAtlasDimensions
+  ).r;
+  float edgeFade = smoothstep(0.0, 0.04, min(edgeDistance.x, edgeDistance.y));
+  return smoothstep(0.025, 0.72, density) * edgeFade * placementEnabled;
+}
+
+float vegetationCloudShadowVisibility(void) {
+  #if SM_DIRECTIONINLIGHTDATA == 1
+  return 1.0;
+  #else
+  float coverage = 1.0;
+  coverage *= 1.0 - sampleVegetationCloudShadow(
+    cloudShadowPlacement0,
+    cloudShadowMetadata0
+  );
+  coverage *= 1.0 - sampleVegetationCloudShadow(
+    cloudShadowPlacement1,
+    cloudShadowMetadata1
+  );
+  coverage *= 1.0 - sampleVegetationCloudShadow(
+    cloudShadowPlacement2,
+    cloudShadowMetadata2
+  );
+  coverage *= 1.0 - sampleVegetationCloudShadow(
+    cloudShadowPlacement3,
+    cloudShadowMetadata3
+  );
+  coverage = 1.0 - coverage;
+  return 1.0 - coverage * cloudShadowLighting.x * ${CLOUD_SHADOW_DARKNESS};
+  #endif
+}
+`;
+
+export const CLOUD_SHADOW_UNIFORMS = [
+  "cloudShadowLighting",
+  "cloudShadowAtlasDimensions",
+  "cloudShadowAtlasTileStride",
+  "cloudShadowPlacement0",
+  "cloudShadowPlacement1",
+  "cloudShadowPlacement2",
+  "cloudShadowPlacement3",
+  "cloudShadowMetadata0",
+  "cloudShadowMetadata1",
+  "cloudShadowMetadata2",
+  "cloudShadowMetadata3",
+] as const;
+
+/** Supplies the shared projected cloud field to a custom vegetation shader. */
+export function bindCloudShadowReceiver(material: ShaderMaterial, scene: Scene): void {
+  const state = cloudShadowState(scene);
+  material.setTexture("cloudShadowAtlas", state.texture);
+  material.setVector4("cloudShadowLighting", state.lighting);
+  material.setVector2("cloudShadowAtlasDimensions", state.atlasDimensions);
+  material.setVector2("cloudShadowAtlasTileStride", state.atlasTileStride);
+  for (let index = 0; index < TERRAIN_CLOUD_SHADOW_COUNT; index++) {
+    material.setVector4(`cloudShadowPlacement${index}`, state.placements[index]);
+    material.setVector2(`cloudShadowMetadata${index}`, state.metadata[index]);
+  }
+  state.vegetationReceivers.add(material);
+  material.onDisposeObservable.addOnce(() => state.vegetationReceivers.delete(material));
+}
 
 /** Adds the nearest sun-projected cloud impostors to a shared terrain material. */
 export function createCloudShadowTerrainMaterial(
@@ -71,11 +174,11 @@ export function createCloudShadowTerrainMaterial(
     varying vec2 vCloudShadowWorldXZ;
 
     float sampleProjectedCloudShadow(vec4 placement, vec2 metadata) {
-      if (placement.z <= 0.0 || placement.w <= 0.0) return 0.0;
       vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
       vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
-      if (min(edgeDistance.x, edgeDistance.y) <= 0.0) return 0.0;
+      float placementEnabled = step(0.000001, min(placement.z, placement.w));
       localUV.x = mix(localUV.x, 1.0 - localUV.x, metadata.y);
+      localUV = clamp(localUV, vec2(0.0), vec2(1.0));
       float variant = floor(metadata.x + 0.5);
       vec2 cell = vec2(
         mod(variant, ${CLOUD_ATLAS_COLUMNS}.0),
@@ -90,7 +193,7 @@ export function createCloudShadowTerrainMaterial(
         atlasPixel / cloudShadowAtlasDimensions
       ).r;
       float edgeFade = smoothstep(0.0, 0.04, min(edgeDistance.x, edgeDistance.y));
-      return smoothstep(0.025, 0.72, density) * edgeFade;
+      return smoothstep(0.025, 0.72, density) * edgeFade * placementEnabled;
     }
   `);
   material.Fragment_Before_Fog(`
@@ -112,7 +215,8 @@ export function createCloudShadowTerrainMaterial(
       cloudShadowMetadata3
     );
     cloudShadowCoverage = 1.0 - cloudShadowCoverage;
-    color.rgb *= 1.0 - cloudShadowCoverage * cloudShadowLighting.x * 0.52;
+    color.rgb *= 1.0
+      - cloudShadowCoverage * cloudShadowLighting.x * ${CLOUD_SHADOW_DARKNESS};
   `);
   state.receivers.add(material);
   material.onDisposeObservable.add(() => state.receivers.delete(material));
@@ -138,6 +242,8 @@ export function createCloudShadowProjector(
   let driftZ = 0;
   const cameraPosition = Vector3.Zero();
   const sunDirection = Vector3.Up();
+  const atlasSunDirection = Vector3.Up();
+  let atlasFootprintScale = cloudShadowFootprintScale(atlasSunDirection);
 
   const updateSelection = (): void => {
     const sunlight = smoothstep(0.04, 0.18, sunDirection.y);
@@ -147,17 +253,24 @@ export function createCloudShadowProjector(
       return;
     }
 
+    const directionDot = Vector3.Dot(sunDirection, atlasSunDirection);
+    if (directionDot < Math.cos(CLOUD_SHADOW_DIRECTION_REFRESH_RADIANS)) {
+      atlas.texture.update(generateCloudShadowAtlasData(sunDirection).pixels);
+      atlasSunDirection.copyFrom(sunDirection);
+      atlasFootprintScale = cloudShadowFootprintScale(atlasSunDirection);
+    }
+
     const projectionY = Math.max(sunDirection.y, 0.08);
     const candidates = fieldPlacements.map((cloud) => {
       const projectionDistance = cloud.y / projectionY;
       const x = cloud.x + driftX - sunDirection.x * projectionDistance;
       const z = cloud.z + driftZ - sunDirection.z * projectionDistance;
       const outsideX = Math.max(
-        Math.abs(cameraPosition.x - x) - cloud.width * 0.5,
+        Math.abs(cameraPosition.x - x) - cloud.width * atlasFootprintScale.x * 0.5,
         0,
       );
       const outsideZ = Math.max(
-        Math.abs(cameraPosition.z - z) - cloud.depth * 0.5,
+        Math.abs(cameraPosition.z - z) - cloud.depth * atlasFootprintScale.z * 0.5,
         0,
       );
       return {
@@ -179,8 +292,8 @@ export function createCloudShadowProjector(
       state.placements[index].set(
         candidate.x,
         candidate.z,
-        1 / candidate.cloud.width,
-        1 / candidate.cloud.depth,
+        1 / (candidate.cloud.width * atlasFootprintScale.x),
+        1 / (candidate.cloud.depth * atlasFootprintScale.z),
       );
       state.metadata[index].set(
         candidate.cloud.variant,
@@ -244,6 +357,7 @@ function cloudShadowState(scene: Scene): CloudShadowSceneState {
       () => Vector2.Zero(),
     ),
     receivers: new Set(),
+    vegetationReceivers: new Set(),
     texture: fallback,
     atlasDimensions: Vector2.One(),
     atlasTileStride: Vector2.One(),
@@ -263,6 +377,9 @@ function setReceiverTexture(state: CloudShadowSceneState, texture: Texture): voi
   state.texture = texture;
   for (const material of state.receivers) {
     material._newSamplerInstances["sampler2D-cloudShadowAtlas"] = texture;
+  }
+  for (const material of state.vegetationReceivers) {
+    material.setTexture("cloudShadowAtlas", texture);
   }
 }
 

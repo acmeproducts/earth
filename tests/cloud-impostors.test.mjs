@@ -168,9 +168,19 @@ test("cloud shadows project the nearest top-down impostors onto terrain", () => 
   assert.match(shadowSource, /TERRAIN_CLOUD_SHADOW_COUNT = 4/);
   assert.match(shadowSource, /cloud\.x \+ driftX - sunDirection\.x \* projectionDistance/);
   assert.match(shadowSource, /smoothstep\(0\.04, 0\.18, sunDirection\.y\)/);
-  assert.match(shadowSource, /1 \/ candidate\.cloud\.width/);
+  assert.match(shadowSource, /1 \/ \(candidate\.cloud\.width \* atlasFootprintScale\.x\)/);
   assert.doesNotMatch(shadowSource, /RenderTargetTexture/);
   assert.doesNotMatch(shadowSource, /ShadowGenerator/);
+});
+
+test("cloud shadow density integrates along the current sun ray", () => {
+  assert.match(volumeSource, /generateCloudShadowAtlasData\([\s\S]*?sunDirection/);
+  assert.match(volumeSource, /baseX \+ raySlopeX \* sampleY/);
+  assert.match(volumeSource, /baseZ \+ raySlopeZ \* sampleY/);
+  assert.match(volumeSource, /cloudShadowFootprintScale/);
+  assert.match(shadowSource, /CLOUD_SHADOW_DIRECTION_REFRESH_RADIANS/);
+  assert.match(shadowSource, /atlas\.texture\.update\(generateCloudShadowAtlasData\(sunDirection\)\.pixels\)/);
+  assert.match(shadowSource, /candidate\.cloud\.width \* atlasFootprintScale\.x/);
 });
 
 test("terrain samples nearby cloud density directly in world space", () => {
@@ -178,5 +188,14 @@ test("terrain samples nearby cloud density directly in world space", () => {
   assert.match(shadowSource, /vCloudShadowWorldXZ = worldPos\.xz/);
   assert.match(shadowSource, /sampleProjectedCloudShadow/);
   assert.match(shadowSource, /texture2D\([\s\S]*?cloudShadowAtlas/);
-  assert.match(shadowSource, /cloudShadowCoverage \* cloudShadowLighting\.x \* 0\.52/);
+  assert.match(shadowSource, /cloudShadowCoverage \* cloudShadowLighting\.x \* \$\{CLOUD_SHADOW_DARKNESS\}/);
+});
+
+test("cloud shadow texture samples use uniform fragment control flow", () => {
+  assert.doesNotMatch(
+    shadowSource,
+    /if \(min\(edgeDistance\.x, edgeDistance\.y\) <= 0\.0\) return 0\.0/,
+  );
+  assert.match(shadowSource, /localUV = clamp\(localUV, vec2\(0\.0\), vec2\(1\.0\)\)/);
+  assert.match(shadowSource, /edgeFade \* placementEnabled/);
 });

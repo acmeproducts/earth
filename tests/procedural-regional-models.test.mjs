@@ -31,6 +31,9 @@ test("regional impostor captures are leased, bounded, and serialized", () => {
 test("runtime captures yield between GPU views and pixel-processing slices", () => {
   const impostors = source("Impostor.ts");
   assert.match(impostors, /RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2/);
+  assert.match(impostors, /RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES = 4/);
+  assert.match(impostors, /RUNTIME_CAPTURE_MAX_RESOLUTION = 128/);
+  assert.match(impostors, /runtimeCaptureSampling\(requestedSampling\)/);
   assert.match(impostors, /cooperative && viewsThisFrame >= 1/);
   assert.match(impostors, /await binaryImage/);
   assert.match(impostors, /await dilateTransparentTileEdgeColors/);
@@ -50,4 +53,16 @@ test("streamed detail and far trees share one world-level model seed", () => {
   const game = source("Game.ts");
   const matches = game.match(/modelVariantSeed: layerSeed\(this\.worldSeed, "proceduralModels"\)/g);
   assert.ok(matches && matches.length >= 2);
+});
+
+test("tree sister variants alter macro silhouette and foliage character", () => {
+  const trees = source("ProceduralTree.ts");
+  assert.match(trees, /function applyRegionalTreeCharacter/);
+  assert.match(trees, /const widthScale = 0\.76 \+ random\(\) \* 0\.48/);
+  assert.match(trees, /const depthScale = 0\.76 \+ random\(\) \* 0\.48/);
+  assert.match(trees, /const crownLeanDistance = random\(\) \* 0\.18/);
+  assert.match(trees, /smoothstep01\(\(height01 - 0\.45\) \/ 0\.55\)/);
+  assert.match(trees, /crownLeanX \* crown/);
+  assert.match(trees, /foliageGreen/);
+  assert.match(trees, /textureU < 0 \|\| textureU >= 1\.5/);
 });

@@ -13,6 +13,12 @@ import {
 } from "@babylonjs/core";
 import { createSeededRandom } from "./Random";
 import {
+  bindCloudShadowReceiver,
+  cloudShadowFragmentDeclaration,
+  cloudShadowVertexDeclaration,
+  CLOUD_SHADOW_UNIFORMS,
+} from "./CloudShadows";
+import {
   bindVegetationShadowReceiver,
   vegetationShadowFragmentDeclaration,
   vegetationShadowVertexDeclaration,
@@ -380,6 +386,7 @@ export function createVertexColorCaptureMaterial(
         uniform mat4 viewProjection;
         uniform float modelHeight;
         ${vegetationShadowVertexDeclaration}
+        ${cloudShadowVertexDeclaration}
         ${windPhaseVertexDeclaration}
         ${windShearVertexDeclaration}
         #include<instancesDeclaration>
@@ -415,6 +422,7 @@ export function createVertexColorCaptureMaterial(
             windBend(instanceOrigin)
           );
           vec4 worldPosition = finalWorld * vec4(windPosition, 1.0);
+          vCloudShadowWorldXZ = instanceOrigin.xz;
           vec4 shadowWorldPosition = mix(
             worldPosition,
             finalWorld * vec4(0.0, 0.0, 0.0, 1.0),
@@ -447,6 +455,7 @@ export function createVertexColorCaptureMaterial(
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
         ${vegetationShadowFragmentDeclaration}
+        ${cloudShadowFragmentDeclaration}
         float bayer4(vec2 pixel) {
           vec2 p = mod(floor(pixel), 4.0);
           vec2 low = mod(p, 2.0);
@@ -498,6 +507,7 @@ export function createVertexColorCaptureMaterial(
           // Keep live vegetation readable when direct sunlight has faded out.
           lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
           lighting = mix(vec3(1.0), lighting, lightingEnabled);
+          lighting *= mix(1.0, vegetationCloudShadowVisibility(), lightingEnabled);
           float sceneBrightness = max(
             max(skyColor.r, max(skyColor.g, skyColor.b)),
             max(sunColor.r, max(sunColor.g, sunColor.b))
@@ -548,10 +558,11 @@ export function createVertexColorCaptureMaterial(
         "vegetationShadowReverseDepth",
         "vegetationShadowDarkness",
         "vegetationShadowFloatTexture",
+        ...CLOUD_SHADOW_UNIFORMS,
         ...WIND_PHASE_UNIFORMS,
         ...WIND_SHEAR_UNIFORMS,
       ],
-      samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler"],
+      samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler", "cloudShadowAtlas"],
       needAlphaBlending: false,
     },
   );
@@ -564,6 +575,7 @@ export function createVertexColorCaptureMaterial(
   material.shadowDepthWrapper = shadowDepthWrapper;
   material.onDisposeObservable.addOnce(() => shadowDepthWrapper.dispose());
   bindVegetationShadowReceiver(material, scene);
+  bindCloudShadowReceiver(material, scene);
   // WebGPU requires every declared sampler to have a binding even when a
   // uniform-controlled branch does not sample it.
   const fallbackTexture = fallbackWhiteTexture(scene);

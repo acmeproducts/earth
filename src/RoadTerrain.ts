@@ -20,7 +20,7 @@ interface StampingSegment {
   end: { x: number; z: number };
   startElevation: number;
   endElevation: number;
-  roadRadius: number;
+  flatRadius: number;
   outerRadius: number;
 }
 
@@ -44,8 +44,12 @@ export async function conformTerrainToRoads(
   const segments: StampingSegment[] = [];
   for (const path of eligible) {
     const sampled = resamplePath(path.points, sampleSpacing);
-    const roadRadius = path.widthMeters / options.metersPerUnit / 2;
-    const outerRadius = roadRadius + path.shoulderWidthMeters / options.metersPerUnit;
+    const visualRadius = path.widthMeters / options.metersPerUnit / 2;
+    // A road can be narrower than one elevation cell. Flatten every grid
+    // vertex capable of contributing interpolation beneath the visible road,
+    // otherwise an unsampled ridge can still poke through the ribbon.
+    const flatRadius = visualRadius + sampleSpacing * Math.SQRT2;
+    const outerRadius = flatRadius + path.shoulderWidthMeters / options.metersPerUnit;
     const elevations = sampled.map((point) =>
       sampleElevation(
         terrain,
@@ -62,7 +66,7 @@ export async function conformTerrainToRoads(
         end: sampled[index],
         startElevation: elevations[index - 1],
         endElevation: elevations[index],
-        roadRadius,
+        flatRadius,
         outerRadius,
       });
     }
@@ -89,10 +93,10 @@ export async function conformTerrainToRoads(
         const closest = closestPointOnSegment(x, z, segment.start, segment.end);
         const distance = Math.hypot(x - closest.x, z - closest.z);
         if (distance >= segment.outerRadius) continue;
-        const blend = distance <= segment.roadRadius
+        const blend = distance <= segment.flatRadius
           ? 1
           : 1 - smoothstep(
-            segment.roadRadius,
+            segment.flatRadius,
             segment.outerRadius,
             distance,
           );

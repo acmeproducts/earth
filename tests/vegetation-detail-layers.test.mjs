@@ -42,12 +42,14 @@ test("undergrowth is restricted to plausible WorldCover classes", () => {
   assert.match(field, /addFern\(x, z, 1\)/);
 });
 
-test("fern patches use broad fronds and overlapping satellite plants", () => {
+test("fern patches use the supplied foliage image on curved fronds", () => {
   const capture = source("FernImpostor.ts");
   const field = source("FernField.ts");
 
-  assert.match(capture, /const rachisWidth = 0\.017 \+ random\(\) \* 0\.01/);
-  assert.match(capture, /0\.034 \+ leafletLength \* 0\.2/);
+  assert.match(capture, /assets\/vegetation\/fern\/foliage\.png/);
+  assert.match(capture, /data\.uvs = uvs/);
+  assert.match(capture, /FERN_FOLIAGE_TEXTURE_URL/);
+  assert.match(capture, /const FROND_SEGMENTS = 8/);
   assert.match(field, /const FERN_CLUSTER_RADIUS_METERS = 1\.8/);
   assert.match(field, /for \(let member = 1; member < clusterCount; member\+\+\)/);
 });

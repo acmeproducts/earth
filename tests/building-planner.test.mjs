@@ -45,6 +45,10 @@ test("keeps far massing cheap while detailed buildings add stable architectural 
   assert.match(proceduralBuildings, /roof\.convertToFlatShadedMesh\(\)/);
   assert.match(proceduralBuildings, /function createRoofTrim\(/);
   assert.match(proceduralBuildings, /function createRooftopVolume\(/);
+  assert.match(proceduralBuildings, /function createEnterableBuilding\(/);
+  assert.match(proceduralBuildings, /function addFacadePanel\(/);
+  assert.match(proceduralBuildings, /enterable: true/);
+  assert.match(proceduralBuildings, /windowCount/);
   assert.match(proceduralBuildings, /result\.useVertexColors = true/);
   assert.doesNotMatch(
     openStreetMap,

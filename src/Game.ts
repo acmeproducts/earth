@@ -605,11 +605,18 @@ export class Game {
 
     let mapTiles = previous?.mapTiles;
     if (native) {
-      await reportInitializationProgress(onProgress, "Preparing road terrain", 34);
+      await reportInitializationProgress(onProgress, "Preparing mapped terrain", 34);
       mapTiles ??= this.requestMapTiles(terrainData.bounds);
       const roads = await mapTiles;
       if (generation !== this.streamingGeneration) return undefined;
       await OpenStreetMap.conformTerrainToRoads(
+        roads,
+        terrainData,
+        { meshWidth, meshDepth, metersPerUnit },
+        yieldControl,
+      );
+      if (generation !== this.streamingGeneration) return undefined;
+      await OpenStreetMap.conformTerrainToBuildings(
         roads,
         terrainData,
         { meshWidth, meshDepth, metersPerUnit },
@@ -1039,7 +1046,7 @@ export class Game {
       record.farTreeField = undefined;
       this.fadeFieldOutAndDispose(farTrees);
     }
-    this.refreshShadowCasters();
+    if (kind === "treeField" || kind === "saplingField") this.refreshShadowCasters();
     this.updateVegetationLod();
     return true;
   }

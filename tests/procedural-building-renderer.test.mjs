@@ -132,3 +132,28 @@ test("skillion roofs contain no collapsed triangles", () => {
   scene.dispose();
   engine.dispose();
 });
+
+test("detailed buildings contain streamed interiors, windows, and an entrance", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(123, { render_height: 9.3, levels: 3 }),
+    terrain,
+    options,
+  );
+  const far = ProceduralBuildingRenderer.createFar(
+    scene,
+    plan(123, { render_height: 9.3, levels: 3 }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed && far);
+  assert.equal(detailed.metadata.enterable, true);
+  assert.equal(detailed.metadata.interiorFloorCount, 3);
+  assert.ok(detailed.metadata.windowCount >= 8);
+  assert.ok(detailed.getTotalVertices() > far.getTotalVertices() * 4);
+
+  scene.dispose();
+  engine.dispose();
+});

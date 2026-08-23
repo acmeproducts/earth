@@ -187,6 +187,44 @@ test("incremental LOD coalesces per-instance GPU buffer uploads", async () => {
   assert.ok(uploadCalls < 40, `expected coalesced uploads, got ${uploadCalls}`);
 });
 
+test("sub-meter movement does not churn LOD buffers", async () => {
+  const positions = [];
+  for (let x = -100; x <= 100; x += 2) positions.push({ x, y: 0, z: 0 });
+  const impostorMesh = createMeshStub("impostors");
+  const modelMesh = createMeshStub("models");
+  const field = await createVegetationFieldResult(
+    { name: "test-root" },
+    [impostorMesh],
+    [modelMesh],
+    packMatrices(positions),
+    1,
+    "auto",
+  );
+
+  assert.equal(field.updateLod(new Vector3(0, 2, 0), 40), true);
+  impostorMesh.resetPartialUpdateCalls();
+  modelMesh.resetPartialUpdateCalls();
+  assert.equal(field.updateLod(new Vector3(0.25, 2, 0), 40), false);
+  assert.equal(impostorMesh.partialUpdateCalls + modelMesh.partialUpdateCalls, 0);
+  assert.equal(field.updateLod(new Vector3(0.5, 2, 0), 40), true);
+});
+
+test("vegetation fields retain conservative bounds and allow frustum culling", async () => {
+  const impostorMesh = createMeshStub("impostors");
+  const modelMesh = createMeshStub("models");
+  await createVegetationFieldResult(
+    { name: "test-root" },
+    [impostorMesh],
+    [modelMesh],
+    packMatrices([{ x: 0, y: 0, z: 0 }, { x: 100, y: 0, z: 100 }]),
+    1,
+    "auto",
+  );
+
+  assert.equal(impostorMesh.alwaysSelectAsActiveMesh, false);
+  assert.equal(modelMesh.alwaysSelectAsActiveMesh, false);
+});
+
 test("first full LOD layout cooperatively yields before the field commits", async () => {
   const positions = [];
   for (let x = -100; x <= 100; x += 2) {

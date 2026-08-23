@@ -43,9 +43,9 @@ test("flattens the carriageway and blends its shoulder into cross slope", async 
   assert.ok(modified > 0);
   assert.equal(terrain.elevations[4 * 9 + 3], 8);
   assert.equal(terrain.elevations[4 * 9 + 5], 8);
-  assert.ok(terrain.elevations[4 * 9 + 2] > 4);
-  assert.ok(terrain.elevations[4 * 9 + 2] < 8);
-  assert.equal(terrain.elevations[4 * 9], 0);
+  assert.equal(terrain.elevations[4 * 9 + 2], 8);
+  assert.ok(terrain.elevations[4 * 9 + 1] > 2);
+  assert.ok(terrain.elevations[4 * 9 + 1] < 8);
 });
 
 test("does not carve terrain beneath a bridge", async () => {
@@ -60,4 +60,19 @@ test("does not carve terrain beneath a bridge", async () => {
 
   assert.equal(modified, 0);
   assert.deepEqual(terrain.elevations, original);
+});
+
+test("gives sub-grid roads a raster-safe flat bed", async () => {
+  const terrain = slopedTerrain();
+  await conformTerrainToRoads(terrain, [{
+    points,
+    widthMeters: 0.5,
+    shoulderWidthMeters: 1,
+    structure: "surface",
+  }], options);
+
+  // The road is narrower than the one-metre elevation cells, but every grid
+  // vertex that can interpolate beneath its surface is still on the profile.
+  assert.equal(terrain.elevations[4 * 9 + 3], 8);
+  assert.equal(terrain.elevations[4 * 9 + 5], 8);
 });

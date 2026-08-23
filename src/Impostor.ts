@@ -41,6 +41,9 @@ export interface ImpostorAssets {
 /** Runtime capture work per frame; editor/demo captures retain their faster path. */
 const RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2;
 const OFFLINE_CAPTURE_FRAME_BUDGET_MS = 12;
+/** Smaller runtime atlases reduce the cost of each indivisible render/readback/upload. */
+const RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES = 4;
+const RUNTIME_CAPTURE_MAX_RESOLUTION = 128;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
@@ -210,7 +213,11 @@ export function createImpostorAssetProvider(
     variant: ImpostorVariant,
     requestOptions: ImpostorAssetRequestOptions,
   ): { cache: Map<string, ImpostorCacheEntry>; entry: ImpostorCacheEntry } => {
-    const sampling = { ...getDefaultSampling(), ...overrides };
+    const requestedSampling = { ...getDefaultSampling(), ...overrides };
+    const cooperative = requestOptions.cooperative ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
+    const sampling = cooperative
+      ? runtimeCaptureSampling(requestedSampling)
+      : requestedSampling;
     validateSampling(definition, sampling);
     let cache = sceneAssets.get(scene);
     if (!cache) {
@@ -238,7 +245,7 @@ export function createImpostorAssetProvider(
         definition,
         sampling,
         variant,
-        requestOptions.cooperative,
+        cooperative,
       ),
     );
     const entry: ImpostorCacheEntry = {
@@ -305,6 +312,20 @@ export function createImpostorAssetProvider(
       void entry.promise.then(disposeImpostorAssets, () => undefined);
     }
   }
+}
+
+function runtimeCaptureSampling(sampling: ImpostorSampling): ImpostorSampling {
+  return {
+    horizontalSamples: Math.min(
+      sampling.horizontalSamples,
+      RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES,
+    ),
+    verticalSamples: Math.min(
+      sampling.verticalSamples,
+      RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES,
+    ),
+    resolution: Math.min(sampling.resolution, RUNTIME_CAPTURE_MAX_RESOLUTION),
+  };
 }
 
 function enqueueImpostorCapture<T>(scene: Scene, capture: () => Promise<T>): Promise<T> {

@@ -1,4 +1,4 @@
-import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
+import { Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
 import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
@@ -21,9 +21,10 @@ export function fernRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
 }
 const ROTATIONAL_SYMMETRY_ORDER = 8;
-const DARK_GREEN = new Color3(0.055, 0.18, 0.07);
-const MID_GREEN = new Color3(0.12, 0.34, 0.1);
-const TIP_GREEN = new Color3(0.26, 0.5, 0.15);
+const FROND_SEGMENTS = 8;
+const FERN_FOLIAGE_TEXTURE_URL = require(
+  "../assets/vegetation/fern/foliage.png",
+) as string;
 
 const fernImpostors = createImpostorAssetProvider({
   name: "fernImpostor",
@@ -64,12 +65,13 @@ export function acquireFernImpostorAssets(
   return fernImpostors.acquireAssets(scene, undefined, variant);
 }
 
-/** Builds a radial clump of arched stems and paired, tapered fern leaflets. */
+/** Builds a radial clump of textured fronds on arched ribbon cards. */
 function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e): Mesh {
   const random = createSeededRandom(seed);
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
+  const uvs: number[] = [];
   const baseY = -SOURCE_HEIGHT / 2;
   const sectorAngle = Math.PI * 2 / ROTATIONAL_SYMMETRY_ORDER;
 
@@ -83,7 +85,7 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
     const rise = lowLayer
       ? 0.5 + random() * 0.18
       : 0.82 + random() * 0.18;
-    const rachisWidth = 0.017 + random() * 0.01;
+    const frondHalfWidth = (0.21 + reach * 0.15) * (0.9 + random() * 0.2);
     const brightness = 0.82 + random() * 0.24;
 
     for (let copy = 0; copy < ROTATIONAL_SYMMETRY_ORDER; copy++) {
@@ -91,36 +93,24 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
       const outward = new Vector3(Math.cos(angle), 0, Math.sin(angle));
       const sideways = new Vector3(-outward.z, 0, outward.x);
       const centers: Vector3[] = [];
-      for (let segment = 0; segment <= 8; segment++) {
-        const t = segment / 8;
+      for (let segment = 0; segment <= FROND_SEGMENTS; segment++) {
+        const t = segment / FROND_SEGMENTS;
         const radius = baseRadius + reach * (0.12 * t + 0.88 * Math.pow(t, 1.35));
         const height = rise * Math.sin(t * Math.PI * 0.78);
         centers.push(outward.scale(radius).add(new Vector3(0, baseY + height, 0)));
       }
 
-      const rachisStart = positions.length / 3;
+      const ribbonStart = positions.length / 3;
       for (let segment = 0; segment < centers.length; segment++) {
-        const taper = 1 - segment / (centers.length - 1) * 0.72;
-        const halfWidth = rachisWidth * taper;
-        pushVertex(centers[segment].subtract(sideways.scale(halfWidth)), DARK_GREEN, brightness);
-        pushVertex(centers[segment].add(sideways.scale(halfWidth)), DARK_GREEN, brightness);
+        const t = segment / FROND_SEGMENTS;
+        pushVertex(centers[segment].subtract(sideways.scale(frondHalfWidth)), brightness);
+        pushVertex(centers[segment].add(sideways.scale(frondHalfWidth)), brightness);
+        // The supplied image is upright: stem at the bottom, tip at the top.
+        uvs.push(0, 1 - t, 1, 1 - t);
       }
       for (let segment = 0; segment < centers.length - 1; segment++) {
-        const left = rachisStart + segment * 2;
+        const left = ribbonStart + segment * 2;
         indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-      }
-
-      for (let segment = 1; segment <= 7; segment++) {
-        const t = segment / 8;
-        // Bias the broadest leaflets toward the lower half so the clump reads
-        // as ground-covering foliage instead of a narrow stem with a top fan.
-        const fullness = Math.pow(Math.sin(Math.PI * t), 0.5) * (1 - t * 0.28);
-        const leafletLength = (0.1 + reach * 0.2) * fullness;
-        const leafletWidth = (0.034 + leafletLength * 0.2) * fullness;
-        const center = centers[segment];
-        const color = Color3.Lerp(MID_GREEN, TIP_GREEN, t * 0.72);
-        addLeaflet(center, sideways, outward, leafletLength, leafletWidth, color, brightness);
-        addLeaflet(center, sideways.scale(-1), outward, leafletLength, leafletWidth, color, brightness);
       }
     }
   }
@@ -132,6 +122,7 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
   data.indices = indices;
   data.normals = normals;
   data.colors = colors;
+  data.uvs = uvs;
   const fern = new Mesh("fernImpostorProceduralSource", scene);
   data.applyToMesh(fern);
   fern.isPickable = false;
@@ -140,37 +131,20 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
     scene,
     "fernImpostorSourceMaterial",
     liveLighting,
+    FERN_FOLIAGE_TEXTURE_URL,
   );
   return fern;
 
-  function pushVertex(point: Vector3, color: Color3, brightness: number): number {
+  function pushVertex(point: Vector3, brightness: number): number {
     positions.push(point.x, point.y, point.z);
+    // Keep seed-to-seed variation without repainting the supplied foliage.
     colors.push(
-      Math.min(1, color.r * brightness),
-      Math.min(1, color.g * brightness),
-      Math.min(1, color.b * brightness),
+      Math.min(1, brightness * 0.94),
+      Math.min(1, brightness),
+      Math.min(1, brightness * 0.9),
       1,
     );
     return positions.length / 3 - 1;
-  }
-
-  function addLeaflet(
-    root: Vector3,
-    direction: Vector3,
-    forward: Vector3,
-    length: number,
-    width: number,
-    color: Color3,
-    brightness: number,
-  ): void {
-    const start = positions.length / 3;
-    const shoulder = root.add(direction.scale(length * 0.48));
-    const tip = root.add(direction.scale(length)).add(forward.scale(length * 0.16));
-    pushVertex(root, color.scale(0.72), brightness);
-    pushVertex(shoulder.subtract(forward.scale(width)), color, brightness);
-    pushVertex(tip, color.scale(1.08), brightness);
-    pushVertex(shoulder.add(forward.scale(width)), color, brightness);
-    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
   }
 }
 

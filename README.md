@@ -139,7 +139,7 @@ limits, faces, and symmetry, then create its provider with
 `createImpostorAssetProvider`. The tree, bush, and grass files are examples;
 they contain only model-specific geometry and descriptor values.
 
-Procedural vegetation models are location-bound through virtual 128 by 128
+Procedural vegetation models are location-bound through virtual 256 by 256
 application-tile regions. Trees, bushes, grass, flowers, and ferns use
 independently shifted region grids, so their model captures normally change at
 different locations. A four-tile-per-side border band assigns nearby placements to either

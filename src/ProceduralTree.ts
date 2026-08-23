@@ -423,6 +423,8 @@ function createBirchTree(
     }
   }
 
+  applyRegionalTreeCharacter(buffers, seed);
+
   const data = new VertexData();
   const normals = new Float32Array(buffers.positions.length);
   VertexData.ComputeNormals(buffers.positions, buffers.indices, normals);
@@ -722,6 +724,7 @@ function createBroadleafTree(
     }
   }
 
+  applyRegionalTreeCharacter(buffers, seed);
   return createTreeMesh(scene, name, species, buffers, liveLighting);
 }
 
@@ -796,6 +799,7 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Mesh {
       }
     }
   }
+  applyRegionalTreeCharacter(buffers, seed);
   return createTreeMesh(scene, name, "palm", buffers, liveLighting);
 }
 
@@ -1030,6 +1034,8 @@ function createConiferTree(
     );
   }
 
+  applyRegionalTreeCharacter(buffers, seed);
+
   const data = new VertexData();
   const normals = new Float32Array(buffers.positions.length);
   VertexData.ComputeNormals(buffers.positions, buffers.indices, normals);
@@ -1051,6 +1057,48 @@ function createConiferTree(
     TREE_LOW_LIGHT_BRIGHTNESS[species],
   );
   return tree;
+}
+
+/** Gives sister variants a different large-scale silhouette, not just different twigs. */
+function applyRegionalTreeCharacter(buffers: GeometryBuffers, seed: number): void {
+  const random = createSeededRandom(seed ^ 0x56415249);
+  const widthScale = 0.76 + random() * 0.48;
+  const depthScale = 0.76 + random() * 0.48;
+  const crownLeanAngle = random() * Math.PI * 2;
+  const crownLeanDistance = random() * 0.18;
+  const crownLeanX = Math.cos(crownLeanAngle) * crownLeanDistance;
+  const crownLeanZ = Math.sin(crownLeanAngle) * crownLeanDistance;
+  const foliageRed = 0.9 + random() * 0.2;
+  const foliageGreen = 0.91 + random() * 0.18;
+  const foliageBlue = 0.88 + random() * 0.24;
+  const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
+
+  for (let offset = 0; offset < buffers.positions.length; offset += 3) {
+    const height01 = Math.max(0, Math.min(
+      1,
+      (buffers.positions[offset + 1] - baseY) / PROCEDURAL_TREE_SOURCE_HEIGHT,
+    ));
+    // Keep regional asymmetry in the canopy. Starting the deformation near the
+    // crown avoids turning an otherwise upright trunk into a deeply bent stem.
+    const crown = smoothstep01((height01 - 0.45) / 0.55);
+    buffers.positions[offset] = buffers.positions[offset] * lerp(1, widthScale, crown)
+      + crownLeanX * crown;
+    buffers.positions[offset + 2] = buffers.positions[offset + 2] * lerp(1, depthScale, crown)
+      + crownLeanZ * crown;
+
+    const vertex = offset / 3;
+    const textureU = buffers.uvs[vertex * 2] ?? -1;
+    if (textureU < 0 || textureU >= 1.5) continue;
+    const color = vertex * 4;
+    buffers.colors[color] = Math.min(1, buffers.colors[color] * foliageRed);
+    buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * foliageGreen);
+    buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * foliageBlue);
+  }
+}
+
+function smoothstep01(value: number): number {
+  const clamped = Math.max(0, Math.min(1, value));
+  return clamped * clamped * (3 - 2 * clamped);
 }
 
 function createTreeMesh(

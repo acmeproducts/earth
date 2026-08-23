@@ -6,6 +6,8 @@ export type VegetationRenderMode = "impostors" | "auto" | "models";
 
 /** Narrow enough to keep the movement-time transition working set small. */
 const LOD_TRANSITION_WIDTH_METERS = 20;
+/** Sub-frame camera motion is visually irrelevant across the wide LOD blend. */
+const LOD_UPDATE_MIN_MOVEMENT_METERS = 0.5;
 /** Small gaps are cheaper to upload than issuing another WebGL buffer call. */
 const PARTIAL_UPDATE_MERGE_GAP_SLOTS = 8;
 
@@ -89,7 +91,8 @@ export async function createVegetationFieldResult(
   );
 
   let mode = initialMode;
-  let lastCameraPosition: Vector3 | undefined;
+  const lastCameraPosition = Vector3.Zero();
+  let hasLastCameraPosition = false;
   let lastDistanceMeters = 10;
   const allInstanceIndices: number[] = [];
   let minimumInstanceY = Number.POSITIVE_INFINITY;
@@ -140,7 +143,7 @@ export async function createVegetationFieldResult(
     if (mode === "impostors") {
       autoSlotsValid = false;
       impostorLodBlend.fill(0);
-      if (lastCameraPosition) {
+      if (hasLastCameraPosition) {
         writeFrontToBackInstances(
           impostorMatrices,
           matrices,
@@ -165,7 +168,7 @@ export async function createVegetationFieldResult(
       modelLodBlend.fill(1);
       setCounts(0, count);
       updateMeshBuffers(modelMeshes, true);
-    } else if (lastCameraPosition) {
+    } else if (hasLastCameraPosition) {
       updateAutoLod(lastCameraPosition, lastDistanceMeters, true);
     } else {
       impostorMatrices.set(matrices);
@@ -395,19 +398,18 @@ export async function createVegetationFieldResult(
   };
 
   const updateLod = (cameraPosition: Vector3, distanceMeters: number): boolean => {
-    if (
-      lastCameraPosition &&
-      Vector3.DistanceSquared(cameraPosition, lastCameraPosition) < 1e-12 &&
-      distanceMeters === lastDistanceMeters
-    ) return false;
-    const previousCameraPosition = lastCameraPosition;
     const distanceChanged = distanceMeters !== lastDistanceMeters;
+    const movementSquared = hasLastCameraPosition
+      ? Vector3.DistanceSquared(cameraPosition, lastCameraPosition)
+      : Number.POSITIVE_INFINITY;
+    const minimumMovement = LOD_UPDATE_MIN_MOVEMENT_METERS / metersPerUnit;
+    if (!distanceChanged && movementSquared < minimumMovement * minimumMovement) return false;
+    const hadPreviousCameraPosition = hasLastCameraPosition;
     const transitionWidth = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters) / metersPerUnit;
-    const forceFullUpdate = !previousCameraPosition || distanceChanged || Vector3.Distance(
-      cameraPosition,
-      previousCameraPosition,
-    ) >= transitionWidth;
-    lastCameraPosition = cameraPosition.clone();
+    const forceFullUpdate = !hadPreviousCameraPosition || distanceChanged ||
+      movementSquared >= transitionWidth * transitionWidth;
+    lastCameraPosition.copyFrom(cameraPosition);
+    hasLastCameraPosition = true;
     lastDistanceMeters = distanceMeters;
     // Impostor-only and model-only modes hold a fixed instance set; the
     // material resolves impostor detail per fragment.
@@ -421,7 +423,8 @@ export async function createVegetationFieldResult(
     distanceMeters: number,
     yieldControl?: () => Promise<void>,
   ): Promise<boolean> => {
-    lastCameraPosition = cameraPosition.clone();
+    lastCameraPosition.copyFrom(cameraPosition);
+    hasLastCameraPosition = true;
     lastDistanceMeters = distanceMeters;
     if (mode !== "auto") return false;
     const update = beginAutoLodUpdate(cameraPosition, distanceMeters, true);
@@ -590,7 +593,9 @@ async function initializeMeshes(
     }
     await yieldControl?.();
     mesh.thinInstanceRefreshBoundingInfo(true);
-    mesh.alwaysSelectAsActiveMesh = true;
+    // The bounds were computed from every source instance and remain a safe
+    // superset while LOD packing changes the active prefix of the buffers.
+    mesh.alwaysSelectAsActiveMesh = false;
     mesh.freezeWorldMatrix();
   }
 }

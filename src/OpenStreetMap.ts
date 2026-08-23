@@ -48,6 +48,7 @@ import {
   RoadVisualStyle,
 } from "./RoadPlanner";
 import { conformTerrainToRoads as stampRoadTerrain } from "./RoadTerrain";
+import { conformTerrainToBuildings as stampBuildingTerrain } from "./BuildingTerrain";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 
@@ -410,6 +411,26 @@ export class OpenStreetMap {
       await yieldControl?.();
     }
     return stampRoadTerrain(terrain, paths, options, yieldControl);
+  }
+
+  static async conformTerrainToBuildings(
+    tiles: MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    yieldControl?: () => Promise<void>,
+  ): Promise<number> {
+    const footprints = [];
+    for (const tile of tiles) {
+      for (const source of buildingSources(tile)) {
+        footprints.push({
+          outline: source.polygon.outer.map(([lon, lat]) =>
+            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
+          ),
+        });
+      }
+      await yieldControl?.();
+    }
+    return stampBuildingTerrain(terrain, footprints, options, yieldControl);
   }
 
   static createLandCoverSampler(
