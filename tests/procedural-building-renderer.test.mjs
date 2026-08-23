@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
+import {
+  FreeCamera,
+  Material,
+  MultiMaterial,
+  NullEngine,
+  PBRMaterial,
+  Scene,
+  TransformNode,
+  Vector3,
+  VertexBuffer,
+} from "@babylonjs/core";
 import { planBuilding } from "../src/BuildingPlanner.ts";
 
 register("./ts-extension-resolver.mjs", import.meta.url);
@@ -133,7 +143,7 @@ test("skillion roofs contain no collapsed triangles", () => {
   engine.dispose();
 });
 
-test("detailed buildings contain streamed interiors, windows, and an entrance", () => {
+test("detailed buildings defer interiors until the camera is very close", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
   const detailed = ProceduralBuildingRenderer.createDetailed(
@@ -150,12 +160,88 @@ test("detailed buildings contain streamed interiors, windows, and an entrance", 
   );
   assert.ok(detailed && far);
   assert.equal(detailed.metadata.enterable, true);
+  assert.equal(detailed.metadata.interiorsLoaded, false);
   assert.equal(detailed.metadata.interiorFloorCount, 3);
   assert.equal(detailed.metadata.stairFlightCount, 2);
+  assert.notEqual(detailed.metadata.stairEdgeIndex, detailed.metadata.entranceEdgeIndex);
   assert.ok(detailed.metadata.windowCount >= 8);
   const colors = detailed.getVerticesData(VertexBuffer.ColorKind);
   assert.ok(colors.some((_, index) => index % 4 === 3 && colors[index] < 0.5));
   assert.ok(detailed.getTotalVertices() > far.getTotalVertices() * 4);
+
+  const merged = ProceduralBuildingRenderer.merge(
+    [detailed],
+    "buildings",
+    new TransformNode("root", scene),
+  );
+  assert.equal(scene.getMeshByName("buildingInteriors"), null);
+  assert.ok(merged.material instanceof MultiMaterial);
+  assert.equal(merged.subMeshes.length, 2);
+  assert.equal(merged.material.subMaterials[0].transparencyMode, Material.MATERIAL_OPAQUE);
+  assert.equal(merged.material.subMaterials[1].transparencyMode, Material.MATERIAL_ALPHABLEND);
+
+  scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+  merged.onBeforeRenderObservable.notifyObservers(merged);
+  assert.ok(scene.getMeshByName("buildingInteriors"));
+  assert.equal(merged.metadata.loadedInteriorCount, 1);
+  assert.equal(merged.metadata.pendingInteriorCount, 0);
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("one-story buildings keep a single floor and no stairs", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(321, { render_height: 3.1, levels: 1 }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed);
+  assert.equal(detailed.metadata.interiorFloorCount, 1);
+  assert.equal(detailed.metadata.stairFlightCount, 0);
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("tall buildings use deterministic reflective high-rise massing", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const tower = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(456, { render_height: 80, levels: 26 }),
+    terrain,
+    options,
+  );
+  const far = ProceduralBuildingRenderer.createFar(
+    scene,
+    plan(456, { render_height: 80, levels: 26 }),
+    terrain,
+    options,
+  );
+  assert.ok(tower && far);
+  assert.equal(tower.metadata.highRise, true);
+  assert.equal(tower.metadata.enterable, false);
+  assert.equal(tower.getTotalVertices(), far.getTotalVertices());
+
+  const merged = ProceduralBuildingRenderer.merge(
+    [tower],
+    "buildings",
+    new TransformNode("root", scene),
+  );
+  assert.ok(merged.material instanceof MultiMaterial);
+  const reflective = merged.material.subMaterials.find(
+    (material) => material instanceof PBRMaterial,
+  );
+  assert.ok(reflective);
+  assert.equal(reflective.transparencyMode, Material.MATERIAL_OPAQUE);
+  assert.equal(reflective.alpha, 1);
+  const colors = merged.getVerticesData(VertexBuffer.ColorKind);
+  assert.ok(colors.every((value, index) => index % 4 !== 3 || value === 1));
+  assert.equal(merged.metadata.pendingInteriorCount, undefined);
 
   scene.dispose();
   engine.dispose();

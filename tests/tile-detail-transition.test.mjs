@@ -21,9 +21,22 @@ test("keeps far building massing visible through the native terrain upgrade", ()
   );
 });
 
-test("prebuilds both distant stand-ins before demoting tile detail", () => {
-  assert.match(game, /record\.farTreeField && record\.farBuildings/);
-  assert.match(game, /\(!record\.farTreeField \|\| !record\.farBuildings\)/);
+test("keeps far roads visible through native upgrades and detail transitions", () => {
+  assert.match(game, /const carriedFarRoads = previous\?\.farRoads;/);
+  assert.match(game, /farRoads: carriedFarRoads,/);
+  assert.match(
+    game,
+    /record\.mapFeatures = mapFeatures\.root;[\s\S]*?record\.farRoads = undefined;[\s\S]*?setMapLayerFade\(farRoads, fade\)/,
+  );
+  assert.match(
+    game,
+    /const farRoads = record\.farRoads;[\s\S]*?farRoads\.setEnabled\(true\);[\s\S]*?setMapLayerFade\(farRoads, fade\)/,
+  );
+});
+
+test("prebuilds every distant stand-in before demoting tile detail", () => {
+  assert.match(game, /record\.farTreeField && record\.farBuildings && record\.farRoads/);
+  assert.match(game, /\(!record\.farTreeField \|\| !record\.farBuildings \|\| !record\.farRoads\)/);
   assert.match(
     game,
     /const farBuildings = record\.farBuildings;[\s\S]*?farBuildings\.setEnabled\(true\);[\s\S]*?setMapLayerFade\(farBuildings, fade\)/,

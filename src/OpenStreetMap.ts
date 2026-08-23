@@ -2,6 +2,7 @@ import {
   Color3,
   Mesh,
   MeshBuilder,
+  MultiMaterial,
   PBRMaterial,
   PolygonMeshBuilder,
   RawTexture,
@@ -182,6 +183,12 @@ export interface BuildingFeatureLayer {
   count: number;
 }
 
+export interface RoadFeatureLayer {
+  root: TransformNode;
+  meshes: Mesh[];
+  count: number;
+}
+
 export class OpenStreetMap {
   private static readonly ZOOM = 14;
   private static readonly TILE_URL = "https://tiles.openfreemap.org/planet/latest";
@@ -225,7 +232,7 @@ export class OpenStreetMap {
     };
     const bridgeDecks: Mesh[] = [];
     const junctionCandidates: RoadJunctionCandidate[] = [];
-    const lakePositions: LakePosition[] = [];
+    const lakePositions = this.collectLakePositions(tiles, terrain, options);
     const waterways: Mesh[] = [];
 
     for (const tile of tiles) {
@@ -265,22 +272,6 @@ export class OpenStreetMap {
         }
       }
       await yieldControl?.();
-      forEachFeature(tile, "water", (feature, featureIndex) => {
-        if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
-        const waterPolygons = polygons(feature, tile);
-        for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
-          const position = lakePosition(
-            waterPolygons[polygonIndex],
-            terrain,
-            options,
-          );
-          if (!position) continue;
-          lakePositions.push({
-            sourceId: waterFeatureSourceId(feature, tile, featureIndex, polygonIndex),
-            ...position,
-          });
-        }
-      });
       forEachFeature(tile, "waterway", (feature) => {
         if (truthy(feature.properties.intermittent)) return;
         const widthMeters = waterwayWidthMeters(feature.properties.class);
@@ -330,6 +321,34 @@ export class OpenStreetMap {
     };
   }
 
+  /** Retains only provider identity and position; terrain owns the final shape. */
+  static collectLakePositions(
+    tiles: readonly MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth">,
+  ): LakePosition[] {
+    const positions = new Map<string, Array<{ x: number; z: number }>>();
+    for (const tile of tiles) {
+      forEachFeature(tile, "water", (feature, featureIndex) => {
+        if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
+        const waterPolygons = polygons(feature, tile);
+        for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
+          const position = lakePosition(waterPolygons[polygonIndex], terrain, options);
+          if (!position) continue;
+          const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
+          const matches = positions.get(sourceId);
+          if (matches) matches.push(position);
+          else positions.set(sourceId, [position]);
+        }
+      });
+    }
+    return [...positions].map(([sourceId, matches]) => ({
+      sourceId,
+      x: matches.reduce((sum, point) => sum + point.x, 0) / matches.length,
+      z: matches.reduce((sum, point) => sum + point.z, 0) / matches.length,
+    }));
+  }
+
   static async createBuildingLayer(
     scene: Scene,
     tiles: MapTile[],
@@ -357,6 +376,47 @@ export class OpenStreetMap {
     const meshes = merged ? [merged] : [];
     for (const mesh of meshes) mesh.setEnabled(true);
     return { root, meshes, count: buildings.length };
+  }
+
+  /** Keeps road surfaces visible beyond the full map-feature detail rings. */
+  static async createRoadLayer(
+    scene: Scene,
+    tiles: MapTile[],
+    terrain: TerrainData,
+    options: MapLayerOptions,
+    yieldControl?: () => Promise<void>,
+  ): Promise<RoadFeatureLayer> {
+    const root = new TransformNode("farRoads", scene);
+    if (options.startDisabled) root.setEnabled(false);
+    const roadMeshes: Record<RoadVisualStyle, Mesh[]> = {
+      marked: [],
+      paved: [],
+      pedestrian: [],
+      unpaved: [],
+      ford: [],
+    };
+    let count = 0;
+    for (const tile of tiles) {
+      for (const source of roadSources(tile)) {
+        const appearance = planRoad(source.properties);
+        if (!appearance || appearance.isTunnel) continue;
+        count++;
+        for (const line of source.paths) {
+          const created = createRoad(scene, line, terrain, options, appearance, "far");
+          roadMeshes[appearance.visualStyle].push(...created.surfaces);
+        }
+      }
+      await yieldControl?.();
+    }
+    const meshes = [
+      mergeRoads(roadMeshes.marked, "farMarkedRoads", "marked", root),
+      mergeRoads(roadMeshes.paved, "farPavedRoads", "paved", root),
+      mergeRoads(roadMeshes.pedestrian, "farPedestrianRoads", "pedestrian", root),
+      mergeRoads(roadMeshes.unpaved, "farUnpavedRoads", "unpaved", root),
+      mergeRoads(roadMeshes.ford, "farFordRoads", "ford", root),
+    ].filter((mesh): mesh is Mesh => mesh !== undefined);
+    for (const mesh of meshes) mesh.setEnabled(true);
+    return { root, meshes, count };
   }
 
   static async createRoadExclusionMask(
@@ -485,8 +545,13 @@ export class OpenStreetMap {
   /** Disposes a streamed layer without taking down its scene-owned sky map. */
   static disposeLayer(root: TransformNode): void {
     for (const mesh of root.getChildMeshes(false)) {
-      if (mesh.material instanceof PBRMaterial || mesh.material instanceof StandardMaterial) {
-        mesh.material.reflectionTexture = null;
+      const materials = mesh.material instanceof MultiMaterial
+        ? mesh.material.subMaterials
+        : [mesh.material];
+      for (const material of materials) {
+        if (material instanceof PBRMaterial || material instanceof StandardMaterial) {
+          material.reflectionTexture = null;
+        }
       }
     }
     root.dispose(false, true);
@@ -609,7 +674,7 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
 function lakePosition(
   coordinates: LonLat[],
   terrain: TerrainData,
-  options: MapLayerOptions,
+  options: Pick<MapLayerOptions, "meshWidth" | "meshDepth">,
 ): { x: number; z: number } | undefined {
   const uniqueCoordinates = coordinates.length > 1 &&
       coordinates[0][0] === coordinates[coordinates.length - 1][0] &&
@@ -636,20 +701,27 @@ function createRoad(
   terrain: TerrainData,
   options: MapLayerOptions,
   appearance: RoadPlan,
+  detail: "detailed" | "far" = "detailed",
 ): CreatedRoad {
   const points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
   );
-  const halfWidth = appearance.widthMeters / options.metersPerUnit / 2;
+  const renderWidthMeters = detail === "far"
+    ? Math.max(appearance.widthMeters, 3)
+    : appearance.widthMeters;
+  const halfWidth = renderWidthMeters / options.metersPerUnit / 2;
   const clippedPaths = clipPolyline(
     points,
     options.meshWidth / 2,
     options.meshDepth / 2,
   );
-  const sampleSpacing = Math.min(
+  const terrainSampleSpacing = Math.min(
     options.meshWidth / Math.max(1, terrain.width - 1),
     options.meshDepth / Math.max(1, terrain.height - 1),
   ) / 2;
+  const sampleSpacing = detail === "far"
+    ? Math.max(terrainSampleSpacing, 12 / options.metersPerUnit)
+    : terrainSampleSpacing;
   const paths = clippedPaths.map((path) => resamplePath(path, sampleSpacing));
   const surfaces: Mesh[] = [];
   const shoulders: Mesh[] = [];
@@ -668,7 +740,9 @@ function createRoad(
       ROAD_SURFACE_CLEARANCE_METERS,
       bridgeElevations,
     ));
-    if (bridgeElevations) {
+    if (detail === "far") {
+      continue;
+    } else if (bridgeElevations) {
       bridgeDecks.push(...createRoadMeshes(
         scene,
         path,

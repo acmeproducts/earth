@@ -467,7 +467,7 @@ interface BroadleafProfile {
 const BROADLEAF_PROFILES: Readonly<Record<BroadleafSpecies, BroadleafProfile>> = {
   acacia: {
     seed: 0x41434143, trunkFraction: 0.54, trunkRadius: 0.14, crownRadius: 1.28,
-    crownDepth: 0.34, branchCount: 11, leaderCount: 3, foliageCards: 460,
+    crownDepth: 0.34, branchCount: 11, leaderCount: 3, foliageCards: 650,
     bark: new Color3(0.3, 0.2, 0.1),
     foliage: [new Color3(0.3, 0.43, 0.12), new Color3(0.39, 0.5, 0.16)],
   },
@@ -480,7 +480,7 @@ const BROADLEAF_PROFILES: Readonly<Record<BroadleafSpecies, BroadleafProfile>> =
   eucalyptus: {
     seed: 0x45554341, trunkFraction: 0.76, trunkRadius: 0.095, crownRadius: 0.72,
     crownDepth: 0.82, branchCount: 9, leaderCount: 2, foliageCards: 330,
-    bark: new Color3(0.56, 0.49, 0.37),
+    bark: new Color3(0.42, 0.36, 0.27),
     foliage: [new Color3(0.25, 0.42, 0.3), new Color3(0.34, 0.5, 0.36)],
   },
   mangrove: {

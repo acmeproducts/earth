@@ -12,9 +12,9 @@ const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 test("streamed tiles own one provider-backed data bundle", () => {
   assert.match(game, /landCover\?: WorldCover/);
-  assert.match(game, /preCarvingElevations\?: Float32Array/);
+  assert.match(game, /preCarvingElevations: Float32Array/);
   assert.match(game, /mapTiles\?: Promise<MapTile\[\]>/);
-  assert.match(game, /const preCarvingElevations = native \? terrainData\.elevations\.slice\(\)/);
+  assert.match(game, /const preCarvingElevations = terrainData\.elevations\.slice\(\)/);
   assert.match(game, /record\.mapTiles \?\?= this\.requestMapTiles\(record\.terrainData\.bounds\)/);
   assert.match(game, /mapTiles \?\?= this\.requestMapTiles\(terrainData\.bounds\)/);
   assert.equal((game.match(/TerrainElevationSource\.fetchWorldArea\(/g) ?? []).length, 1);

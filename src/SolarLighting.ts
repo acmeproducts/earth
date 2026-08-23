@@ -14,6 +14,7 @@ import {
 } from "@babylonjs/core";
 import { SkyMaterial } from "@babylonjs/materials";
 import * as SunCalc from "suncalc";
+import { parseCalendarDate } from "./CalendarDate";
 import { Moon } from "./Moon";
 import { StarField } from "./StarField";
 
@@ -53,6 +54,7 @@ export class SolarLighting {
   private latitude: number;
   private longitude: number;
   private lastUpdate = 0;
+  private calendarDate?: string;
   private timeOfDayHours?: number;
 
   constructor(scene: Scene, latitude: number, longitude: number) {
@@ -195,8 +197,8 @@ export class SolarLighting {
         RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
     }
 
-    this.update(new Date(), true);
-    scene.onBeforeRenderObservable.add(() => this.update(this.currentLightingDate()));
+    this.update(this.currentDate, true);
+    scene.onBeforeRenderObservable.add(() => this.update(this.currentDate));
   }
 
   /** The captured sky, for materials that reflect their surroundings. */
@@ -216,16 +218,39 @@ export class SolarLighting {
     result.groundColor.copyFrom(this.ambientLight.groundColor).scaleInPlace(this.ambientLight.intensity);
   }
 
+  /** The local simulation timestamp currently driving the sky. */
+  get currentDate(): Date {
+    const date = new Date();
+    const calendarDate = this.calendarDate
+      ? parseCalendarDate(this.calendarDate)
+      : undefined;
+    if (calendarDate) {
+      date.setFullYear(calendarDate.year, calendarDate.month - 1, calendarDate.day);
+    }
+    if (this.timeOfDayHours !== undefined) {
+      const hours = Math.floor(this.timeOfDayHours);
+      const minutes = Math.round((this.timeOfDayHours - hours) * 60);
+      date.setHours(hours, minutes, 0, 0);
+    }
+    return date;
+  }
+
   setLocation(latitude: number, longitude: number): void {
     this.latitude = latitude;
     this.longitude = longitude;
-    this.update(this.currentLightingDate(), true);
+    this.update(this.currentDate, true);
+  }
+
+  /** Fixes the calendar date, or resumes today's date when omitted. */
+  setDate(date?: string): void {
+    this.calendarDate = date && parseCalendarDate(date) ? date : undefined;
+    this.update(this.currentDate, true);
   }
 
   /** Fixes the sun to a clock time, or resumes the live clock when omitted. */
   setTimeOfDay(hours?: number): void {
     this.timeOfDayHours = hours;
-    this.update(this.currentLightingDate(), true);
+    this.update(this.currentDate, true);
   }
 
   setShadowCasters(meshes: Mesh[]): void {
@@ -246,16 +271,6 @@ export class SolarLighting {
     // old projection before replacement vegetation samples the shadow matrix.
     this.directLight.forceProjectionMatrixCompute();
     this.refreshStaticShadows();
-  }
-
-  private currentLightingDate(): Date {
-    const date = new Date();
-    if (this.timeOfDayHours === undefined) return date;
-
-    const hours = Math.floor(this.timeOfDayHours);
-    const minutes = Math.round((this.timeOfDayHours - hours) * 60);
-    date.setHours(hours, minutes, 0, 0);
-    return date;
   }
 
   private update(date: Date, force = false): void {

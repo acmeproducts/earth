@@ -119,6 +119,12 @@ test("gives every tree species its own procedural bark texture", () => {
   assert.match(proceduralTrees, /getTreeBarkTexture\(scene, species\)/);
 });
 
+test("keeps acacia foliage dense and eucalyptus bark subdued", () => {
+  assert.match(proceduralTrees, /acacia:[\s\S]*?foliageCards: 650/);
+  assert.match(proceduralTrees, /eucalyptus:[\s\S]*?bark: new Color3\(0\.42, 0\.36, 0\.27\)/);
+  assert.match(captureMaterial, /eucalyptus: \[174, 158, 128\]/);
+});
+
 test("gives pine and spruce dense, twigged crowns and converges species brightness in low light", () => {
   assert.match(proceduralTrees, /firstLevel = species === "pine" \? 4 : 2/);
   assert.match(proceduralTrees, /species === "spruce"\s*\? 7/);

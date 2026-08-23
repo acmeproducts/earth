@@ -195,7 +195,7 @@ test("non-grazing shallow depth separation still shadows grass", () => {
 test("scene changes invalidate cached directional shadow bounds", () => {
   const setCasters = solarLighting.slice(
     solarLighting.indexOf("setShadowCasters"),
-    solarLighting.indexOf("private currentLightingDate"),
+    solarLighting.indexOf("private update(date"),
   );
   assert.match(setCasters, /directLight\.forceProjectionMatrixCompute\(\)/);
   assert.match(solarLighting, /directLight\.autoUpdateExtends = true/);

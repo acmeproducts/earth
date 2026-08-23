@@ -1,13 +1,18 @@
 import {
+  BaseTexture,
   Color3,
   Material,
   Mesh,
   MeshBuilder,
+  MultiMaterial,
+  PBRMaterial,
   PolygonMeshBuilder,
   Scene,
   StandardMaterial,
+  SubMesh,
   TransformNode,
   Vector2,
+  Vector3,
   VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
@@ -31,6 +36,10 @@ const BUILDING_WINDOW_SPACING_METERS = 3;
 const BUILDING_WINDOW_CLEAR_DISTANCE_METERS = 9;
 const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 24;
 const BUILDING_WINDOW_CLOSE_ALPHA = 0.16;
+const BUILDING_REFLECTIVE_MARKER_ALPHA = 0.72;
+const BUILDING_INTERIOR_LOAD_DISTANCE_METERS = 42;
+const BUILDING_INTERIOR_CHECK_INTERVAL_MS = 120;
+const BUILDING_INTERIORS_PER_CHECK = 2;
 const BUILDING_STAIR_WIDTH_METERS = 1.15;
 const BUILDING_STAIR_MIN_RUN_METERS = 2.4;
 const BUILDING_STAIR_MAX_RUN_METERS = 4.2;
@@ -40,6 +49,7 @@ export interface BuildingRenderOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
+  skyReflection?: BaseTexture | null;
 }
 
 interface BuildingAppearance {
@@ -70,13 +80,27 @@ interface DetailedBuildingParts {
   windowCount: number;
   floorCount: number;
   stairFlightCount: number;
+  entranceEdgeIndex: number;
+  stairEdgeIndex?: number;
+}
+
+interface PendingBuildingInterior {
+  center: Vector3;
+  load: () => Mesh | undefined;
 }
 
 interface StairLayout {
+  edgeIndex: number;
   start: ScenePoint;
   direction: ScenePoint;
   inward: ScenePoint;
   runMeters: number;
+  widthMeters: number;
+}
+
+interface EntranceClearance {
+  edgeIndex: number;
+  centerMeters: number;
   widthMeters: number;
 }
 
@@ -100,6 +124,10 @@ export class ProceduralBuildingRenderer {
 
     const appearance = buildingAppearance(plan);
     const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
+    const towerBlend = highRiseBlend(plan.heightMeters);
+    if (seededUnit(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
+      return createHighRiseBuilding(scene, plan, prepared, options, appearance, towerBlend);
+    }
     const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
     const roofHeightMeters = roofShape === "flat"
       ? 0
@@ -122,6 +150,7 @@ export class ProceduralBuildingRenderer {
       wallTopElevation,
       options,
       appearance,
+      "exterior",
     );
     const parts = detailed.parts;
     const trim = createRoofTrim(
@@ -171,7 +200,27 @@ export class ProceduralBuildingRenderer {
       windowCount: detailed.windowCount,
       interiorFloorCount: detailed.floorCount,
       stairFlightCount: detailed.stairFlightCount,
+      entranceEdgeIndex: detailed.entranceEdgeIndex,
+      stairEdgeIndex: detailed.stairEdgeIndex,
       metersPerUnit: options.metersPerUnit,
+      skyReflection: options.skyReflection,
+      interiorsLoaded: false,
+      pendingInterior: {
+        center: new Vector3(
+          averagePoint(prepared.outline).x,
+          (prepared.baseElevation + wallTopElevation) / (2 * options.metersPerUnit),
+          averagePoint(prepared.outline).z,
+        ),
+        load: () => createInteriorMesh(
+          scene,
+          plan,
+          prepared.outline,
+          prepared.baseElevation,
+          wallTopElevation,
+          options,
+          appearance,
+        ),
+      } satisfies PendingBuildingInterior,
     };
     return stageBuildingMesh(merged);
   }
@@ -202,6 +251,11 @@ export class ProceduralBuildingRenderer {
   static merge(meshes: Mesh[], name: string, parent: TransformNode): Mesh | undefined {
     if (meshes.length === 0) return undefined;
     const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
+    const skyReflection = meshes.find((mesh) => mesh.metadata?.skyReflection)?.metadata
+      ?.skyReflection as BaseTexture | null | undefined;
+    const pendingInteriors = meshes
+      .map((mesh) => mesh.metadata?.pendingInterior as PendingBuildingInterior | undefined)
+      .filter((pending): pending is PendingBuildingInterior => pending !== undefined);
     const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
     if (!result) return undefined;
     const material = new StandardMaterial(`${name}Material`, result.getScene());
@@ -209,10 +263,7 @@ export class ProceduralBuildingRenderer {
     material.specularColor = new Color3(0.025, 0.025, 0.025);
     material.specularPower = 16;
     material.backFaceCulling = false;
-    // Keep the merged shell in the depth-writing path. Alpha blending sorts
-    // the entire building as one transparent object, which can make outward
-    // facade polygons disappear behind inward-facing geometry.
-    material.transparencyMode = Material.MATERIAL_ALPHATEST;
+    material.transparencyMode = Material.MATERIAL_OPAQUE;
     result.useVertexColors = true;
     result.hasVertexAlpha = true;
     result.name = name;
@@ -220,10 +271,80 @@ export class ProceduralBuildingRenderer {
     result.parent = parent;
     result.checkCollisions = name === "buildings" || name === "detailedBuildings";
     if (Number.isFinite(metersPerUnit)) {
-      configureProximityWindows(result, metersPerUnit);
+      configureBuildingSurfaceMaterials(result, metersPerUnit, material, skyReflection);
+      configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
     }
     return result;
   }
+}
+
+function highRiseBlend(heightMeters: number): number {
+  const height01 = clamp01((heightMeters - 22) / 58);
+  return height01 * height01 * (3 - 2 * height01);
+}
+
+function createHighRiseBuilding(
+  scene: Scene,
+  plan: BuildingPlan,
+  prepared: PreparedBuildingFootprint,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+  towerBlend: number,
+): Mesh {
+  const bottomElevation = plan.minimumHeightMeters > 0
+    ? prepared.baseElevation + plan.minimumHeightMeters
+    : prepared.baseElevation - BUILDING_GROUND_OVERLAP_METERS;
+  const mesh = createBuildingPrism(
+    scene,
+    prepared.outline,
+    prepared.baseElevation + plan.heightMeters,
+    bottomElevation,
+    options,
+  );
+  const glass = mixColor(
+    appearance.wall,
+    new Color3(0.32, 0.48, 0.56),
+    0.48 + towerBlend * 0.32,
+  );
+  colorReflectiveBuildingMass(mesh, glass, appearance.roof);
+  mesh.metadata = {
+    buildingId: plan.id,
+    enterable: false,
+    highRise: true,
+    highRiseBlend: towerBlend,
+    metersPerUnit: options.metersPerUnit,
+    skyReflection: options.skyReflection,
+  };
+  return mesh;
+}
+
+function createInteriorMesh(
+  scene: Scene,
+  plan: BuildingPlan,
+  outline: ScenePoint[],
+  baseElevation: number,
+  topElevation: number,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+): Mesh | undefined {
+  const interior = createEnterableBuilding(
+    scene,
+    plan,
+    outline,
+    baseElevation,
+    topElevation,
+    options,
+    appearance,
+    "interior",
+  );
+  const merged = Mesh.MergeMeshes(interior.parts, false, true);
+  if (!merged) {
+    for (const part of interior.parts) part.dispose(false, true);
+    return undefined;
+  }
+  for (const part of interior.parts) part.dispose(false, true);
+  merged.metadata = { metersPerUnit: options.metersPerUnit };
+  return stageBuildingMesh(merged);
 }
 
 /**
@@ -239,6 +360,7 @@ function createEnterableBuilding(
   topElevation: number,
   options: BuildingRenderOptions,
   appearance: BuildingAppearance,
+  part: "exterior" | "interior",
 ): DetailedBuildingParts {
   const usableHeight = Math.max(2.4, topElevation - baseElevation);
   const requestedFloors = plan.levels === undefined
@@ -247,42 +369,60 @@ function createEnterableBuilding(
   const floorCount = Math.min(20, requestedFloors);
   const storyHeight = usableHeight / floorCount;
   const entranceEdge = longestPolygonEdge(outline);
-  const stair = floorCount > 1 ? findStairLayout(outline, options) : undefined;
+  const entranceEdgeLengthMeters = pointDistance(
+    outline[entranceEdge],
+    outline[(entranceEdge + 1) % outline.length],
+  ) * options.metersPerUnit;
+  const entranceBayCount = Math.max(
+    1,
+    Math.min(16, Math.round(entranceEdgeLengthMeters / BUILDING_WINDOW_SPACING_METERS)),
+  );
+  const entranceBayWidth = entranceEdgeLengthMeters / entranceBayCount;
+  const entranceClearance: EntranceClearance = {
+    edgeIndex: entranceEdge,
+    centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
+    widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
+  };
+  const stair = floorCount > 1
+    ? findStairLayout(outline, options, entranceClearance)
+    : undefined;
   const parts: Mesh[] = [];
   const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
   let windowCount = 0;
 
-  const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
-  for (let floor = 0; floor < floorCount; floor++) {
-    const slabBottom = baseElevation + floor * storyHeight;
-    const slab = createBuildingPrism(
-      scene,
-      outline,
-      slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
-      slabBottom,
-      options,
-      floor > 0 && stair ? [stairOpening(stair, options)] : undefined,
-    );
-    setSolidVertexColor(slab, floorColor);
-    parts.push(slab);
-  }
-
-  if (stair) {
-    for (let floor = 0; floor < floorCount - 1; floor++) {
-      createStairFlight(
-        parts,
+  if (part === "interior") {
+    const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
+    for (let floor = 0; floor < floorCount; floor++) {
+      const slabBottom = baseElevation + floor * storyHeight;
+      const slab = createBuildingPrism(
         scene,
-        stair,
-        baseElevation + floor * storyHeight,
-        storyHeight,
-        floor % 2 === 1,
+        outline,
+        slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
+        slabBottom,
         options,
-        floorColor,
+        floor > 0 && stair ? [stairOpening(stair, options)] : undefined,
       );
+      setSolidVertexColor(slab, floorColor);
+      parts.push(slab);
+    }
+
+    if (stair) {
+      for (let floor = 0; floor < floorCount - 1; floor++) {
+        createStairFlight(
+          parts,
+          scene,
+          stair,
+          baseElevation + floor * storyHeight,
+          storyHeight,
+          floor % 2 === 1,
+          options,
+          floorColor,
+        );
+      }
     }
   }
 
-  for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
+  for (let edgeIndex = 0; part === "exterior" && edgeIndex < outline.length; edgeIndex++) {
     const start = outline[edgeIndex];
     const end = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
@@ -333,7 +473,14 @@ function createEnterableBuilding(
   const windowMesh = createWindowMesh(scene, windows);
   if (windowMesh) parts.push(windowMesh);
 
-  return { parts, windowCount, floorCount, stairFlightCount: stair ? floorCount - 1 : 0 };
+  return {
+    parts,
+    windowCount,
+    floorCount,
+    stairFlightCount: stair ? floorCount - 1 : 0,
+    entranceEdgeIndex: entranceEdge,
+    stairEdgeIndex: stair?.edgeIndex,
+  };
 }
 
 function addWindowQuad(
@@ -506,8 +653,10 @@ function createBuildingPrism(
 function findStairLayout(
   outline: ScenePoint[],
   options: BuildingRenderOptions,
+  entrance: EntranceClearance,
 ): StairLayout | undefined {
   const edges = outline.map((_, index) => index).sort((a, b) =>
+    Number(a === entrance.edgeIndex) - Number(b === entrance.edgeIndex) ||
     pointDistance(outline[b], outline[(b + 1) % outline.length]) -
     pointDistance(outline[a], outline[(a + 1) % outline.length])
   );
@@ -522,24 +671,36 @@ function findStairLayout(
       z: (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters,
     };
     const inward = { x: -direction.z, z: direction.x };
-    const alongStart = (edgeLengthMeters - runMeters) / 2;
     const acrossCenter = BUILDING_STAIR_WALL_CLEARANCE_METERS +
       BUILDING_STAIR_WIDTH_METERS / 2;
-    const start = {
-      x: edgeStart.x + (direction.x * alongStart + inward.x * acrossCenter) /
-        options.metersPerUnit,
-      z: edgeStart.z + (direction.z * alongStart + inward.z * acrossCenter) /
-        options.metersPerUnit,
-    };
-    const layout = {
-      start,
-      direction,
-      inward,
-      runMeters,
-      widthMeters: BUILDING_STAIR_WIDTH_METERS,
-    };
-    if (stairOpening(layout, options).every((point) => pointInPolygon(point, outline))) {
-      return layout;
+    const centeredStart = (edgeLengthMeters - runMeters) / 2;
+    const alongStarts = edgeIndex === entrance.edgeIndex
+      ? [0.6, edgeLengthMeters - runMeters - 0.6]
+      : [centeredStart];
+    for (const alongStart of alongStarts) {
+      if (alongStart < 0.35 || alongStart + runMeters > edgeLengthMeters - 0.35) continue;
+      if (edgeIndex === entrance.edgeIndex) {
+        const doorwayMinimum = entrance.centerMeters - entrance.widthMeters / 2 - 0.65;
+        const doorwayMaximum = entrance.centerMeters + entrance.widthMeters / 2 + 0.65;
+        if (alongStart < doorwayMaximum && alongStart + runMeters > doorwayMinimum) continue;
+      }
+      const start = {
+        x: edgeStart.x + (direction.x * alongStart + inward.x * acrossCenter) /
+          options.metersPerUnit,
+        z: edgeStart.z + (direction.z * alongStart + inward.z * acrossCenter) /
+          options.metersPerUnit,
+      };
+      const layout = {
+        edgeIndex,
+        start,
+        direction,
+        inward,
+        runMeters,
+        widthMeters: BUILDING_STAIR_WIDTH_METERS,
+      };
+      if (stairOpening(layout, options).every((point) => pointInPolygon(point, outline))) {
+        return layout;
+      }
     }
   }
   return undefined;
@@ -617,14 +778,77 @@ function pointInPolygon(point: ScenePoint, polygon: readonly ScenePoint[]): bool
   return inside;
 }
 
-function configureProximityWindows(mesh: Mesh, metersPerUnit: number): void {
+function configureBuildingSurfaceMaterials(
+  mesh: Mesh,
+  metersPerUnit: number,
+  solidMaterial: StandardMaterial,
+  skyReflection: BaseTexture | null | undefined,
+): void {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const colors = mesh.getVerticesData(VertexBuffer.ColorKind);
-  if (!positions || !colors) return;
+  const indices = mesh.getIndices();
+  if (!positions || !colors || !indices) return;
   const windowVertices: number[] = [];
+  const reflectiveVertices = new Set<number>();
   for (let vertex = 0; vertex < colors.length / 4; vertex++) {
-    if (colors[vertex * 4 + 3] < 0.99) windowVertices.push(vertex);
+    const marker = colors[vertex * 4 + 3];
+    if (marker < 0.5) windowVertices.push(vertex);
+    else if (marker < 0.99) {
+      reflectiveVertices.add(vertex);
+      colors[vertex * 4 + 3] = 1;
+    }
   }
+  if (windowVertices.length === 0 && reflectiveVertices.size === 0) return;
+
+  const solidIndices: number[] = [];
+  const windowIndices: number[] = [];
+  const reflectiveIndices: number[] = [];
+  for (let index = 0; index < indices.length; index += 3) {
+    const target = reflectiveVertices.has(indices[index]) &&
+        reflectiveVertices.has(indices[index + 1]) &&
+        reflectiveVertices.has(indices[index + 2])
+      ? reflectiveIndices
+      : colors[indices[index] * 4 + 3] < 0.5 &&
+          colors[indices[index + 1] * 4 + 3] < 0.5 &&
+          colors[indices[index + 2] * 4 + 3] < 0.5
+        ? windowIndices
+        : solidIndices;
+    target.push(indices[index], indices[index + 1], indices[index + 2]);
+  }
+  mesh.setIndices([...solidIndices, ...windowIndices, ...reflectiveIndices], undefined, true);
+  mesh.setVerticesData(VertexBuffer.ColorKind, colors, true);
+  mesh.releaseSubMeshes();
+
+  const glassMaterial = new StandardMaterial(`${mesh.name}WindowMaterial`, mesh.getScene());
+  glassMaterial.diffuseColor = Color3.White();
+  glassMaterial.specularColor = new Color3(0.3, 0.34, 0.36);
+  glassMaterial.specularPower = 48;
+  glassMaterial.backFaceCulling = false;
+  glassMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND;
+  const reflectiveMaterial = new PBRMaterial(`${mesh.name}HighRiseMaterial`, mesh.getScene());
+  reflectiveMaterial.metallic = 0.18;
+  reflectiveMaterial.roughness = 0.16;
+  reflectiveMaterial.environmentIntensity = 0.85;
+  reflectiveMaterial.reflectionTexture = skyReflection ?? null;
+  reflectiveMaterial.backFaceCulling = false;
+  reflectiveMaterial.alpha = 1;
+  reflectiveMaterial.transparencyMode = Material.MATERIAL_OPAQUE;
+  reflectiveMaterial.useAlphaFromAlbedoTexture = false;
+  const materials = new MultiMaterial(`${mesh.name}Materials`, mesh.getScene());
+  materials.subMaterials = [];
+  let indexOffset = 0;
+  const addSurface = (surfaceIndices: number[], material: StandardMaterial | PBRMaterial): void => {
+    if (surfaceIndices.length === 0) return;
+    const materialIndex = materials.subMaterials.length;
+    materials.subMaterials.push(material);
+    SubMesh.CreateFromIndices(materialIndex, indexOffset, surfaceIndices.length, mesh);
+    indexOffset += surfaceIndices.length;
+  };
+  addSurface(solidIndices, solidMaterial);
+  addSurface(windowIndices, glassMaterial);
+  addSurface(reflectiveIndices, reflectiveMaterial);
+  mesh.material = materials;
+
   if (windowVertices.length === 0) return;
   mesh.markVerticesDataAsUpdatable(VertexBuffer.ColorKind, true);
   let lastUpdateMilliseconds = -Infinity;
@@ -656,6 +880,64 @@ function configureProximityWindows(mesh: Mesh, metersPerUnit: number): void {
         (1 - BUILDING_WINDOW_CLOSE_ALPHA) * fade;
     }
     mesh.updateVerticesData(VertexBuffer.ColorKind, colors, false, false);
+  });
+}
+
+function configureLazyInteriors(
+  exterior: Mesh,
+  parent: TransformNode,
+  pendingInteriors: PendingBuildingInterior[],
+  metersPerUnit: number,
+): void {
+  if (pendingInteriors.length === 0) return;
+  exterior.metadata ??= {};
+  delete exterior.metadata.pendingInterior;
+  exterior.metadata.pendingInteriorCount = pendingInteriors.length;
+  exterior.metadata.loadedInteriorCount = 0;
+  let lastCheckMilliseconds = -Infinity;
+  exterior.onBeforeRenderObservable.add(() => {
+    const now = performance.now();
+    if (now - lastCheckMilliseconds < BUILDING_INTERIOR_CHECK_INTERVAL_MS) return;
+    lastCheckMilliseconds = now;
+    const camera = exterior.getScene().activeCamera;
+    if (!camera) return;
+    const parentWorld = parent.computeWorldMatrix(true);
+    const localCamera = Vector3.TransformCoordinates(
+      camera.globalPosition,
+      parentWorld.clone().invert(),
+    );
+    let loaded = 0;
+    while (loaded < BUILDING_INTERIORS_PER_CHECK && pendingInteriors.length > 0) {
+      let nearestIndex = 0;
+      let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < pendingInteriors.length; index++) {
+        const center = pendingInteriors[index].center;
+        const distanceSquared = (center.x - localCamera.x) ** 2 +
+          (center.z - localCamera.z) ** 2;
+        if (distanceSquared < nearestDistanceSquared) {
+          nearestDistanceSquared = distanceSquared;
+          nearestIndex = index;
+        }
+      }
+      const candidate = pendingInteriors[nearestIndex];
+      const distanceMeters = Math.sqrt(nearestDistanceSquared) * metersPerUnit;
+      if (distanceMeters > BUILDING_INTERIOR_LOAD_DISTANCE_METERS) break;
+      pendingInteriors.splice(nearestIndex, 1);
+      const interiorSource = candidate.load();
+      if (!interiorSource) continue;
+      const interior = ProceduralBuildingRenderer.merge(
+        [interiorSource],
+        "buildingInteriors",
+        parent,
+      );
+      if (!interior) continue;
+      interior.checkCollisions = true;
+      interior.setEnabled(true);
+      exterior.metadata.loadedInteriorCount++;
+      loaded++;
+    }
+    exterior.metadata.pendingInteriorCount = pendingInteriors.length;
+    exterior.metadata.interiorsLoaded = pendingInteriors.length === 0;
   });
 }
 
@@ -929,6 +1211,30 @@ function colorBuildingMass(mesh: Mesh, appearance: BuildingAppearance): void {
       clamp01(base.g * light),
       clamp01(base.b * light),
       1,
+    );
+  }
+  mesh.setVerticesData(VertexBuffer.ColorKind, colors);
+  mesh.useVertexColors = true;
+}
+
+function colorReflectiveBuildingMass(mesh: Mesh, wall: Color3, roof: Color3): void {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+  if (!positions) return;
+  const colors: number[] = [];
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const normalX = normals?.[vertex * 3] ?? 0;
+    const normalY = normals?.[vertex * 3 + 1] ?? 0;
+    const normalZ = normals?.[vertex * 3 + 2] ?? 0;
+    const base = normalY > 0.55 ? roof : wall;
+    const light = normalY > 0.55
+      ? 0.9
+      : Math.max(0.72, Math.min(1.06, 0.9 + normalX * 0.1 - normalZ * 0.06));
+    colors.push(
+      clamp01(base.r * light),
+      clamp01(base.g * light),
+      clamp01(base.b * light),
+      BUILDING_REFLECTIVE_MARKER_ALPHA,
     );
   }
   mesh.setVerticesData(VertexBuffer.ColorKind, colors);

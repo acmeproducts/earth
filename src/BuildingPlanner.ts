@@ -45,7 +45,7 @@ export interface BuildingPlan {
   detailSeed: number;
 }
 
-const DEFAULT_BUILDING_HEIGHT_METERS = 8;
+const DEFAULT_BUILDING_HEIGHT_METERS = 3.1;
 
 export function planBuilding(source: BuildingSource): BuildingPlan {
   const heightMeters = positiveNumber(source.properties.render_height) ??

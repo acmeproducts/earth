@@ -86,7 +86,7 @@ const BARK_BASE: Record<TreeBarkStyle, readonly [number, number, number]> = {
   acacia: [157, 139, 111],
   beech: [181, 181, 169],
   birch: [229, 226, 216],
-  eucalyptus: [205, 191, 160],
+  eucalyptus: [174, 158, 128],
   fir: [151, 143, 128],
   mangrove: [139, 124, 99],
   maple: [160, 148, 127],

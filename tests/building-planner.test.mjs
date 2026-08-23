@@ -95,7 +95,7 @@ test("uses stable defaults and identity-derived detail seeds", () => {
   const second = planBuilding({ ...source, properties: { render_height: "invalid" } });
   const neighbor = planBuilding({ ...source, id: "building/14/43/0" });
 
-  assert.equal(first.heightMeters, 8);
+  assert.equal(first.heightMeters, 3.1);
   assert.equal(first.minimumHeightMeters, 0);
   assert.equal(first.detailSeed, second.detailSeed);
   assert.notEqual(first.detailSeed, neighbor.detailSeed);

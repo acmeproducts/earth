@@ -7,6 +7,7 @@ const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url
 const geocoding = readFileSync(new URL("../src/Geocoding.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
+const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
 
 test("defaults to three by three and allows exact even-sized detail windows", () => {
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 3/);
@@ -53,6 +54,17 @@ test("a URL time override fixes both the sun and the settings clock", () => {
   assert.match(game, /this\.solarLighting\.setTimeOfDay\(this\.initialTimeOfDay\)/);
   assert.match(controls, /initialTimeOfDay\?: number/);
   assert.match(controls, /this\.isLiveTime = false/);
+});
+
+test("the simulation date can be fixed from the settings menu or URL", () => {
+  assert.match(game, /query\.get\("date"\)/);
+  assert.match(game, /this\.solarLighting\.setDate\(this\.initialDate\)/);
+  assert.match(controls, /initialDate\?: string/);
+  assert.match(controls, /this\.dateInput\.type = "date"/);
+  assert.match(controls, /options\.onDateChange\(this\.dateInput\.value\)/);
+  assert.match(controls, /options\.onDateChange\(undefined\)/);
+  assert.match(solarLighting, /get currentDate\(\): Date/);
+  assert.match(solarLighting, /setDate\(date\?: string\)/);
 });
 
 test("location names are geocoded and passed through coordinate navigation", () => {

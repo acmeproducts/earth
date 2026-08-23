@@ -6,6 +6,7 @@ import {
   providerPixelCrop,
 } from "../src/TerrainElevationSource.ts";
 import {
+  createTerrainSkirtGeometry,
   stitchTerrainEdges,
   stitchTerrainMeshEdges,
 } from "../src/TerrainStitching.ts";
@@ -125,4 +126,47 @@ test("makes detailed edges follow the same profile as coarse edges", () => {
     assert.equal(positions[vertex * 3 + 1], coarseProfile);
   }
   assert.equal(positions[(64 * verticesPerRow + 64) * 3 + 1], 64 * 64 * 2);
+});
+
+test("builds a double-sided skirt below every terrain edge segment", () => {
+  const subdivisions = 2;
+  const rowSize = subdivisions + 1;
+  const positions = new Float32Array(rowSize * rowSize * 3);
+  const uvs = new Float32Array(rowSize * rowSize * 2);
+  const colors = new Float32Array(rowSize * rowSize * 4).fill(0.5);
+  for (let row = 0; row < rowSize; row++) {
+    for (let column = 0; column < rowSize; column++) {
+      const vertex = row * rowSize + column;
+      positions.set([column, 10 + vertex, row], vertex * 3);
+      uvs.set([column, row], vertex * 2);
+    }
+  }
+
+  const skirt = createTerrainSkirtGeometry(
+    positions,
+    uvs,
+    subdivisions,
+    -1,
+    colors,
+    0.5,
+    0.02,
+  );
+  assert.equal(skirt.positions.length / 3, subdivisions * 4 * 8);
+  assert.equal(skirt.indices.length, subdivisions * 4 * 24);
+  assert.equal(skirt.colors.length / 4, skirt.positions.length / 3);
+  for (let vertex = 6; vertex < skirt.positions.length / 3; vertex += 8) {
+    assert.equal(skirt.positions[vertex * 3 + 1], -1);
+    assert.equal(skirt.positions[(vertex + 1) * 3 + 1], -1);
+  }
+  assert.equal(skirt.positions[2 * 3 + 2], 0.5);
+  assert.ok(Math.abs(skirt.positions[2 * 3 + 1] - (positions[1] - 0.02)) < 1e-5);
+});
+
+test("restitches detailed terrain after map-driven deformation", () => {
+  const initialStitch = game.indexOf("stitchTerrainEdges(terrainData");
+  const buildingStamp = game.indexOf("OpenStreetMap.conformTerrainToBuildings");
+  const finalStitch = game.indexOf("stitchTerrainEdges(terrainData", initialStitch + 1);
+  assert.ok(initialStitch >= 0);
+  assert.ok(buildingStamp > initialStitch);
+  assert.ok(finalStitch > buildingStamp);
 });

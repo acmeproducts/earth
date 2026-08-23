@@ -16,11 +16,12 @@ test("saplings reuse tree species assets at a smaller rendered height", () => {
   assert.match(trees, /const treeHeight = renderHeightMeters \/ metersPerUnit/);
 });
 
-test("fern undergrowth shares one source between its model and upper-hemisphere impostor", () => {
+test("fern undergrowth shares one directional source between its model and impostor", () => {
   const capture = source("FernImpostor.ts");
   const field = source("FernField.ts");
 
-  assert.match(capture, /rotationallySymmetric: true/);
+  assert.match(capture, /faces: IMPOSTOR_CUBE_FACES/);
+  assert.match(capture, /rotationallySymmetric: false/);
   assert.match(capture, /upperHemisphereOnly: true/);
   assert.match(capture, /export function createFernModel/);
   assert.match(field, /\[fern\],\s*\[fernModel\],\s*await packInstanceMatrices/);
@@ -50,6 +51,9 @@ test("fern patches use the supplied foliage image on curved fronds", () => {
   assert.match(capture, /data\.uvs = uvs/);
   assert.match(capture, /FERN_FOLIAGE_TEXTURE_URL/);
   assert.match(capture, /const FROND_SEGMENTS = 8/);
+  assert.match(capture, /const FROND_COUNT = 18/);
+  assert.match(capture, /positionAlongRhizome/);
+  assert.doesNotMatch(capture, /baseRadius|ROTATIONAL_SYMMETRY_ORDER/);
   assert.match(field, /const FERN_CLUSTER_RADIUS_METERS = 1\.8/);
   assert.match(field, /for \(let member = 1; member < clusterCount; member\+\+\)/);
 });

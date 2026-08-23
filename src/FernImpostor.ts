@@ -4,8 +4,8 @@ import {
   setVertexColorModelHeight,
 } from "./ProceduralCaptureMaterial";
 import {
-  AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  IMPOSTOR_CUBE_FACES,
   ImpostorAssetLease,
   ImpostorAssets,
   ImpostorVariant,
@@ -20,7 +20,7 @@ const CAPTURE_DIAMETER = 2.7;
 export function fernRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
 }
-const ROTATIONAL_SYMMETRY_ORDER = 8;
+const FROND_COUNT = 18;
 const FROND_SEGMENTS = 8;
 const FERN_FOLIAGE_TEXTURE_URL = require(
   "../assets/vegetation/fern/foliage.png",
@@ -32,9 +32,8 @@ const fernImpostors = createImpostorAssetProvider({
   createSource: (scene, variant) => createFernSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
-  faces: AXISYMMETRIC_IMPOSTOR_FACES,
-  rotationallySymmetric: true,
-  rotationalSymmetryOrder: ROTATIONAL_SYMMETRY_ORDER,
+  faces: IMPOSTOR_CUBE_FACES,
+  rotationallySymmetric: false,
   upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
@@ -65,7 +64,7 @@ export function acquireFernImpostorAssets(
   return fernImpostors.acquireAssets(scene, undefined, variant);
 }
 
-/** Builds a radial clump of textured fronds on arched ribbon cards. */
+/** Builds upright fronds staggered along a short, irregular rhizome. */
 function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e): Mesh {
   const random = createSeededRandom(seed);
   const positions: number[] = [];
@@ -73,45 +72,50 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
   const colors: number[] = [];
   const uvs: number[] = [];
   const baseY = -SOURCE_HEIGHT / 2;
-  const sectorAngle = Math.PI * 2 / ROTATIONAL_SYMMETRY_ORDER;
+  const rhizomeAngle = random() * Math.PI * 2;
+  const rhizome = new Vector3(Math.cos(rhizomeAngle), 0, Math.sin(rhizomeAngle));
+  const rhizomeSide = new Vector3(-rhizome.z, 0, rhizome.x);
 
-  for (let variant = 0; variant < 4; variant++) {
-    const lowLayer = variant < 2;
-    const localAngle = random() * sectorAngle;
-    const baseRadius = 0.12 + random() * 0.16;
-    const reach = lowLayer
-      ? 0.68 + random() * 0.2
-      : 0.48 + random() * 0.18;
-    const rise = lowLayer
-      ? 0.5 + random() * 0.18
-      : 0.82 + random() * 0.18;
-    const frondHalfWidth = (0.21 + reach * 0.15) * (0.9 + random() * 0.2);
+  for (let frond = 0; frond < FROND_COUNT; frond++) {
+    const positionAlongRhizome = (frond / (FROND_COUNT - 1) - 0.5) * 0.48
+      + (random() - 0.5) * 0.06;
+    const base = rhizome.scale(positionAlongRhizome)
+      .add(rhizomeSide.scale((random() - 0.5) * 0.12));
+    const sideOfRhizome = frond % 2 === 0 ? 1 : -1;
+    const heading = rhizomeAngle
+      + sideOfRhizome * (Math.PI * (0.34 + random() * 0.22))
+      + (random() - 0.5) * 0.45;
+    const outward = new Vector3(Math.cos(heading), 0, Math.sin(heading));
+    const sideways = new Vector3(-outward.z, 0, outward.x);
+    const mature = random() > 0.22;
+    const reach = mature ? 0.2 + random() * 0.32 : 0.08 + random() * 0.18;
+    const rise = mature ? 0.88 + random() * 0.26 : 0.56 + random() * 0.25;
+    const frondHalfWidth = (mature ? 0.2 : 0.14) * (0.88 + random() * 0.24);
     const brightness = 0.82 + random() * 0.24;
+    const lateralBow = (random() - 0.5) * 0.07;
 
-    for (let copy = 0; copy < ROTATIONAL_SYMMETRY_ORDER; copy++) {
-      const angle = localAngle + copy * sectorAngle;
-      const outward = new Vector3(Math.cos(angle), 0, Math.sin(angle));
-      const sideways = new Vector3(-outward.z, 0, outward.x);
-      const centers: Vector3[] = [];
-      for (let segment = 0; segment <= FROND_SEGMENTS; segment++) {
-        const t = segment / FROND_SEGMENTS;
-        const radius = baseRadius + reach * (0.12 * t + 0.88 * Math.pow(t, 1.35));
-        const height = rise * Math.sin(t * Math.PI * 0.78);
-        centers.push(outward.scale(radius).add(new Vector3(0, baseY + height, 0)));
-      }
+    const centers: Vector3[] = [];
+    for (let segment = 0; segment <= FROND_SEGMENTS; segment++) {
+      const t = segment / FROND_SEGMENTS;
+      const horizontal = reach * Math.pow(t, 1.8);
+      const height = rise * (1.22 * t - 0.22 * t * t);
+      centers.push(base
+        .add(outward.scale(horizontal))
+        .add(sideways.scale(Math.sin(t * Math.PI) * lateralBow))
+        .add(new Vector3(0, baseY + height, 0)));
+    }
 
-      const ribbonStart = positions.length / 3;
-      for (let segment = 0; segment < centers.length; segment++) {
-        const t = segment / FROND_SEGMENTS;
-        pushVertex(centers[segment].subtract(sideways.scale(frondHalfWidth)), brightness);
-        pushVertex(centers[segment].add(sideways.scale(frondHalfWidth)), brightness);
-        // The supplied image is upright: stem at the bottom, tip at the top.
-        uvs.push(0, 1 - t, 1, 1 - t);
-      }
-      for (let segment = 0; segment < centers.length - 1; segment++) {
-        const left = ribbonStart + segment * 2;
-        indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-      }
+    const ribbonStart = positions.length / 3;
+    for (let segment = 0; segment < centers.length; segment++) {
+      const t = segment / FROND_SEGMENTS;
+      pushVertex(centers[segment].subtract(sideways.scale(frondHalfWidth)), brightness);
+      pushVertex(centers[segment].add(sideways.scale(frondHalfWidth)), brightness);
+      // The supplied image is upright: stem at the bottom, tip at the top.
+      uvs.push(0, 1 - t, 1, 1 - t);
+    }
+    for (let segment = 0; segment < centers.length - 1; segment++) {
+      const left = ribbonStart + segment * 2;
+      indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
     }
   }
 

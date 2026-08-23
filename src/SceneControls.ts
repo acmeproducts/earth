@@ -1,5 +1,6 @@
 import { WEB_MERCATOR_MAX_LATITUDE } from "./Locations";
 import type { WorldLocation } from "./Locations";
+import { formatCalendarDate } from "./CalendarDate";
 import { geocodeLocationName } from "./Geocoding";
 import { SCENE_SETTING_DEFINITIONS } from "./SceneSettings";
 import type {
@@ -11,8 +12,10 @@ import type {
 export interface SceneControlsOptions {
   settings: Readonly<SceneSettings>;
   initialLocation: WorldLocation;
+  initialDate?: string;
   initialTimeOfDay?: number;
   onSettingChange: (key: SceneSettingKey, value: number) => void;
+  onDateChange: (date: string | undefined) => void;
   onTimeOfDayChange: (hours: number | undefined) => void;
   onLocationChange: (location: WorldLocation) => Promise<void>;
   onMenuOpenChange: (isOpen: boolean) => void;
@@ -26,6 +29,8 @@ export class SceneControls {
   private readonly timeInput: HTMLInputElement;
   private readonly timeOutput: HTMLOutputElement;
   private readonly liveButton: HTMLButtonElement;
+  private readonly dateInput: HTMLInputElement;
+  private readonly todayButton: HTMLButtonElement;
   private readonly placeInput: HTMLInputElement;
   private readonly placeGoButton: HTMLButtonElement;
   private readonly latitudeInput: HTMLInputElement;
@@ -35,6 +40,7 @@ export class SceneControls {
   private readonly clockTimer: number;
   private readonly rangeControls = new Map<SceneSettingKey, RangeControl>();
   private readonly onMenuOpenChange: (isOpen: boolean) => void;
+  private isLiveDate = true;
   private isLiveTime = true;
   private menuOpen = false;
 
@@ -68,6 +74,35 @@ export class SceneControls {
       this.rangeControls.set(definition.key, control);
       sceneGroup.appendChild(control.row);
     }
+
+    const dateRow = document.createElement("label");
+    dateRow.className = "scene-control-row date-control-row";
+    const dateLabel = document.createElement("span");
+    dateLabel.textContent = "Date";
+
+    this.dateInput = document.createElement("input");
+    this.dateInput.type = "date";
+    this.dateInput.setAttribute("aria-label", "Date");
+
+    this.todayButton = document.createElement("button");
+    this.todayButton.type = "button";
+    this.todayButton.textContent = "Today";
+    this.todayButton.title = "Use today's date";
+    this.todayButton.addEventListener("click", () => {
+      this.isLiveDate = true;
+      this.updateLiveDate();
+      options.onDateChange(undefined);
+    });
+
+    this.dateInput.addEventListener("input", () => {
+      if (!this.dateInput.value) return;
+      this.isLiveDate = false;
+      this.updateDateState();
+      options.onDateChange(this.dateInput.value);
+    });
+
+    dateRow.append(dateLabel, this.dateInput, this.todayButton);
+    sceneGroup.appendChild(dateRow);
 
     const timeRow = document.createElement("label");
     timeRow.className = "scene-control-row";
@@ -158,6 +193,13 @@ export class SceneControls {
     document.body.appendChild(this.element);
     document.addEventListener("keydown", this.handleKeyDown, true);
     this.setLocation(options.initialLocation);
+    if (options.initialDate === undefined) {
+      this.updateLiveDate();
+    } else {
+      this.isLiveDate = false;
+      this.dateInput.value = options.initialDate;
+      this.updateDateState();
+    }
     if (options.initialTimeOfDay === undefined) {
       this.updateLiveTime();
     } else {
@@ -165,7 +207,10 @@ export class SceneControls {
       this.timeInput.value = String(options.initialTimeOfDay);
       this.updateTimeDisplay(options.initialTimeOfDay);
     }
-    this.clockTimer = window.setInterval(() => this.updateLiveTime(), 60_000);
+    this.clockTimer = window.setInterval(() => {
+      this.updateLiveDate();
+      this.updateLiveTime();
+    }, 60_000);
   }
 
   get isOpen(): boolean {
@@ -338,6 +383,17 @@ export class SceneControls {
     const hours = now.getHours() + now.getMinutes() / MINUTES_PER_HOUR;
     this.timeInput.value = String(hours);
     this.updateTimeDisplay(hours);
+  }
+
+  private updateLiveDate(): void {
+    if (!this.isLiveDate) return;
+    this.dateInput.value = formatCalendarDate(new Date());
+    this.updateDateState();
+  }
+
+  private updateDateState(): void {
+    this.todayButton.classList.toggle("active", this.isLiveDate);
+    this.todayButton.setAttribute("aria-pressed", String(this.isLiveDate));
   }
 
   private updateTimeDisplay(hours: number): void {

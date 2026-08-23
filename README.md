@@ -182,7 +182,9 @@ with solid shaded cores and softer edge coverage. Clouds fade out before the
 camera reaches them and through their own high-altitude haze beyond the terrain
 fog; use `?clouds=off` for a cloud-free performance comparison.
 Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
-shadows; the settings menu's Live button returns to the current local time.
+shadows, and `?date=2026-08-23` to hold the simulation on a specific local
+calendar date. The settings menu's Live and Today buttons restore the current
+local time and date.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
@@ -205,7 +207,7 @@ frames so replacement tiles have less impact on frame rate.
 Click the world once to capture the pointer; looking around then follows mouse
 movement without holding a button in either movement mode. Press Escape to
 release the pointer and open the settings menu. It can resize both streaming
-windows, adjust cloud density at runtime, set the time of day, and load a new
+windows, adjust cloud density at runtime, set the date and time of day, and load a new
 world location from latitude and longitude. Grass density remains fixed at 1.
 Numeric scene settings are remembered in local storage. The same settings can
 be initialized with `?detail-size=3`, `?terrain-size=17`, and

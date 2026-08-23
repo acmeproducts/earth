@@ -66,7 +66,7 @@ test("branch-selected vegetation textures disable WGSL derivative uniformity ana
 test("WebGPU uses native material variants for streamed shadows and water", () => {
   assert.match(
     game,
-    /this\.engine\.isWebGPU \? field\.shadowCasterMeshes : field\.meshes/,
+    /field\.shadowCasterMeshes\.length > 0 \? field\.shadowCasterMeshes : field\.meshes/,
   );
   assert.match(game, /refreshShadows && !this\.engine\.isWebGPU/);
   assert.match(solarLighting, /!scene\.getEngine\(\)\.isWebGPU\);/);

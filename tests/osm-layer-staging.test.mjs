@@ -62,6 +62,14 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
 });
 
+test("builds a coarse road-only layer for the far render", () => {
+  assert.match(openStreetMap, /static async createRoadLayer/);
+  assert.match(openStreetMap, /new TransformNode\("farRoads"/);
+  assert.match(openStreetMap, /createRoad\(scene, line, terrain, options, appearance, "far"\)/);
+  assert.match(openStreetMap, /Math\.max\(terrainSampleSpacing, 12 \/ options\.metersPerUnit\)/);
+  assert.match(openStreetMap, /Math\.max\(appearance\.widthMeters, 3\)/);
+});
+
 test("profiles bridges independently and closes shared road endpoints", () => {
   assert.match(openStreetMap, /function bridgeElevationProfile/);
   assert.match(openStreetMap, /BRIDGE_WATER_CLEARANCE_METERS = 3/);
@@ -80,8 +88,8 @@ test("renders permanent mapped waterways as terrain-following water ribbons", ()
 test("retains mapped lake positions without rendering provider polygons", () => {
   assert.match(openStreetMap, /function waterFeatureSourceId/);
   assert.match(openStreetMap, /`water\/\$\{tile\.zoom\}\/\$\{String\(feature\.id\)\}`/);
-  assert.match(openStreetMap, /lakePositions\.push\(\{/);
-  assert.match(openStreetMap, /sourceId: waterFeatureSourceId/);
+  assert.match(openStreetMap, /static collectLakePositions\(/);
+  assert.match(openStreetMap, /const sourceId = waterFeatureSourceId/);
   assert.match(openStreetMap, /lakePositions: LakePosition\[\]/);
   assert.doesNotMatch(
     openStreetMap,

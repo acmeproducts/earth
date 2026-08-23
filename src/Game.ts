@@ -19,10 +19,16 @@ import {
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
 import {
+  createTerrainSkirtGeometry,
   stitchTerrainEdges,
   stitchTerrainMeshEdges,
 } from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
+import {
+  createTerrainLakeLayer,
+  disposeTerrainLakeLayer,
+} from "./TerrainLakeSurface";
+import type { TerrainLakeLayer } from "./TerrainLakeSurface";
 import { createTreeField } from "./TreeField";
 import { createGrassField, setGrassFieldDetailDistance } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
@@ -40,6 +46,7 @@ import {
   lonLatToScene,
   sampleElevation,
   sceneToLonLat,
+  SEA_LEVEL_METERS,
   sinkSubmergedElevation,
   sinkSubmergedTerrain,
 } from "./Geo";
@@ -83,6 +90,7 @@ import {
   VegetationRenderMode,
 } from "./VegetationField";
 import { SceneControls } from "./SceneControls";
+import { parseCalendarDate } from "./CalendarDate";
 import { createBrowserSceneSettingsStore } from "./SceneSettings";
 import type {
   SceneSettingKey,
@@ -150,6 +158,9 @@ const TILE_COOLDOWN_MS = 30_000;
 const DETAIL_COOLDOWN_MS = 10_000;
 /** Terrain resolution for tiles beyond the detail rings. */
 const FAR_TILE_SUBDIVISIONS = 32;
+/** Hides the skirt wall below its neighbour while retaining sub-pixel gap coverage. */
+const TERRAIN_SKIRT_OVERLAP_METERS = 0.5;
+const TERRAIN_SKIRT_SURFACE_DROP_METERS = 0.02;
 /**
  * Distant tree layers use wider spacing with raised occupancy, matching the
  * detail rings' trees per square meter at a quarter of the instance count.
@@ -165,6 +176,7 @@ type MovementMode = "fly" | "walk";
 
 interface TerrainMetadata {
   surfaceColors?: Float32Array;
+  skirt?: Mesh;
 }
 
 /** One streamed world tile and every scene resource it owns. */
@@ -174,8 +186,8 @@ interface StreamedTile {
   terrainData: TerrainData;
   /** Classification loaded once for coastline, terrain tint, and vegetation. */
   landCover?: WorldCover;
-  /** Provider elevations retained before coastline shaping for bridge clearance. */
-  preCarvingElevations?: Float32Array;
+  /** Provider elevations retained before coastline shaping for lakes and bridges. */
+  preCarvingElevations: Float32Array;
   /** One shared vector-tile request for every OSM-backed layer on this tile. */
   mapTiles?: Promise<MapTile[]>;
   terrain: Mesh;
@@ -192,10 +204,14 @@ interface StreamedTile {
   bushField?: VegetationFieldResult;
   fernField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
-  /** Provider seeds retained for a future terrain-derived lake boundary pass. */
+  /** Provider positions used as optional identity hints for terrain-derived lakes. */
   lakePositions?: LakePosition[];
+  /** Terrain-owned inland water remains visible at every streaming detail tier. */
+  lakeSurfaces?: TerrainLakeLayer;
   /** Merged building massing retained outside the detail rings. */
   farBuildings?: TransformNode;
+  /** Coarsely sampled road surfaces retained outside the detail rings. */
+  farRoads?: TransformNode;
   /** Impostor-only tree layer carried by tiles outside the detail rings. */
   farTreeField?: VegetationFieldResult;
   /** Every detail layer is present. */
@@ -241,6 +257,7 @@ export class Game {
   private solarLighting?: SolarLighting;
   private cloudLayer?: CloudLayer;
   private readonly cloudsEnabled: boolean;
+  private readonly initialDate?: string;
   private readonly initialTimeOfDay?: number;
   private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
@@ -354,6 +371,10 @@ export class Game {
     this.cloudsEnabled = !["0", "off", "false"].includes(
       query.get("clouds")?.toLowerCase() ?? "",
     );
+    const requestedDate = query.get("date");
+    this.initialDate = requestedDate && parseCalendarDate(requestedDate)
+      ? requestedDate
+      : undefined;
     this.initialTimeOfDay = query.has("time")
       ? queryNumber(query, "time", 12, 0, 23.75)
       : undefined;
@@ -435,6 +456,7 @@ export class Game {
       location.lat,
       location.lon,
     );
+    this.solarLighting.setDate(this.initialDate);
     this.solarLighting.setTimeOfDay(this.initialTimeOfDay);
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
 
@@ -445,8 +467,10 @@ export class Game {
     this.sceneControls = new SceneControls({
       settings: this.sceneSettings.value,
       initialLocation: location,
+      initialDate: this.initialDate,
       initialTimeOfDay: this.initialTimeOfDay,
       onSettingChange: (key, value) => this.changeSceneSetting(key, value),
+      onDateChange: (date) => this.solarLighting?.setDate(date),
       onTimeOfDayChange: (hours) => this.solarLighting?.setTimeOfDay(hours),
       onLocationChange: (target) => this.changeToCoordinates(target),
       onMenuOpenChange: (isOpen) => this.setMenuOpen(isOpen),
@@ -520,6 +544,7 @@ export class Game {
         // queued ahead of a demotion (the stand-ins commit hidden there).
         if (!record.farTreeField) await this.buildFarTrees(record, generation);
         if (!record.farBuildings) await this.buildFarBuildings(record, generation);
+        if (!record.farRoads) await this.buildFarRoads(record, generation);
       }
     } finally {
       this.activeTileBuilds.delete(key);
@@ -545,7 +570,7 @@ export class Game {
         return undefined;
       });
     if (generation !== this.streamingGeneration) return undefined;
-    const preCarvingElevations = native ? terrainData.elevations.slice() : undefined;
+    const preCarvingElevations = terrainData.elevations.slice();
     if (landCover) {
       await landCover.constrainElevations(
         terrainData,
@@ -609,11 +634,17 @@ export class Game {
     });
 
     let mapTiles = previous?.mapTiles;
+    let lakePositions: LakePosition[] | undefined;
     if (native) {
       await reportInitializationProgress(onProgress, "Preparing mapped terrain", 34);
       mapTiles ??= this.requestMapTiles(terrainData.bounds);
       const roads = await mapTiles;
       if (generation !== this.streamingGeneration) return undefined;
+      lakePositions = OpenStreetMap.collectLakePositions(
+        roads,
+        terrainData,
+        { meshWidth, meshDepth },
+      );
       await OpenStreetMap.conformTerrainToRoads(
         roads,
         terrainData,
@@ -628,6 +659,9 @@ export class Game {
         yieldControl,
       );
       if (generation !== this.streamingGeneration) return undefined;
+      // Map features are processed independently per tile and can reach a
+      // boundary. Restore the canonical shared samples after all deformation.
+      stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
     }
 
     const subdivisions = Math.max(
@@ -653,15 +687,45 @@ export class Game {
     terrain.checkCollisions = true;
     terrain.setEnabled(true);
 
+    let lakeSurfaces = previous?.lakeSurfaces;
+    if (!lakeSurfaces) {
+      lakeSurfaces = await createTerrainLakeLayer(
+        this.scene,
+        terrainData,
+        preCarvingElevations,
+        {
+          meshWidth,
+          meshDepth,
+          metersPerUnit,
+          worldOffsetX: offset.x,
+          worldOffsetZ: offset.z,
+          skyReflection: this.solarLighting?.skyReflectionTexture,
+          seeds: lakePositions,
+        },
+        yieldControl,
+      );
+      if (generation !== this.streamingGeneration) {
+        disposeTerrainMesh(terrain);
+        disposeTerrainLakeLayer(lakeSurfaces);
+        return undefined;
+      }
+    }
+    setTransformNodeOffset(lakeSurfaces.root, offset.x, offset.z);
+    for (const mesh of lakeSurfaces.meshes) mesh.freezeWorldMatrix();
+    lakeSurfaces.root.setEnabled(true);
+
     // Upgrading a streamed tile from the coarse terrain tier to native detail
     // replaces its record. Keep the already-visible distant tree stand-in
     // alive across that replacement; buildTileDetail will cross-fade it only
     // after the matching detailed tree field has committed.
     const carriedFarTreeField = previous?.farTreeField;
     const carriedFarBuildings = previous?.farBuildings;
+    const carriedFarRoads = previous?.farRoads;
     if (previous) {
       previous.farTreeField = undefined;
       previous.farBuildings = undefined;
+      previous.farRoads = undefined;
+      previous.lakeSurfaces = undefined;
     }
     const now = performance.now();
     const record: StreamedTile = {
@@ -677,8 +741,11 @@ export class Game {
       offsetX: offset.x,
       offsetZ: offset.z,
       nativeTerrain: native,
+      lakePositions,
+      lakeSurfaces,
       farTreeField: carriedFarTreeField,
       farBuildings: carriedFarBuildings,
+      farRoads: carriedFarRoads,
       detailed: false,
       lastNeededMilliseconds: now,
       detailLastNeededMilliseconds: now,
@@ -845,6 +912,12 @@ export class Game {
       this.beginLayerFade(1, 0, (fade) => setMapLayerFade(farBuildings, fade),
         () => OpenStreetMap.disposeLayer(farBuildings));
     }
+    if (record.farRoads) {
+      const farRoads = record.farRoads;
+      record.farRoads = undefined;
+      this.beginLayerFade(1, 0, (fade) => setMapLayerFade(farRoads, fade),
+        () => OpenStreetMap.disposeLayer(farRoads));
+    }
     record.detailed = true;
     this.refreshShadowCasters();
     console.log(
@@ -930,6 +1003,39 @@ export class Game {
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
     record.farBuildings = layer.root;
+    if (record.detailed) {
+      layer.root.setEnabled(false);
+    } else {
+      layer.root.setEnabled(true);
+      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(layer.root, fade));
+    }
+  }
+
+  /** Builds coarsely sampled road surfaces for tiles outside the detail rings. */
+  private async buildFarRoads(record: StreamedTile, generation: number): Promise<void> {
+    const metersPerUnit = this.terrainMetersPerUnit;
+    if (!metersPerUnit) return;
+    const mapWays = await this.loadMapTiles(record);
+    if (generation !== this.streamingGeneration) return;
+    const layer = await OpenStreetMap.createRoadLayer(
+      this.scene,
+      mapWays,
+      record.terrainData,
+      {
+        meshWidth: record.meshWidth,
+        meshDepth: record.meshDepth,
+        metersPerUnit,
+        preCarvingElevations: record.preCarvingElevations,
+        startDisabled: true,
+      },
+      this.streamingYielder,
+    );
+    if (generation !== this.streamingGeneration || record.farRoads) {
+      OpenStreetMap.disposeLayer(layer.root);
+      return;
+    }
+    setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
+    record.farRoads = layer.root;
     if (record.detailed) {
       layer.root.setEnabled(false);
     } else {
@@ -1246,6 +1352,10 @@ export class Game {
     record.farTreeField = undefined;
     if (record.farBuildings) OpenStreetMap.disposeLayer(record.farBuildings);
     record.farBuildings = undefined;
+    if (record.farRoads) OpenStreetMap.disposeLayer(record.farRoads);
+    record.farRoads = undefined;
+    if (record.lakeSurfaces) disposeTerrainLakeLayer(record.lakeSurfaces);
+    record.lakeSurfaces = undefined;
     disposeTerrainMesh(record.terrain);
   }
 
@@ -1274,6 +1384,12 @@ export class Game {
       setMapLayerFade(farBuildings, 0);
       farBuildings.setEnabled(true);
       this.beginLayerFade(0, 1, (fade) => setMapLayerFade(farBuildings, fade));
+    }
+    const farRoads = record.farRoads;
+    if (farRoads && !farRoads.isDisposed()) {
+      setMapLayerFade(farRoads, 0);
+      farRoads.setEnabled(true);
+      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(farRoads, fade));
     }
     for (const kind of VEGETATION_FIELD_KINDS) {
       const field = record[kind];
@@ -1317,8 +1433,8 @@ export class Game {
         this.disposeTile(record);
       } else if (record.detailed && !wantDetail &&
           now - record.detailLastNeededMilliseconds > DETAIL_COOLDOWN_MS &&
-          record.farTreeField && record.farBuildings) {
-        // The streaming pass pre-builds both stand-ins; demotion waits for
+          record.farTreeField && record.farBuildings && record.farRoads) {
+        // The streaming pass pre-builds every stand-in; demotion waits for
         // them so the cross-fade never leaves the tile bare.
         this.demoteTileDetail(record);
         detailChanged = true;
@@ -1585,6 +1701,7 @@ export class Game {
             bushes: Boolean(tile.bushField),
             mapFeatures: Boolean(tile.mapFeatures),
             farBuildings: Boolean(tile.farBuildings),
+            farRoads: Boolean(tile.farRoads),
             farTrees: Boolean(tile.farTreeField),
           },
         })),
@@ -1692,7 +1809,7 @@ export class Game {
         const wantsDemotion = record !== undefined && record.detailed && !wantDetail &&
           now - record.detailLastNeededMilliseconds > DETAIL_COOLDOWN_MS;
         const needsFarLayers = !wantDetail && record !== undefined &&
-          (!record.farTreeField || !record.farBuildings) &&
+          (!record.farTreeField || !record.farBuildings || !record.farRoads) &&
           (!record.detailed || wantsDemotion);
         if (needsTerrain || needsDetail || needsFarLayers) {
           work.push({ id, detail: wantDetail, distanceSquared: dx * dx + dy * dy });
@@ -2116,7 +2233,31 @@ export class Game {
     ground.updateVerticesData(VertexBuffer.NormalKind, normals);
     await yieldToNextFrame(yieldControl);
     ground.updateVerticesData(VertexBuffer.UVKind, uvs);
-    ground.metadata = { surfaceColors } satisfies TerrainMetadata;
+    const skirtGeometry = createTerrainSkirtGeometry(
+      positions,
+      uvs,
+      subdivisions,
+      Math.min(SEA_LEVEL_METERS - 1, terrain.minElevation - 1) / metersPerUnit,
+      surfaceColors,
+      TERRAIN_SKIRT_OVERLAP_METERS / metersPerUnit,
+      TERRAIN_SKIRT_SURFACE_DROP_METERS / metersPerUnit,
+    );
+    const skirt = new Mesh(`${name} skirt`, this.scene);
+    const skirtVertexData = new VertexData();
+    skirtVertexData.positions = skirtGeometry.positions;
+    skirtVertexData.uvs = skirtGeometry.uvs;
+    skirtVertexData.indices = skirtGeometry.indices;
+    // The underlap is a continuation of the ground. Upward normals keep its
+    // rare visible pixels terrain-lit instead of turning the seam into a wall.
+    const skirtNormals = new Float32Array(skirtGeometry.positions.length);
+    for (let index = 1; index < skirtNormals.length; index += 3) skirtNormals[index] = 1;
+    skirtVertexData.normals = skirtNormals;
+    if (skirtGeometry.colors) skirtVertexData.colors = skirtGeometry.colors;
+    skirtVertexData.applyToMesh(skirt);
+    skirt.parent = ground;
+    skirt.isPickable = false;
+    skirt.checkCollisions = false;
+    ground.metadata = { surfaceColors, skirt } satisfies TerrainMetadata;
     ground.freezeWorldMatrix();
 
     // Vertex colors are another full-size GPU buffer, so commit them in their
@@ -2137,9 +2278,15 @@ export class Game {
       terrain.removeVerticesData(VertexBuffer.ColorKind);
     }
     // The mesh UV buffer is already expressed in physical metres.
-    terrain.material = createTerrainMaterial(this.scene, {
+    const material = createTerrainMaterial(this.scene, {
       usesLandCoverTint: Boolean(colors),
     });
+    terrain.material = material;
+    const skirt = (terrain.metadata as TerrainMetadata | null)?.skirt;
+    if (skirt) {
+      skirt.material = material;
+      skirt.useVertexColors = Boolean(colors);
+    }
   }
 
   private disposeTerrainAppearance(terrain: Mesh): void {
