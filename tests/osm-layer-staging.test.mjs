@@ -93,12 +93,13 @@ test("renders permanent mapped waterways as terrain-following water ribbons", ()
   assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
 });
 
-test("retains mapped lake positions without rendering provider polygons", () => {
+test("retains authoritative mapped lake rings for the terrain-water pipeline", () => {
   assert.match(openStreetMap, /function waterFeatureSourceId/);
   assert.match(openStreetMap, /`water\/\$\{tile\.zoom\}\/\$\{String\(feature\.id\)\}`/);
-  assert.match(openStreetMap, /static collectLakePositions\(/);
+  assert.match(openStreetMap, /static collectLakePolygons\(/);
   assert.match(openStreetMap, /const sourceId = waterFeatureSourceId/);
-  assert.match(openStreetMap, /lakePositions: LakePosition\[\]/);
+  assert.match(openStreetMap, /lakePolygons: TerrainLakeSource\[\]/);
+  assert.match(openStreetMap, /outline = clipPolygon/);
   assert.doesNotMatch(
     openStreetMap,
     /createWaterPolygon|expandLakeShoreline|prepareLakeSurfacePiece|styleLakeSurfaces|inlandWater/,

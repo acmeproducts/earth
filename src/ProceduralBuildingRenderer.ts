@@ -384,11 +384,11 @@ function createEnterableBuilding(
   part: "exterior" | "interior",
 ): DetailedBuildingParts {
   const usableHeight = Math.max(0, topElevation - baseElevation);
-  const requestedFloors = plan.levels === undefined
-    ? Math.max(1, Math.round(usableHeight / 3.1))
-    : Math.max(1, Math.round(plan.levels));
+  // A partial story is not another floor. Rounding made ordinary 4.7-6.1 m
+  // houses grow a second facade row when no level count was mapped.
+  const requestedFloors = plan.levels ?? Math.floor(usableHeight / 3.1);
   const floorsThatFit = Math.max(1, Math.floor(usableHeight / 2.4));
-  const floorCount = Math.min(20, requestedFloors, floorsThatFit);
+  const floorCount = Math.max(1, Math.min(20, Math.round(requestedFloors), floorsThatFit));
   const storyHeight = usableHeight / floorCount;
   const windowStyle = buildingWindowStyle(plan);
   const glass = varyColor(

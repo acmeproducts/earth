@@ -167,7 +167,12 @@ test("cloud shadows project the nearest top-down impostors onto terrain", () => 
   assert.match(volumeSource, /generateCloudShadowAtlasData/);
   assert.match(shadowSource, /TERRAIN_CLOUD_SHADOW_COUNT = 4/);
   assert.match(shadowSource, /cloud\.x \+ driftX - sunDirection\.x \* projectionDistance/);
-  assert.match(shadowSource, /smoothstep\(0\.04, 0\.18, sunDirection\.y\)/);
+  assert.match(shadowSource, /CLOUD_SHADOW_FADE_START = Math\.sin\(4 \* Math\.PI \/ 180\)/);
+  assert.match(shadowSource, /CLOUD_SHADOW_FULL_STRENGTH = Math\.sin\(20 \* Math\.PI \/ 180\)/);
+  assert.match(
+    shadowSource,
+    /smoothstep\([\s\S]*?CLOUD_SHADOW_FADE_START,[\s\S]*?CLOUD_SHADOW_FULL_STRENGTH,[\s\S]*?sunDirection\.y/,
+  );
   assert.match(shadowSource, /1 \/ \(candidate\.cloud\.width \* atlasFootprintScale\.x\)/);
   assert.doesNotMatch(shadowSource, /RenderTargetTexture/);
   assert.doesNotMatch(shadowSource, /ShadowGenerator/);

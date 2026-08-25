@@ -192,7 +192,14 @@ export async function createGrassField(
               z,
             ),
           );
-        const color = grassGroundColorMultiplier(lon, lat, coverClass);
+        const surfaceColor = landCover.sampleSurfaceColor?.(lon, lat) ??
+          landCoverSurfaceColor(coverClass);
+        const color = grassGroundColorMultiplier(
+          lon,
+          lat,
+          coverClass,
+          surfaceColor,
+        );
         matrices.push(matrix);
         addProceduralVariantPlacement(
           variantBuckets,
@@ -282,9 +289,10 @@ export function grassGroundColorMultiplier(
   longitude: number,
   latitude: number,
   landCover: LandCoverClass,
+  surfaceColor = landCoverSurfaceColor(landCover),
 ): readonly [number, number, number] {
   const ground = varyGroundColor(
-    landCoverSurfaceColor(landCover),
+    surfaceColor,
     longitude,
     latitude,
     landCover,

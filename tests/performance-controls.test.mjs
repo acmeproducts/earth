@@ -111,6 +111,16 @@ test("changing worlds discards the outgoing camera's local position offset", () 
   assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?cameraDirection\.setAll\(0\)/);
 });
 
+test("keyboard location shortcuts reload a clean scene", () => {
+  assert.match(
+    game,
+    /private reloadAtLocation\(target: WorldLocation\): void[\s\S]*?this\.worldLocation\.update\(target\);[\s\S]*?window\.location\.reload\(\)/,
+  );
+  assert.match(game, /this\.reloadAtLocation\(EXAMPLE_LOCATIONS\[locationIndex\]\)/);
+  assert.match(game, /Random location:[\s\S]*?this\.reloadAtLocation\(target\)/);
+  assert.doesNotMatch(game, /terrainLocationIndex|changeTerrainLocation/);
+});
+
 test("persists normalized controls through one scene settings store", () => {
   assert.match(settings, /earth\.scene-settings\.v1/);
   assert.match(settings, /storage\?\.setItem\(STORAGE_KEY, JSON\.stringify\(this\.current\)\)/);

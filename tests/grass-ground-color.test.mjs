@@ -11,10 +11,21 @@ const modelSource = readFileSync(
 
 test("grass instances inherit their local rendered ground color", () => {
   assert.match(fieldSource, /varyGroundColor\(/);
-  assert.match(fieldSource, /landCoverSurfaceColor\(landCover\)/);
+  assert.match(fieldSource, /landCover\.sampleSurfaceColor\?\.\(lon, lat\)/);
+  assert.match(fieldSource, /surfaceColor = landCoverSurfaceColor\(landCover\)/);
   assert.match(fieldSource, /const color = grassGroundColorMultiplier/);
   assert.match(fieldSource, /addProceduralVariantPlacement\([\s\S]*?matrix,[\s\S]*?color/);
   assert.match(fieldSource, /new Float32Array\(bucket\.colors\)/);
+});
+
+test("WorldCover exposes a continuous tint across source raster cells", () => {
+  const worldCoverSource = readFileSync(
+    new URL("../src/WorldCover.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(worldCoverSource, /sampleSurfaceColor\(/);
+  assert.match(worldCoverSource, /pixelX[\s\S]*?- 0\.5/);
+  assert.match(worldCoverSource, /top \* \(1 - fy\) \+ bottom \* fy/);
 });
 
 test("grass applies the tint consistently to models and impostors", () => {

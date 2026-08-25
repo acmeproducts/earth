@@ -49,6 +49,7 @@ import { conformTerrainToRoads as stampRoadTerrain } from "./RoadTerrain";
 import { conformTerrainToBuildings as stampBuildingTerrain } from "./BuildingTerrain";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
+import type { TerrainLakeSource } from "./TerrainLakePolygons";
 
 export interface MapTile {
   x: number;
@@ -151,15 +152,8 @@ class RoadExclusionMask implements HorizontalExclusionMask {
 export interface MapFeatureLayer {
   root: TransformNode;
   meshes: Mesh[];
-  lakePositions: LakePosition[];
+  lakePolygons: TerrainLakeSource[];
   counts: { buildings: number; roads: number; water: number };
-}
-
-/** Approximate provider position retained as a seed for terrain-derived lakes. */
-export interface LakePosition {
-  sourceId: string;
-  x: number;
-  z: number;
 }
 
 interface CreatedRoad {
@@ -232,7 +226,7 @@ export class OpenStreetMap {
     };
     const bridgeDecks: Mesh[] = [];
     const junctionCandidates: RoadJunctionCandidate[] = [];
-    const lakePositions = this.collectLakePositions(tiles, terrain, options);
+    const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
     const waterways: Mesh[] = [];
 
     for (const tile of tiles) {
@@ -312,41 +306,47 @@ export class OpenStreetMap {
     return {
       root,
       meshes,
-      lakePositions,
+      lakePolygons,
       counts: {
         buildings: buildings.length,
         roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
-        water: lakePositions.length + waterways.length,
+        water: lakePolygons.length + waterways.length,
       },
     };
   }
 
-  /** Retains only provider identity and position; terrain owns the final shape. */
-  static collectLakePositions(
+  /** Projects and clips authoritative OSM lake rings into this terrain tile. */
+  static collectLakePolygons(
     tiles: readonly MapTile[],
     terrain: TerrainData,
     options: Pick<MapLayerOptions, "meshWidth" | "meshDepth">,
-  ): LakePosition[] {
-    const positions = new Map<string, Array<{ x: number; z: number }>>();
+  ): TerrainLakeSource[] {
+    const results: TerrainLakeSource[] = [];
+    const clipBounds = {
+      minX: -options.meshWidth / 2,
+      maxX: options.meshWidth / 2,
+      minZ: -options.meshDepth / 2,
+      maxZ: options.meshDepth / 2,
+    };
+    const project = ([lon, lat]: LonLat) =>
+      lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
     for (const tile of tiles) {
       forEachFeature(tile, "water", (feature, featureIndex) => {
         if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
-        const waterPolygons = polygons(feature, tile);
+        const waterPolygons = polygonRings(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
-          const position = lakePosition(waterPolygons[polygonIndex], terrain, options);
-          if (!position) continue;
+          const rings = waterPolygons[polygonIndex];
+          const outline = clipPolygon(withoutClosingPoint(rings[0]).map(project), clipBounds);
+          if (outline.length < 3) continue;
           const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
-          const matches = positions.get(sourceId);
-          if (matches) matches.push(position);
-          else positions.set(sourceId, [position]);
+          const holes = rings.slice(1)
+            .map((ring) => clipPolygon(withoutClosingPoint(ring).map(project), clipBounds))
+            .filter((ring) => ring.length >= 3 && pointInPolygon(ring[0], outline));
+          results.push({ sourceId, outline, holes });
         }
       });
     }
-    return [...positions].map(([sourceId, matches]) => ({
-      sourceId,
-      x: matches.reduce((sum, point) => sum + point.x, 0) / matches.length,
-      z: matches.reduce((sum, point) => sum + point.z, 0) / matches.length,
-    }));
+    return results;
   }
 
   static async createBuildingLayer(
@@ -655,13 +655,18 @@ function waterFeatureSourceId(
     : `water/${tile.zoom}/${String(feature.id)}`;
 }
 
-function polygons(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
+function polygonRings(feature: VectorTileFeature, tile: MapTile): LonLat[][][] {
   const geometry = feature.toGeoJSON(tile.x, tile.y, tile.zoom).geometry;
-  if (geometry.type === "Polygon") return [geometry.coordinates[0] as LonLat[]];
-  if (geometry.type === "MultiPolygon") {
-    return geometry.coordinates.map((polygon) => polygon[0] as LonLat[]);
-  }
+  if (geometry.type === "Polygon") return [geometry.coordinates as LonLat[][]];
+  if (geometry.type === "MultiPolygon") return geometry.coordinates as LonLat[][][];
   return [];
+}
+
+function withoutClosingPoint(ring: LonLat[]): LonLat[] {
+  if (ring.length < 2) return ring;
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  return first[0] === last[0] && first[1] === last[1] ? ring.slice(0, -1) : ring;
 }
 
 function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
@@ -669,30 +674,6 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
   if (geometry.type === "LineString") return [geometry.coordinates as LonLat[]];
   if (geometry.type === "MultiLineString") return geometry.coordinates as LonLat[][];
   return [];
-}
-
-function lakePosition(
-  coordinates: LonLat[],
-  terrain: TerrainData,
-  options: Pick<MapLayerOptions, "meshWidth" | "meshDepth">,
-): { x: number; z: number } | undefined {
-  const uniqueCoordinates = coordinates.length > 1 &&
-      coordinates[0][0] === coordinates[coordinates.length - 1][0] &&
-      coordinates[0][1] === coordinates[coordinates.length - 1][1]
-    ? coordinates.slice(0, -1)
-    : coordinates;
-  if (uniqueCoordinates.length === 0) return undefined;
-  const sum = uniqueCoordinates.reduce(
-    (total, [lon, lat]) => ({ lon: total.lon + lon, lat: total.lat + lat }),
-    { lon: 0, lat: 0 },
-  );
-  return lonLatToScene(
-    sum.lon / uniqueCoordinates.length,
-    sum.lat / uniqueCoordinates.length,
-    terrain.bounds,
-    options.meshWidth,
-    options.meshDepth,
-  );
 }
 
 function createRoad(
@@ -1138,6 +1119,22 @@ function clipPolygon(
     }
   }
   return output;
+}
+
+function pointInPolygon(
+  point: { x: number; z: number },
+  polygon: readonly { x: number; z: number }[],
+): boolean {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    if ((a.z > point.z) !== (b.z > point.z) &&
+        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 function clipPolyline(

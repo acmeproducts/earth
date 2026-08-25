@@ -4,8 +4,8 @@ import {
   setVertexColorModelHeight,
 } from "./ProceduralCaptureMaterial";
 import {
-  AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
+  IMPOSTOR_CUBE_FACES,
   ImpostorAssetLease,
   ImpostorAssets,
   ImpostorVariant,
@@ -20,7 +20,6 @@ const CAPTURE_DIAMETER = 4.5;
 export function bushRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
 }
-const ROTATIONAL_SYMMETRY_ORDER = 12;
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
   [new Color3(0.1, 0.27, 0.07), new Color3(0.34, 0.59, 0.15)],
@@ -34,9 +33,8 @@ const bushImpostors = createImpostorAssetProvider({
   createSource: (scene, variant) => createBushSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,
-  faces: AXISYMMETRIC_IMPOSTOR_FACES,
-  rotationallySymmetric: true,
-  rotationalSymmetryOrder: ROTATIONAL_SYMMETRY_ORDER,
+  faces: IMPOSTOR_CUBE_FACES,
+  rotationallySymmetric: false,
   upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
@@ -72,93 +70,130 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
-  const symmetryOrder = ROTATIONAL_SYMMETRY_ORDER;
-  const sectorAngle = Math.PI * 2 / symmetryOrder;
+  // Each regional seed gets a coherent but asymmetric crown. Low-frequency
+  // lobes read as natural growth; exact rotational copies read as a pattern.
+  const crownRadius = 0.88 + random() * 0.14;
+  const crownRotation = random() * Math.PI * 2;
+  const lobePhase = random() * Math.PI * 2;
+  const secondaryLobePhase = random() * Math.PI * 2;
+  const leanAngle = random() * Math.PI * 2;
+  const leanDistance = 0.05 + random() * 0.16;
+  const crownLeanX = Math.cos(leanAngle) * leanDistance;
+  const crownLeanZ = Math.sin(leanAngle) * leanDistance;
+  const paletteCenter = Math.floor(random() * FOLIAGE_PALETTES.length);
 
-  const branchBase = new Vector3(0, -SOURCE_HEIGHT / 2, 0);
-  for (let branch = 0; branch < 2; branch++) {
-    const angle = random() * sectorAngle;
-    const distance = 0.3 + random() * 0.72;
-    const startRadius = random() * 0.08;
-    const startAngle = random() * sectorAngle;
-    const endY = -0.32 + random() * 1.18;
-    const radius = 0.022 + random() * 0.028;
-    for (let copy = 0; copy < symmetryOrder; copy++) {
-      const rotation = copy * sectorAngle;
-      const start = branch === 0
-        ? branchBase
-        : new Vector3(
-          Math.cos(startAngle + rotation) * startRadius,
-          -1.08,
-          Math.sin(startAngle + rotation) * startRadius,
-        );
-      const end = new Vector3(
-        Math.cos(angle + rotation) * distance,
-        endY,
-        Math.sin(angle + rotation) * distance,
-      );
-      addBranch(positions, indices, colors, start, end, radius, 5);
-    }
+  const radiusAtAngle = (angle: number): number => crownRadius * (
+    1
+    + Math.sin((angle - crownRotation) * 3 + lobePhase) * 0.13
+    + Math.sin((angle - crownRotation) * 5 + secondaryLobePhase) * 0.075
+  );
+
+  // A handful of visible stems gives the mass some structure without turning
+  // it into a bundle of identical radial spokes.
+  const branchCount = 26;
+  for (let branch = 0; branch < branchCount; branch++) {
+    const angle = random() * Math.PI * 2;
+    const distance = (0.28 + random() * 0.65) * radiusAtAngle(angle);
+    const startAngle = random() * Math.PI * 2;
+    const startRadius = random() * 0.09;
+    const start = new Vector3(
+      Math.cos(startAngle) * startRadius,
+      -SOURCE_HEIGHT / 2,
+      Math.sin(startAngle) * startRadius,
+    );
+    const end = new Vector3(
+      Math.cos(angle) * distance + crownLeanX * (0.35 + random() * 0.65),
+      -0.34 + random() * 1.18,
+      Math.sin(angle) * distance + crownLeanZ * (0.35 + random() * 0.65),
+    );
+    const midpoint = Vector3.Lerp(start, end, 0.54).add(new Vector3(
+      (random() - 0.5) * 0.12,
+      0.08 + random() * 0.12,
+      (random() - 0.5) * 0.12,
+    ));
+    const radius = 0.018 + random() * 0.026;
+    addBranch(positions, indices, colors, start, midpoint, radius, 5);
+    addBranch(positions, indices, colors, midpoint, end, radius * 0.68, 5);
   }
 
-  const segments = 5;
-  const shootCount = 900;
-  for (let shoot = 0; shoot < shootCount / symmetryOrder; shoot++) {
-    const baseAngle = random() * sectorAngle;
-    const edgeRadius = 0.96
-      + Math.sin(baseAngle * 3 + 0.4) * 0.12
-      + Math.sin(baseAngle * 7 + 1.6) * 0.07;
-    const radius = Math.sqrt(random()) * edgeRadius;
-    const bladeAngle = random() * Math.PI * 2;
-    const bendAngle = baseAngle + (random() - 0.5) * 1.7;
-    const edgeScale = 1 - 0.34 * Math.pow(radius / edgeRadius, 2);
-    const height = (0.65 + Math.pow(random(), 0.65) * 1.55) * edgeScale;
-    const bend = (0.04 + random() * 0.22) * height;
-    const width = 0.018 + Math.pow(random(), 1.45) * 0.072;
-    const palette = FOLIAGE_PALETTES[Math.floor(random() * FOLIAGE_PALETTES.length)];
-    const brightness = 0.84 + random() * 0.3;
+  // Build short compound sprays rather than grass-like ribbons. Paired side
+  // leaves and a terminal leaf keep the close model legible, while random
+  // orientation and gentle camber prevent the atlas from looking like cards.
+  const sprayCount = 260;
+  for (let spray = 0; spray < sprayCount; spray++) {
+    const baseAngle = random() * Math.PI * 2;
+    const edgeRadius = radiusAtAngle(baseAngle);
+    const radius = Math.sqrt(random()) * edgeRadius * 0.98;
+    const normalizedRadius = radius / edgeRadius;
+    const baseX = Math.cos(baseAngle) * radius + crownLeanX * (1 - normalizedRadius * 0.35);
+    const baseZ = Math.sin(baseAngle) * radius + crownLeanZ * (1 - normalizedRadius * 0.35);
+    const crownDome = Math.pow(Math.max(0, 1 - normalizedRadius * normalizedRadius), 0.42);
+    const localTop = Math.min(
+      SOURCE_HEIGHT / 2 - 0.07,
+      -0.18 + crownDome * 1.3
+        + Math.sin(baseAngle * 2 + lobePhase) * 0.09
+        + (random() - 0.5) * 0.13,
+    );
+    const localBottom = -0.94 + normalizedRadius * 0.28 + (random() - 0.5) * 0.1;
+    const baseY = localBottom + Math.pow(random(), 0.72)
+      * Math.max(0.08, localTop - localBottom - 0.16);
+    const growthAngle = baseAngle + (random() - 0.5) * 1.3;
+    const growthDirection = new Vector3(
+      Math.cos(growthAngle) * (0.42 + random() * 0.28),
+      0.68 + random() * 0.34,
+      Math.sin(growthAngle) * (0.42 + random() * 0.28),
+    ).normalize();
+    const desiredLength = 0.22 + random() * 0.25;
+    const availableRise = Math.max(0.08, localTop + 0.045 - baseY);
+    const sprayLength = Math.min(desiredLength, availableRise / growthDirection.y);
+    const sprayStart = new Vector3(baseX, baseY, baseZ);
+    const sprayEnd = sprayStart.add(growthDirection.scale(sprayLength));
+    const paletteOffset = random() < 0.16 ? (random() < 0.5 ? -1 : 1) : 0;
+    const palette = FOLIAGE_PALETTES[
+      Math.max(0, Math.min(FOLIAGE_PALETTES.length - 1, paletteCenter + paletteOffset))
+    ];
+    const brightness = 0.86 + random() * 0.25;
 
-    for (let copy = 0; copy < symmetryOrder; copy++) {
-      const rotation = copy * sectorAngle;
-      const rotatedBaseAngle = baseAngle + rotation;
-      const rotatedBladeAngle = bladeAngle + rotation;
-      const rotatedBendAngle = bendAngle + rotation;
-      const baseX = Math.cos(rotatedBaseAngle) * radius;
-      const baseZ = Math.sin(rotatedBaseAngle) * radius;
-      const sideX = Math.cos(rotatedBladeAngle);
-      const sideZ = Math.sin(rotatedBladeAngle);
-      const vertexStart = positions.length / 3;
-
-      for (let segment = 0; segment <= segments; segment++) {
-        const t = segment / segments;
-        const taper = Math.max(0.035, 1 - t * t);
-        const curve = bend * t * t;
-        const centerX = baseX + Math.cos(rotatedBendAngle) * curve;
-        const centerZ = baseZ + Math.sin(rotatedBendAngle) * curve;
-        const centerY = -SOURCE_HEIGHT / 2 + height * t;
-        const halfWidth = width * taper;
-        const mix = 0.18 + t * 0.68;
-        const light = brightness * (0.82 + t * 0.18);
-        const red = (palette[0].r + (palette[1].r - palette[0].r) * mix) * light;
-        const green = (palette[0].g + (palette[1].g - palette[0].g) * mix) * light;
-        const blue = (palette[0].b + (palette[1].b - palette[0].b) * mix) * light;
-
-        positions.push(
-          centerX - sideX * halfWidth,
-          centerY,
-          centerZ - sideZ * halfWidth,
-          centerX + sideX * halfWidth,
-          centerY,
-          centerZ + sideZ * halfWidth,
+    addBranch(positions, indices, colors, sprayStart, sprayEnd, 0.006, 3);
+    const lateral = Vector3.Cross(growthDirection, Vector3.Up()).normalize();
+    for (const along of [0.34, 0.66]) {
+      const leafBase = Vector3.Lerp(sprayStart, sprayEnd, along);
+      for (const side of [-1, 1]) {
+        const leafDirection = growthDirection.scale(0.3)
+          .add(lateral.scale(side * (0.86 + random() * 0.24)))
+          .add(Vector3.Up().scale(0.08 + random() * 0.2))
+          .normalize();
+        const leafLength = (0.13 + random() * 0.1) * (0.9 + along * 0.18);
+        addLeaf(
+          positions,
+          indices,
+          colors,
+          leafBase,
+          leafDirection,
+          leafLength,
+          leafLength * (0.27 + random() * 0.1),
+          random() * Math.PI * 2,
+          (random() - 0.3) * 0.035,
+          palette,
+          brightness,
         );
-        colors.push(red, green, blue, 1, red, green, blue, 1);
-      }
-
-      for (let segment = 0; segment < segments; segment++) {
-        const left = vertexStart + segment * 2;
-        indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
       }
     }
+
+    const terminalLength = 0.17 + random() * 0.11;
+    addLeaf(
+      positions,
+      indices,
+      colors,
+      sprayEnd,
+      growthDirection.add(lateral.scale((random() - 0.5) * 0.28)).normalize(),
+      terminalLength,
+      terminalLength * (0.26 + random() * 0.09),
+      random() * Math.PI * 2,
+      (random() - 0.3) * 0.04,
+      palette,
+      brightness * 1.04,
+    );
   }
 
   const data = new VertexData();
@@ -234,5 +269,53 @@ function addBranch(
     const bottom = vertexStart + side;
     const top = vertexStart + sides + side;
     indices.push(bottom, top, vertexStart + nextSide, vertexStart + nextSide, top, vertexStart + sides + nextSide);
+  }
+}
+
+/** Adds one softly cupped, pointed oval leaf with a subtle center fold. */
+function addLeaf(
+  positions: number[],
+  indices: number[],
+  colors: number[],
+  start: Vector3,
+  direction: Vector3,
+  length: number,
+  halfWidth: number,
+  orientation: number,
+  camber: number,
+  palette: readonly [Color3, Color3],
+  brightness: number,
+): void {
+  const segments = 4;
+  const vertexStart = positions.length / 3;
+  const reference = Math.abs(direction.y) < 0.88 ? Vector3.Up() : Vector3.Right();
+  const axisX = Vector3.Cross(direction, reference).normalize();
+  const axisZ = Vector3.Cross(direction, axisX).normalize();
+  const side = axisX.scale(Math.cos(orientation)).add(axisZ.scale(Math.sin(orientation)));
+  const normal = Vector3.Cross(direction, side).normalize();
+
+  for (let segment = 0; segment <= segments; segment++) {
+    const t = segment / segments;
+    const profile = Math.pow(Math.sin(Math.PI * t), 0.72);
+    const center = start.add(direction.scale(length * t))
+      .add(normal.scale(Math.sin(Math.PI * t) * camber));
+    // Make the base shoulder slightly fuller than the tip for a believable
+    // ovate leaf instead of a mathematically mirrored lens.
+    const widthBias = 1.08 - t * 0.16;
+    const offset = side.scale(halfWidth * profile * widthBias);
+    const mix = 0.34 + t * 0.46;
+    const light = brightness * (0.94 + t * 0.06);
+    const red = (palette[0].r + (palette[1].r - palette[0].r) * mix) * light;
+    const green = (palette[0].g + (palette[1].g - palette[0].g) * mix) * light;
+    const blue = (palette[0].b + (palette[1].b - palette[0].b) * mix) * light;
+    const left = center.subtract(offset);
+    const right = center.add(offset);
+    positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
+    colors.push(red, green, blue, 1, red, green, blue, 1);
+  }
+
+  for (let segment = 0; segment < segments; segment++) {
+    const left = vertexStart + segment * 2;
+    indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
   }
 }

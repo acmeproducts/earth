@@ -9,11 +9,7 @@ import {
 } from "@babylonjs/core";
 import type { BaseTexture, Scene } from "@babylonjs/core";
 import earcut from "earcut";
-import type { TerrainData } from "./TerrainData";
-import {
-  buildTerrainLakePolygons,
-  TerrainLakeSeed,
-} from "./TerrainLakePolygons";
+import type { TerrainLakePolygon } from "./TerrainLakePolygons";
 import {
   createWaterSurfaceMaterial,
   prepareWaterSurfaceMesh,
@@ -28,7 +24,6 @@ export interface TerrainLakeSurfaceOptions {
   worldOffsetX?: number;
   worldOffsetZ?: number;
   skyReflection?: BaseTexture | null;
-  seeds?: readonly TerrainLakeSeed[];
 }
 
 export interface TerrainLakeLayer {
@@ -38,22 +33,15 @@ export interface TerrainLakeLayer {
 
 export const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
 
-/** Builds one flat mesh for each terrain-derived inland-water region. */
+/** Builds one flat water mesh for each prepared OSM lake polygon piece. */
 export async function createTerrainLakeLayer(
   scene: Scene,
-  terrain: TerrainData,
-  originalElevations: Float32Array,
+  polygons: readonly TerrainLakePolygon[],
   options: TerrainLakeSurfaceOptions,
   yieldControl?: () => Promise<void>,
 ): Promise<TerrainLakeLayer> {
   const root = new TransformNode("terrainLakes", scene);
   root.setEnabled(false);
-  const polygons = await buildTerrainLakePolygons(
-    terrain,
-    originalElevations,
-    options,
-    yieldControl,
-  );
   if (polygons.length === 0) return { root, meshes: [] };
 
   let material = terrainLakeMaterials.get(scene);

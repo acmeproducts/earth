@@ -17,11 +17,15 @@ import * as SunCalc from "suncalc";
 import { parseCalendarDate } from "./CalendarDate";
 import { getGameDate } from "./GameTime";
 import { Moon } from "./Moon";
+import { shouldUpdateSolarLocation } from "./SolarLocation";
 import { StarField } from "./StarField";
 
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
-const UPDATE_INTERVAL_MS = 60_000;
+/** Keeps accelerated sky motion sub-pixel instead of stepping at the horizon. */
+const ATMOSPHERE_UPDATE_INTERVAL_MS = 5_000;
+/** Expensive static render targets do not need the visual sky's faster cadence. */
+const SHADOW_UPDATE_INTERVAL_MS = 60_000;
 /**
  * The sky reflection only has to survive being seen in a rippling surface, so
  * a small cube is plenty and keeps the six extra faces off the frame budget.
@@ -54,7 +58,8 @@ export class SolarLighting {
   private readonly skyProbe?: ReflectionProbe;
   private latitude: number;
   private longitude: number;
-  private lastUpdate = 0;
+  private lastAtmosphereUpdate = 0;
+  private lastShadowUpdate = 0;
   private calendarDate?: string;
   private timeOfDayHours?: number;
 
@@ -237,6 +242,12 @@ export class SolarLighting {
   }
 
   setLocation(latitude: number, longitude: number): void {
+    if (!shouldUpdateSolarLocation(
+      this.latitude,
+      this.longitude,
+      latitude,
+      longitude,
+    )) return;
     this.latitude = latitude;
     this.longitude = longitude;
     this.update(this.currentDate, true);
@@ -276,9 +287,14 @@ export class SolarLighting {
   }
 
   private update(date: Date, force = false): void {
-    const elapsed = date.getTime() - this.lastUpdate;
-    if (!force && elapsed >= 0 && elapsed < UPDATE_INTERVAL_MS) return;
-    this.lastUpdate = date.getTime();
+    const now = date.getTime();
+    const atmosphereElapsed = now - this.lastAtmosphereUpdate;
+    const shadowElapsed = now - this.lastShadowUpdate;
+    const updateAtmosphere = force || atmosphereElapsed < 0 ||
+      atmosphereElapsed >= ATMOSPHERE_UPDATE_INTERVAL_MS;
+    const updateShadowTargets = force || shadowElapsed < 0 ||
+      shadowElapsed >= SHADOW_UPDATE_INTERVAL_MS;
+    if (!updateAtmosphere && !updateShadowTargets) return;
 
     const position = SunCalc.getPosition(
       date,
@@ -296,44 +312,51 @@ export class SolarLighting {
       Math.sin(altitude),
       Math.cos(azimuth) * cosAltitude,
     ).normalize();
-    this.sunMesh.position.copyFrom(towardSun.scale(SUN_DISTANCE));
-    this.skyMaterial.sunPosition.copyFrom(towardSun.scale(SUN_DISTANCE));
-    this.directLight.direction.copyFrom(towardSun.scale(-1));
-    this.directLight.position.copyFrom(towardSun.scale(200));
-    this.directLight.forceProjectionMatrixCompute();
-
     const elevationDegrees = position.altitude;
-    this.moon.update(date, towardSun, elevationDegrees);
-    this.starField.update(
-      date,
-      this.latitude,
-      this.longitude,
-      elevationDegrees,
-    );
     const daylight = elevationDegrees > 0;
     const elevationFactor = Math.max(0, Math.sin(altitude));
-    this.directLight.setEnabled(daylight);
-    this.directLight.intensity = 0.55 + 1.55 * Math.sqrt(elevationFactor);
-    this.sunMesh.setEnabled(daylight);
-    // Avoid the old horizon discontinuity (0.32 -> 0.06) and retain a soft
-    // ambient floor so vegetation does not collapse into black silhouettes.
-    this.ambientLight.intensity = MIN_AMBIENT_INTENSITY +
-      (0.82 - MIN_AMBIENT_INTENSITY) * elevationFactor;
-    const twilight = Math.max(0, Math.min(1, (elevationDegrees + 6) / 12));
-    this.skyMaterial.luminance = 0.06 +
-      (0.72 + 0.38 * elevationFactor - 0.06) * twilight;
-    this.scene.fogColor = Color3.Lerp(
-      new Color3(0.012, 0.025, 0.065),
-      new Color3(0.3, 0.52, 0.86),
-      twilight,
-    ).scale(0.75 + this.skyMaterial.luminance * 0.25);
-    this.horizonMaterial.setColor3("horizonColor", this.scene.fogColor);
-    this.scene.environmentIntensity = daylight
-      ? 0.7 + 0.3 * elevationFactor
-      : 0.12;
-    // The dome's colours were just rewritten, so the captured copy is stale.
-    this.skyProbe?.cubeTexture.resetRefreshCounter();
-    this.refreshStaticShadows();
+    if (updateAtmosphere) {
+      this.lastAtmosphereUpdate = now;
+      this.sunMesh.position.copyFrom(towardSun.scale(SUN_DISTANCE));
+      this.skyMaterial.sunPosition.copyFrom(towardSun.scale(SUN_DISTANCE));
+      this.moon.update(date, towardSun, elevationDegrees);
+      this.starField.update(
+        date,
+        this.latitude,
+        this.longitude,
+        elevationDegrees,
+      );
+      this.directLight.setEnabled(daylight);
+      this.directLight.intensity = 0.55 + 1.55 * Math.sqrt(elevationFactor);
+      this.sunMesh.setEnabled(daylight);
+      // Avoid the old horizon discontinuity (0.32 -> 0.06) and retain a soft
+      // ambient floor so vegetation does not collapse into black silhouettes.
+      this.ambientLight.intensity = MIN_AMBIENT_INTENSITY +
+        (0.82 - MIN_AMBIENT_INTENSITY) * elevationFactor;
+      const twilight = Math.max(0, Math.min(1, (elevationDegrees + 6) / 12));
+      this.skyMaterial.luminance = 0.06 +
+        (0.72 + 0.38 * elevationFactor - 0.06) * twilight;
+      this.scene.fogColor = Color3.Lerp(
+        new Color3(0.012, 0.025, 0.065),
+        new Color3(0.3, 0.52, 0.86),
+        twilight,
+      ).scale(0.75 + this.skyMaterial.luminance * 0.25);
+      this.horizonMaterial.setColor3("horizonColor", this.scene.fogColor);
+      this.scene.environmentIntensity = daylight
+        ? 0.7 + 0.3 * elevationFactor
+        : 0.12;
+    }
+    if (updateShadowTargets) {
+      this.lastShadowUpdate = now;
+      // Keep the shadow transform paired with the depth texture that was
+      // rendered from it. The visible sky can move more often without making
+      // receivers sample a new matrix against stale shadow depth.
+      this.directLight.direction.copyFrom(towardSun.scale(-1));
+      this.directLight.position.copyFrom(towardSun.scale(200));
+      this.directLight.forceProjectionMatrixCompute();
+      this.skyProbe?.cubeTexture.resetRefreshCounter();
+      this.refreshStaticShadows();
+    }
   }
 
   /** Re-renders once after packed vegetation instances or their LOD masks move. */

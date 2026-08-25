@@ -26,11 +26,12 @@ test("all non-tree vegetation opts in while trees retain the full range", () => 
   assert.doesNotMatch(source("TreeImpostor.ts"), /upperHemisphereOnly: true/);
 });
 
-test("bush impostors preserve their finite procedural symmetry at runtime", () => {
+test("bush impostors preserve their asymmetric regional silhouettes at runtime", () => {
   const bushSource = source("BushImpostor.ts");
 
-  assert.match(bushSource, /const ROTATIONAL_SYMMETRY_ORDER = 12/);
-  assert.match(bushSource, /rotationalSymmetryOrder: ROTATIONAL_SYMMETRY_ORDER/);
+  assert.match(bushSource, /faces: IMPOSTOR_CUBE_FACES/);
+  assert.match(bushSource, /rotationallySymmetric: false/);
   assert.match(bushSource, /horizontalSamples: \{ default: 5,/);
-  assert.match(bushSource, /const symmetryOrder = ROTATIONAL_SYMMETRY_ORDER/);
+  assert.match(bushSource, /const radiusAtAngle/);
+  assert.doesNotMatch(bushSource, /ROTATIONAL_SYMMETRY_ORDER|for \(let copy/);
 });

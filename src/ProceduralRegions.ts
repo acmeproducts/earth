@@ -29,6 +29,14 @@ export interface ProceduralRegionSpec {
 const DEFAULT_SPAN_TILES = 256;
 /** A small reusable bank prevents unbounded runtime atlas generation during travel. */
 export const PROCEDURAL_VARIANTS_PER_FAMILY = 4;
+export const FERN_PROCEDURAL_VARIANT_COUNT = 2;
+const VARIANT_COUNTS: Readonly<Record<ProceduralRegionFamily, number>> = {
+  trees: PROCEDURAL_VARIANTS_PER_FAMILY,
+  bushes: PROCEDURAL_VARIANTS_PER_FAMILY,
+  grass: PROCEDURAL_VARIANTS_PER_FAMILY,
+  flowers: PROCEDURAL_VARIANTS_PER_FAMILY,
+  ferns: FERN_PROCEDURAL_VARIANT_COUNT,
+};
 let cachedConfiguredSpanTiles: number | undefined;
 const OFFSET_FRACTIONS: Readonly<Record<ProceduralRegionFamily, readonly [number, number]>> = {
   trees: [0, 0],
@@ -221,7 +229,9 @@ function regionalVariantIndex(
   regionY: number,
 ): number {
   const offset = hashParts(worldSeed, `${family}Palette`) >>> 0;
-  return wrap(regionX + regionY * 2 + offset, PROCEDURAL_VARIANTS_PER_FAMILY);
+  const variantCount = VARIANT_COUNTS[family];
+  const rowStride = Math.max(1, Math.floor(variantCount / 2));
+  return wrap(regionX + regionY * rowStride + offset, variantCount);
 }
 
 function variantSeed(

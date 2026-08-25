@@ -87,15 +87,17 @@ test("medium-range tree shadows use the full field instead of visual LOD buffers
   assert.doesNotMatch(shadowRefresh, /modelMeshes|impostorMeshes|modelRangeMeters/);
 });
 
-test("low vegetation commits do not rebuild the expensive shadow caster list", () => {
-  const commit = game.slice(
-    game.indexOf("private commitTileField"),
+test("staged vegetation rebuilds the expensive shadow caster list only once", () => {
+  const stage = game.slice(
+    game.indexOf("private stageTileField"),
+    game.indexOf("private activateTileVegetation"),
+  );
+  const activation = game.slice(
+    game.indexOf("private activateTileVegetation"),
     game.indexOf("private refreshShadowCasters"),
   );
-  assert.match(
-    commit,
-    /if \(kind === "treeField" \|\| kind === "saplingField"\) this\.refreshShadowCasters\(\)/,
-  );
+  assert.doesNotMatch(stage, /refreshShadowCasters/);
+  assert.equal(activation.match(/this\.refreshShadowCasters\(\)/g)?.length, 1);
 });
 
 test("keeps foliage alpha and LOD masks in model and impostor shadow passes", () => {
@@ -132,7 +134,7 @@ test("does not rerender the static shadow map for camera-relative LOD changes", 
 test("refreshes shadows throughout streamed layer cross-fades", () => {
   const fades = game.slice(
     game.indexOf("private updateLayerFades"),
-    game.indexOf("private commitTileField"),
+    game.indexOf("private stageTileField"),
   );
   assert.match(fades, /this\.solarLighting\?\.refreshShadows\(\)/);
 });

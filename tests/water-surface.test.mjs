@@ -34,7 +34,7 @@ test("separately streamed water materials animate in phase", () => {
   assert.doesNotMatch(water, /seconds \+= scene\.getEngine\(\)\.getDeltaTime\(\)/);
 });
 
-test("retains the terrain carving mask for terrain-derived inland water", () => {
+test("retains the terrain water mask for coastline shaping and bridge clearance", () => {
   assert.match(terrainData, /waterMask\?: Uint8Array/);
   assert.match(worldCover, /terrain\.waterMask = cropWaterMask\(/);
   assert.match(worldCover, /shapeCoastlineElevations\([\s\S]*coverage,[\s\S]*water,/);

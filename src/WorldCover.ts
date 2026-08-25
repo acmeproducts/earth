@@ -20,6 +20,11 @@ export enum LandCoverClass {
 
 export interface LandCoverSampler {
   sample(longitude: number, latitude: number): LandCoverClass;
+  /** Optional continuous surface tint for renderers that soften class edges. */
+  sampleSurfaceColor?(
+    longitude: number,
+    latitude: number,
+  ): readonly [number, number, number];
 }
 
 // Natural material tints used by the terrain renderer.
@@ -103,6 +108,39 @@ export class WorldCover {
     return this.classAtPixel(pixelX, pixelY, LandCoverClass.Bare);
   }
 
+  /**
+   * Blends the four nearest source pixels into a continuous surface tint.
+   * Classification remains discrete for placement and collision decisions,
+   * but visual layers can cross a land-cover boundary without exposing the
+   * source raster grid.
+   */
+  sampleSurfaceColor(
+    longitude: number,
+    latitude: number,
+  ): readonly [number, number, number] {
+    // Pixel coordinates refer to cell corners; subtracting half a pixel makes
+    // the integer sample positions land on the source pixels' centres.
+    const pixelX = (longitude - WorldCover.ORIGIN_X) / this.resolution - 0.5;
+    const pixelY = (WorldCover.ORIGIN_Y - latitude) / this.resolution - 0.5;
+    const x0 = Math.floor(pixelX);
+    const y0 = Math.floor(pixelY);
+    const fx = pixelX - x0;
+    const fy = pixelY - y0;
+    const fallback = this.sample(longitude, latitude);
+    const colorAt = (x: number, y: number): readonly [number, number, number] =>
+      landCoverSurfaceColor(this.classAtPixel(x, y, fallback));
+    const topLeft = colorAt(x0, y0);
+    const topRight = colorAt(x0 + 1, y0);
+    const bottomLeft = colorAt(x0, y0 + 1);
+    const bottomRight = colorAt(x0 + 1, y0 + 1);
+
+    return [0, 1, 2].map((channel) => {
+      const top = topLeft[channel] * (1 - fx) + topRight[channel] * fx;
+      const bottom = bottomLeft[channel] * (1 - fx) + bottomRight[channel] * fx;
+      return top * (1 - fy) + bottom * fy;
+    }) as [number, number, number];
+  }
+
   async constrainElevations(
     terrain: TerrainData,
     shorelineWidthMeters = COASTLINE_LAND_BLEND_METERS,
@@ -155,8 +193,8 @@ export class WorldCover {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
       if ((index & 4095) === 4095) await yieldControl?.();
     }
-    // Retain the terrain-aligned crop so terrain-derived inland water and
-    // bridge clearance can use the same classification as coastline shaping.
+    // Retain the terrain-aligned crop so bridge clearance and coastline
+    // shaping use the same water classification.
     terrain.waterMask = cropWaterMask(
       water,
       sampleWidth,

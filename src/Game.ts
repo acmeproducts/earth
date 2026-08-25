@@ -29,6 +29,8 @@ import {
   disposeTerrainLakeLayer,
 } from "./TerrainLakeSurface";
 import type { TerrainLakeLayer } from "./TerrainLakeSurface";
+import { conformTerrainToLakePolygons } from "./TerrainLakePolygons";
+import type { TerrainLakePolygon } from "./TerrainLakePolygons";
 import { createTreeField } from "./TreeField";
 import { createGrassField, setGrassFieldDetailDistance } from "./GrassField";
 import { createFlowerField } from "./FlowerField";
@@ -52,7 +54,7 @@ import {
 } from "./Geo";
 import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
-import type { LakePosition, MapTile } from "./OpenStreetMap";
+import type { MapTile } from "./OpenStreetMap";
 import {
   LandCoverClass,
   landCoverSurfaceColor,
@@ -204,8 +206,6 @@ interface StreamedTile {
   bushField?: VegetationFieldResult;
   fernField?: VegetationFieldResult;
   mapFeatures?: TransformNode;
-  /** Provider positions used as optional identity hints for terrain-derived lakes. */
-  lakePositions?: LakePosition[];
   /** Terrain-owned inland water remains visible at every streaming detail tier. */
   lakeSurfaces?: TerrainLakeLayer;
   /** Merged building massing retained outside the detail rings. */
@@ -242,6 +242,7 @@ export class Game {
   private readonly tiles = new Map<string, StreamedTile>();
   private readonly activeTileBuilds = new Set<string>();
   private readonly terrainEdgeElevations = new Map<string, number>();
+  private readonly lakeElevations = new Map<string, number>();
   private readonly activeLayerFades: LayerFade[] = [];
   private streamingGeneration = 0;
   /** Streaming CPU work yields when it has consumed its frame slice. */
@@ -253,7 +254,6 @@ export class Game {
   private readonly sceneSettings: SceneSettingsStore;
   private readonly worldLocation: WorldLocationStore;
   private lastTerrainStreamingCheckMilliseconds = 0;
-  private terrainLocationIndex = 0;
   private solarLighting?: SolarLighting;
   private cloudLayer?: CloudLayer;
   private readonly cloudsEnabled: boolean;
@@ -448,9 +448,6 @@ export class Game {
     });
 
     const location = this.worldLocation.value;
-    this.terrainLocationIndex = EXAMPLE_LOCATIONS.findIndex(
-      (example) => example.lat === location.lat && example.lon === location.lon,
-    );
     this.solarLighting = new SolarLighting(
       this.scene,
       location.lat,
@@ -491,6 +488,7 @@ export class Game {
     this.cloudLayer = undefined;
     this.disposeAllTiles();
     this.terrainEdgeElevations.clear();
+    this.lakeElevations.clear();
     this.terrainCoordinateFrame = undefined;
     this.terrainMetersPerUnit = undefined;
     this.solarLighting?.setLocation(target.lat, target.lon);
@@ -581,8 +579,6 @@ export class Game {
     } else {
       sinkSubmergedTerrain(terrainData);
     }
-    stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
-
     // The first tile of a world anchors the stable coordinate frame; every
     // later tile is projected into it so offsets stay exact while streaming.
     if (!this.terrainCoordinateFrame || !this.terrainMetersPerUnit) {
@@ -634,17 +630,30 @@ export class Game {
     });
 
     let mapTiles = previous?.mapTiles;
-    let lakePositions: LakePosition[] | undefined;
+    mapTiles ??= this.requestMapTiles(terrainData.bounds);
+    const lakeTiles = await mapTiles;
+    if (generation !== this.streamingGeneration) return undefined;
+    const lakeSources = OpenStreetMap.collectLakePolygons(
+      lakeTiles,
+      terrainData,
+      { meshWidth, meshDepth },
+    );
+    const lakePolygons: TerrainLakePolygon[] = await conformTerrainToLakePolygons(
+      terrainData,
+      preCarvingElevations,
+      lakeSources,
+      {
+        meshWidth,
+        meshDepth,
+        metersPerUnit,
+        sharedLakeElevations: this.lakeElevations,
+      },
+      yieldControl,
+    );
+    if (generation !== this.streamingGeneration) return undefined;
     if (native) {
       await reportInitializationProgress(onProgress, "Preparing mapped terrain", 34);
-      mapTiles ??= this.requestMapTiles(terrainData.bounds);
-      const roads = await mapTiles;
-      if (generation !== this.streamingGeneration) return undefined;
-      lakePositions = OpenStreetMap.collectLakePositions(
-        roads,
-        terrainData,
-        { meshWidth, meshDepth },
-      );
+      const roads = lakeTiles;
       // Level foundations first. Their broad blend aprons can overlap nearby
       // carriageways, so roads must be the final terrain deformation pass or
       // those aprons can lift ground back through the road ribbons up close.
@@ -662,10 +671,12 @@ export class Game {
         yieldControl,
       );
       if (generation !== this.streamingGeneration) return undefined;
-      // Map features are processed independently per tile and can reach a
-      // boundary. Restore the canonical shared samples after all deformation.
-      stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
     }
+
+    // Cache only finalized terrain. Newly attached tiles now adopt lake,
+    // building, and road deformation from an already-visible neighbor instead
+    // of restoring the pre-lake WorldCover edge that caused tile chasms.
+    stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
 
     const subdivisions = Math.max(
       1,
@@ -694,8 +705,7 @@ export class Game {
     if (!lakeSurfaces) {
       lakeSurfaces = await createTerrainLakeLayer(
         this.scene,
-        terrainData,
-        preCarvingElevations,
+        lakePolygons,
         {
           meshWidth,
           meshDepth,
@@ -703,7 +713,6 @@ export class Game {
           worldOffsetX: offset.x,
           worldOffsetZ: offset.z,
           skyReflection: this.solarLighting?.skyReflectionTexture,
-          seeds: lakePositions,
         },
         yieldControl,
       );
@@ -744,7 +753,6 @@ export class Game {
       offsetX: offset.x,
       offsetZ: offset.z,
       nativeTerrain: native,
-      lakePositions,
       lakeSurfaces,
       farTreeField: carriedFarTreeField,
       farBuildings: carriedFarBuildings,
@@ -819,7 +827,7 @@ export class Game {
       this.fieldLodDistance("treeField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "treeField", treeField, generation)) return;
+    if (!this.stageTileField(record, "treeField", treeField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Planting saplings", 63);
     const saplingField = await createSaplingField(this.scene, terrainData, {
@@ -834,7 +842,7 @@ export class Game {
       this.fieldLodDistance("saplingField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "saplingField", saplingField, generation)) return;
+    if (!this.stageTileField(record, "saplingField", saplingField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing grass", 68);
     const grassField = await createGrassField(this.scene, terrainData, {
@@ -848,7 +856,7 @@ export class Game {
       this.fieldLodDistance("grassField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "grassField", grassField, generation)) return;
+    if (!this.stageTileField(record, "grassField", grassField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding flowers", 73);
     const flowerField = await createFlowerField(this.scene, terrainData, {
@@ -862,7 +870,7 @@ export class Game {
       this.fieldLodDistance("flowerField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "flowerField", flowerField, generation)) return;
+    if (!this.stageTileField(record, "flowerField", flowerField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding bushes", 78);
     const bushField = await createBushField(this.scene, terrainData, {
@@ -876,7 +884,7 @@ export class Game {
       this.fieldLodDistance("bushField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "bushField", bushField, generation)) return;
+    if (!this.stageTileField(record, "bushField", bushField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing undergrowth", 82);
     const fernField = await createFernField(this.scene, terrainData, {
@@ -890,7 +898,8 @@ export class Game {
       this.fieldLodDistance("fernField"),
       yieldControl,
     );
-    if (!this.commitTileField(record, "fernField", fernField, generation)) return;
+    if (!this.stageTileField(record, "fernField", fernField, generation)) return;
+    this.activateTileVegetation(record);
 
     await reportInitializationProgress(onProgress, "Creating map features", 88);
     const mapFeatures = await OpenStreetMap.createLayer(
@@ -909,7 +918,6 @@ export class Game {
     const mapRoot = mapFeatures.root;
     this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
-    record.lakePositions = mapFeatures.lakePositions;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
       record.farBuildings = undefined;
@@ -1143,8 +1151,8 @@ export class Game {
     await field.prepareLod(localCameraPosition, distanceMeters, yieldControl);
   }
 
-  /** Commits one finished detail layer, or disposes it when the world moved on. */
-  private commitTileField(
+  /** Stages one finished detail field, or disposes it when the world moved on. */
+  private stageTileField(
     record: StreamedTile,
     kind: VegetationFieldKind,
     field: VegetationFieldResult,
@@ -1162,19 +1170,36 @@ export class Game {
         this.sceneSettings.value.detailTilesAcross,
       );
     }
-    field.root.setEnabled(true);
     record[kind] = field;
     record.lodResolved = false;
-    this.fadeFieldIn(field, kind === "treeField");
-    // The full tree layer cross-fades against the tile's distant stand-in.
-    if (kind === "treeField" && record.farTreeField) {
-      const farTrees = record.farTreeField;
-      record.farTreeField = undefined;
-      this.fadeFieldOutAndDispose(farTrees);
-    }
-    if (kind === "treeField" || kind === "saplingField") this.refreshShadowCasters();
-    this.updateVegetationLod();
     return true;
+  }
+
+  /** Cross-fades the complete vegetation layer against its distant stand-in. */
+  private activateTileVegetation(record: StreamedTile): void {
+    const fields = VEGETATION_FIELD_KINDS
+      .map((kind) => record[kind])
+      .filter((field): field is VegetationFieldResult => field !== undefined);
+    for (const field of fields) {
+      field.setFade(0);
+      field.root.setEnabled(true);
+    }
+
+    const farTrees = record.farTreeField;
+    this.beginLayerFade(0, 1, (fade) => {
+      for (const field of fields) {
+        if (!field.root.isDisposed()) field.setFade(fade);
+      }
+      if (farTrees && !farTrees.root.isDisposed()) farTrees.setFade(1 - fade);
+    }, () => {
+      farTrees?.root.dispose(false, false);
+      if (record.farTreeField === farTrees) record.farTreeField = undefined;
+      // Leave one settled static frame after the temporary fade refreshes.
+      this.solarLighting?.refreshShadows();
+    }, true);
+
+    this.refreshShadowCasters();
+    this.updateVegetationLod();
   }
 
   /** Rebuilds the shadow render list from every live detail layer. */
@@ -1360,7 +1385,6 @@ export class Game {
     }
     if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
     record.mapFeatures = undefined;
-    record.lakePositions = undefined;
     record.detailed = false;
   }
 
@@ -1418,7 +1442,6 @@ export class Game {
     const mapFeatures = record.mapFeatures;
     if (mapFeatures) {
       record.mapFeatures = undefined;
-      record.lakePositions = undefined;
       this.beginLayerFade(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
         () => OpenStreetMap.disposeLayer(mapFeatures), true);
     }
@@ -1483,7 +1506,7 @@ export class Game {
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
-          void this.changeTerrainLocation(locationIndex);
+          this.reloadAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
         }
       }
     });
@@ -1631,18 +1654,13 @@ export class Game {
     );
   }
 
-  private async changeTerrainLocation(locationIndex: number): Promise<void> {
-    if (locationIndex === this.terrainLocationIndex) {
-      this.placeCameraAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
-      return;
-    }
-    this.terrainLocationIndex = locationIndex;
-    console.log(`Loading location ${locationIndex + 1}: ${EXAMPLE_LOCATIONS[locationIndex].name}`);
-    await this.startWorld(EXAMPLE_LOCATIONS[locationIndex]);
+  /** Persists a keyboard-selected destination, then rebuilds all scene-owned state. */
+  private reloadAtLocation(target: WorldLocation): void {
+    this.worldLocation.update(target);
+    window.location.reload();
   }
 
   private async changeToCoordinates(target: WorldLocation): Promise<void> {
-    this.terrainLocationIndex = -1;
     console.log(`Loading coordinates: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
     await this.startWorld(target);
   }
@@ -1743,9 +1761,8 @@ export class Game {
         elevation > 0
       );
     });
-    this.terrainLocationIndex = -1;
     console.log(`Random location: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
-    await this.startWorld(target);
+    this.reloadAtLocation(target);
   }
 
   /** Places the player's eye exactly one standing height over loaded terrain. */

@@ -40,6 +40,18 @@ test("runtime captures yield between GPU views and pixel-processing slices", () 
   assert.match(impostors, /yieldCaptureWorkIfNeeded/);
 });
 
+test("startup and streamed requests share the same regional atlas cache key", () => {
+  const impostors = source("Impostor.ts");
+  assert.match(
+    impostors,
+    /const regionalVariant = variant\.key !== DEFAULT_IMPOSTOR_VARIANT\.key;[\s\S]*?const cooperative = requestOptions\.cooperative \?\? regionalVariant;[\s\S]*?const sampling = regionalVariant[\s\S]*?runtimeCaptureSampling\(requestedSampling\)/,
+  );
+  assert.doesNotMatch(
+    impostors,
+    /const sampling = cooperative\s*\?[\s\S]*?runtimeCaptureSampling\(requestedSampling\)/,
+  );
+});
+
 test("initial tree atlases use the fast path while streamed atlases remain cooperative", () => {
   const game = source("Game.ts");
   const trees = source("TreeField.ts");
@@ -65,4 +77,21 @@ test("tree sister variants alter macro silhouette and foliage character", () => 
   assert.match(trees, /crownLeanX \* crown/);
   assert.match(trees, /foliageGreen/);
   assert.match(trees, /textureU < 0 \|\| textureU >= 1\.5/);
+});
+
+test("bush variants and placements avoid repeated radial silhouettes", () => {
+  const bushes = source("BushImpostor.ts");
+  const field = source("BushField.ts");
+
+  assert.match(bushes, /const crownRotation = random\(\)/);
+  assert.match(bushes, /const lobePhase = random\(\)/);
+  assert.match(bushes, /const paletteCenter = Math\.floor\(random\(\)/);
+  assert.match(bushes, /const localBottom/);
+  assert.match(bushes, /function addLeaf/);
+  assert.match(bushes, /for \(const along of \[0\.34, 0\.66\]\)/);
+  assert.match(bushes, /Math\.pow\(Math\.sin\(Math\.PI \* t\), 0\.72\)/);
+  assert.doesNotMatch(bushes, /bladeAngle|shootCount/);
+  assert.match(field, /const widthScaleX/);
+  assert.match(field, /const widthScaleZ/);
+  assert.match(field, /new Vector3\(widthScaleX, heightScale, widthScaleZ\)/);
 });

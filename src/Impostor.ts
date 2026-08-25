@@ -214,8 +214,13 @@ export function createImpostorAssetProvider(
     requestOptions: ImpostorAssetRequestOptions,
   ): { cache: Map<string, ImpostorCacheEntry>; entry: ImpostorCacheEntry } => {
     const requestedSampling = { ...getDefaultSampling(), ...overrides };
-    const cooperative = requestOptions.cooperative ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
-    const sampling = cooperative
+    const regionalVariant = variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
+    const cooperative = requestOptions.cooperative ?? regionalVariant;
+    // Regional atlases must use one stable sampling tier regardless of whether
+    // they are captured synchronously during startup or cooperatively while
+    // streaming. Otherwise the capture mode changes the cache key and the
+    // first streamed tile regenerates every atlas that startup already made.
+    const sampling = regionalVariant
       ? runtimeCaptureSampling(requestedSampling)
       : requestedSampling;
     validateSampling(definition, sampling);

@@ -169,11 +169,13 @@ test("builds a double-sided skirt below every terrain edge segment", () => {
   assert.ok(Math.abs(skirt.positions[2 * 3 + 1] - (positions[1] - 0.02)) < 1e-5);
 });
 
-test("restitches detailed terrain after map-driven deformation", () => {
-  const initialStitch = game.indexOf("stitchTerrainEdges(terrainData");
+test("caches shared edges only after lake and map deformation", () => {
+  const lakeStamp = game.indexOf("conformTerrainToLakePolygons(");
   const buildingStamp = game.indexOf("OpenStreetMap.conformTerrainToBuildings");
-  const finalStitch = game.indexOf("stitchTerrainEdges(terrainData", initialStitch + 1);
-  assert.ok(initialStitch >= 0);
-  assert.ok(buildingStamp > initialStitch);
+  const finalStitch = game.indexOf("stitchTerrainEdges(terrainData");
+  assert.ok(lakeStamp >= 0);
+  assert.ok(buildingStamp > lakeStamp);
   assert.ok(finalStitch > buildingStamp);
+  assert.equal((game.match(/stitchTerrainEdges\(terrainData/g) ?? []).length, 1);
+  assert.match(game, /sharedLakeElevations: this\.lakeElevations/);
 });

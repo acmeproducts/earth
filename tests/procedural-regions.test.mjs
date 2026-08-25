@@ -5,6 +5,7 @@ import test from "node:test";
 register("./ts-extension-resolver.mjs", import.meta.url);
 
 const {
+  FERN_PROCEDURAL_VARIANT_COUNT,
   proceduralRegionCandidatesAtLocation,
   proceduralRegionSpec,
   proceduralVariantAtLocation,
@@ -75,6 +76,19 @@ test("distant regions reuse a bounded model palette without matching their neigh
     variants.push(proceduralVariantAtLocation("trees", location.lon, location.lat, 123, 128));
   }
   assert.equal(new Set(variants.map(({ key }) => key)).size, 4);
+  for (let index = 1; index < variants.length; index++) {
+    assert.notEqual(variants[index].key, variants[index - 1].key);
+  }
+});
+
+test("ferns use a smaller two-variant model palette", () => {
+  const variants = [];
+  for (let region = 0; region < 8; region++) {
+    const location = locationAtTileCoordinate(region * 128 + 64, 20_000.25);
+    variants.push(proceduralVariantAtLocation("ferns", location.lon, location.lat, 123, 128));
+  }
+  assert.equal(FERN_PROCEDURAL_VARIANT_COUNT, 2);
+  assert.equal(new Set(variants.map(({ key }) => key)).size, 2);
   for (let index = 1; index < variants.length; index++) {
     assert.notEqual(variants[index].key, variants[index - 1].key);
   }

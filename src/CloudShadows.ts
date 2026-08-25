@@ -20,6 +20,10 @@ import {
 const TERRAIN_CLOUD_SHADOW_COUNT = 4;
 const CLOUD_SHADOW_DIRECTION_REFRESH_RADIANS = 3 * Math.PI / 180;
 const CLOUD_SHADOW_DARKNESS = 0.36;
+// Low-angle sunlight contributes less contrast than the ambient sky, so cloud
+// shadows should build gradually through dawn and fall away before sunset.
+const CLOUD_SHADOW_FADE_START = Math.sin(4 * Math.PI / 180);
+const CLOUD_SHADOW_FULL_STRENGTH = Math.sin(20 * Math.PI / 180);
 
 interface CloudShadowSceneState {
   readonly fallback: RawTexture;
@@ -246,7 +250,11 @@ export function createCloudShadowProjector(
   let atlasFootprintScale = cloudShadowFootprintScale(atlasSunDirection);
 
   const updateSelection = (): void => {
-    const sunlight = smoothstep(0.04, 0.18, sunDirection.y);
+    const sunlight = smoothstep(
+      CLOUD_SHADOW_FADE_START,
+      CLOUD_SHADOW_FULL_STRENGTH,
+      sunDirection.y,
+    );
     state.lighting.x = sunlight;
     if (sunlight <= 0 || fieldPlacements.length === 0) {
       clearSelectedPlacements(state);

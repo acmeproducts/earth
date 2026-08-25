@@ -104,13 +104,16 @@ export async function createBushField(
           waterLineMeters,
         )) continue;
 
-        const heightScale = 0.68 + random() * 0.82;
-        const widthScale = 0.7 + random() * 0.72;
+        const vigor = Math.pow(random(), 0.72);
+        const heightScale = 0.62 + vigor * 0.84;
+        const widthScale = 0.68 + vigor * 0.5;
+        const widthScaleX = widthScale * (0.82 + random() * 0.36);
+        const widthScaleZ = widthScale * (0.82 + random() * 0.36);
         const yaw = random() * Math.PI * 2;
         const pitch = (random() - 0.5) * 0.05;
         const roll = (random() - 0.5) * 0.05;
         const matrix = Matrix.Compose(
-            new Vector3(widthScale, heightScale, widthScale),
+            new Vector3(widthScaleX, heightScale, widthScaleZ),
             new Vector3(pitch, yaw, roll).toQuaternion(),
             new Vector3(x, elevation / metersPerUnit, z),
           );

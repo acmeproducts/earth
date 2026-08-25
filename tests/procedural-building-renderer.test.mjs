@@ -250,6 +250,23 @@ test("one-story buildings keep a single floor and no stairs", () => {
   engine.dispose();
 });
 
+test("house heights without mapped levels do not round up to a second floor", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(322, { render_height: 5.9, roof_shape: "flat" }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed);
+  assert.equal(detailed.metadata.interiorFloorCount, 1);
+  assert.equal(detailed.metadata.stairFlightCount, 0);
+
+  scene.dispose();
+  engine.dispose();
+});
+
 test("facade windows keep one coherent size per building", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
