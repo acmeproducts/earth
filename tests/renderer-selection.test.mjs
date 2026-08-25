@@ -69,7 +69,10 @@ test("WebGPU uses native material variants for streamed shadows and water", () =
     /field\.shadowCasterMeshes\.length > 0 \? field\.shadowCasterMeshes : field\.meshes/,
   );
   assert.match(game, /refreshShadows && !this\.engine\.isWebGPU/);
-  assert.match(solarLighting, /!scene\.getEngine\(\)\.isWebGPU\);/);
+  assert.match(
+    solarLighting,
+    /new ShadowGenerator\([\s\S]*?!scene\.getEngine\(\)\.isWebGPU/,
+  );
   assert.match(solarLighting, /if \(!scene\.getEngine\(\)\.isWebGPU\) \{/);
   assert.match(water, /scene\.getEngine\(\)\.isWebGPU\s+\? new StandardMaterial/);
 });

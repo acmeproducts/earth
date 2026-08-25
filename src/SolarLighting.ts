@@ -27,6 +27,17 @@ const ATMOSPHERE_UPDATE_INTERVAL_MS = 5_000;
 /** Expensive static render targets do not need the visual sky's faster cadence. */
 const SHADOW_UPDATE_INTERVAL_MS = 60_000;
 /**
+ * The shadow frustum spans the complete streamed vegetation ring, so 2048
+ * leaves building silhouettes visibly quantized. Shadows are cached between
+ * streaming and sun updates, making extra map resolution cheaper than it
+ * would be for a conventional per-frame shadow pass.
+ */
+const PREFERRED_SHADOW_MAP_SIZE = 4096;
+/** Retain a small guard band without Babylon's resolution-heavy 10% default. */
+const SHADOW_ORTHO_SCALE = 0.02;
+/** A restrained source size softens quantization without washing out foliage. */
+const SHADOW_LIGHT_SIZE_UV_RATIO = 0.025;
+/**
  * The sky reflection only has to survive being seen in a rippling surface, so
  * a small cube is plenty and keeps the six extra faces off the frame budget.
  */
@@ -88,14 +99,27 @@ export class SolarLighting {
     // metres of separation, so shadows only survive at grazing sun angles.
     this.directLight.autoCalcShadowZBounds = true;
     this.directLight.autoUpdateExtends = true;
+    this.directLight.shadowOrthoScale = SHADOW_ORTHO_SCALE;
 
     // A float depth texture can also be sampled by the custom vegetation
-    // receiver shaders. Poisson filtering keeps the built-in terrain receiver
-    // compatible with that regular sampler path.
+    // receiver shaders. PCSS retains that regular depth target while using a
+    // comparison sampler for built-in materials. Unlike the old four-tap
+    // Poisson filter, its denser kernel does not expose four obvious shade
+    // bands across broad building shadows.
     // Prefer packed depth on WebGPU so the shadow target stays on Babylon's
     // most widely supported native pipeline.
-    this.shadows = new ShadowGenerator(2048, this.directLight, !scene.getEngine().isWebGPU);
-    this.shadows.usePoissonSampling = true;
+    const shadowMapSize = Math.min(
+      PREFERRED_SHADOW_MAP_SIZE,
+      scene.getEngine().getCaps().maxTextureSize,
+    );
+    this.shadows = new ShadowGenerator(
+      shadowMapSize,
+      this.directLight,
+      !scene.getEngine().isWebGPU,
+    );
+    this.shadows.useContactHardeningShadow = true;
+    this.shadows.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
+    this.shadows.contactHardeningLightSizeUVRatio = SHADOW_LIGHT_SIZE_UV_RATIO;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
     const shadowMap = this.shadows.getShadowMap();

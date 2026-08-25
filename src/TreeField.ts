@@ -480,7 +480,7 @@ void main(void) {
   #if SM_DIRECTIONINLIGHTDATA == 1
   // A captured canopy otherwise writes one dense, hard-edged slab into the
   // shadow map. Filter only its depth-pass coverage over roughly one source
-  // texel, then leave a little open foliage for the existing Poisson receiver
+  // texel, then leave a little open foliage for the filtered shadow receiver
   // to turn into a restrained penumbra. Visible impostors are unaffected.
   vec2 shadowTexel = tileInset * 2.5;
   float softShadowAlpha = color.a * 0.5;

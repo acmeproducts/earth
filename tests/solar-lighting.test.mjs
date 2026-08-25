@@ -24,3 +24,24 @@ test("updates the visible atmosphere more often than shadows and reflections", (
     /if \(updateShadowTargets\) \{[\s\S]*?forceProjectionMatrixCompute\(\)[\s\S]*?resetRefreshCounter\(\)[\s\S]*?refreshStaticShadows\(\)/,
   );
 });
+
+test("spends more of the cached shadow map on streamed caster detail", () => {
+  assert.match(source, /const PREFERRED_SHADOW_MAP_SIZE = 4096/);
+  assert.match(source, /const SHADOW_ORTHO_SCALE = 0\.02/);
+  assert.match(
+    source,
+    /Math\.min\([\s\S]*?PREFERRED_SHADOW_MAP_SIZE,[\s\S]*?getCaps\(\)\.maxTextureSize/,
+  );
+  assert.match(source, /directLight\.shadowOrthoScale = SHADOW_ORTHO_SCALE/);
+});
+
+test("avoids four-level Poisson banding without replacing vegetation depth", () => {
+  assert.doesNotMatch(source, /usePoissonSampling = true/);
+  assert.match(source, /useContactHardeningShadow = true/);
+  assert.match(source, /filteringQuality = ShadowGenerator\.QUALITY_MEDIUM/);
+  assert.match(source, /const SHADOW_LIGHT_SIZE_UV_RATIO = 0\.025/);
+  assert.match(
+    source,
+    /contactHardeningLightSizeUVRatio = SHADOW_LIGHT_SIZE_UV_RATIO/,
+  );
+});
