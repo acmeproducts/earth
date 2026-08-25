@@ -16,6 +16,12 @@ test("builds lake surfaces with terrain so coarse tiles render them", () => {
   assert.match(terrainBuild, /lakeSurfaces\.root\.setEnabled\(true\)/);
 });
 
+test("loads padded lake context while keeping rendered water tile-clipped", () => {
+  assert.match(game, /expandTerrainBounds\([\s\S]*LAKE_TERRAIN_CONTEXT_METERS/);
+  assert.match(game, /clipPadding: LAKE_TERRAIN_CONTEXT_METERS \/ metersPerUnit/);
+  assert.match(game, /surfaceSources: surfaceLakeSources/);
+});
+
 test("carries lake surfaces through native terrain promotion", () => {
   assert.match(game, /let lakeSurfaces = previous\?\.lakeSurfaces/);
   assert.match(game, /previous\.lakeSurfaces = undefined/);

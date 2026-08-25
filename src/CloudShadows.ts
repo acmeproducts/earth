@@ -19,7 +19,9 @@ import {
 
 const TERRAIN_CLOUD_SHADOW_COUNT = 4;
 const CLOUD_SHADOW_DIRECTION_REFRESH_RADIANS = 3 * Math.PI / 180;
-const CLOUD_SHADOW_DARKNESS = 0.36;
+// Even an opaque cloud leaves diffuse skylight, so its contribution alone may
+// remove at most 22% of the receiver's light.
+const CLOUD_SHADOW_DARKNESS = 0.22;
 // Low-angle sunlight contributes less contrast than the ambient sky, so cloud
 // shadows should build gradually through dawn and fall away before sunset.
 const CLOUD_SHADOW_FADE_START = Math.sin(4 * Math.PI / 180);

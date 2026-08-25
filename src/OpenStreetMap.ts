@@ -319,14 +319,18 @@ export class OpenStreetMap {
   static collectLakePolygons(
     tiles: readonly MapTile[],
     terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth">,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth"> & {
+      /** Extra world-space margin retained for terrain deformation only. */
+      clipPadding?: number;
+    },
   ): TerrainLakeSource[] {
     const results: TerrainLakeSource[] = [];
+    const clipPadding = Math.max(0, options.clipPadding ?? 0);
     const clipBounds = {
-      minX: -options.meshWidth / 2,
-      maxX: options.meshWidth / 2,
-      minZ: -options.meshDepth / 2,
-      maxZ: options.meshDepth / 2,
+      minX: -options.meshWidth / 2 - clipPadding,
+      maxX: options.meshWidth / 2 + clipPadding,
+      minZ: -options.meshDepth / 2 - clipPadding,
+      maxZ: options.meshDepth / 2 + clipPadding,
     };
     const project = ([lon, lat]: LonLat) =>
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);

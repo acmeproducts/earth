@@ -142,6 +142,39 @@ test("reuses one lake level across independently streamed tile pieces", async ()
   assert.equal(sharedLakeElevations.get("water/14/42"), 40);
 });
 
+test("uses padded lake rings for deformation but returns tile-clipped water", async () => {
+  const grid = terrain(new Array(25).fill(10));
+  const contextLake = {
+    ...square(),
+    outline: square().outline.map(({ x, z }) => ({ x: x + 5.5, z })),
+  };
+  const surfaceLake = {
+    ...contextLake,
+    outline: contextLake.outline.map(({ x, z }) => ({ x: Math.min(5, x), z })),
+  };
+  const sharedLakeElevations = new Map([[contextLake.sourceId, 4]]);
+
+  const lakes = await conformTerrainToLakePolygons(
+    grid,
+    new Float32Array(25).fill(50),
+    [contextLake],
+    {
+      meshWidth: 10,
+      meshDepth: 10,
+      metersPerUnit: 1,
+      shorelineBlendMeters: 2,
+      rasterRepairMeters: 4,
+      sharedLakeElevations,
+      surfaceSources: [surfaceLake],
+    },
+  );
+
+  // The padded ring lies mostly in the eastern neighbor but still shapes this edge.
+  assert.notEqual(grid.elevations[2 * 5 + 4], 10);
+  assert.deepEqual(lakes[0].outline, surfaceLake.outline);
+  assert.equal(lakes[0].elevationMeters, 4);
+});
+
 test("preserves mapped islands as holes in the water surface", async () => {
   const grid = terrain(new Array(25).fill(50));
   const lake = square();

@@ -25,9 +25,14 @@ export interface TerrainLakePolygonOptions {
   lakeBedDepthMeters?: number;
   rasterRepairMeters?: number;
   rasterRepairFadeMeters?: number;
+  /** Tile-clipped rings returned for water rendering after padded rings shape terrain. */
+  surfaceSources?: readonly TerrainLakeSource[];
   /** Makes every streamed piece of one OSM lake reuse exactly one level. */
   sharedLakeElevations?: Map<string, number>;
 }
+
+/** Maximum default distance at which an OSM lake can alter neighboring terrain. */
+export const LAKE_TERRAIN_CONTEXT_METERS = 240;
 
 interface Bounds {
   minimumX: number;
@@ -74,7 +79,7 @@ export async function conformTerrainToLakePolygons(
   const shorelineWidth = (options.shorelineBlendMeters ?? 24) / options.metersPerUnit;
   const repairWidth = Math.max(
     shorelineWidth,
-    (options.rasterRepairMeters ?? 240) / options.metersPerUnit,
+    (options.rasterRepairMeters ?? LAKE_TERRAIN_CONTEXT_METERS) / options.metersPerUnit,
   );
   const repairFadeWidth = Math.min(
     repairWidth,
@@ -124,7 +129,13 @@ export async function conformTerrainToLakePolygons(
   }
 
   updateElevationRange(terrain);
-  return lakes.map(({ polygon }) => polygon);
+  const surfaceSources = options.surfaceSources ?? sources;
+  return surfaceSources.flatMap((source) => {
+    const elevationMeters = levels.get(source.sourceId);
+    return elevationMeters === undefined || elevationMeters < minimumElevation
+      ? []
+      : [{ ...source, elevationMeters }];
+  });
 }
 
 /** Estimates one level once, then shares it with every later streamed piece. */

@@ -184,7 +184,7 @@ test("cloud footprints shadow both vegetation models and impostors", () => {
     /lighting \*= mix\(1\.0, vegetationCloudShadowVisibility\(\), lightingEnabled\)/,
   );
   assert.match(cloudReceivers, /uniform sampler2D cloudShadowAtlas/);
-  assert.match(cloudReceivers, /CLOUD_SHADOW_DARKNESS = 0\.36/);
+  assert.match(cloudReceivers, /CLOUD_SHADOW_DARKNESS = 0\.22/);
   assert.match(
     cloudReceivers,
     /coverage \* cloudShadowLighting\.x \* \$\{CLOUD_SHADOW_DARKNESS\}/,

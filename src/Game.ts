@@ -29,7 +29,10 @@ import {
   disposeTerrainLakeLayer,
 } from "./TerrainLakeSurface";
 import type { TerrainLakeLayer } from "./TerrainLakeSurface";
-import { conformTerrainToLakePolygons } from "./TerrainLakePolygons";
+import {
+  conformTerrainToLakePolygons,
+  LAKE_TERRAIN_CONTEXT_METERS,
+} from "./TerrainLakePolygons";
 import type { TerrainLakePolygon } from "./TerrainLakePolygons";
 import { createTreeField } from "./TreeField";
 import { createGrassField, setGrassFieldDetailDistance } from "./GrassField";
@@ -192,6 +195,8 @@ interface StreamedTile {
   preCarvingElevations: Float32Array;
   /** One shared vector-tile request for every OSM-backed layer on this tile. */
   mapTiles?: Promise<MapTile[]>;
+  /** Padded OSM request used only to make lake deformation cross tile edges. */
+  lakeContextTiles?: Promise<MapTile[]>;
   terrain: Mesh;
   meshWidth: number;
   meshDepth: number;
@@ -631,12 +636,26 @@ export class Game {
 
     let mapTiles = previous?.mapTiles;
     mapTiles ??= this.requestMapTiles(terrainData.bounds);
-    const lakeTiles = await mapTiles;
+    let lakeContextTiles = previous?.lakeContextTiles;
+    lakeContextTiles ??= this.requestMapTiles(expandTerrainBounds(
+      terrainData,
+      LAKE_TERRAIN_CONTEXT_METERS,
+    ));
+    const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
     if (generation !== this.streamingGeneration) return undefined;
-    const lakeSources = OpenStreetMap.collectLakePolygons(
+    const surfaceLakeSources = OpenStreetMap.collectLakePolygons(
       lakeTiles,
       terrainData,
       { meshWidth, meshDepth },
+    );
+    const lakeSources = OpenStreetMap.collectLakePolygons(
+      contextTiles,
+      terrainData,
+      {
+        meshWidth,
+        meshDepth,
+        clipPadding: LAKE_TERRAIN_CONTEXT_METERS / metersPerUnit,
+      },
     );
     const lakePolygons: TerrainLakePolygon[] = await conformTerrainToLakePolygons(
       terrainData,
@@ -647,6 +666,7 @@ export class Game {
         meshDepth,
         metersPerUnit,
         sharedLakeElevations: this.lakeElevations,
+        surfaceSources: surfaceLakeSources,
       },
       yieldControl,
     );
@@ -747,6 +767,7 @@ export class Game {
       landCover,
       preCarvingElevations,
       mapTiles,
+      lakeContextTiles,
       terrain,
       meshWidth,
       meshDepth,
@@ -2414,6 +2435,33 @@ function changed(
   key: SceneSettingKey,
 ): boolean {
   return previous[key] !== next[key];
+}
+
+/** Expands a terrain footprint in its Mercator-aligned local frame. */
+function expandTerrainBounds(
+  terrain: TerrainData,
+  paddingMeters: number,
+): TerrainData["bounds"] {
+  const northWest = sceneToLonLat(
+    -terrain.groundWidthMeters / 2 - paddingMeters,
+    terrain.groundHeightMeters / 2 + paddingMeters,
+    terrain.bounds,
+    terrain.groundWidthMeters,
+    terrain.groundHeightMeters,
+  );
+  const southEast = sceneToLonLat(
+    terrain.groundWidthMeters / 2 + paddingMeters,
+    -terrain.groundHeightMeters / 2 - paddingMeters,
+    terrain.bounds,
+    terrain.groundWidthMeters,
+    terrain.groundHeightMeters,
+  );
+  return {
+    lonWest: Math.max(-180, northWest.lon),
+    lonEast: Math.min(180, southEast.lon),
+    latNorth: Math.min(85.05112878, northWest.lat),
+    latSouth: Math.max(-85.05112878, southEast.lat),
+  };
 }
 
 async function reportInitializationProgress(
