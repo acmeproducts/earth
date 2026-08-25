@@ -69,7 +69,9 @@ const BRIDGE_EDGE_WIDTH_METERS = 0.45;
 const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
 const BRIDGE_WATER_CLEARANCE_METERS = 3;
 const WATERWAY_SURFACE_CLEARANCE_METERS = 0.08;
-const ROAD_TEXTURE_SIZE = 64;
+const ROAD_TEXTURE_SIZE = 128;
+/** A deliberately non-round span keeps gravel repeats from lining up with road sampling. */
+const LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6.7;
 
 type RoadMaterialStyle = RoadVisualStyle | "pavedShoulder" | "unpavedShoulder" | "bridgeDeck";
 
@@ -1031,7 +1033,9 @@ function roadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford" ? 1.5 : 4;
+  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford"
+    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
+    : 4;
   const leftUvs = [new Vector2(0, 0)];
   const rightUvs = [new Vector2(0, 1)];
   let distanceMeters = 0;
@@ -1275,12 +1279,12 @@ function mergeWaterways(
 function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMaterialStyle): StandardMaterial {
   const material = new StandardMaterial(`${name}Material`, scene);
   switch (visualStyle) {
-    case "unpaved": material.diffuseColor = new Color3(0.46, 0.39, 0.28); break;
+    case "unpaved": material.diffuseColor = new Color3(0.43, 0.42, 0.38); break;
     case "marked": material.diffuseColor = new Color3(0.72, 0.72, 0.68); break;
     case "pedestrian": material.diffuseColor = new Color3(0.38, 0.36, 0.33); break;
     case "ford": material.diffuseColor = new Color3(0.28, 0.32, 0.31); break;
     case "pavedShoulder": material.diffuseColor = new Color3(0.3, 0.29, 0.27); break;
-    case "unpavedShoulder": material.diffuseColor = new Color3(0.4, 0.34, 0.25); break;
+    case "unpavedShoulder": material.diffuseColor = new Color3(0.38, 0.37, 0.34); break;
     case "bridgeDeck": material.diffuseColor = new Color3(0.16, 0.17, 0.17); break;
     default: material.diffuseColor = new Color3(0.2, 0.21, 0.2); break;
   }
@@ -1302,7 +1306,7 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
   material.diffuseTexture = texture;
   if (looseSurface) {
     const relief = createRoadTexture(scene, `${name}Relief`, visualStyle, false);
-    relief.level = 0.42;
+    relief.level = 0.24;
     material.bumpTexture = relief;
   }
   return material;
@@ -1321,6 +1325,12 @@ function createRoadTexture(
       const offset = (y * ROAD_TEXTURE_SIZE + x) * 4;
       const fine = hashNoise(x, y);
       const coarse = hashNoise(Math.floor(x / 4), Math.floor(y / 4));
+      // Periodic value noise crosses the wrapped edges smoothly. Several
+      // incommensurate scales read as varied aggregate without the old square
+      // four-pixel clumps advertising each texture tile.
+      const gravelBroad = tiledRoadNoise(x, y, 7, 0x45d9f3b);
+      const gravelCluster = tiledRoadNoise(x, y, 23, 0x119de1f3);
+      const gravelGrain = tiledRoadNoise(x, y, 53, 0x3449f5);
       const centerMark = visualStyle === "marked" &&
         Math.abs(y - (ROAD_TEXTURE_SIZE - 1) / 2) <= 1.25 &&
         x < ROAD_TEXTURE_SIZE * 0.58;
@@ -1329,7 +1339,11 @@ function createRoadTexture(
         : visualStyle === "marked"
           ? 55 + Math.round((fine - 0.5) * 10)
           : visualStyle === "unpaved" || visualStyle === "unpavedShoulder"
-            ? 150 + Math.round((fine - 0.5) * 70 + (coarse - 0.5) * 34)
+            ? 164 + Math.round(
+              (gravelBroad - 0.5) * 14 +
+              (gravelCluster - 0.5) * 24 +
+              (gravelGrain - 0.5) * 12
+            )
             : visualStyle === "pedestrian"
               ? 185 + Math.round((fine - 0.5) * 18 + (coarse - 0.5) * 8)
               : visualStyle === "ford"
@@ -1368,6 +1382,26 @@ function hashNoise(x: number, y: number): number {
   hash = Math.imul(hash, 0x85ebca6b);
   hash ^= hash >>> 13;
   return (hash >>> 0) / 0xffffffff;
+}
+
+/** Seamless smooth noise whose lattice repeats exactly at the texture boundary. */
+function tiledRoadNoise(x: number, y: number, frequency: number, seed: number): number {
+  const sampleX = (x / ROAD_TEXTURE_SIZE) * frequency;
+  const sampleY = (y / ROAD_TEXTURE_SIZE) * frequency;
+  const cellX = Math.floor(sampleX);
+  const cellY = Math.floor(sampleY);
+  const fractionX = sampleX - cellX;
+  const fractionY = sampleY - cellY;
+  const smoothX = fractionX * fractionX * (3 - 2 * fractionX);
+  const smoothY = fractionY * fractionY * (3 - 2 * fractionY);
+  const wrapped = (value: number): number => (value + frequency) % frequency;
+  const topLeft = hashNoise(wrapped(cellX) ^ seed, wrapped(cellY));
+  const topRight = hashNoise(wrapped(cellX + 1) ^ seed, wrapped(cellY));
+  const bottomLeft = hashNoise(wrapped(cellX) ^ seed, wrapped(cellY + 1));
+  const bottomRight = hashNoise(wrapped(cellX + 1) ^ seed, wrapped(cellY + 1));
+  const top = topLeft + (topRight - topLeft) * smoothX;
+  const bottom = bottomLeft + (bottomRight - bottomLeft) * smoothX;
+  return top + (bottom - top) * smoothY;
 }
 
 function truthy(value: unknown): boolean {

@@ -68,6 +68,9 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.ford, "fordRoads", "ford"/);
   assert.match(openStreetMap, /mergeRoads\(roadShoulders\.paved, "pavedRoadShoulders", "pavedShoulder"/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
+  assert.match(openStreetMap, /LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6\.7/);
+  assert.match(openStreetMap, /function tiledRoadNoise/);
+  assert.match(openStreetMap, /relief\.level = 0\.24/);
 });
 
 test("builds a coarse road-only layer for the far render", () => {
