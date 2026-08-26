@@ -21,8 +21,9 @@ import {
   createTreeModels,
   getTreeImpostorAssets,
   TREE_IMPOSTOR_FACES,
+  TreeImpostorVariant,
 } from "./TreeImpostor";
-import { ImpostorAssets, ImpostorVariant } from "./Impostor";
+import { ImpostorAssets } from "./Impostor";
 import {
   combineVegetationFieldResults,
   createVegetationFieldResult,
@@ -68,6 +69,7 @@ import {
 } from "./Wind";
 import { proceduralVariantAtLocation } from "./ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
+import { treeSeasonAt } from "./TreeSeason";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -127,7 +129,7 @@ interface TreeFieldOptions extends VegetationPlacementOptions {
 
 interface TreeVariantBucket {
   species: TreeSpecies;
-  variant: ImpostorVariant;
+  variant: TreeImpostorVariant;
   matrices: Matrix[];
   fallenLogMatrices: Matrix[];
 }
@@ -561,6 +563,7 @@ export async function createTreeField(
     metersPerUnit,
     seed = 0x4f534c4f,
     modelVariantSeed = DEFAULT_WORLD_SEED,
+    seasonalDate,
     spacingMeters = DEFAULT_TREE_SPACING_METERS,
     occupancy = 0.52,
     edgeOccupancy = 0.12,
@@ -693,7 +696,13 @@ export async function createTreeField(
           location.lat,
           modelVariantSeed,
         );
-        const variant = { ...region, seed: layerSeed(region.seed, species) };
+        const season = treeSeasonAt(seasonalDate, location.lat, species);
+        const variant: TreeImpostorVariant = {
+          ...region,
+          key: `${region.key}/season/${season.key}`,
+          seed: layerSeed(region.seed, species),
+          season,
+        };
         const bucketKey = `${species}:${variant.key}`;
         let bucket = variantBuckets.get(bucketKey);
         if (!bucket) {
@@ -755,11 +764,11 @@ export async function createTreeField(
       prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
     }
     const modelMeshes = includeModels
-      ? await createTreeModels(scene, treeHeight, species, variant.seed)
+      ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season)
       : [];
     modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
     const fallenLogModel = bucket.fallenLogMatrices.length > 0
-      ? await createTreeLogModel(scene, treeHeight, species, variant.seed)
+      ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season)
       : undefined;
     if (fallenLogModel) fallenLogModel.parent = prototype.root;
     const modelMaterials = new Set(
@@ -827,7 +836,7 @@ function consolidateTreeVariantBuckets(
 ): Map<string, TreeVariantBucket> {
   if (buckets.size <= 1) return new Map(buckets);
 
-  const variants = new Map<string, { variant: ImpostorVariant; count: number }>();
+  const variants = new Map<string, { variant: TreeImpostorVariant; count: number }>();
   let total = 0;
   for (const bucket of buckets.values()) {
     total += bucket.matrices.length;
@@ -946,7 +955,7 @@ export async function createTreeImpostorPrototype(
   treeHeight: number,
   rootName = "treeImpostorPrototype",
   species: TreeSpecies = "birch",
-  variant?: ImpostorVariant,
+  variant?: TreeImpostorVariant,
   cooperativeCapture = true,
 ): Promise<ImpostorPrototype> {
   const root = new TransformNode(rootName, scene);

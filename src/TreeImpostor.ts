@@ -19,6 +19,11 @@ import {
   ImpostorAssets,
   ImpostorVariant,
 } from "./Impostor";
+import type { TreeSeasonAppearance } from "./TreeSeason";
+
+export interface TreeImpostorVariant extends ImpostorVariant {
+  season?: TreeSeasonAppearance;
+}
 
 export type TreeImpostorAssets = ImpostorAssets;
 export { IMPOSTOR_CUBE_FACES as TREE_IMPOSTOR_FACES } from "./Impostor";
@@ -29,9 +34,13 @@ function createTreeProvider(species: TreeSpecies) {
     name: `${species}TreeImpostor`,
     queryPrefix: species === "birch" ? "tree-impostor" : `${species}-tree-impostor`,
     createSource: (scene, variant) => {
+      const treeVariant = variant as TreeImpostorVariant;
       const parts = tree.create(
         scene,
-        variant.seed === undefined ? undefined : { seed: variant.seed },
+        {
+          ...(treeVariant.seed === undefined ? {} : { seed: treeVariant.seed }),
+          season: treeVariant.season,
+        },
       );
       return [parts.log, parts.branches];
     },
@@ -60,7 +69,7 @@ export async function getTreeImpostorAssets(
   verticalSamples = treeImpostors.birch.getDefaultSampling().verticalSamples,
   resolution = treeImpostors.birch.getDefaultSampling().resolution,
   species: TreeSpecies = "birch",
-  variant?: ImpostorVariant,
+  variant?: TreeImpostorVariant,
 ): Promise<TreeImpostorAssets> {
   // The capture source is foliage geometry, so its cards need the leaf image's
   // proportions before this species is built and baked into an atlas.
@@ -76,7 +85,7 @@ export async function getTreeImpostorAssets(
 export async function acquireTreeImpostorAssets(
   scene: Scene,
   species: TreeSpecies,
-  variant: ImpostorVariant,
+  variant: TreeImpostorVariant,
   cooperative = true,
 ): Promise<ImpostorAssetLease> {
   await measureFoliageTextures();
@@ -89,12 +98,14 @@ export async function createTreeModels(
   renderHeight: number,
   species: TreeSpecies = "birch",
   seed?: number,
+  season?: TreeSeasonAppearance,
 ): Promise<Mesh[]> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
   const parts = treeDefinition.create(scene, {
     name: `${species}TreeModels`,
     liveLighting: true,
+    season,
     ...(seed === undefined ? {} : { seed }),
   });
   const renderScale = renderHeight / treeDefinition.sourceHeight;
@@ -111,12 +122,14 @@ export async function createTreeLogModel(
   renderHeight: number,
   species: TreeSpecies,
   seed?: number,
+  season?: TreeSeasonAppearance,
 ): Promise<Mesh> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
   const parts = treeDefinition.create(scene, {
     name: `${species}FallenLog`,
     liveLighting: true,
+    season,
     ...(seed === undefined ? {} : { seed }),
   });
   parts.branches.dispose(false, false);

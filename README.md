@@ -87,7 +87,16 @@ upper-hemisphere mode, spending every vertical row on level-to-overhead views
 because these low vegetation types are not normally seen from below. Tree captures
 retain the full below-to-above range and use 5 horizontal by 5 vertical samples
 per face. Each tree frame keeps a 192 px height and derives its narrower width
-from the generated tree's bounding box. `tree-impostor-x-samples`,
+from the generated tree's bounding box.
+
+Tree foliage is baked for the calendar date captured at world startup.
+Temperate deciduous trees gain sparse spring crowns, autumn color and leaf loss,
+or bare winter silhouettes; seasons reverse in the southern hemisphere, while
+tropical and evergreen crowns remain stable. Models and their impostors are
+generated from the same seasonal geometry. Changing the date control later only
+updates the sky and intentionally does not rebuild vegetation.
+
+`tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
 override those defaults for quality testing, up to a maximum resolution of 256
 px. Grass uses a 5 by 5 grid at
@@ -184,8 +193,11 @@ fog; use `?clouds=off` for a cloud-free performance comparison.
 Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
 shadows, and `?date=2026-08-23` to hold the simulation on a specific local
 calendar date. Live game time starts at `2026-01-01 00:00` and advances at 24x
-real time, so one real hour spans one game day. The settings menu's Live and
-Today buttons restore the live game time and date.
+real time, so one real hour spans one game day. The settings menu's Manual clock
+toggle switches the date and time together. Clock mode and the last manual date
+and time persist across reloads, allowing a reload to regenerate seasonal trees
+for the selected date. `?clock=automatic` or `?clock=manual` can override the
+persisted mode; supplying `?date` or `?time` selects manual mode by default.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from

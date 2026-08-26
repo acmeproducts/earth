@@ -95,13 +95,17 @@ import {
   VegetationRenderMode,
 } from "./VegetationField";
 import { SceneControls } from "./SceneControls";
-import { parseCalendarDate } from "./CalendarDate";
 import { createBrowserSceneSettingsStore } from "./SceneSettings";
 import type {
   SceneSettingKey,
   SceneSettings,
   SceneSettingsStore,
 } from "./SceneSettings";
+import {
+  ClockMode,
+  ClockSettingsStore,
+  createBrowserClockSettingsStore,
+} from "./ClockSettings";
 import {
   DEFAULT_WORLD_SEED,
   layerSeed,
@@ -257,6 +261,7 @@ export class Game {
   private readonly worldSeed: number;
   private readonly renderScale: number;
   private readonly sceneSettings: SceneSettingsStore;
+  private readonly clockSettings: ClockSettingsStore;
   private readonly worldLocation: WorldLocationStore;
   private lastTerrainStreamingCheckMilliseconds = 0;
   private solarLighting?: SolarLighting;
@@ -264,6 +269,8 @@ export class Game {
   private readonly cloudsEnabled: boolean;
   private readonly initialDate?: string;
   private readonly initialTimeOfDay?: number;
+  /** Date captured once for vegetation generation; sky controls do not rebuild trees. */
+  private vegetationDate?: Date;
   private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
   private sceneControls?: SceneControls;
@@ -347,6 +354,7 @@ export class Game {
     );
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
     this.sceneSettings = createBrowserSceneSettingsStore(query);
+    this.clockSettings = createBrowserClockSettingsStore(query);
     this.worldLocation = createBrowserWorldLocationStore(EXAMPLE_LOCATIONS[0]);
     this.engine.setHardwareScalingLevel(1 / this.renderScale);
     this.fpsCounter = new FpsCounter(
@@ -376,13 +384,9 @@ export class Game {
     this.cloudsEnabled = !["0", "off", "false"].includes(
       query.get("clouds")?.toLowerCase() ?? "",
     );
-    const requestedDate = query.get("date");
-    this.initialDate = requestedDate && parseCalendarDate(requestedDate)
-      ? requestedDate
-      : undefined;
-    this.initialTimeOfDay = query.has("time")
-      ? queryNumber(query, "time", 12, 0, 23.75)
-      : undefined;
+    const clock = this.clockSettings.value;
+    this.initialDate = clock.mode === "manual" ? clock.manualDate : undefined;
+    this.initialTimeOfDay = clock.mode === "manual" ? clock.manualTimeOfDay : undefined;
   }
 
   private get terrainTileRadius(): number {
@@ -460,6 +464,7 @@ export class Game {
     );
     this.solarLighting.setDate(this.initialDate);
     this.solarLighting.setTimeOfDay(this.initialTimeOfDay);
+    this.vegetationDate = this.solarLighting.currentDate;
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
 
     // Load terrain at the active example location. Only the center tile
@@ -468,12 +473,18 @@ export class Game {
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.sceneControls = new SceneControls({
       settings: this.sceneSettings.value,
+      clockSettings: this.clockSettings.value,
       initialLocation: location,
-      initialDate: this.initialDate,
-      initialTimeOfDay: this.initialTimeOfDay,
       onSettingChange: (key, value) => this.changeSceneSetting(key, value),
-      onDateChange: (date) => this.solarLighting?.setDate(date),
-      onTimeOfDayChange: (hours) => this.solarLighting?.setTimeOfDay(hours),
+      onClockModeChange: (mode) => this.changeClockMode(mode),
+      onDateChange: (date) => {
+        this.clockSettings.setManualDate(date);
+        if (this.clockSettings.value.mode === "manual") this.solarLighting?.setDate(date);
+      },
+      onTimeOfDayChange: (hours) => {
+        this.clockSettings.setManualTimeOfDay(hours);
+        if (this.clockSettings.value.mode === "manual") this.solarLighting?.setTimeOfDay(hours);
+      },
       onLocationChange: (target) => this.changeToCoordinates(target),
       onMenuOpenChange: (isOpen) => this.setMenuOpen(isOpen),
     });
@@ -829,6 +840,7 @@ export class Game {
       landCover: placementLandCover,
       exclusionMask,
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
+      seasonalDate: this.vegetationDate,
       yieldControl,
       impostorCaptureMode: onProgress ? "fast" as const : "cooperative" as const,
       startDisabled,
@@ -993,6 +1005,7 @@ export class Game {
       seed: layerSeed(record.terrainData.generationSeed, "trees"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
+      seasonalDate: this.vegetationDate,
       landCover: placementLandCover,
       exclusionMask,
       spacingMeters: FAR_TREE_SPACING_METERS,
@@ -1583,6 +1596,17 @@ export class Game {
     if (detailSizeChanged) this.updateGrassDetailDistance();
     if (modelRangeChanged) this.updateVegetationLod();
     if (cloudDensityChanged) this.cloudLayer?.setDensity(next.cloudDensity);
+  }
+
+  private changeClockMode(mode: ClockMode): void {
+    const clock = this.clockSettings.setMode(mode);
+    if (mode === "manual") {
+      this.solarLighting?.setDate(clock.manualDate);
+      this.solarLighting?.setTimeOfDay(clock.manualTimeOfDay);
+    } else {
+      this.solarLighting?.setDate(undefined);
+      this.solarLighting?.setTimeOfDay(undefined);
+    }
   }
 
   private requestStreamingUpdate(): void {

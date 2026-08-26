@@ -9,6 +9,7 @@ const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
 const gameTime = readFileSync(new URL("../src/GameTime.ts", import.meta.url), "utf8");
+const clockSettings = readFileSync(new URL("../src/ClockSettings.ts", import.meta.url), "utf8");
 
 test("defaults to three by three and allows exact even-sized detail windows", () => {
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 3/);
@@ -50,11 +51,11 @@ test("the settings menu toggles with Escape and supports coordinate navigation",
 });
 
 test("a URL time override fixes both the sun and the settings clock", () => {
-  assert.match(game, /query\.has\("time"\)/);
-  assert.match(game, /queryNumber\(query, "time", 12, 0, 23\.75\)/);
+  assert.match(clockSettings, /query\.get\("time"\)/);
+  assert.match(clockSettings, /mode: "manual"/);
   assert.match(game, /this\.solarLighting\.setTimeOfDay\(this\.initialTimeOfDay\)/);
-  assert.match(controls, /initialTimeOfDay\?: number/);
-  assert.match(controls, /this\.isLiveTime = false/);
+  assert.match(controls, /clockSettings: Readonly<ClockSettings>/);
+  assert.match(controls, /this\.setClockMode\(options\.clockSettings\.mode\)/);
 });
 
 test("live date and time share the accelerated game clock", () => {
@@ -66,12 +67,12 @@ test("live date and time share the accelerated game clock", () => {
 });
 
 test("the simulation date can be fixed from the settings menu or URL", () => {
-  assert.match(game, /query\.get\("date"\)/);
+  assert.match(clockSettings, /query\.get\("date"\)/);
   assert.match(game, /this\.solarLighting\.setDate\(this\.initialDate\)/);
-  assert.match(controls, /initialDate\?: string/);
   assert.match(controls, /this\.dateInput\.type = "date"/);
   assert.match(controls, /options\.onDateChange\(this\.dateInput\.value\)/);
-  assert.match(controls, /options\.onDateChange\(undefined\)/);
+  assert.match(controls, /this\.manualClockInput\.type = "checkbox"/);
+  assert.match(controls, /options\.onClockModeChange\(mode\)/);
   assert.match(solarLighting, /get currentDate\(\): Date/);
   assert.match(solarLighting, /setDate\(date\?: string\)/);
 });
@@ -125,4 +126,12 @@ test("persists normalized controls through one scene settings store", () => {
   assert.match(settings, /earth\.scene-settings\.v1/);
   assert.match(settings, /storage\?\.setItem\(STORAGE_KEY, JSON\.stringify\(this\.current\)\)/);
   assert.match(game, /private changeSceneSetting\(key: SceneSettingKey, value: number\)/);
+});
+
+test("persists automatic or manual clock selection and manual values", () => {
+  assert.match(clockSettings, /earth\.clock-settings\.v1/);
+  assert.match(clockSettings, /setMode\(mode: ClockMode\)/);
+  assert.match(clockSettings, /setManualDate\(date: string\)/);
+  assert.match(clockSettings, /setManualTimeOfDay\(hours: number\)/);
+  assert.match(game, /private changeClockMode\(mode: ClockMode\)/);
 });

@@ -9,15 +9,16 @@ import type {
   SceneSettingKey,
   SceneSettings,
 } from "./SceneSettings";
+import type { ClockMode, ClockSettings } from "./ClockSettings";
 
 export interface SceneControlsOptions {
   settings: Readonly<SceneSettings>;
+  clockSettings: Readonly<ClockSettings>;
   initialLocation: WorldLocation;
-  initialDate?: string;
-  initialTimeOfDay?: number;
   onSettingChange: (key: SceneSettingKey, value: number) => void;
-  onDateChange: (date: string | undefined) => void;
-  onTimeOfDayChange: (hours: number | undefined) => void;
+  onClockModeChange: (mode: ClockMode) => void;
+  onDateChange: (date: string) => void;
+  onTimeOfDayChange: (hours: number) => void;
   onLocationChange: (location: WorldLocation) => Promise<void>;
   onMenuOpenChange: (isOpen: boolean) => void;
 }
@@ -30,9 +31,8 @@ export class SceneControls {
   private readonly element: HTMLElement;
   private readonly timeInput: HTMLInputElement;
   private readonly timeOutput: HTMLOutputElement;
-  private readonly liveButton: HTMLButtonElement;
   private readonly dateInput: HTMLInputElement;
-  private readonly todayButton: HTMLButtonElement;
+  private readonly manualClockInput: HTMLInputElement;
   private readonly placeInput: HTMLInputElement;
   private readonly placeGoButton: HTMLButtonElement;
   private readonly latitudeInput: HTMLInputElement;
@@ -42,8 +42,9 @@ export class SceneControls {
   private readonly clockTimer: number;
   private readonly rangeControls = new Map<SceneSettingKey, RangeControl>();
   private readonly onMenuOpenChange: (isOpen: boolean) => void;
-  private isLiveDate = true;
-  private isLiveTime = true;
+  private isAutomaticClock = true;
+  private manualDate = "";
+  private manualTimeOfDay = 12;
   private menuOpen = false;
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -77,6 +78,21 @@ export class SceneControls {
       sceneGroup.appendChild(control.row);
     }
 
+    const clockModeRow = document.createElement("label");
+    clockModeRow.className = "scene-control-row clock-mode-row";
+    const clockModeLabel = document.createElement("span");
+    clockModeLabel.textContent = "Manual clock";
+    this.manualClockInput = document.createElement("input");
+    this.manualClockInput.type = "checkbox";
+    this.manualClockInput.setAttribute("aria-label", "Use manual date and time");
+    this.manualClockInput.addEventListener("change", () => {
+      const mode: ClockMode = this.manualClockInput.checked ? "manual" : "automatic";
+      this.setClockMode(mode);
+      options.onClockModeChange(mode);
+    });
+    clockModeRow.append(clockModeLabel, this.manualClockInput);
+    sceneGroup.appendChild(clockModeRow);
+
     const dateRow = document.createElement("label");
     dateRow.className = "scene-control-row date-control-row";
     const dateLabel = document.createElement("span");
@@ -86,24 +102,13 @@ export class SceneControls {
     this.dateInput.type = "date";
     this.dateInput.setAttribute("aria-label", "Date");
 
-    this.todayButton = document.createElement("button");
-    this.todayButton.type = "button";
-    this.todayButton.textContent = "Today";
-    this.todayButton.title = "Use the current game date";
-    this.todayButton.addEventListener("click", () => {
-      this.isLiveDate = true;
-      this.updateLiveDate();
-      options.onDateChange(undefined);
-    });
-
     this.dateInput.addEventListener("input", () => {
       if (!this.dateInput.value) return;
-      this.isLiveDate = false;
-      this.updateDateState();
+      this.manualDate = this.dateInput.value;
       options.onDateChange(this.dateInput.value);
     });
 
-    dateRow.append(dateLabel, this.dateInput, this.todayButton);
+    dateRow.append(dateLabel, this.dateInput);
     sceneGroup.appendChild(dateRow);
 
     const timeRow = document.createElement("label");
@@ -119,24 +124,14 @@ export class SceneControls {
     this.timeInput.setAttribute("aria-label", "Time of day");
     this.timeOutput = document.createElement("output");
 
-    this.liveButton = document.createElement("button");
-    this.liveButton.type = "button";
-    this.liveButton.textContent = "Live";
-    this.liveButton.title = "Use the accelerated game time";
-    this.liveButton.addEventListener("click", () => {
-      this.isLiveTime = true;
-      this.updateLiveTime();
-      options.onTimeOfDayChange(undefined);
-    });
-
     this.timeInput.addEventListener("input", () => {
-      this.isLiveTime = false;
       const hours = Number(this.timeInput.value);
+      this.manualTimeOfDay = hours;
       this.updateTimeDisplay(hours);
       options.onTimeOfDayChange(hours);
     });
 
-    timeRow.append(timeLabel, this.timeInput, this.timeOutput, this.liveButton);
+    timeRow.append(timeLabel, this.timeInput, this.timeOutput);
     sceneGroup.appendChild(timeRow);
     this.element.appendChild(sceneGroup);
 
@@ -195,24 +190,16 @@ export class SceneControls {
     document.body.appendChild(this.element);
     document.addEventListener("keydown", this.handleKeyDown, true);
     this.setLocation(options.initialLocation);
-    if (options.initialDate === undefined) {
-      this.updateLiveDate();
-    } else {
-      this.isLiveDate = false;
-      this.dateInput.value = options.initialDate;
-      this.updateDateState();
-    }
-    if (options.initialTimeOfDay === undefined) {
-      this.updateLiveTime();
-    } else {
-      this.isLiveTime = false;
-      this.timeInput.value = String(options.initialTimeOfDay);
-      this.updateTimeDisplay(options.initialTimeOfDay);
-    }
+    this.manualDate = options.clockSettings.manualDate;
+    this.manualTimeOfDay = options.clockSettings.manualTimeOfDay;
+    this.dateInput.value = this.manualDate;
+    this.timeInput.value = String(this.manualTimeOfDay);
+    this.updateTimeDisplay(this.manualTimeOfDay);
+    this.setClockMode(options.clockSettings.mode);
     this.clockTimer = window.setInterval(() => {
       const gameDate = getGameDate();
-      this.updateLiveDate(gameDate);
-      this.updateLiveTime(gameDate);
+      this.updateAutomaticDate(gameDate);
+      this.updateAutomaticTime(gameDate);
     }, CLOCK_UPDATE_INTERVAL_MS);
   }
 
@@ -380,22 +367,32 @@ export class SceneControls {
     return { row, input, setValue };
   }
 
-  private updateLiveTime(gameDate = getGameDate()): void {
-    if (!this.isLiveTime) return;
+  private updateAutomaticTime(gameDate = getGameDate()): void {
+    if (!this.isAutomaticClock) return;
     const hours = gameDate.getHours() + gameDate.getMinutes() / MINUTES_PER_HOUR;
     this.timeInput.value = String(hours);
     this.updateTimeDisplay(hours);
   }
 
-  private updateLiveDate(gameDate = getGameDate()): void {
-    if (!this.isLiveDate) return;
+  private updateAutomaticDate(gameDate = getGameDate()): void {
+    if (!this.isAutomaticClock) return;
     this.dateInput.value = formatCalendarDate(gameDate);
-    this.updateDateState();
   }
 
-  private updateDateState(): void {
-    this.todayButton.classList.toggle("active", this.isLiveDate);
-    this.todayButton.setAttribute("aria-pressed", String(this.isLiveDate));
+  private setClockMode(mode: ClockMode): void {
+    this.isAutomaticClock = mode === "automatic";
+    this.manualClockInput.checked = !this.isAutomaticClock;
+    this.dateInput.disabled = this.isAutomaticClock;
+    this.timeInput.disabled = this.isAutomaticClock;
+    if (this.isAutomaticClock) {
+      const gameDate = getGameDate();
+      this.updateAutomaticDate(gameDate);
+      this.updateAutomaticTime(gameDate);
+    } else {
+      this.dateInput.value = this.manualDate;
+      this.timeInput.value = String(this.manualTimeOfDay);
+      this.updateTimeDisplay(this.manualTimeOfDay);
+    }
   }
 
   private updateTimeDisplay(hours: number): void {
@@ -403,8 +400,6 @@ export class SceneControls {
     const displayHours = Math.floor(totalMinutes / MINUTES_PER_HOUR) % 24;
     const displayMinutes = totalMinutes % MINUTES_PER_HOUR;
     this.timeOutput.value = `${String(displayHours).padStart(2, "0")}:${String(displayMinutes).padStart(2, "0")}`;
-    this.liveButton.classList.toggle("active", this.isLiveTime);
-    this.liveButton.setAttribute("aria-pressed", String(this.isLiveTime));
   }
 }
 

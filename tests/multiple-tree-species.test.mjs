@@ -56,7 +56,10 @@ test("captures species sequentially so the gameplay camera is restored", () => {
 test("uses the same regional seed for each tree model and impostor", () => {
   assert.match(treeField, /proceduralVariantAtLocation\([\s\S]*?"trees"/);
   assert.match(treeField, /createTreeImpostorPrototype\([\s\S]*?variant/);
-  assert.match(treeField, /createTreeModels\(scene, treeHeight, species, variant\.seed\)/);
+  assert.match(
+    treeField,
+    /createTreeModels\(scene, treeHeight, species, variant\.seed, variant\.season\)/,
+  );
 });
 
 test("keeps lazy capture sources and cameras out of gameplay frames", () => {

@@ -12,6 +12,8 @@ export interface VegetationPlacementOptions {
   seed?: number;
   /** World-level seed used for location-bound procedural model variants. */
   modelVariantSeed?: number;
+  /** Calendar snapshot used by procedural vegetation generated for this world. */
+  seasonalDate?: Date;
   spacingMeters?: number;
   waterLineMeters?: number;
   landCover?: LandCoverSampler;

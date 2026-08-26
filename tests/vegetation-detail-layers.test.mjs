@@ -80,7 +80,10 @@ test("mature detailed forests include sparse species-matched fallen logs", () =>
   assert.match(treeImpostors, /export async function createTreeLogModel/);
   assert.match(trees, /depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH/);
   assert.match(trees, /random\(\) < FALLEN_LOG_CHANCE/);
-  assert.match(trees, /createTreeLogModel\(scene, treeHeight, species, variant\.seed\)/);
+  assert.match(
+    trees,
+    /createTreeLogModel\(scene, treeHeight, species, variant\.seed, variant\.season\)/,
+  );
   assert.match(trees, /createVegetationFieldResult\([\s\S]*?\[\],[\s\S]*?\[fallenLogModel\],[\s\S]*?"auto"/);
   assert.match(game, /includeFallenLogs: true/);
 

@@ -4,6 +4,7 @@ import {
   getTreeBarkTexture,
 } from "./ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
+import type { TreeSeasonAppearance } from "./TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 3.2;
@@ -12,6 +13,8 @@ export interface ProceduralTreeOptions {
   seed?: number;
   name?: string;
   liveLighting?: boolean;
+  /** Seasonal state baked into foliage geometry and vertex colors. */
+  season?: TreeSeasonAppearance;
 }
 
 /** The reusable wood and crown components of one procedural tree. */
@@ -432,7 +435,7 @@ function createBirchTree(
 
   applyRegionalTreeCharacter(logBuffers, seed);
   applyRegionalTreeCharacter(branchBuffers, seed);
-  return createTreeParts(scene, name, "birch", logBuffers, branchBuffers, liveLighting);
+  return createTreeParts(scene, name, "birch", logBuffers, branchBuffers, liveLighting, options.season);
 }
 
 function emptyGeometryBuffers(): GeometryBuffers {
@@ -717,7 +720,7 @@ function createBroadleafTree(
 
   applyRegionalTreeCharacter(logBuffers, seed);
   applyRegionalTreeCharacter(branchBuffers, seed);
-  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting);
+  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting, options.season);
 }
 
 /** Builds a ringed, gently leaning trunk with a radial crown of feathered fronds. */
@@ -794,7 +797,7 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
   }
   applyRegionalTreeCharacter(logBuffers, seed);
   applyRegionalTreeCharacter(branchBuffers, seed);
-  return createTreeParts(scene, name, "palm", logBuffers, branchBuffers, liveLighting);
+  return createTreeParts(scene, name, "palm", logBuffers, branchBuffers, liveLighting, options.season);
 }
 
 function createConiferTree(
@@ -1031,7 +1034,7 @@ function createConiferTree(
 
   applyRegionalTreeCharacter(logBuffers, seed);
   applyRegionalTreeCharacter(branchBuffers, seed);
-  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting);
+  return createTreeParts(scene, name, species, logBuffers, branchBuffers, liveLighting, options.season);
 }
 
 /** Gives sister variants a different large-scale silhouette, not just different twigs. */
@@ -1083,7 +1086,9 @@ function createTreeParts(
   logBuffers: GeometryBuffers,
   branchBuffers: GeometryBuffers,
   liveLighting: boolean,
+  season?: TreeSeasonAppearance,
 ): ProceduralTreeParts {
+  if (season) applySeasonalFoliage(branchBuffers, season);
   const material = createVertexColorCaptureMaterial(
     scene,
     `${name}Material`,
@@ -1096,6 +1101,59 @@ function createTreeParts(
     log: createTreePartMesh(scene, `${name}Log`, logBuffers, material),
     branches: createTreePartMesh(scene, `${name}Branches`, branchBuffers, material),
   };
+}
+
+/** Removes whole leaf cards and recolors the survivors before model/impostor creation. */
+function applySeasonalFoliage(
+  buffers: GeometryBuffers,
+  season: TreeSeasonAppearance,
+): void {
+  if (season.leafCoverage >= 1 && season.foliageTint.every((value) => value === 1)) return;
+
+  const droppedVertices = new Set<number>();
+  for (let vertex = 0; vertex + 3 < buffers.positions.length / 3;) {
+    let foliageCard = true;
+    for (let corner = 0; corner < 4; corner++) {
+      const u = buffers.uvs[(vertex + corner) * 2];
+      const v = buffers.uvs[(vertex + corner) * 2 + 1];
+      foliageCard &&= u >= 0 && u <= 1 && v >= 0 && v <= 1;
+    }
+    if (!foliageCard) {
+      vertex++;
+      continue;
+    }
+
+    // Geometry order is deterministic, so this keeps the same scattered leaves
+    // in models and captures without consuming or perturbing the tree RNG.
+    const retained = deterministicUnit(vertex ^ hashString(season.key)) < season.leafCoverage;
+    for (let corner = 0; corner < 4; corner++) {
+      const index = vertex + corner;
+      if (!retained) droppedVertices.add(index);
+      const color = index * 4;
+      buffers.colors[color] = Math.min(1, buffers.colors[color] * season.foliageTint[0]);
+      buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * season.foliageTint[1]);
+      buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * season.foliageTint[2]);
+    }
+    vertex += 4;
+  }
+  if (droppedVertices.size > 0) {
+    buffers.indices = buffers.indices.filter((index) => !droppedVertices.has(index));
+  }
+}
+
+function deterministicUnit(value: number): number {
+  let hash = value | 0;
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+  return ((hash ^ (hash >>> 16)) >>> 0) / 4_294_967_296;
+}
+
+function hashString(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
+  }
+  return hash;
 }
 
 function createTreePartMesh(
