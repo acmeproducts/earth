@@ -191,12 +191,34 @@ function renderCloudShadowVariant(
 }
 
 function cloudLobes(variant: number): CloudLobe[] {
+  let lobes: CloudLobe[];
   switch (variant % 4) {
-    case 0: return bankLobes(variant);
-    case 1: return clusteredLobes(variant);
-    case 2: return brokenLobes(variant);
-    default: return towerLobes(variant);
+    case 0: lobes = bankLobes(variant); break;
+    case 1: lobes = clusteredLobes(variant); break;
+    case 2: lobes = brokenLobes(variant); break;
+    default: lobes = towerLobes(variant); break;
   }
+  return addBillowDetails(lobes, variant);
+}
+
+/** Adds attached, smaller billows without turning the formation into loose dots. */
+function addBillowDetails(lobes: CloudLobe[], variant: number): CloudLobe[] {
+  const parentCount = lobes.length;
+  for (let index = 0; index < 6; index++) {
+    const parent = lobes[Math.floor(lobeRandom(variant, index, 21) * parentCount)];
+    const angle = lobeRandom(variant, index, 22) * Math.PI * 2;
+    const scale = lerp(0.075, 0.145, lobeRandom(variant, index, 23));
+    lobes.push(makeLobe(
+      parent.x + Math.cos(angle) * parent.radiusX * 0.42,
+      parent.y + lerp(0.2, 0.55, lobeRandom(variant, index, 24)) * parent.radiusY,
+      parent.z + Math.sin(angle) * parent.radiusZ * 0.42,
+      scale * lerp(0.85, 1.3, lobeRandom(variant, index, 25)),
+      scale * lerp(0.72, 1.08, lobeRandom(variant, index, 26)),
+      scale * lerp(0.9, 1.4, lobeRandom(variant, index, 27)),
+      lerp(0.76, 1.0, lobeRandom(variant, index, 28)),
+    ));
+  }
+  return lobes;
 }
 
 function bankLobes(variant: number): CloudLobe[] {
@@ -311,19 +333,62 @@ function cloudDensity(
   z: number,
   variant: number,
 ): number {
-  let density = 0;
+  // Bend the otherwise analytic ellipsoids before evaluating them. Broad,
+  // low-amplitude warping keeps the cloud readable as one soft mass while
+  // preventing a chain of lobes from producing a perfectly smooth capsule.
+  const broadWarp = valueNoise3D(x * 1.7 + 19.3, y * 1.9, z * 1.7, variant + 31)
+    - 0.5;
+  const crossWarp = valueNoise3D(z * 1.6 - 23.7, y * 1.8 + 37.1, x * 1.6, variant + 47)
+    - 0.5;
+  const detailWarp = valueNoise3D(x * 5.7, y * 6.4 + 8.1, z * 5.7, variant + 67)
+    - 0.5;
+  const warpX = broadWarp
+      * 0.15
+    + detailWarp * 0.075;
+  const warpY = (broadWarp + crossWarp) * 0.055
+    + detailWarp * 0.045;
+  const warpZ = crossWarp
+      * 0.15
+    - detailWarp * 0.075;
+  const warpedX = x + warpX;
+  const warpedY = y + warpY;
+  const warpedZ = z + warpZ;
+
+  let strongestBillow = 0;
+  let overlappingBillows = 0;
   for (const lobe of lobes) {
-    const dx = (x - lobe.x) / lobe.radiusX;
-    const dy = (y - lobe.y) / lobe.radiusY;
-    const dz = (z - lobe.z) / lobe.radiusZ;
+    const dx = (warpedX - lobe.x) / lobe.radiusX;
+    const dy = (warpedY - lobe.y) / lobe.radiusY;
+    const dz = (warpedZ - lobe.z) / lobe.radiusZ;
     const radiusSquared = dx * dx + dy * dy + dz * dz;
     if (radiusSquared >= 1) continue;
     const influence = 1 - radiusSquared;
-    density += influence * influence * lobe.strength;
+    const billow = influence * influence * lobe.strength;
+    strongestBillow = Math.max(strongestBillow, billow);
+    overlappingBillows += billow;
   }
-  if (density <= 0.08) return 0;
-  const detail = valueNoise3D(x * 4.2, y * 5.4, z * 4.2, variant);
-  return Math.max(0, density * (0.78 + detail * 0.42) - 0.08);
+  if (strongestBillow <= 0) return 0;
+
+  // A mostly-max union leaves individual cauliflower-like billows visible.
+  // The small additive term still welds overlaps into a coherent cloud body.
+  const baseDensity = strongestBillow + Math.max(0, overlappingBillows - strongestBillow) * 0.26;
+  const edge = 1 - smoothstep(0.16, 0.62, baseDensity);
+  const shapeNoise = fractalNoise3D(
+    warpedX * 3.1,
+    warpedY * 3.8,
+    warpedZ * 3.1,
+    variant,
+  );
+  // Most of the high-frequency breakup is confined to the perimeter. Dense
+  // interiors receive only a faint variation and therefore remain soft.
+  const erosion = (shapeNoise - 0.5) * lerp(0.07, 0.38, edge);
+  return Math.max(0, baseDensity - 0.075 + erosion);
+}
+
+function fractalNoise3D(x: number, y: number, z: number, seed: number): number {
+  const broad = valueNoise3D(x, y, z, seed);
+  const medium = valueNoise3D(x * 2.03 + 17.1, y * 2.03, z * 2.03 - 9.7, seed + 101);
+  return broad * 0.68 + medium * 0.32;
 }
 
 function valueNoise3D(x: number, y: number, z: number, seed: number): number {
@@ -375,6 +440,11 @@ function writeAtlasTile(
 
 function smoothFraction(value: number): number {
   return value * value * (3 - 2 * value);
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const amount = clamp01((value - edge0) / (edge1 - edge0));
+  return amount * amount * (3 - 2 * amount);
 }
 
 function lerp(from: number, to: number, amount: number): number {

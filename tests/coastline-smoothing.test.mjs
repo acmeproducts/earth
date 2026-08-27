@@ -90,8 +90,12 @@ test("uses shoreline context beyond the terrain tile edge", async () => {
 
 test("preserves the carved profile during terrain interpolation", () => {
   const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const terrainMesh = readFileSync(
+    new URL("../src/TerrainMesh.ts", import.meta.url),
+    "utf8",
+  );
   assert.match(
-    game,
+    terrainMesh,
     /const elevation = terrain\.waterMask\s*\? interpolatedElevation\s*:\s*sinkSubmergedElevation\(interpolatedElevation\)/,
   );
   assert.match(

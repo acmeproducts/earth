@@ -9,8 +9,8 @@ test("every vegetation family assigns placements to its own regional variants", 
     ["TreeField.ts", "trees"],
     ["BushField.ts", "bushes"],
     ["GrassField.ts", "grass"],
-    ["FlowerField.ts", "flowers"],
     ["FernField.ts", "ferns"],
+    ["TallPlantField.ts", "tallPlants"],
   ]) {
     const field = source(file);
     assert.match(field, new RegExp(`"${family}"`));

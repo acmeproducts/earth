@@ -105,10 +105,14 @@ test("volume capture retains continuous density for runtime blending", () => {
   assert.doesNotMatch(volumeSource, /coverage\s*[<>]=?\s*0\.5/);
 });
 
-test("cloud bodies favor opaque mass over low-alpha mist", () => {
+test("cloud bodies keep solid cores while multi-scale noise breaks up their edges", () => {
   assert.match(source, /bodyCoverage = smoothstep\(0\.025, 0\.78, density\.r\)/);
   assert.match(source, /mix\(1\.06, 0\.58, core\)/);
-  assert.match(volumeSource, /density \* \(0\.78 \+ detail \* 0\.42\) - 0\.08/);
+  assert.match(volumeSource, /strongestBillow \+ Math\.max\(0, overlappingBillows - strongestBillow\) \* 0\.26/);
+  assert.match(volumeSource, /const edge = 1 - smoothstep\(0\.16, 0\.62, baseDensity\)/);
+  assert.match(volumeSource, /function addBillowDetails/);
+  assert.match(volumeSource, /function fractalNoise3D/);
+  assert.match(volumeSource, /lerp\(0\.07, 0\.38, edge\)/);
 });
 
 test("cloud atlas contains eight distinct formation archetypes", () => {

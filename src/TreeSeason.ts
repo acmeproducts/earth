@@ -12,6 +12,24 @@ export interface TreeSeasonAppearance {
   foliageTint: readonly [number, number, number];
 }
 
+/**
+ * Whether seasonal snow cover is appropriate at a location. Tropical places
+ * retain year-round ground cover even during their hemisphere's nominal
+ * winter, matching the tropical tree treatment below.
+ */
+export function hasWinterGroundCover(
+  date: Date | undefined,
+  latitude: number,
+): boolean {
+  return Boolean(
+    date
+    && Number.isFinite(date.getTime())
+    && Number.isFinite(latitude)
+    && Math.abs(latitude) >= 23.5
+    && meteorologicalSeason(date.getMonth(), latitude < 0) === "winter",
+  );
+}
+
 const EVERGREEN_SPECIES = new Set<TreeSpecies>([
   "acacia", "eucalyptus", "fir", "mangrove", "palm", "pine", "spruce",
 ]);

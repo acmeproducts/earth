@@ -4,7 +4,13 @@ import {
   worldTileCoordinatesAtLocation,
 } from "./WorldGrid";
 
-export type ProceduralRegionFamily = "trees" | "bushes" | "grass" | "flowers" | "ferns";
+export type ProceduralRegionFamily =
+  | "trees"
+  | "bushes"
+  | "grass"
+  | "ferns"
+  | "tallPlants"
+  | "rocks";
 
 export interface ProceduralVariant {
   key: string;
@@ -27,23 +33,14 @@ export interface ProceduralRegionSpec {
 }
 
 const DEFAULT_SPAN_TILES = 256;
-/** A small reusable bank prevents unbounded runtime atlas generation during travel. */
-export const PROCEDURAL_VARIANTS_PER_FAMILY = 4;
-export const FERN_PROCEDURAL_VARIANT_COUNT = 2;
-const VARIANT_COUNTS: Readonly<Record<ProceduralRegionFamily, number>> = {
-  trees: PROCEDURAL_VARIANTS_PER_FAMILY,
-  bushes: PROCEDURAL_VARIANTS_PER_FAMILY,
-  grass: PROCEDURAL_VARIANTS_PER_FAMILY,
-  flowers: PROCEDURAL_VARIANTS_PER_FAMILY,
-  ferns: FERN_PROCEDURAL_VARIANT_COUNT,
-};
 let cachedConfiguredSpanTiles: number | undefined;
 const OFFSET_FRACTIONS: Readonly<Record<ProceduralRegionFamily, readonly [number, number]>> = {
   trees: [0, 0],
   bushes: [0.18, 0.55],
   grass: [0.37, 0.15],
-  flowers: [0.55, 0.74],
   ferns: [0.74, 0.34],
+  tallPlants: [0.88, 0.88],
+  rocks: [0.9, 0.62],
 };
 
 /** Returns the staggered virtual grid used by one procedural model family. */
@@ -110,10 +107,13 @@ function proceduralRegionCandidatesAtCoordinates(
     for (const y of yCandidates) {
       const regionX = x.index;
       const regionY = y.index;
-      const variantIndex = regionalVariantIndex(worldSeed, family, regionX, regionY);
+      const seed = regionalVariantSeed(worldSeed, family, regionX, regionY);
+      const variantIndex = seed >>> 0;
       candidates.push({
-        key: `${family}/variant/${variantIndex}`,
-        seed: variantSeed(worldSeed, family, variantIndex),
+        // Region identity prevents distant places from cycling through a small
+        // preset palette. The cache remains bounded independently of this key.
+        key: `${family}/region/${regionX}/${regionY}/seed/${variantIndex}`,
+        seed,
         family,
         variantIndex,
         regionX,
@@ -222,24 +222,13 @@ function spatialSelection(
   return (hashParts(worldSeed, family, xFixed, yFixed) >>> 0) / 4_294_967_296;
 }
 
-function regionalVariantIndex(
+function regionalVariantSeed(
   worldSeed: number,
   family: ProceduralRegionFamily,
   regionX: number,
   regionY: number,
 ): number {
-  const offset = hashParts(worldSeed, `${family}Palette`) >>> 0;
-  const variantCount = VARIANT_COUNTS[family];
-  const rowStride = Math.max(1, Math.floor(variantCount / 2));
-  return wrap(regionX + regionY * rowStride + offset, variantCount);
-}
-
-function variantSeed(
-  worldSeed: number,
-  family: ProceduralRegionFamily,
-  variantIndex: number,
-): number {
-  return hashParts(worldSeed, `${family}Variant`, variantIndex) | 0;
+  return hashParts(worldSeed, `${family}Region`, regionX, regionY) | 0;
 }
 
 function hashParts(seed: number, label: string, ...values: number[]): number {

@@ -55,6 +55,7 @@ export async function createBushField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
+    densityScale,
     renderMode = "auto",
     yieldControl,
     startDisabled = false,
@@ -88,7 +89,11 @@ export async function createBushField(
           z / (clusterScale * 0.42) - 29.1,
         ) * 0.5 + 0.5;
         const clusterDensity = smoothstep(0.28, 0.72, broadNoise * 0.82 + detailNoise * 0.18);
-        const clusteredOccupancy = Math.min(1, occupancy * (0.12 + clusterDensity * 1.88));
+        const clusteredOccupancy = Math.min(
+          1,
+          occupancy * (0.12 + clusterDensity * 1.88) *
+            Math.max(0, densityScale?.(x, z) ?? 1),
+        );
         if (random() > clusteredOccupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);

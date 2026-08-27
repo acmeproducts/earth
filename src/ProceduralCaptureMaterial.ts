@@ -587,7 +587,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("instanceColorCoverage", 0);
-  // Species opt into wind explicitly; trees and flowers remain still.
+  // Species opt into wind explicitly; trees remain still.
   setWindShear(material, 0);
   material.setFloat("fieldFade", 1);
   material.setFloat("groundColorBlend", 0);

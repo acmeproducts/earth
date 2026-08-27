@@ -20,12 +20,19 @@ test("terrain tiles reuse scene-owned materials and GPU textures", () => {
     { length: 169 },
     () => createTerrainMaterial(scene, { usesLandCoverTint: false }),
   );
+  const snow = Array.from(
+    { length: 169 },
+    () => createTerrainMaterial(scene, { snowCovered: true }),
+  );
 
   assert.ok(tinted.every((material) => material === tinted[0]));
   assert.ok(untinted.every((material) => material === untinted[0]));
   assert.notEqual(tinted[0], untinted[0]);
+  assert.ok(snow.every((material) => material === snow[0]));
+  assert.notEqual(snow[0], tinted[0]);
+  assert.ok(isSharedTerrainMaterial(snow[0]));
   assert.ok(isSharedTerrainMaterial(tinted[0]));
-  assert.equal(scene.materials.length, 2);
+  assert.equal(scene.materials.length, 3);
   assert.equal(scene.textures.length, 3);
 
   scene.dispose();
@@ -48,6 +55,20 @@ test("disposing a stale terrain mesh preserves scene-owned terrain resources", (
   assert.equal(currentTerrain.material, sharedMaterial);
   assert.ok(scene.materials.includes(sharedMaterial));
   assert.equal(scene.textures.length, 3);
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("a snow request is honored when it initializes the scene material cache", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+
+  const snow = createTerrainMaterial(scene, { snowCovered: true });
+
+  assert.equal(snow.name, "terrainMaterialSnow");
+  assert.equal(snow, createTerrainMaterial(scene, { snowCovered: true }));
+  assert.notEqual(snow, createTerrainMaterial(scene, { usesLandCoverTint: true }));
 
   scene.dispose();
   engine.dispose();

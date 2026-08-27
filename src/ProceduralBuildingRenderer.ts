@@ -19,7 +19,7 @@ import {
 import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
 import { clamp01 } from "./MathUtils";
-import type { BuildingPlan, LonLat } from "./BuildingPlanner";
+import type { BuildingPlan, BuildingPolygon, LonLat } from "./BuildingPlanner";
 import { buildingWindowStyle, type BuildingWindowStyle } from "./BuildingWindowStyle";
 import type { TerrainData } from "./TerrainData";
 
@@ -60,6 +60,7 @@ interface BuildingAppearance {
 
 interface PreparedBuildingFootprint {
   outline: ScenePoint[];
+  holes: ScenePoint[][];
   baseElevation: number;
 }
 
@@ -128,10 +129,17 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.footprint.outer, terrain, options);
+    const prepared = prepareBuildingFootprint(plan.footprint, terrain, options);
     if (!prepared) return undefined;
 
     const appearance = buildingAppearance(plan);
+    // Courtyard footprints cannot use the enterable shell: that path builds
+    // floors and roofs from the outer ring alone. Keep these buildings as one
+    // faithful mass so a real building inside a courtyard does not appear to
+    // sit on top of a second, incorrectly filled building.
+    if (prepared.holes.length > 0) {
+      return createCourtyardBuilding(scene, plan, prepared, options, appearance);
+    }
     const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
     const towerBlend = highRiseBlend(plan.heightMeters);
     if (seededUnit(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
@@ -245,7 +253,7 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.footprint.outer, terrain, options);
+    const prepared = prepareBuildingFootprint(plan.footprint, terrain, options);
     if (!prepared) return undefined;
     const bottomElevation = plan.minimumHeightMeters > 0
       ? prepared.baseElevation + plan.minimumHeightMeters
@@ -256,6 +264,7 @@ export class ProceduralBuildingRenderer {
       prepared.baseElevation + plan.heightMeters,
       bottomElevation,
       options,
+      prepared.holes,
     );
     colorBuildingMass(mesh, buildingAppearance(plan));
     return mesh;
@@ -297,6 +306,36 @@ export class ProceduralBuildingRenderer {
     }
     return result;
   }
+}
+
+function createCourtyardBuilding(
+  scene: Scene,
+  plan: BuildingPlan,
+  prepared: PreparedBuildingFootprint,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+): Mesh {
+  const bottomElevation = plan.minimumHeightMeters > 0
+    ? prepared.baseElevation + plan.minimumHeightMeters
+    : prepared.baseElevation - BUILDING_GROUND_OVERLAP_METERS;
+  const mesh = createBuildingPrism(
+    scene,
+    prepared.outline,
+    prepared.baseElevation + plan.heightMeters,
+    bottomElevation,
+    options,
+    prepared.holes,
+  );
+  colorBuildingMass(mesh, appearance);
+  mesh.metadata = {
+    buildingId: plan.id,
+    enterable: false,
+    complexFootprint: true,
+    courtyardCount: prepared.holes.length,
+    metersPerUnit: options.metersPerUnit,
+    skyReflection: options.skyReflection,
+  };
+  return mesh;
 }
 
 function highRiseBlend(heightMeters: number): number {
@@ -684,28 +723,40 @@ function addFacadePanel(
 }
 
 function prepareBuildingFootprint(
-  coordinates: LonLat[],
+  footprint: BuildingPolygon,
   terrain: TerrainData,
   options: BuildingRenderOptions,
 ): PreparedBuildingFootprint | undefined {
-  const points = coordinates.map(([lon, lat]) =>
-    lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
-  );
-  if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-  const outline = clipPolygon(points, {
+  const clipBounds = {
     minX: -options.meshWidth / 2,
     maxX: options.meshWidth / 2,
     minZ: -options.meshDepth / 2,
     maxZ: options.meshDepth / 2,
-  });
+  };
+  const projectRing = (ring: LonLat[]): ScenePoint[] => {
+    const points = ring.map(([lon, lat]) =>
+      lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
+    );
+    if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
+    return clipPolygon(points, clipBounds);
+  };
+  const outline = projectRing(footprint.outer);
   if (outline.length < 3) return undefined;
   if (signedArea(outline) < 0) outline.reverse();
+  const holes = footprint.holes
+    .map(projectRing)
+    .filter((hole) => hole.length >= 3 && Math.abs(signedArea(hole)) > 1e-10)
+    .filter((hole) => hole.some((point) => pointInPolygon(point, outline)) ||
+      pointInPolygon(averagePoint(hole), outline));
+  for (const hole of holes) {
+    if (signedArea(hole) > 0) hole.reverse();
+  }
   const center = averagePoint(outline);
   const elevations = [center, ...outline].map((point) =>
     sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth)
   );
   if (elevations.some((elevation) => elevation <= SEA_LEVEL_METERS)) return undefined;
-  return { outline, baseElevation: Math.max(...elevations) };
+  return { outline, holes, baseElevation: Math.max(...elevations) };
 }
 
 function createBuildingPrism(

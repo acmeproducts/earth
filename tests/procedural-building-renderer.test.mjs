@@ -57,6 +57,27 @@ function meshBounds(mesh) {
   };
 }
 
+function horizontalRoofCovers(mesh, x, z) {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const indices = mesh.getIndices();
+  const maximumY = meshBounds(mesh).maximumY;
+  const cross = (ax, az, bx, bz, px, pz) => (px - bx) * (az - bz) - (ax - bx) * (pz - bz);
+  for (let index = 0; index < indices.length; index += 3) {
+    const vertices = [indices[index], indices[index + 1], indices[index + 2]].map((vertex) => ({
+      x: positions[vertex * 3] + mesh.position.x,
+      y: positions[vertex * 3 + 1] + mesh.position.y,
+      z: positions[vertex * 3 + 2] + mesh.position.z,
+    }));
+    if (!vertices.every((vertex) => Math.abs(vertex.y - maximumY) < 1e-5)) continue;
+    const signs = vertices.map((vertex, vertexIndex) => {
+      const next = vertices[(vertexIndex + 1) % 3];
+      return cross(vertex.x, vertex.z, next.x, next.z, x, z);
+    });
+    if (signs.every((sign) => sign >= -1e-6) || signs.every((sign) => sign <= 1e-6)) return true;
+  }
+  return false;
+}
+
 function windowDimensions(mesh) {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const colors = mesh.getVerticesData(VertexBuffer.ColorKind);
@@ -94,6 +115,33 @@ test("inferred roofs rise above the mapped massing without clipping its cap", ()
   assert.ok(detailedBounds.maximumY >= farBounds.maximumY + 1.99);
   assert.ok(detailedBounds.width >= farBounds.width + 0.6);
   assert.ok(detailedBounds.depth >= farBounds.depth + 0.6);
+
+  scene.dispose();
+  engine.dispose();
+});
+
+test("courtyard buildings keep interior rings instead of roofing over nested buildings", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const courtyardFootprint = {
+    outer: footprint.outer,
+    holes: [[
+      [0.45, 0.46], [0.55, 0.46], [0.55, 0.54], [0.45, 0.54], [0.45, 0.46],
+    ]],
+  };
+  const building = planBuilding({
+    id: "building/14/courtyard/0",
+    polygon: courtyardFootprint,
+    properties: { render_height: 12 },
+  });
+  const detailed = ProceduralBuildingRenderer.createDetailed(scene, building, terrain, options);
+  const far = ProceduralBuildingRenderer.createFar(scene, building, terrain, options);
+  assert.ok(detailed && far);
+  assert.equal(detailed.metadata.complexFootprint, true);
+  assert.equal(detailed.metadata.courtyardCount, 1);
+  assert.equal(detailed.metadata.enterable, false);
+  assert.equal(horizontalRoofCovers(detailed, 0, 0), false);
+  assert.equal(horizontalRoofCovers(far, 0, 0), false);
 
   scene.dispose();
   engine.dispose();

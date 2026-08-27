@@ -8,21 +8,14 @@ import {
   SSRRenderingPipeline,
   UniversalCamera,
   Vector3,
-  MeshBuilder,
   Color4,
   Mesh,
   KeyboardEventTypes,
-  VertexBuffer,
-  VertexData,
   TransformNode,
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
-import {
-  createTerrainSkirtGeometry,
-  stitchTerrainEdges,
-  stitchTerrainMeshEdges,
-} from "./TerrainStitching";
+import { stitchTerrainEdges } from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
 import {
   createTerrainLakeLayer,
@@ -36,10 +29,14 @@ import {
 import type { TerrainLakePolygon } from "./TerrainLakePolygons";
 import { createTreeField } from "./TreeField";
 import { createGrassField, setGrassFieldDetailDistance } from "./GrassField";
-import { createFlowerField } from "./FlowerField";
 import { createBushField } from "./BushField";
 import { createSaplingField } from "./SaplingField";
 import { createFernField } from "./FernField";
+import { createTallPlantField } from "./TallPlantField";
+import { createRockyBeachField } from "./RockyBeachField";
+import { createRockField } from "./RockField";
+import { proceduralActorMixAtTile } from "./ProceduralActorMix";
+import type { RockFieldResult } from "./RockField";
 import {
   createBrowserWorldLocationStore,
   EXAMPLE_LOCATIONS,
@@ -47,38 +44,31 @@ import {
 } from "./Locations";
 import type { WorldLocation, WorldLocationStore } from "./Locations";
 import {
+  combineHorizontalExclusionMasks,
   geographicFrameOffset,
   lonLatToScene,
   sampleElevation,
   sceneToLonLat,
-  SEA_LEVEL_METERS,
-  sinkSubmergedElevation,
   sinkSubmergedTerrain,
 } from "./Geo";
 import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
-import {
-  LandCoverClass,
-  landCoverSurfaceColor,
-  WorldCover,
-} from "./WorldCover";
+import { OpenStreetMapBarriers } from "./OpenStreetMapBarriers";
+import type { BarrierFeature } from "./OpenStreetMapBarriers";
+import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
-import {
-  createTerrainMaterial,
-  disposeTerrainMesh,
-  isSharedTerrainMaterial,
-} from "./TerrainMaterial";
+import { disposeTerrainMesh } from "./TerrainMaterial";
+import { createTerrainMesh as buildTerrainMesh } from "./TerrainMesh";
 import { configureWindSceneScale } from "./Wind";
-import { varyGroundColor } from "./GroundVariation";
 import { SolarLighting } from "./SolarLighting";
+import { hasWinterGroundCover } from "./TreeSeason";
 import { createCloudLayer } from "./CloudImpostors";
 import type { CloudLayer } from "./CloudImpostors";
 import { FpsCounter } from "./FpsCounter";
 import {
   createFrameBudgetYielder,
   FrameBudgetYielder,
-  yieldToNextFrame,
 } from "./FrameBudget";
 import {
   adaptiveCameraNearClipMeters,
@@ -125,14 +115,16 @@ type VegetationFieldKind =
   | "treeField"
   | "saplingField"
   | "grassField"
-  | "flowerField"
+  | "tallPlantField"
+  | "rockyBeachField"
   | "bushField"
   | "fernField";
 const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
   "treeField",
   "saplingField",
   "grassField",
-  "flowerField",
+  "tallPlantField",
+  "rockyBeachField",
   "bushField",
   "fernField",
 ];
@@ -144,7 +136,8 @@ const VEGETATION_FIELD_CONFIG: Readonly<Record<VegetationFieldKind, VegetationFi
   treeField: { category: "trees", lodDistanceCapMeters: Number.POSITIVE_INFINITY },
   saplingField: { category: "trees", lodDistanceCapMeters: 14 },
   grassField: { category: "grass", lodDistanceCapMeters: 8 },
-  flowerField: { category: "grass", lodDistanceCapMeters: 8 },
+  tallPlantField: { category: "grass", lodDistanceCapMeters: 11 },
+  rockyBeachField: { category: "grass", lodDistanceCapMeters: 10 },
   bushField: { category: "bushes", lodDistanceCapMeters: 16 },
   fernField: { category: "grass", lodDistanceCapMeters: 7 },
 };
@@ -152,7 +145,6 @@ const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
 const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
 const WHEEL_NOTCH_PIXELS = 100;
-const GROUND_COVER_BLEND_METERS = 12;
 const PLAYER_HEIGHT_METERS = 1.8;
 const PLAYER_RADIUS_METERS = 0.3;
 const WALK_MAX_STEP_UP_METERS = 0.35;
@@ -167,9 +159,6 @@ const TILE_COOLDOWN_MS = 30_000;
 const DETAIL_COOLDOWN_MS = 10_000;
 /** Terrain resolution for tiles beyond the detail rings. */
 const FAR_TILE_SUBDIVISIONS = 32;
-/** Hides the skirt wall below its neighbour while retaining sub-pixel gap coverage. */
-const TERRAIN_SKIRT_OVERLAP_METERS = 0.5;
-const TERRAIN_SKIRT_SURFACE_DROP_METERS = 0.02;
 /**
  * Distant tree layers use wider spacing with raised occupancy, matching the
  * detail rings' trees per square meter at a quarter of the instance count.
@@ -183,11 +172,6 @@ const LAYER_FADE_DURATION_MS = 700;
 
 type MovementMode = "fly" | "walk";
 
-interface TerrainMetadata {
-  surfaceColors?: Float32Array;
-  skirt?: Mesh;
-}
-
 /** One streamed world tile and every scene resource it owns. */
 interface StreamedTile {
   id: WorldTileId;
@@ -199,6 +183,8 @@ interface StreamedTile {
   preCarvingElevations: Float32Array;
   /** One shared vector-tile request for every OSM-backed layer on this tile. */
   mapTiles?: Promise<MapTile[]>;
+  /** Detailed OSM barriers shared through zoom-14 parent-region requests. */
+  barrierFeatures?: Promise<BarrierFeature[]>;
   /** Padded OSM request used only to make lake deformation cross tile edges. */
   lakeContextTiles?: Promise<MapTile[]>;
   terrain: Mesh;
@@ -211,9 +197,11 @@ interface StreamedTile {
   treeField?: VegetationFieldResult;
   saplingField?: VegetationFieldResult;
   grassField?: VegetationFieldResult;
-  flowerField?: VegetationFieldResult;
+  tallPlantField?: VegetationFieldResult;
+  rockyBeachField?: VegetationFieldResult;
   bushField?: VegetationFieldResult;
   fernField?: VegetationFieldResult;
+  rockField?: RockFieldResult;
   mapFeatures?: TransformNode;
   /** Terrain-owned inland water remains visible at every streaming detail tier. */
   lakeSurfaces?: TerrainLakeLayer;
@@ -811,7 +799,9 @@ export class Game {
     const yieldControl = onProgress ? undefined : this.streamingYielder;
     const startDisabled = !onProgress;
     await reportInitializationProgress(onProgress, "Loading map features", 50);
+    const barrierRequest = this.loadBarrierFeatures(record);
     const mapWays = await this.loadMapTiles(record);
+    const barrierFeatures = await barrierRequest;
     if (generation !== this.streamingGeneration) return;
     const placementLandCover = OpenStreetMap.createLandCoverSampler(
       mapWays,
@@ -826,13 +816,22 @@ export class Game {
       skyReflection: this.solarLighting?.skyReflectionTexture,
       startDisabled,
     };
-    const exclusionMask = await OpenStreetMap.createVegetationExclusionMask(
+    const mappedExclusionMask = await OpenStreetMap.createVegetationExclusionMask(
       mapWays,
       terrainData,
       mapOptions,
       yieldControl,
     );
     if (generation !== this.streamingGeneration) return;
+    const barrierExclusionMask = OpenStreetMapBarriers.createExclusionMask(
+      barrierFeatures,
+      terrainData,
+      mapOptions,
+    );
+    const exclusionMask = combineHorizontalExclusionMasks([
+      mappedExclusionMask,
+      barrierExclusionMask,
+    ]);
     const fieldOptions = {
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
@@ -845,12 +844,18 @@ export class Game {
       impostorCaptureMode: onProgress ? "fast" as const : "cooperative" as const,
       startDisabled,
     };
+    const winterGroundCover = hasWinterGroundCover(
+      this.vegetationDate,
+      (terrainData.bounds.latNorth + terrainData.bounds.latSouth) / 2,
+    );
+    const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
 
     await reportInitializationProgress(onProgress, "Planting trees", 58);
     const treeField = await createTreeField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "trees"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+      densityScale: () => actorMix.trees.densityScale,
       renderMode: this.vegetationModes.trees,
       includeFallenLogs: true,
     });
@@ -867,6 +872,7 @@ export class Game {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "saplings"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+      densityScale: () => actorMix.trees.densityScale,
       renderMode: this.vegetationModes.trees,
     });
     await this.prepareTileFieldLod(
@@ -882,6 +888,7 @@ export class Game {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "grass"),
       renderMode: this.vegetationModes.grass,
+      densityScale: () => winterGroundCover ? 0 : actorMix.grass.densityScale,
     });
     await this.prepareTileFieldLod(
       record,
@@ -891,24 +898,26 @@ export class Game {
     );
     if (!this.stageTileField(record, "grassField", grassField, generation)) return;
 
-    await reportInitializationProgress(onProgress, "Adding flowers", 73);
-    const flowerField = await createFlowerField(this.scene, terrainData, {
+    await reportInitializationProgress(onProgress, "Growing wildflowers", 74);
+    const tallPlantField = await createTallPlantField(this.scene, terrainData, {
       ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "flowers"),
+      seed: layerSeed(terrainData.generationSeed, "tallPlants"),
+      densityScale: () => actorMix.tallPlants.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
       record,
-      flowerField,
-      this.fieldLodDistance("flowerField"),
+      tallPlantField,
+      this.fieldLodDistance("tallPlantField"),
       yieldControl,
     );
-    if (!this.stageTileField(record, "flowerField", flowerField, generation)) return;
+    if (!this.stageTileField(record, "tallPlantField", tallPlantField, generation)) return;
 
-    await reportInitializationProgress(onProgress, "Adding bushes", 78);
+    await reportInitializationProgress(onProgress, "Adding bushes", 79);
     const bushField = await createBushField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "bushes"),
+      densityScale: () => actorMix.bushes.densityScale,
       renderMode: this.vegetationModes.bushes,
     });
     await this.prepareTileFieldLod(
@@ -919,10 +928,11 @@ export class Game {
     );
     if (!this.stageTileField(record, "bushField", bushField, generation)) return;
 
-    await reportInitializationProgress(onProgress, "Growing undergrowth", 82);
+    await reportInitializationProgress(onProgress, "Growing undergrowth", 83);
     const fernField = await createFernField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "ferns"),
+      densityScale: () => actorMix.ferns.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
@@ -932,6 +942,39 @@ export class Game {
       yieldControl,
     );
     if (!this.stageTileField(record, "fernField", fernField, generation)) return;
+
+    await reportInitializationProgress(onProgress, "Covering rocky beaches", 85);
+    const rockyBeachField = await createRockyBeachField(this.scene, terrainData, {
+      ...fieldOptions,
+      seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
+      densityScale: () => actorMix.rocks.densityScale,
+      renderMode: this.vegetationModes.grass,
+    });
+    await this.prepareTileFieldLod(
+      record,
+      rockyBeachField,
+      this.fieldLodDistance("rockyBeachField"),
+      yieldControl,
+    );
+    if (!this.stageTileField(
+      record,
+      "rockyBeachField",
+      rockyBeachField,
+      generation,
+    )) return;
+
+    await reportInitializationProgress(onProgress, "Scattering rocks", 86);
+    const rockField = await createRockField(this.scene, terrainData, {
+      ...fieldOptions,
+      seed: layerSeed(terrainData.generationSeed, "rocks"),
+      densityScale: () => actorMix.rocks.densityScale,
+    });
+    if (generation !== this.streamingGeneration) {
+      rockField.root.dispose(false, true);
+      return;
+    }
+    setTransformNodeOffset(rockField.root, record.offsetX, record.offsetZ);
+    record.rockField = rockField;
     this.activateTileVegetation(record);
 
     await reportInitializationProgress(onProgress, "Creating map features", 88);
@@ -942,10 +985,20 @@ export class Game {
       mapOptions,
       yieldControl,
     );
+    const barrierLayer = await OpenStreetMapBarriers.createLayer(
+      this.scene,
+      barrierFeatures,
+      terrainData,
+      mapOptions,
+      yieldControl,
+    );
     if (generation !== this.streamingGeneration) {
       OpenStreetMap.disposeLayer(mapFeatures.root);
+      barrierLayer.root.dispose(false, true);
       return;
     }
+    barrierLayer.root.parent = mapFeatures.root;
+    barrierLayer.root.setEnabled(true);
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
@@ -967,9 +1020,12 @@ export class Game {
     this.refreshShadowCasters();
     console.log(
       `Tile ${record.key}: ${treeField.count} trees, ${saplingField.count} saplings, ` +
-      `${grassField.count} grass, ${bushField.count} bushes, ${fernField.count} ferns, ` +
+      `${grassField.count} grass, ${tallPlantField.count} wildflower patches, ` +
+      `${bushField.count} bushes, ` +
+      `${fernField.count} ferns, ${rockyBeachField.count} rocky beach patches, ` +
+      `${rockField.count} rocks, ` +
       `${mapFeatures.counts.buildings} buildings, ` +
-      `${mapFeatures.counts.roads} roads`,
+      `${mapFeatures.counts.roads} roads, ${barrierLayer.count} barriers`,
     );
   }
 
@@ -998,12 +1054,14 @@ export class Game {
       this.streamingYielder,
     );
     if (generation !== this.streamingGeneration) return;
+    const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
     const treeField = await createTreeField(this.scene, record.terrainData, {
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
       metersPerUnit,
       seed: layerSeed(record.terrainData.generationSeed, "trees"),
       speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+      densityScale: () => actorMix.trees.densityScale,
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       seasonalDate: this.vegetationDate,
       landCover: placementLandCover,
@@ -1105,6 +1163,11 @@ export class Game {
   private loadMapTiles(record: StreamedTile): Promise<MapTile[]> {
     record.mapTiles ??= this.requestMapTiles(record.terrainData.bounds);
     return record.mapTiles;
+  }
+
+  private loadBarrierFeatures(record: StreamedTile): Promise<BarrierFeature[]> {
+    record.barrierFeatures ??= OpenStreetMapBarriers.fetch(record.terrainData.bounds);
+    return record.barrierFeatures;
   }
 
   private requestMapTiles(bounds: TerrainData["bounds"]): Promise<MapTile[]> {
@@ -1218,12 +1281,18 @@ export class Game {
       field.setFade(0);
       field.root.setEnabled(true);
     }
+    const rockField = record.rockField;
+    if (rockField) {
+      rockField.setFade(0);
+      rockField.root.setEnabled(true);
+    }
 
     const farTrees = record.farTreeField;
     this.beginLayerFade(0, 1, (fade) => {
       for (const field of fields) {
         if (!field.root.isDisposed()) field.setFade(fade);
       }
+      if (rockField && !rockField.root.isDisposed()) rockField.setFade(fade);
       if (farTrees && !farTrees.root.isDisposed()) farTrees.setFade(1 - fade);
     }, () => {
       farTrees?.root.dispose(false, false);
@@ -1246,7 +1315,7 @@ export class Game {
         .filter((kind) => kind === "treeField" || kind === "saplingField")
         .map((kind) => record[kind])
         .filter((field): field is VegetationFieldResult => field !== undefined);
-      if (fields.length === 0 && !record.mapFeatures) continue;
+      if (fields.length === 0 && !record.rockField && !record.mapFeatures) continue;
       record.terrain.receiveShadows = true;
       // Packed WebGPU depth makes a height field compare almost equal to its
       // own shadow depth, producing repeating terrain-acne stripes. Preserve
@@ -1259,6 +1328,7 @@ export class Game {
           field.shadowCasterMeshes.length > 0 ? field.shadowCasterMeshes : field.meshes
         ));
       }
+      if (record.rockField) casters.push(...record.rockField.meshes);
       if (record.mapFeatures) {
         const mapMeshes = record.mapFeatures.getChildMeshes(false).filter(
           (mesh): mesh is Mesh => mesh instanceof Mesh,
@@ -1417,6 +1487,8 @@ export class Game {
       record[kind]?.root.dispose(false, false);
       record[kind] = undefined;
     }
+    record.rockField?.root.dispose(false, true);
+    record.rockField = undefined;
     if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
     record.mapFeatures = undefined;
     record.detailed = false;
@@ -1472,6 +1544,13 @@ export class Game {
       if (!field) continue;
       record[kind] = undefined;
       this.fadeFieldOutAndDispose(field, kind === "treeField");
+    }
+    const rockField = record.rockField;
+    if (rockField) {
+      record.rockField = undefined;
+      this.beginLayerFade(1, 0, (fade) => {
+        if (!rockField.root.isDisposed()) rockField.setFade(fade);
+      }, () => rockField.root.dispose(false, true), true);
     }
     const mapFeatures = record.mapFeatures;
     if (mapFeatures) {
@@ -1778,7 +1857,7 @@ export class Game {
           layers: {
             trees: Boolean(tile.treeField),
             grass: Boolean(tile.grassField),
-            flowers: Boolean(tile.flowerField),
+            tallPlants: Boolean(tile.tallPlantField),
             bushes: Boolean(tile.bushField),
             mapFeatures: Boolean(tile.mapFeatures),
             farBuildings: Boolean(tile.farBuildings),
@@ -2181,198 +2260,13 @@ export class Game {
       yieldControl?: FrameBudgetYielder;
     },
   ): Promise<Mesh> {
-    const { meshWidth, meshDepth, subdivisions, metersPerUnit, landCover, yieldControl } = options;
-
-    // Ground creation allocates and uploads the initial flat vertex buffers.
-    // Give it a fresh post-render slice when this is a streamed tile.
-    await yieldToNextFrame(yieldControl);
-    const ground = MeshBuilder.CreateGround(
-      name,
-      { width: meshWidth, height: meshDepth, subdivisions, updatable: true },
-      this.scene,
-    );
-    // A cooperative build renders frames while the vertices are still flat;
-    // the caller re-enables the mesh when it commits the finished terrain.
-    if (yieldControl) ground.setEnabled(false);
-
-    const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
-    const uvs = ground.getVerticesData(VertexBuffer.UVKind)!;
-    const indices = ground.getIndices()!;
-    const { elevations, width: elevW, height: elevH } = terrain;
-    const vPerRow = subdivisions + 1;
-    const surfaceColors = landCover
-      ? new Float32Array((positions.length / 3) * 4)
-      : undefined;
-    // Kept so the variation pass below can weight itself by surface type
-    // without resampling the land cover raster.
-    const coverClasses = landCover
-      ? new Uint8Array(positions.length / 3)
-      : undefined;
-
-    for (let row = 0; row < vPerRow; row++) {
-      for (let col = 0; col < vPerRow; col++) {
-        // Map vertex grid position to elevation data coordinates
-        const u = col / subdivisions;
-        const v = row / subdivisions;
-        const px = u * (elevW - 1);
-        const py = v * (elevH - 1);
-
-        // Bilinear interpolation
-        const x0 = Math.floor(px);
-        const y0 = Math.floor(py);
-        const x1 = Math.min(x0 + 1, elevW - 1);
-        const y1 = Math.min(y0 + 1, elevH - 1);
-        const fx = px - x0;
-        const fy = py - y0;
-
-        const e00 = elevations[y0 * elevW + x0];
-        const e10 = elevations[y0 * elevW + x1];
-        const e01 = elevations[y1 * elevW + x0];
-        const e11 = elevations[y1 * elevW + x1];
-
-        const interpolatedElevation =
-          e00 * (1 - fx) * (1 - fy) +
-          e10 * fx * (1 - fy) +
-          e01 * (1 - fx) * fy +
-          e11 * fx * fy;
-        // A classified coast already contains a deliberate shallow-to-deep
-        // profile. The fallback still sinks unclassified ocean interpolation.
-        const elevation = terrain.waterMask
-          ? interpolatedElevation
-          : sinkSubmergedElevation(interpolatedElevation);
-
-        const vertexIndex = row * vPerRow + col;
-        positions[vertexIndex * 3 + 1] = elevation / metersPerUnit;
-        // Physical UVs let every tile share one set of terrain textures while
-        // preserving each detail layer's real-world repeat size.
-        uvs[vertexIndex * 2] *= terrain.groundWidthMeters;
-        uvs[vertexIndex * 2 + 1] *= terrain.groundHeightMeters;
-
-        if (surfaceColors && landCover) {
-          const { lon, lat } = sceneToLonLat(
-            positions[vertexIndex * 3],
-            positions[vertexIndex * 3 + 2],
-            terrain.bounds,
-            meshWidth,
-            meshDepth,
-          );
-          const coverClass = landCover.sample(lon, lat);
-          const [surfaceRed, surfaceGreen, surfaceBlue] = landCoverSurfaceColor(
-            coverClass,
-          );
-          const colorIndex = vertexIndex * 4;
-          surfaceColors[colorIndex] = surfaceRed;
-          surfaceColors[colorIndex + 1] = surfaceGreen;
-          surfaceColors[colorIndex + 2] = surfaceBlue;
-          surfaceColors[colorIndex + 3] = 1;
-          coverClasses![vertexIndex] = coverClass;
-        }
-      }
-      await yieldControl?.();
-    }
-
-    stitchTerrainMeshEdges(
-      positions,
-      subdivisions,
-      Math.min(FAR_TILE_SUBDIVISIONS, subdivisions),
-    );
-
-    if (surfaceColors && coverClasses) {
-      const metersPerVertex = Math.min(
-        terrain.groundWidthMeters / subdivisions,
-        terrain.groundHeightMeters / subdivisions,
-      );
-      await smoothVertexColors(
-        surfaceColors,
-        vPerRow,
-        Math.max(1, Math.round(GROUND_COVER_BLEND_METERS / metersPerVertex)),
-        yieldControl,
-      );
-      // Applied after the blend on purpose: smoothing exists to soften
-      // land-cover class edges, and running it over the variation would erase
-      // the finer bands this pass contributes.
-      await applyGroundVariation(surfaceColors, coverClasses, positions, terrain, {
-        meshWidth,
-        meshDepth,
-        metersPerVertex,
-      }, yieldControl);
-    }
-
-    // Recompute normals for correct lighting after modifying heights
-    await yieldToNextFrame(yieldControl);
-    const normals = new Float32Array(positions.length);
-    VertexData.ComputeNormals(positions, indices, normals);
-    // CreateGround leaves the bounding box flat at y = 0. Vertices carry
-    // absolute elevation, so a mountain tile's geometry ends up hundreds of
-    // units above bounds that still describe a flat plane, and the frustum
-    // test, shadow frustum and collision broad phase all miss it. Updating the
-    // extents alongside the positions keeps the bounds on the real surface.
-    await yieldToNextFrame(yieldControl);
-    ground.updateVerticesData(VertexBuffer.PositionKind, positions, true);
-    await yieldToNextFrame(yieldControl);
-    ground.updateVerticesData(VertexBuffer.NormalKind, normals);
-    await yieldToNextFrame(yieldControl);
-    ground.updateVerticesData(VertexBuffer.UVKind, uvs);
-    const skirtGeometry = createTerrainSkirtGeometry(
-      positions,
-      uvs,
-      subdivisions,
-      Math.min(SEA_LEVEL_METERS - 1, terrain.minElevation - 1) / metersPerUnit,
-      surfaceColors,
-      TERRAIN_SKIRT_OVERLAP_METERS / metersPerUnit,
-      TERRAIN_SKIRT_SURFACE_DROP_METERS / metersPerUnit,
-    );
-    const skirt = new Mesh(`${name} skirt`, this.scene);
-    const skirtVertexData = new VertexData();
-    skirtVertexData.positions = skirtGeometry.positions;
-    skirtVertexData.uvs = skirtGeometry.uvs;
-    skirtVertexData.indices = skirtGeometry.indices;
-    // The underlap is a continuation of the ground. Upward normals keep its
-    // rare visible pixels terrain-lit instead of turning the seam into a wall.
-    const skirtNormals = new Float32Array(skirtGeometry.positions.length);
-    for (let index = 1; index < skirtNormals.length; index += 3) skirtNormals[index] = 1;
-    skirtVertexData.normals = skirtNormals;
-    if (skirtGeometry.colors) skirtVertexData.colors = skirtGeometry.colors;
-    skirtVertexData.applyToMesh(skirt);
-    skirt.parent = ground;
-    skirt.isPickable = false;
-    skirt.checkCollisions = false;
-    ground.metadata = { surfaceColors, skirt } satisfies TerrainMetadata;
-    ground.freezeWorldMatrix();
-
-    // Vertex colors are another full-size GPU buffer, so commit them in their
-    // own slice after the geometry uploads above.
-    await yieldToNextFrame(yieldControl);
-    this.applyDefaultTerrainMaterial(ground);
-
-    return ground;
-  }
-
-  private applyDefaultTerrainMaterial(terrain: Mesh): void {
-    this.disposeTerrainAppearance(terrain);
-    const colors = (terrain.metadata as TerrainMetadata | null)?.surfaceColors;
-    if (colors) {
-      terrain.setVerticesData(VertexBuffer.ColorKind, colors);
-      terrain.useVertexColors = true;
-    } else {
-      terrain.removeVerticesData(VertexBuffer.ColorKind);
-    }
-    // The mesh UV buffer is already expressed in physical metres.
-    const material = createTerrainMaterial(this.scene, {
-      usesLandCoverTint: Boolean(colors),
+    return buildTerrainMesh(this.scene, name, terrain, {
+      ...options,
+      snowCovered: hasWinterGroundCover(
+        this.vegetationDate,
+        (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
+      ),
     });
-    terrain.material = material;
-    const skirt = (terrain.metadata as TerrainMetadata | null)?.skirt;
-    if (skirt) {
-      skirt.material = material;
-      skirt.useVertexColors = Boolean(colors);
-    }
-  }
-
-  private disposeTerrainAppearance(terrain: Mesh): void {
-    const material = terrain.material;
-    if (material && !isSharedTerrainMaterial(material)) material.dispose(true, true);
-    terrain.material = null;
   }
 
 }
@@ -2496,86 +2390,4 @@ async function reportInitializationProgress(
   if (!onProgress) return;
   onProgress(step, progress);
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-/**
- * Adds world-anchored ground variation on top of the blended land-cover colors.
- * The terrain textures repeat every few metres and must stay near-neutral, so
- * this pass owns the coarser variation that keeps mid and far ground from
- * reading as flat fields of one color per land-cover class.
- */
-async function applyGroundVariation(
-  colors: Float32Array,
-  coverClasses: Uint8Array,
-  positions: Float32Array | number[],
-  terrain: TerrainData,
-  options: { meshWidth: number; meshDepth: number; metersPerVertex: number },
-  yieldControl?: () => Promise<void>,
-): Promise<void> {
-  for (let index = 0; index < coverClasses.length; index++) {
-    const { lon, lat } = sceneToLonLat(
-      positions[index * 3],
-      positions[index * 3 + 2],
-      terrain.bounds,
-      options.meshWidth,
-      options.meshDepth,
-    );
-    const target = index * 4;
-    const [red, green, blue] = varyGroundColor(
-      [colors[target], colors[target + 1], colors[target + 2]],
-      lon,
-      lat,
-      coverClasses[index] as LandCoverClass,
-      options.metersPerVertex,
-    );
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
-    if ((index & 511) === 511) await yieldControl?.();
-  }
-}
-
-async function smoothVertexColors(
-  colors: Float32Array,
-  rowSize: number,
-  radius: number,
-  yieldControl?: () => Promise<void>,
-): Promise<void> {
-  const horizontal = new Float32Array(colors.length);
-  const vertexCount = colors.length / 4;
-
-  for (let row = 0; row < rowSize; row++) {
-    for (let column = 0; column < rowSize; column++) {
-      const target = (row * rowSize + column) * 4;
-      const start = Math.max(0, column - radius);
-      const end = Math.min(rowSize - 1, column + radius);
-      const count = end - start + 1;
-      for (let channel = 0; channel < 3; channel++) {
-        let sum = 0;
-        for (let sample = start; sample <= end; sample++) {
-          sum += colors[(row * rowSize + sample) * 4 + channel];
-        }
-        horizontal[target + channel] = sum / count;
-      }
-      horizontal[target + 3] = 1;
-    }
-    await yieldControl?.();
-  }
-
-  for (let index = 0; index < vertexCount; index++) {
-    const row = Math.floor(index / rowSize);
-    const column = index % rowSize;
-    const start = Math.max(0, row - radius);
-    const end = Math.min(rowSize - 1, row + radius);
-    const count = end - start + 1;
-    for (let channel = 0; channel < 3; channel++) {
-      let sum = 0;
-      for (let sample = start; sample <= end; sample++) {
-        sum += horizontal[(sample * rowSize + column) * 4 + channel];
-      }
-      colors[index * 4 + channel] = sum / count;
-    }
-    colors[index * 4 + 3] = 1;
-    if (index % rowSize === rowSize - 1) await yieldControl?.();
-  }
 }

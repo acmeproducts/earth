@@ -5,7 +5,6 @@ import test from "node:test";
 register("./ts-extension-resolver.mjs", import.meta.url);
 
 const {
-  FERN_PROCEDURAL_VARIANT_COUNT,
   proceduralRegionCandidatesAtLocation,
   proceduralRegionSpec,
   proceduralVariantAtLocation,
@@ -22,7 +21,7 @@ function locationAtTileCoordinate(x, y) {
 }
 
 test("procedural families use staggered grids", () => {
-  const specs = ["trees", "bushes", "grass", "flowers", "ferns"]
+  const specs = ["trees", "bushes", "grass", "ferns", "tallPlants"]
     .map((family) => proceduralRegionSpec(family, 128));
   assert.equal(new Set(specs.map(({ offsetX, offsetY }) => `${offsetX}/${offsetY}`)).size, 5);
   assert.ok(specs.every((spec) => spec.spanTiles === 128));
@@ -33,7 +32,7 @@ test("default procedural regions span 256 application tiles", () => {
 });
 
 test("family transition bands remain separated on each grid axis", () => {
-  const specs = ["trees", "bushes", "grass", "flowers", "ferns"]
+  const specs = ["trees", "bushes", "grass", "ferns", "tallPlants"]
     .map((family) => proceduralRegionSpec(family, 128));
   for (const axis of ["offsetX", "offsetY"]) {
     const offsets = specs.map((spec) => spec[axis]).sort((left, right) => left - right);
@@ -69,28 +68,16 @@ test("variant selection is deterministic and world-seed dependent", () => {
   assert.notEqual(first.seed, anotherWorld.seed);
 });
 
-test("distant regions reuse a bounded model palette without matching their neighbors", () => {
-  const variants = [];
-  for (let region = 0; region < 12; region++) {
-    const location = locationAtTileCoordinate(region * 128 + 64, 20_000.25);
-    variants.push(proceduralVariantAtLocation("trees", location.lon, location.lat, 123, 128));
-  }
-  assert.equal(new Set(variants.map(({ key }) => key)).size, 4);
-  for (let index = 1; index < variants.length; index++) {
-    assert.notEqual(variants[index].key, variants[index - 1].key);
-  }
-});
-
-test("ferns use a smaller two-variant model palette", () => {
-  const variants = [];
-  for (let region = 0; region < 8; region++) {
-    const location = locationAtTileCoordinate(region * 128 + 64, 20_000.25);
-    variants.push(proceduralVariantAtLocation("ferns", location.lon, location.lat, 123, 128));
-  }
-  assert.equal(FERN_PROCEDURAL_VARIANT_COUNT, 2);
-  assert.equal(new Set(variants.map(({ key }) => key)).size, 2);
-  for (let index = 1; index < variants.length; index++) {
-    assert.notEqual(variants[index].key, variants[index - 1].key);
+test("every distant region receives unique deterministic geometry", () => {
+  for (const family of ["trees", "bushes", "grass", "ferns", "tallPlants", "rocks"]) {
+    const variants = [];
+    for (let region = 0; region < 12; region++) {
+      const location = locationAtTileCoordinate(region * 128 + 64, 20_000.25);
+      variants.push(proceduralVariantAtLocation(family, location.lon, location.lat, 123, 128));
+    }
+    assert.equal(new Set(variants.map(({ key }) => key)).size, variants.length, family);
+    assert.equal(new Set(variants.map(({ seed }) => seed)).size, variants.length, family);
+    assert.ok(variants.every(({ key }) => key.startsWith(`${family}/region/`)));
   }
 });
 

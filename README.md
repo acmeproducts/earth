@@ -77,17 +77,28 @@ bilinearly blends the four nearest frames. `Export ZIP` writes the five face
 atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
 black wherever alpha is zero.
 
-The Earth view generates mature trees, saplings, grass, flowers, bushes, and fern
-undergrowth procedurally at startup and thin-instances them across suitable ESA
+The Earth view generates mature trees, saplings, grass, wildflower colonies, bushes, fern
+undergrowth, and low-poly rocks procedurally at startup and thin-instances them across suitable ESA
 WorldCover classes. Mature trees and 3.5 m saplings share the five-face tree
-impostor pipeline and geographic species groves. Grass, flowers, bushes, and
-ferns are rotationally symmetric, so
-they capture only one side and the top. Their side atlases use the optional
+impostor pipeline and geographic species groves. Grass captures only one side and
+the top; directional wildflowers, bushes, and ferns retain several side views. Their atlases use the optional
 upper-hemisphere mode, spending every vertical row on level-to-overhead views
 because these low vegetation types are not normally seen from below. Tree captures
 retain the full below-to-above range and use 5 horizontal by 5 vertical samples
 per face. Each tree frame keeps a 192 px height and derives its narrower width
 from the generated tree's bounding box.
+
+Rocks are low-poly procedural meshes with smooth surface normals. Most are partly
+buried, while a smaller set barely peeks through the soil. Damp biomes increase
+the chance of moss, which colors only upward-facing patches. Along shorelines,
+coherent noise selects intermittent formations of tightly spaced rocks stretched
+parallel to the local water boundary; the regular inland scatter is suppressed
+inside that shoreline band.
+Selected natural shore stretches also receive dense procedural pebble patches.
+These use the grass-style model/impostor pipeline: nearby patches retain their
+low-poly stones while distance switches to an upper-hemisphere atlas. Mapped bare
+and shingle shore has the strongest coverage, with world-anchored broad variation
+preventing the effect from appearing uniformly along every beach.
 
 Tree foliage is baked for the calendar date captured at world startup.
 Temperate deciduous trees gain sparse spring crowns, autumn color and leaf loss,
@@ -95,6 +106,8 @@ or bare winter silhouettes; seasons reverse in the southern hemisphere, while
 tropical and evergreen crowns remain stable. Models and their impostors are
 generated from the same seasonal geometry. Changing the date control later only
 updates the sky and intentionally does not rebuild vegetation.
+During that hemisphere's winter, non-tropical terrain uses a shared snow
+material and grass placement is suppressed as well.
 
 `tree-impostor-x-samples`,
 `tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
@@ -107,12 +120,15 @@ can override those values for quality testing.
 Bushes are generated from procedural branches and dense curved shoots, captured
 into their own directional atlases, and scattered in noise-shaped clusters most
 densely through WorldCover shrubland with lighter placement elsewhere.
+Wildflower regions choose between tall fireweed-like spires and the former short
+daisy patches. Both share one denser colony field, model/impostor lifecycle, and
+regional variant bank.
 Fern clumps use paired tapered leaflets and form rare patches predominantly
 beneath tree cover, with occasional growth in shrubland, wetlands, and
 mangroves. Saplings and ferns are created only for the
 fully detailed tile rings; distant tiles retain their cheaper mature-tree layer.
 
-Grass, bushes, and ferns lean in a looping wind cycle; trees and flowers remain still.
+Grass, wildflowers, bushes, and ferns lean in a looping wind cycle; trees remain still.
 `src/Wind.ts` owns the shared cycle and its GLSL shear. Displacement grows
 linearly with height above the base, so roots stay planted and tips lean
 furthest. Gusts travel across the world, making an instance's position set its
@@ -134,7 +150,7 @@ gets to a silhouette smeared through every height. The technique needs slack
 around the subject inside its frame; the square captures of low vegetation have
 it, and a tightly fitted capture like the trees' would clip.
 
-`?wind=0` removes grass, bush, and fern motion; values up to 3 scale it.
+`?wind=0` removes grass, wildflower, bush, and fern motion; values up to 3 scale it.
 
 Vegetation shadows remain cached and therefore do not animate with wind. The
 shadow map renders once and refreshes when the LOD packing or sun changes;
@@ -149,17 +165,24 @@ limits, faces, and symmetry, then create its provider with
 they contain only model-specific geometry and descriptor values.
 
 Procedural vegetation models are location-bound through virtual 256 by 256
-application-tile regions. Trees, bushes, grass, flowers, and ferns use
+application-tile regions. Trees, bushes, grass, wildflowers, and ferns use
 independently shifted region grids, so their model captures normally change at
 different locations. A four-tile-per-side border band assigns nearby placements to either
 neighbor with deterministic spatial weights; this creates a gradual population
 transition without drawing two models per plant. Mature trees and saplings share
-the tree grid. Regions select from four deterministic sister models per family,
-so long-distance travel reuses a bounded atlas bank instead of continuously
-capturing new geometry. Regional model and impostor sources use the same seed,
-while leased per-scene atlas caches retain active regions and evict older captures.
+the tree grid. Every region receives its own deterministic procedural model;
+there is no repeating model palette during long-distance travel. Regional model
+and impostor sources use the same seed, while leased per-scene atlas caches retain
+active regions and evict older captures so infinite variation does not imply
+unbounded GPU memory.
 Use `?procedural-region-size=8` to make boundaries frequent during testing; the
 value is normalized to a power of two so regions wrap cleanly at the date line.
+
+Each application tile also samples a normalized procedural-actor mix from
+world-seeded simplex fields using its tile X/Y coordinates. The mix biases the
+relative density of trees, bushes, grass, ferns, wildflowers, and rocks. Nearby
+tiles therefore transition gradually while distant areas gain distinct character;
+the same world seed and tile ID always reproduce the same mix.
 
 The production view renders grass and bushes as dense impostor clumps. Mature
 trees, saplings, and fern undergrowth can switch between impostors, automatic
@@ -335,6 +358,9 @@ land-cover and land-use polygons. OSM also supplies building-part visibility,
 road class, path and service type, surface, tunnels, and permanent waterways;
 those attributes drive building filtering, road widths and materials, vegetation
 placement, and narrow water surfaces without relying on regional data sources.
+Detailed OSM hedges, fences, walls, guard rails, and roadside noise barriers come
+from small cached Overpass queries because the general-purpose OpenMapTiles schema
+omits them; four level-16 terrain tiles share each level-14 query region.
 
 ### Modifying the Scene
 

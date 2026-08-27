@@ -20,6 +20,7 @@ let cachedTextureData: TerrainTextureData | undefined;
 const sceneMaterials = new WeakMap<Scene, {
   tinted: StandardMaterial;
   untinted: StandardMaterial;
+  snow: StandardMaterial;
 }>();
 const sharedMaterials = new WeakSet<Material>();
 
@@ -39,6 +40,8 @@ export interface TerrainMaterialOptions {
    * only carry relief and grain.
    */
   usesLandCoverTint?: boolean;
+  /** Replaces land-cover color with a bright, lightly reflective snow surface. */
+  snowCovered?: boolean;
 }
 
 /**
@@ -50,7 +53,10 @@ export function createTerrainMaterial(
   options: TerrainMaterialOptions = {},
 ): StandardMaterial {
   const cached = sceneMaterials.get(scene);
-  if (cached) return options.usesLandCoverTint ? cached.tinted : cached.untinted;
+  if (cached) {
+    if (options.snowCovered) return cached.snow;
+    return options.usesLandCoverTint ? cached.tinted : cached.untinted;
+  }
 
   cachedTextureData ??= createTerrainTextureData();
   const textures = cachedTextureData;
@@ -101,11 +107,31 @@ export function createTerrainMaterial(
     return material;
   };
 
+  const createSnowMaterial = (): StandardMaterial => {
+    const material = createCloudShadowTerrainMaterial("terrainMaterialSnow", scene)
+      ?? new StandardMaterial("terrainMaterialSnow", scene);
+    // Snow uses the existing physical-scale relief but not the earthy albedo
+    // or land-cover vertex tint beneath it.
+    material.bumpTexture = normal;
+    material.detailMap.texture = detail;
+    material.detailMap.diffuseBlendLevel = 0.42;
+    material.detailMap.bumpLevel = 0.5;
+    material.detailMap.isEnabled = true;
+    material.diffuseColor = new Color3(0.9, 0.94, 0.98);
+    material.specularColor = new Color3(0.16, 0.18, 0.2);
+    material.specularPower = 48;
+    applyTerrainDepthBias(material);
+    sharedMaterials.add(material);
+    return material;
+  };
+
   const materials = {
     tinted: createMaterial(true),
     untinted: createMaterial(false),
+    snow: createSnowMaterial(),
   };
   sceneMaterials.set(scene, materials);
+  if (options.snowCovered) return materials.snow;
   return options.usesLandCoverTint ? materials.tinted : materials.untinted;
 }
 

@@ -75,7 +75,6 @@ test("grass and bushes lean by a shear", () => {
     assert.match(source(field), /setVegetationWindShear\(/);
     assert.match(source(field), /windShearFraction\("(grass|bush)"\)/);
   }
-  assert.doesNotMatch(source("FlowerField.ts"), /setVegetationWindShear\(/);
 });
 
 test("the impostor and the live model lean by the same amount", () => {
