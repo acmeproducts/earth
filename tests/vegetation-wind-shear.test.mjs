@@ -79,7 +79,7 @@ test("grass and bushes lean by a shear", () => {
 
 test("the impostor and the live model lean by the same amount", () => {
   const impostor = source("TreeField.ts");
-  const model = source("ProceduralCaptureMaterial.ts");
+  const model = source("procedural/ProceduralCaptureMaterial.ts");
   // The impostor warps its lookup; the model moves real vertices. Both are the
   // same gradient times height above the base, so they agree across the LOD.
   assert.match(impostor, /vWindShear = windShearGradient\(/);

@@ -2,7 +2,7 @@ import { Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core"
 import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
-} from "./ProceduralCaptureMaterial";
+} from "./procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,

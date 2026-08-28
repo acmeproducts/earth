@@ -5,7 +5,7 @@ import test from "node:test";
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
 const roadPlanner = readFileSync(new URL("../src/RoadPlanner.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
-  new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralBuildingRenderer.ts", import.meta.url),
   "utf8",
 );
 

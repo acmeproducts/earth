@@ -36,7 +36,7 @@ import {
   TREE_SPECIES,
   TREE_SPECIES_LIST,
   TreeSpecies,
-} from "./ProceduralTree";
+} from "./procedural/ProceduralTree";
 import { SimplexNoise2D } from "./SimplexNoise";
 import {
   sampleWorldTreeSpecies,
@@ -67,7 +67,7 @@ import {
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
 } from "./Wind";
-import { proceduralVariantAtLocation } from "./ProceduralRegions";
+import { proceduralVariantAtLocation } from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
 

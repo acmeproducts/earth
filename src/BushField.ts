@@ -4,7 +4,7 @@ import {
   bushRenderedCaptureSize,
   createBushModel,
 } from "./BushImpostor";
-import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { habitatField } from "./HabitatNoise";

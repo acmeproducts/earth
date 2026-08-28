@@ -7,7 +7,7 @@ import type { ImpostorAssetLease, ImpostorAssets, ImpostorVariant } from "./Impo
 import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
-} from "./ProceduralCaptureMaterial";
+} from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
 export type TallPlantImpostorAssets = ImpostorAssets;

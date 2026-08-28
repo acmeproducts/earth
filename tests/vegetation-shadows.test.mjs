@@ -9,9 +9,10 @@ import {
 } from "../src/VegetationShadowReceiver.ts";
 
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const layerFades = readFileSync(new URL("../src/LayerFades.ts", import.meta.url), "utf8");
 const impostors = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
 const models = readFileSync(
-  new URL("../src/ProceduralCaptureMaterial.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 const receivers = readFileSync(
@@ -44,7 +45,7 @@ test("roads and waterways receive shadows without casting ground streaks", () =>
 
 test("buildings cast stable opaque geometry without proximity-fading windows", () => {
   const buildings = readFileSync(
-    new URL("../src/ProceduralBuildingRenderer.ts", import.meta.url),
+    new URL("../src/procedural/ProceduralBuildingRenderer.ts", import.meta.url),
     "utf8",
   );
   assert.match(buildings, /function createBuildingShadowCaster\(/);
@@ -132,11 +133,8 @@ test("does not rerender the static shadow map for camera-relative LOD changes", 
 });
 
 test("refreshes shadows throughout streamed layer cross-fades", () => {
-  const fades = game.slice(
-    game.indexOf("private updateLayerFades"),
-    game.indexOf("private stageTileField"),
-  );
-  assert.match(fades, /this\.solarLighting\?\.refreshShadows\(\)/);
+  assert.match(layerFades, /if \(refreshShadows\) this\.options\.refreshShadowsDuringFade\(\)/);
+  assert.match(game, /refreshShadowsDuringFade:[\s\S]*?this\.solarLighting\?\.refreshShadows\(\)/);
 });
 
 test("grass models and impostors share terrain-root shadow sampling", () => {

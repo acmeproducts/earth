@@ -4,6 +4,7 @@ import test from "node:test";
 
 const source = readFileSync(new URL("../src/RockField.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
 
 test("builds deterministic bare and mossy thin-instanced rock variants", () => {
   assert.match(source, /createSeededRandom\(seed\)/);
@@ -43,5 +44,5 @@ test("streams and fades the rock layer with detailed terrain tiles", () => {
   assert.match(game, /createRockField\(this\.scene, terrainData/);
   assert.match(game, /record\.rockField = rockField/);
   assert.match(game, /rockField\.setFade\(fade\)/);
-  assert.match(game, /record\.rockField\?\.root\.dispose/);
+  assert.match(streamedTile, /record\.rockField\?\.root\.dispose/);
 });

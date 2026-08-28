@@ -16,7 +16,7 @@ import { planBuilding } from "../src/BuildingPlanner.ts";
 
 register("./ts-extension-resolver.mjs", import.meta.url);
 const { ProceduralBuildingRenderer } = await import(
-  "../src/ProceduralBuildingRenderer.ts"
+  "../src/procedural/ProceduralBuildingRenderer.ts"
 );
 
 const footprint = {

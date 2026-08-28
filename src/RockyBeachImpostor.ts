@@ -13,7 +13,7 @@ import {
   type ImpostorAssets,
   type ImpostorVariant,
 } from "./Impostor";
-import { createVertexColorCaptureMaterial } from "./ProceduralCaptureMaterial";
+import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
 export type RockyBeachImpostorAssets = ImpostorAssets;

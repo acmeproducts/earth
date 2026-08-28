@@ -2,7 +2,7 @@ import {
   DEFAULT_WORLD_SEED,
   WORLD_GRID_LEVEL,
   worldTileCoordinatesAtLocation,
-} from "./WorldGrid";
+} from "../WorldGrid";
 
 export type ProceduralRegionFamily =
   | "trees"

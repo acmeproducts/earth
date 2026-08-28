@@ -28,7 +28,7 @@ test("impostor atlases have no obsolete time-sample dimension", () => {
     assert.doesNotMatch(source(file), /timeSamples|time-samples|setTimePhase/);
   }
   assert.doesNotMatch(
-    source("ProceduralCaptureMaterial.ts"),
+    source("procedural/ProceduralCaptureMaterial.ts"),
     /windSway|setVegetationWindPhase|setWindPhaseOverride/,
   );
 });

@@ -2,7 +2,7 @@ import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylon
 import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
-} from "./ProceduralCaptureMaterial";
+} from "./procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,

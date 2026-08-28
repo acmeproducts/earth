@@ -22,7 +22,7 @@ import {
   measureFoliageTextures,
   PROCEDURAL_TREE_CAPTURE_DIAMETER,
   PROCEDURAL_TREE_SOURCE_HEIGHT,
-} from "./ProceduralTree";
+} from "./procedural/ProceduralTree";
 
 interface CaptureSettings {
   gridSize: number;

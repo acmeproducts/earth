@@ -11,18 +11,18 @@ import {
   Texture,
   Vector3,
 } from "@babylonjs/core";
-import { createSeededRandom } from "./Random";
+import { createSeededRandom } from "../Random";
 import {
   bindCloudShadowReceiver,
   cloudShadowFragmentDeclaration,
   cloudShadowVertexDeclaration,
   CLOUD_SHADOW_UNIFORMS,
-} from "./CloudShadows";
+} from "../CloudShadows";
 import {
   bindVegetationShadowReceiver,
   vegetationShadowFragmentDeclaration,
   vegetationShadowVertexDeclaration,
-} from "./VegetationShadowReceiver";
+} from "../VegetationShadowReceiver";
 import {
   bindWindPhase,
   setWindShear,
@@ -30,7 +30,7 @@ import {
   windShearVertexDeclaration,
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
-} from "./Wind";
+} from "../Wind";
 
 const BARK_TEXTURE_SIZE = 512;
 

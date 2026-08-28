@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
 const elevation = readFileSync(
   new URL("../src/TerrainElevationSource.ts", import.meta.url),
   "utf8",
@@ -11,9 +12,9 @@ const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url)
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 test("streamed tiles own one provider-backed data bundle", () => {
-  assert.match(game, /landCover\?: WorldCover/);
-  assert.match(game, /preCarvingElevations: Float32Array/);
-  assert.match(game, /mapTiles\?: Promise<MapTile\[\]>/);
+  assert.match(streamedTile, /landCover\?: WorldCover/);
+  assert.match(streamedTile, /preCarvingElevations: Float32Array/);
+  assert.match(streamedTile, /mapTiles\?: Promise<MapTile\[\]>/);
   assert.match(game, /const preCarvingElevations = terrainData\.elevations\.slice\(\)/);
   assert.match(game, /record\.mapTiles \?\?= this\.requestMapTiles\(record\.terrainData\.bounds\)/);
   assert.match(game, /mapTiles \?\?= this\.requestMapTiles\(terrainData\.bounds\)/);

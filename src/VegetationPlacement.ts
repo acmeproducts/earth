@@ -2,11 +2,11 @@ import { Matrix } from "@babylonjs/core";
 import type { HorizontalExclusionMask } from "./Geo";
 import type { VegetationRenderMode } from "./VegetationField";
 import type { LandCoverSampler } from "./WorldCover";
-import type { ProceduralRegionFamily, ProceduralVariant } from "./ProceduralRegions";
+import type { ProceduralRegionFamily, ProceduralVariant } from "./procedural/ProceduralRegions";
 import {
   proceduralLocalVariantAtLocation,
   proceduralVariantAtLocation,
-} from "./ProceduralRegions";
+} from "./procedural/ProceduralRegions";
 
 export interface VegetationPlacementOptions {
   meshWidth: number;

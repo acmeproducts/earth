@@ -5,7 +5,7 @@ import test from "node:test";
 const fieldSource = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
 const impostorSource = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
 const modelSource = readFileSync(
-  new URL("../src/ProceduralCaptureMaterial.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 

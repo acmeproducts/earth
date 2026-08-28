@@ -6,7 +6,7 @@ import {
   createFernModel,
   fernRenderedCaptureSize,
 } from "./FernImpostor";
-import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";

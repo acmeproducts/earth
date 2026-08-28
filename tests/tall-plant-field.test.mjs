@@ -134,6 +134,7 @@ test("tall plants form sizeable irregular colonies on plausible land cover", () 
 test("tall plant colonies use regional variants, wind, exclusions, and model LOD", () => {
   const field = source("TallPlantField.ts");
   const game = source("Game.ts");
+  const streamedTile = source("StreamedTile.ts");
 
   assert.match(field, /"tallPlants"/);
   assert.match(field, /modelVariantSeed/);
@@ -145,6 +146,6 @@ test("tall plant colonies use regional variants, wind, exclusions, and model LOD
   assert.match(field, /\[plants\],\s*\[plantModel\],\s*await packInstanceMatrices/);
   assert.match(game, /createTallPlantField/);
   assert.match(game, /"tallPlantField"/);
-  assert.match(game, /tallPlantField\?: VegetationFieldResult/);
+  assert.match(streamedTile, /tallPlantField\?: VegetationFieldResult/);
   assert.doesNotMatch(game, /FlowerField|flowerField/);
 });

@@ -34,7 +34,7 @@ import {
   LonLat,
   planBuilding,
 } from "./BuildingPlanner";
-import { ProceduralBuildingRenderer } from "./ProceduralBuildingRenderer";
+import { ProceduralBuildingRenderer } from "./procedural/ProceduralBuildingRenderer";
 import {
   createWaterSurfaceMaterial,
   prepareWaterSurfaceMesh,

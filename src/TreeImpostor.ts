@@ -8,10 +8,10 @@ import {
   TREE_SPECIES,
   TREE_SPECIES_LIST,
   TreeSpecies,
-} from "./ProceduralTree";
+} from "./procedural/ProceduralTree";
 import {
   setVertexColorModelHeight,
-} from "./ProceduralCaptureMaterial";
+} from "./procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,

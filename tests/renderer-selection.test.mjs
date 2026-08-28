@@ -7,7 +7,7 @@ const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const fpsCounter = readFileSync(new URL("../src/FpsCounter.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const captureMaterial = readFileSync(
-  new URL("../src/ProceduralCaptureMaterial.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 const shadowReceiver = readFileSync(
@@ -68,7 +68,7 @@ test("WebGPU uses native material variants for streamed shadows and water", () =
     game,
     /field\.shadowCasterMeshes\.length > 0 \? field\.shadowCasterMeshes : field\.meshes/,
   );
-  assert.match(game, /refreshShadows && !this\.engine\.isWebGPU/);
+  assert.match(game, /refreshShadowsDuringFade:[\s\S]*?!this\.engine\.isWebGPU/);
   assert.match(
     solarLighting,
     /new ShadowGenerator\([\s\S]*?!scene\.getEngine\(\)\.isWebGPU/,

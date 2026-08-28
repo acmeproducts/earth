@@ -72,7 +72,7 @@ test("saplings and ferns belong to the detailed tile lifecycle only", () => {
 
 test("mature detailed forests include sparse species-matched fallen logs", () => {
   const trees = source("TreeField.ts");
-  const proceduralTrees = source("ProceduralTree.ts");
+  const proceduralTrees = source("procedural/ProceduralTree.ts");
   const treeImpostors = source("TreeImpostor.ts");
 
   assert.match(proceduralTrees, /interface ProceduralTreeParts \{[\s\S]*?log: Mesh;[\s\S]*?branches: Mesh;/);

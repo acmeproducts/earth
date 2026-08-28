@@ -7,6 +7,7 @@ const barriers = readFileSync(
   "utf8",
 );
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
 
 test("loads globally mapped linear barriers in shared parent regions", () => {
   assert.match(barriers, /private static readonly QUERY_ZOOM = 14/);
@@ -29,7 +30,7 @@ test("clips and terrain-conforms barrier geometry before committing it", () => {
 });
 
 test("barriers share detailed-map lifecycle and vegetation exclusion", () => {
-  assert.match(game, /barrierFeatures\?: Promise<BarrierFeature\[\]>/);
+  assert.match(streamedTile, /barrierFeatures\?: Promise<BarrierFeature\[\]>/);
   assert.match(game, /OpenStreetMapBarriers\.createExclusionMask\(/);
   assert.match(game, /combineHorizontalExclusionMasks\(\[/);
   assert.match(game, /OpenStreetMapBarriers\.createLayer\(/);

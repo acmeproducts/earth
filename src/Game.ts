@@ -11,7 +11,6 @@ import {
   Color4,
   Mesh,
   KeyboardEventTypes,
-  TransformNode,
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
 import { TerrainElevationSource } from "./TerrainElevationSource";
@@ -21,7 +20,6 @@ import {
   createTerrainLakeLayer,
   disposeTerrainLakeLayer,
 } from "./TerrainLakeSurface";
-import type { TerrainLakeLayer } from "./TerrainLakeSurface";
 import {
   conformTerrainToLakePolygons,
   LAKE_TERRAIN_CONTEXT_METERS,
@@ -35,8 +33,7 @@ import { createFernField } from "./FernField";
 import { createTallPlantField } from "./TallPlantField";
 import { createRockyBeachField } from "./RockyBeachField";
 import { createRockField } from "./RockField";
-import { proceduralActorMixAtTile } from "./ProceduralActorMix";
-import type { RockFieldResult } from "./RockField";
+import { proceduralActorMixAtTile } from "./procedural/ProceduralActorMix";
 import {
   createBrowserWorldLocationStore,
   EXAMPLE_LOCATIONS,
@@ -78,6 +75,15 @@ import {
   WALK_MAX_STEP_UP_METERS,
   WALK_SURFACE_PROBE_DEPTH_METERS,
 } from "./PlayerControls";
+import { LayerFades } from "./LayerFades";
+import {
+  disposeStreamedTile,
+  setFrozenMeshOffset,
+  setMapLayerFade,
+  setTransformNodeOffset,
+  VEGETATION_FIELD_KINDS,
+} from "./StreamedTile";
+import type { StreamedTile, VegetationFieldKind } from "./StreamedTile";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -118,23 +124,6 @@ export type { GameIntegrationOptions } from "./integration/PlayerPresence";
 
 type VegetationCategory = "trees" | "grass" | "bushes";
 type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
-type VegetationFieldKind =
-  | "treeField"
-  | "saplingField"
-  | "grassField"
-  | "tallPlantField"
-  | "rockyBeachField"
-  | "bushField"
-  | "fernField";
-const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
-  "treeField",
-  "saplingField",
-  "grassField",
-  "tallPlantField",
-  "rockyBeachField",
-  "bushField",
-  "fernField",
-];
 interface VegetationFieldConfig {
   category: VegetationCategory;
   lodDistanceCapMeters: number;
@@ -165,66 +154,6 @@ const FAR_TREE_SPACING_METERS = 5;
 const FAR_TREE_OCCUPANCY = 1;
 const FAR_TREE_EDGE_OCCUPANCY = 0.24;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
-/** Streamed layers dither in and out over this long instead of popping. */
-const LAYER_FADE_DURATION_MS = 700;
-
-/** One streamed world tile and every scene resource it owns. */
-interface StreamedTile {
-  id: WorldTileId;
-  key: string;
-  terrainData: TerrainData;
-  /** Classification loaded once for coastline, terrain tint, and vegetation. */
-  landCover?: WorldCover;
-  /** Provider elevations retained before coastline shaping for lakes and bridges. */
-  preCarvingElevations: Float32Array;
-  /** One shared vector-tile request for every OSM-backed layer on this tile. */
-  mapTiles?: Promise<MapTile[]>;
-  /** Detailed OSM barriers shared through zoom-14 parent-region requests. */
-  barrierFeatures?: Promise<BarrierFeature[]>;
-  /** Padded OSM request used only to make lake deformation cross tile edges. */
-  lakeContextTiles?: Promise<MapTile[]>;
-  terrain: Mesh;
-  meshWidth: number;
-  meshDepth: number;
-  offsetX: number;
-  offsetZ: number;
-  /** The terrain mesh carries its native elevation resolution. */
-  nativeTerrain: boolean;
-  treeField?: VegetationFieldResult;
-  saplingField?: VegetationFieldResult;
-  grassField?: VegetationFieldResult;
-  tallPlantField?: VegetationFieldResult;
-  rockyBeachField?: VegetationFieldResult;
-  bushField?: VegetationFieldResult;
-  fernField?: VegetationFieldResult;
-  rockField?: RockFieldResult;
-  mapFeatures?: TransformNode;
-  /** Terrain-owned inland water remains visible at every streaming detail tier. */
-  lakeSurfaces?: TerrainLakeLayer;
-  /** Merged building massing retained outside the detail rings. */
-  farBuildings?: TransformNode;
-  /** Coarsely sampled road surfaces retained outside the detail rings. */
-  farRoads?: TransformNode;
-  /** Impostor-only tree layer carried by tiles outside the detail rings. */
-  farTreeField?: VegetationFieldResult;
-  /** Every detail layer is present. */
-  detailed: boolean;
-  lastNeededMilliseconds: number;
-  detailLastNeededMilliseconds: number;
-  /** Vegetation LOD already settled while the camera is out of reach. */
-  lodResolved: boolean;
-}
-
-/** One running layer transition, advanced by the render loop. */
-interface LayerFade {
-  startMilliseconds: number;
-  from: number;
-  to: number;
-  apply: (fade: number) => void;
-  onComplete?: () => void;
-  refreshShadows: boolean;
-}
-
 export type InitializationProgress = (step: string, progress: number) => void;
 
 export class Game {
@@ -236,7 +165,7 @@ export class Game {
   private readonly activeTileBuilds = new Set<string>();
   private readonly terrainEdgeElevations = new Map<string, number>();
   private readonly lakeElevations = new Map<string, number>();
-  private readonly activeLayerFades: LayerFade[] = [];
+  private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
   /** Streaming CPU work yields when it has consumed its frame slice. */
   private readonly streamingYielder = createFrameBudgetYielder();
@@ -286,6 +215,12 @@ export class Game {
     // Reverse depth can be isolated explicitly once the base renderer is sound.
     this.engine.useReverseDepthBuffer = !this.engine.isWebGPU || forceReverseDepth;
     this.scene = new Scene(this.engine);
+    this.layerFades = new LayerFades({
+      refreshShadows: () => this.solarLighting?.refreshShadows(),
+      refreshShadowsDuringFade: () => {
+        if (!this.engine.isWebGPU) this.solarLighting?.refreshShadows();
+      },
+    });
     this.playerPresence = new PlayerPresence(this.scene, integration);
     window.addEventListener("pagehide", this.handlePageHide);
     // The app does not use hover picking. Skipping the implicit ray cast keeps
@@ -726,7 +661,7 @@ export class Game {
       lodResolved: false,
     };
     this.tiles.set(key, record);
-    if (previous) this.disposeTile(previous);
+    if (previous) disposeStreamedTile(previous);
     this.playerControls?.ensureAboveGround();
     return record;
   }
@@ -945,18 +880,18 @@ export class Game {
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
-    this.beginLayerFade(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
+    this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
       record.farBuildings = undefined;
-      this.beginLayerFade(1, 0, (fade) => setMapLayerFade(farBuildings, fade),
+      this.layerFades.begin(1, 0, (fade) => setMapLayerFade(farBuildings, fade),
         () => OpenStreetMap.disposeLayer(farBuildings));
     }
     if (record.farRoads) {
       const farRoads = record.farRoads;
       record.farRoads = undefined;
-      this.beginLayerFade(1, 0, (fade) => setMapLayerFade(farRoads, fade),
+      this.layerFades.begin(1, 0, (fade) => setMapLayerFade(farRoads, fade),
         () => OpenStreetMap.disposeLayer(farRoads));
     }
     record.detailed = true;
@@ -1033,7 +968,7 @@ export class Game {
       treeField.root.setEnabled(false);
     } else {
       treeField.root.setEnabled(true);
-      this.fadeFieldIn(treeField);
+      this.layerFades.fadeFieldIn(treeField);
     }
   }
 
@@ -1066,7 +1001,7 @@ export class Game {
       layer.root.setEnabled(false);
     } else {
       layer.root.setEnabled(true);
-      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(layer.root, fade));
+      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(layer.root, fade));
     }
   }
 
@@ -1099,7 +1034,7 @@ export class Game {
       layer.root.setEnabled(false);
     } else {
       layer.root.setEnabled(true);
-      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(layer.root, fade));
+      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(layer.root, fade));
     }
   }
 
@@ -1118,62 +1053,6 @@ export class Game {
       console.warn("OpenStreetMap unavailable; map-backed layers were skipped.", error);
       return [];
     });
-  }
-
-  /** Starts one layer transition; the render loop advances and completes it. */
-  private beginLayerFade(
-    from: number,
-    to: number,
-    apply: (fade: number) => void,
-    onComplete?: () => void,
-    refreshShadows = false,
-  ): void {
-    apply(from);
-    this.activeLayerFades.push({
-      startMilliseconds: performance.now(),
-      from,
-      to,
-      apply,
-      onComplete,
-      refreshShadows,
-    });
-  }
-
-  private fadeFieldIn(field: VegetationFieldResult, refreshShadows = false): void {
-    this.beginLayerFade(0, 1, (fade) => {
-      if (!field.root.isDisposed()) field.setFade(fade);
-    }, () => {
-      // Leave one settled static frame after the temporary fade refreshes.
-      this.solarLighting?.refreshShadows();
-    }, refreshShadows);
-  }
-
-  private fadeFieldOutAndDispose(field: VegetationFieldResult, refreshShadows = false): void {
-    this.beginLayerFade(1, 0, (fade) => {
-      if (!field.root.isDisposed()) field.setFade(fade);
-    }, () => field.root.dispose(false, false), refreshShadows);
-  }
-
-  private updateLayerFades(): void {
-    if (this.activeLayerFades.length === 0) return;
-    const now = performance.now();
-    let refreshShadows = false;
-    for (let index = this.activeLayerFades.length - 1; index >= 0; index--) {
-      const fade = this.activeLayerFades[index];
-      refreshShadows = refreshShadows || fade.refreshShadows;
-      const progress = Math.min(1, (now - fade.startMilliseconds) / LAYER_FADE_DURATION_MS);
-      const eased = progress * progress * (3 - 2 * progress);
-      fade.apply(fade.from + (fade.to - fade.from) * eased);
-      if (progress >= 1) {
-        this.activeLayerFades.splice(index, 1);
-        fade.onComplete?.();
-      }
-    }
-    // The sun shadow map normally renders once because its casters are static.
-    // During a streamed-layer cross-fade, however, the shadow depth shaders use
-    // the same dither mask as the visible materials. Refresh temporarily so
-    // shadows interpolate with the tile instead of jumping between snapshots.
-    if (refreshShadows && !this.engine.isWebGPU) this.solarLighting?.refreshShadows();
   }
 
   /** Resolves the first full LOD layout while the field is still staged. */
@@ -1231,7 +1110,7 @@ export class Game {
     }
 
     const farTrees = record.farTreeField;
-    this.beginLayerFade(0, 1, (fade) => {
+    this.layerFades.begin(0, 1, (fade) => {
       for (const field of fields) {
         if (!field.root.isDisposed()) field.setFade(fade);
       }
@@ -1424,35 +1303,9 @@ export class Game {
     );
   }
 
-  private disposeTileDetail(record: StreamedTile): void {
-    for (const kind of VEGETATION_FIELD_KINDS) {
-      // Impostor atlases are cached per scene and intentionally outlive fields.
-      record[kind]?.root.dispose(false, false);
-      record[kind] = undefined;
-    }
-    record.rockField?.root.dispose(false, true);
-    record.rockField = undefined;
-    if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
-    record.mapFeatures = undefined;
-    record.detailed = false;
-  }
-
-  private disposeTile(record: StreamedTile): void {
-    this.disposeTileDetail(record);
-    record.farTreeField?.root.dispose(false, false);
-    record.farTreeField = undefined;
-    if (record.farBuildings) OpenStreetMap.disposeLayer(record.farBuildings);
-    record.farBuildings = undefined;
-    if (record.farRoads) OpenStreetMap.disposeLayer(record.farRoads);
-    record.farRoads = undefined;
-    if (record.lakeSurfaces) disposeTerrainLakeLayer(record.lakeSurfaces);
-    record.lakeSurfaces = undefined;
-    disposeTerrainMesh(record.terrain);
-  }
-
   private disposeAllTiles(): void {
-    this.activeLayerFades.length = 0;
-    for (const record of this.tiles.values()) this.disposeTile(record);
+    this.layerFades.clear();
+    for (const record of this.tiles.values()) disposeStreamedTile(record);
     this.tiles.clear();
     this.activeTileBuilds.clear();
     if (this.water) disposeWaterPlane(this.water);
@@ -1468,37 +1321,37 @@ export class Game {
     if (farTrees && !farTrees.root.isDisposed()) {
       farTrees.setFade(0);
       farTrees.root.setEnabled(true);
-      this.fadeFieldIn(farTrees);
+      this.layerFades.fadeFieldIn(farTrees);
     }
     const farBuildings = record.farBuildings;
     if (farBuildings && !farBuildings.isDisposed()) {
       setMapLayerFade(farBuildings, 0);
       farBuildings.setEnabled(true);
-      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(farBuildings, fade));
+      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(farBuildings, fade));
     }
     const farRoads = record.farRoads;
     if (farRoads && !farRoads.isDisposed()) {
       setMapLayerFade(farRoads, 0);
       farRoads.setEnabled(true);
-      this.beginLayerFade(0, 1, (fade) => setMapLayerFade(farRoads, fade));
+      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(farRoads, fade));
     }
     for (const kind of VEGETATION_FIELD_KINDS) {
       const field = record[kind];
       if (!field) continue;
       record[kind] = undefined;
-      this.fadeFieldOutAndDispose(field, kind === "treeField");
+      this.layerFades.fadeFieldOutAndDispose(field, kind === "treeField");
     }
     const rockField = record.rockField;
     if (rockField) {
       record.rockField = undefined;
-      this.beginLayerFade(1, 0, (fade) => {
+      this.layerFades.begin(1, 0, (fade) => {
         if (!rockField.root.isDisposed()) rockField.setFade(fade);
       }, () => rockField.root.dispose(false, true), true);
     }
     const mapFeatures = record.mapFeatures;
     if (mapFeatures) {
       record.mapFeatures = undefined;
-      this.beginLayerFade(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
+      this.layerFades.begin(1, 0, (fade) => setMapLayerFade(mapFeatures, fade),
         () => OpenStreetMap.disposeLayer(mapFeatures), true);
     }
     record.detailed = false;
@@ -1527,7 +1380,7 @@ export class Game {
           now - record.lastNeededMilliseconds > TILE_COOLDOWN_MS) {
         this.tiles.delete(record.key);
         detailChanged = detailChanged || record.detailed;
-        this.disposeTile(record);
+        disposeStreamedTile(record);
       } else if (record.detailed && !wantDetail &&
           now - record.detailLastNeededMilliseconds > DETAIL_COOLDOWN_MS &&
           record.farTreeField && record.farBuildings && record.farRoads) {
@@ -1778,7 +1631,7 @@ export class Game {
         detailTiles: [...this.tiles.values()].filter((tile) => tile.detailed).length,
         nativeTerrainTiles: [...this.tiles.values()].filter((tile) => tile.nativeTerrain).length,
         activeBuilds: [...this.activeTileBuilds],
-        activeLayerFades: this.activeLayerFades.length,
+        activeLayerFades: this.layerFades.size,
         tiles: [...this.tiles.values()].map((tile) => ({
           key: tile.key,
           detailed: tile.detailed,
@@ -1922,7 +1775,7 @@ export class Game {
       this.playerControls?.updateMovement();
       this.publishLocalPlayerPose();
       this.updateTerrainStreaming();
-      this.updateLayerFades();
+      this.layerFades.update();
       if (this.flyCamera) this.cloudLayer?.update(this.flyCamera.globalPosition);
       const vegetationStart = performance.now();
       this.updateVegetationLod();
@@ -2082,31 +1935,6 @@ function queryNumber(
   return query.has(name) && Number.isFinite(value)
     ? Math.max(minimum, Math.min(maximum, value))
     : fallback;
-}
-
-/** Map features fade through per-mesh visibility; 1 restores the opaque path. */
-function setMapLayerFade(root: TransformNode, fade: number): void {
-  if (root.isDisposed()) return;
-  for (const mesh of root.getChildMeshes(false)) mesh.visibility = fade;
-}
-
-function setFrozenMeshOffset(mesh: Mesh, x: number, z: number): void {
-  const wasFrozen = mesh.isWorldMatrixFrozen;
-  if (wasFrozen) mesh.unfreezeWorldMatrix();
-  mesh.position.x = x;
-  mesh.position.z = z;
-  mesh.computeWorldMatrix(true);
-  if (wasFrozen) mesh.freezeWorldMatrix();
-}
-
-function setTransformNodeOffset(root: TransformNode, x: number, z: number): void {
-  const frozenChildren = root.getChildMeshes(false).filter((mesh) => mesh.isWorldMatrixFrozen);
-  frozenChildren.forEach((mesh) => mesh.unfreezeWorldMatrix());
-  root.position.x = x;
-  root.position.z = z;
-  root.computeWorldMatrix(true);
-  root.getChildMeshes(false).forEach((mesh) => mesh.computeWorldMatrix(true));
-  frozenChildren.forEach((mesh) => mesh.freezeWorldMatrix());
 }
 
 function emptyVegetationLodStats(): VegetationLodDebugStats {

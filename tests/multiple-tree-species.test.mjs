@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const proceduralTrees = readFileSync(
-  new URL("../src/ProceduralTree.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralTree.ts", import.meta.url),
   "utf8",
 );
 const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
 const impostorCapture = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
 const captureMaterial = readFileSync(
-  new URL("../src/ProceduralCaptureMaterial.ts", import.meta.url),
+  new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 
@@ -123,9 +123,17 @@ test("gives every tree species its own procedural bark texture", () => {
 });
 
 test("keeps acacia foliage dense and eucalyptus bark subdued", () => {
-  assert.match(proceduralTrees, /acacia:[\s\S]*?foliageCards: 650/);
+  assert.match(proceduralTrees, /acacia:[\s\S]*?foliageCards: 1500/);
   assert.match(proceduralTrees, /eucalyptus:[\s\S]*?bark: new Color3\(0\.42, 0\.36, 0\.27\)/);
   assert.match(captureMaterial, /eucalyptus: \[174, 158, 128\]/);
+});
+
+test("builds palms as layered fronds with texture-shaped leaflets", () => {
+  assert.match(proceduralTrees, /const palmLeafAspect = foliageCardShape\("palm"\)\?\.aspect/);
+  assert.match(proceduralTrees, /const livingFrondCount = 17/);
+  assert.match(proceduralTrees, /const crownLayer = frond % 4/);
+  assert.match(proceduralTrees, /const halfWidth = halfLength \* palmLeafAspect/);
+  assert.match(proceduralTrees, /rollCenter: Math\.PI \/ 2/);
 });
 
 test("gives pine and spruce dense, twigged crowns and converges species brightness in low light", () => {

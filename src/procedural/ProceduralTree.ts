@@ -3,8 +3,8 @@ import {
   createVertexColorCaptureMaterial,
   getTreeBarkTexture,
 } from "./ProceduralCaptureMaterial";
-import { createSeededRandom } from "./Random";
-import type { TreeSeasonAppearance } from "./TreeSeason";
+import { createSeededRandom } from "../Random";
+import type { TreeSeasonAppearance } from "../TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 3.2;
@@ -52,7 +52,7 @@ const foliageTextureContext = (require as NodeRequire & {
     useSubdirectories: boolean,
     pattern: RegExp,
   ): WebpackAssetContext;
-}).context("../assets/vegetation", true, /^\.\/[^/]+\/foliage\.png$/);
+}).context("../../assets/vegetation", true, /^\.\/[^/]+\/foliage\.png$/);
 const availableFoliageTextures = new Set(foliageTextureContext.keys());
 
 const FOLIAGE_TEXTURE_URLS: Readonly<Partial<Record<TreeSpecies, string>>> =
@@ -460,7 +460,7 @@ interface BroadleafProfile {
 const BROADLEAF_PROFILES: Readonly<Record<BroadleafSpecies, BroadleafProfile>> = {
   acacia: {
     seed: 0x41434143, trunkFraction: 0.54, trunkRadius: 0.14, crownRadius: 1.28,
-    crownDepth: 0.34, branchCount: 11, leaderCount: 3, foliageCards: 650,
+    crownDepth: 0.34, branchCount: 11, leaderCount: 3, foliageCards: 1500,
     bark: new Color3(0.3, 0.2, 0.1),
     foliage: [new Color3(0.3, 0.43, 0.12), new Color3(0.39, 0.5, 0.16)],
   },
@@ -773,25 +773,60 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
     );
   }
 
-  const frondColors = [new Color3(0.16, 0.4, 0.11), new Color3(0.25, 0.5, 0.13)];
-  for (let frond = 0; frond < 13; frond++) {
-    const angle = frond * Math.PI * 2 / 13 + random() * 0.16;
+  const frondColors = [
+    new Color3(0.13, 0.34, 0.08),
+    new Color3(0.2, 0.44, 0.1),
+    new Color3(0.27, 0.5, 0.13),
+  ];
+  const palmLeafAspect = foliageCardShape("palm")?.aspect ?? DEFAULT_FOLIAGE_CARD_ASPECT;
+  const livingFrondCount = 17;
+  for (let frond = 0; frond < livingFrondCount; frond++) {
+    // Offset neighboring fronds vertically as well as azimuthally. A single
+    // perfect radial ring reads as a parasol; overlapping crown layers give a
+    // palm its characteristic fountain silhouette.
+    const crownLayer = frond % 4;
+    const angle = frond * Math.PI * 2 / livingFrondCount + (random() - 0.5) * 0.28;
     const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
-    const length = 0.82 + random() * 0.22;
-    const end = trunkTop.add(direction.scale(length)).add(new Vector3(0, -0.12 - random() * 0.18, 0));
+    const crownOrigin = trunkTop.add(new Vector3(0, 0.025 * crownLayer, 0));
+    const length = 0.78 + random() * 0.3 + crownLayer * 0.025;
+    const end = crownOrigin.add(direction.scale(length)).add(new Vector3(
+      0,
+      crownLayer === 3 ? -0.04 - random() * 0.08 : -0.14 - random() * 0.2,
+      0,
+    ));
     // A frond arches: it leaves the crown steeply and the tip hangs below the
     // chord. Two straight segments can only corner where the arch should be.
-    const rachis = curvePath(trunkTop, end, new Vector3(0, 0.21 + random() * 0.07, 0), 5);
-    const frondSpine = new Color3(0.23, 0.39, 0.08);
-    addLimbAlongPath(branchBuffers, rachis, 0.026, 0.004, 5, 0.9, frondSpine, frondSpine);
-    for (let leaflet = 1; leaflet <= 11; leaflet++) {
-      const along = leaflet / 12;
+    const rachis = curvePath(crownOrigin, end, new Vector3(0, 0.19 + random() * 0.11, 0), 6);
+    const frondSpine = new Color3(0.2, 0.36, 0.065);
+    addLimbAlongPath(branchBuffers, rachis, 0.022, 0.0035, 5, 0.9, frondSpine, frondSpine);
+    const leafletCount = 13;
+    for (let leaflet = 1; leaflet <= leafletCount; leaflet++) {
+      const along = leaflet / (leafletCount + 1);
       const anchor = pointAlongPath(rachis, along);
       for (const side of [-1, 1]) {
-        const lateral = new Vector3(-direction.z * side, -0.18, direction.x * side).normalize();
-        addLeaf(branchBuffers, anchor.add(lateral.scale(0.08)), lateral, 0.045,
-          0.18 * (1 - Math.abs(along - 0.5) * 0.7), random,
-          frondColors[frond % frondColors.length], 0.84 + random() * 0.18);
+        const sweep = 0.08 + along * 0.18;
+        const droop = 0.08 + along * along * 0.28 + crownLayer * 0.015;
+        const lateral = new Vector3(
+          -direction.z * side + direction.x * sweep,
+          -droop,
+          direction.x * side + direction.z * sweep,
+        ).normalize();
+        const middleFullness = Math.pow(Math.sin(Math.PI * along), 0.38);
+        const halfLength = (0.12 + middleFullness * 0.075) * (0.94 + random() * 0.12);
+        // The palm image is one unusually slender leaflet. Preserve its measured
+        // proportions instead of stretching it across the broad generic cards.
+        const halfWidth = halfLength * palmLeafAspect;
+        addLeaf(
+          branchBuffers,
+          anchor.add(lateral.scale(halfLength * 0.22)),
+          lateral,
+          halfWidth,
+          halfLength,
+          random,
+          frondColors[(frond + leaflet) % frondColors.length],
+          0.86 + random() * 0.17,
+          { upwardBias: 0.06, directionJitter: 0.07, rollCenter: Math.PI / 2, rollSpread: 0.34 },
+        );
       }
     }
   }
@@ -1452,18 +1487,32 @@ function addLeaf(
   random: () => number,
   tint: Color3,
   brightness: number,
+  orientation: {
+    upwardBias?: number;
+    directionJitter?: number;
+    rollCenter?: number;
+    rollSpread?: number;
+  } = {},
 ): void {
+  const {
+    upwardBias = 0.38,
+    directionJitter = 0.22,
+    rollCenter,
+    rollSpread = Math.PI * 2,
+  } = orientation;
   const directionalGrowth = growthDirection.lengthSquared() > 0.001
     ? growthDirection.normalize()
     : randomUnitVector(random);
   const leafUp = directionalGrowth.scale(0.72)
-    .add(Vector3.Up().scale(0.38))
-    .add(randomUnitVector(random).scale(0.22))
+    .add(Vector3.Up().scale(upwardBias))
+    .add(randomUnitVector(random).scale(directionJitter))
     .normalize();
   const reference = Math.abs(leafUp.y) < 0.9 ? Vector3.Up() : Vector3.Right();
   const tangent = Vector3.Cross(leafUp, reference).normalize();
   const bitangent = Vector3.Cross(leafUp, tangent).normalize();
-  const roll = random() * Math.PI * 2;
+  const roll = rollCenter === undefined
+    ? random() * rollSpread
+    : rollCenter + (random() - 0.5) * rollSpread;
   const normal = tangent.scale(Math.cos(roll)).add(bitangent.scale(Math.sin(roll))).normalize();
   const leafRight = Vector3.Cross(normal, leafUp).normalize();
 

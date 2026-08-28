@@ -9,7 +9,7 @@ const {
   proceduralRegionCandidatesAtLocation,
   proceduralRegionSpec,
   proceduralVariantAtLocation,
-} = await import("../src/ProceduralRegions.ts");
+} = await import("../src/procedural/ProceduralRegions.ts");
 const { worldTileBounds } = await import("../src/WorldGrid.ts");
 
 function locationAtTileCoordinate(x, y) {

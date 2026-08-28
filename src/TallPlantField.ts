@@ -7,7 +7,7 @@ import {
   createTallPlantModel,
   tallPlantRenderedCaptureSize,
 } from "./TallPlantImpostor";
-import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
 import {

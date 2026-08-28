@@ -11,7 +11,7 @@ import {
   Viewport,
 } from "@babylonjs/core";
 import { documentIsHidden, waitForNextFrame as nextFrame } from "./FrameBudget";
-import { waitForVertexColorTextures } from "./ProceduralCaptureMaterial";
+import { waitForVertexColorTextures } from "./procedural/ProceduralCaptureMaterial";
 
 export interface ImpostorAssets {
   /** Raw RGBA atlases preserve hidden edge colors used by bilinear filtering. */

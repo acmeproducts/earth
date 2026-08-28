@@ -59,6 +59,6 @@ test("cross-fades all detailed vegetation with the retained tree impostors", () 
   );
   assert.match(
     game,
-    /private activateTileVegetation[\s\S]*?this\.beginLayerFade\(0, 1, \(fade\) => \{[\s\S]*?field\.setFade\(fade\);[\s\S]*?farTrees\.setFade\(1 - fade\);/,
+    /private activateTileVegetation[\s\S]*?this\.layerFades\.begin\(0, 1, \(fade\) => \{[\s\S]*?field\.setFade\(fade\);[\s\S]*?farTrees\.setFade\(1 - fade\);/,
   );
 });

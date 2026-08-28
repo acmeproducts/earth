@@ -7,7 +7,7 @@ register("./ts-extension-resolver.mjs", import.meta.url);
 const {
   PROCEDURAL_ACTOR_FAMILIES,
   proceduralActorMixAtTile,
-} = await import("../src/ProceduralActorMix.ts");
+} = await import("../src/procedural/ProceduralActorMix.ts");
 
 const tile = (x, y) => ({ level: 16, x, y });
 

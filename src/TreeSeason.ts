@@ -1,4 +1,4 @@
-import type { TreeSpecies } from "./ProceduralTree";
+import type { TreeSpecies } from "./procedural/ProceduralTree";
 
 export type TreeSeason = "spring" | "summer" | "autumn" | "winter";
 

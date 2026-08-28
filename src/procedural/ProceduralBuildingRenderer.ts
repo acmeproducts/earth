@@ -17,11 +17,11 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
-import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "./Geo";
-import { clamp01 } from "./MathUtils";
-import type { BuildingPlan, BuildingPolygon, LonLat } from "./BuildingPlanner";
-import { buildingWindowStyle, type BuildingWindowStyle } from "./BuildingWindowStyle";
-import type { TerrainData } from "./TerrainData";
+import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
+import { clamp01 } from "../MathUtils";
+import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
+import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
+import type { TerrainData } from "../TerrainData";
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
 const BUILDING_ROOF_TRIM_METERS = 0.32;

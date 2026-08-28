@@ -68,7 +68,7 @@ test("streamed detail and far trees share one world-level model seed", () => {
 });
 
 test("tree sister variants alter macro silhouette and foliage character", () => {
-  const trees = source("ProceduralTree.ts");
+  const trees = source("procedural/ProceduralTree.ts");
   assert.match(trees, /function applyRegionalTreeCharacter/);
   assert.match(trees, /const widthScale = 0\.76 \+ random\(\) \* 0\.48/);
   assert.match(trees, /const depthScale = 0\.76 \+ random\(\) \* 0\.48/);

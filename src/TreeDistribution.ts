@@ -1,4 +1,4 @@
-import type { TreeSpecies } from "./ProceduralTree";
+import type { TreeSpecies } from "./procedural/ProceduralTree";
 import { clamp01, smoothstep } from "./MathUtils";
 
 /**

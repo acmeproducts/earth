@@ -14,7 +14,7 @@ import {
   createGrassModel,
   grassRenderedCaptureSize,
 } from "./GrassImpostor";
-import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
 import type { TerrainData } from "./TerrainData";
 import {
