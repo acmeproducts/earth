@@ -109,6 +109,14 @@ import {
 } from "./WorldGrid";
 import type { WorldTileWindowOffsets } from "./WorldGrid";
 import type { WorldTileId } from "./WorldGrid";
+import { PlayerPresence } from "./integration/PlayerPresence";
+import type {
+  GameIntegrationOptions,
+  LocalPlayerTransform,
+} from "./integration/PlayerPresence";
+import type { PlayerPose } from "./integration/GameProtocol";
+
+export type { GameIntegrationOptions } from "./integration/PlayerPresence";
 
 type VegetationCategory = "trees" | "grass" | "bushes";
 type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
@@ -171,7 +179,7 @@ const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 /** Streamed layers dither in and out over this long instead of popping. */
 const LAYER_FADE_DURATION_MS = 700;
 
-type MovementMode = "fly" | "walk";
+type MovementMode = PlayerPose["movementMode"];
 
 /** One streamed world tile and every scene resource it owns. */
 interface StreamedTile {
@@ -275,6 +283,7 @@ export class Game {
   private walkerJumpRequested = false;
   private lastVegetationLodDebugLogMilliseconds = 0;
   private pointerLockWasActive = false;
+  private readonly playerPresence: PlayerPresence;
 
   private readonly handleCanvasClick = (): void => {
     this.requestPointerLock();
@@ -319,7 +328,15 @@ export class Game {
     this.walkerJumpRequested = false;
   };
 
-  constructor(canvas: HTMLCanvasElement, engine: AbstractEngine) {
+  private readonly handlePageHide = (event: PageTransitionEvent): void => {
+    if (!event.persisted) this.playerPresence.dispose();
+  };
+
+  constructor(
+    canvas: HTMLCanvasElement,
+    engine: AbstractEngine,
+    integration?: GameIntegrationOptions,
+  ) {
     this.canvas = canvas;
     this.engine = engine;
     const query = new URLSearchParams(window.location.search);
@@ -330,6 +347,8 @@ export class Game {
     // Reverse depth can be isolated explicitly once the base renderer is sound.
     this.engine.useReverseDepthBuffer = !this.engine.isWebGPU || forceReverseDepth;
     this.scene = new Scene(this.engine);
+    this.playerPresence = new PlayerPresence(this.scene, integration);
+    window.addEventListener("pagehide", this.handlePageHide);
     // The app does not use hover picking. Skipping the implicit ray cast keeps
     // pointer movement from competing with rendering on slower CPUs.
     this.scene.skipPointerMovePicking = true;
@@ -445,7 +464,8 @@ export class Game {
       }
     });
 
-    const location = this.worldLocation.value;
+    const presenceSession = await this.playerPresence.connect(this.worldLocation.value);
+    const location = presenceSession.location;
     this.solarLighting = new SolarLighting(
       this.scene,
       location.lat,
@@ -459,6 +479,8 @@ export class Game {
     // Load terrain at the active example location. Only the center tile
     // blocks the loading screen; the rest streams in from the render loop.
     await this.startWorld(location, onProgress);
+    if (presenceSession.restoredPose) this.applyRestoredPose(presenceSession.restoredPose);
+    this.publishLocalPlayerPose(true);
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.sceneControls = new SceneControls({
       settings: this.sceneSettings.value,
@@ -510,10 +532,14 @@ export class Game {
     );
     this.worldLocation.update(target);
     this.sceneControls?.setLocation(target);
+    if (this.terrainCoordinateFrame && this.terrainMetersPerUnit) {
+      this.playerPresence.setWorldFrame(this.terrainCoordinateFrame, this.terrainMetersPerUnit);
+    }
   }
 
   /** Drops movement carried over from the outgoing world's local frame. */
   private resetCameraForWorldChange(): void {
+    this.playerPresence.clearWorldFrame();
     if (!this.flyCamera) return;
     this.flyCamera.position.x = 0;
     this.flyCamera.position.z = 0;
@@ -1620,7 +1646,7 @@ export class Game {
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
         const locationIndex = Number(kbInfo.event.key) - 1;
         if (locationIndex < EXAMPLE_LOCATIONS.length) {
-          this.reloadAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
+          void this.reloadAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
         }
       }
     });
@@ -1780,8 +1806,20 @@ export class Game {
   }
 
   /** Persists a keyboard-selected destination, then rebuilds all scene-owned state. */
-  private reloadAtLocation(target: WorldLocation): void {
+  private async reloadAtLocation(target: WorldLocation): Promise<void> {
     this.worldLocation.update(target);
+    const camera = this.flyCamera;
+    if (camera) {
+      try {
+        await this.playerPresence.publishDestination(target, {
+          yaw: camera.rotation.y,
+          pitch: camera.rotation.x,
+          movementMode: this.movementMode,
+        });
+      } catch (error) {
+        console.warn("Could not persist the destination before reloading.", error);
+      }
+    }
     window.location.reload();
   }
 
@@ -1887,7 +1925,7 @@ export class Game {
       );
     });
     console.log(`Random location: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
-    this.reloadAtLocation(target);
+    await this.reloadAtLocation(target);
   }
 
   /** Places the player's eye exactly one standing height over loaded terrain. */
@@ -1992,6 +2030,7 @@ export class Game {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
       this.updateWalker();
+      this.publishLocalPlayerPose();
       this.updateTerrainStreaming();
       this.updateLayerFades();
       if (this.flyCamera) this.cloudLayer?.update(this.flyCamera.globalPosition);
@@ -2026,9 +2065,11 @@ export class Game {
     this.canvas.removeEventListener("click", this.handleCanvasClick);
     document.removeEventListener("pointerlockchange", this.handlePointerLockChange);
     window.removeEventListener("blur", this.handleWindowBlur);
+    window.removeEventListener("pagehide", this.handlePageHide);
     document.body.classList.remove("gameplay-input");
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     this.flySpeedOutput?.remove();
+    this.playerPresence.dispose();
     this.fpsCounter.dispose();
     this.sceneControls?.dispose();
     this.cloudLayer?.dispose();
@@ -2132,6 +2173,35 @@ export class Game {
     });
     camera.position.y = verticalMotion.eyeHeight;
     this.verticalVelocityMetersPerSecond = verticalMotion.verticalVelocityMetersPerSecond;
+  }
+
+  /** Hands the locally predicted camera transform to the presence subsystem. */
+  private publishLocalPlayerPose(force = false): void {
+    const camera = this.flyCamera;
+    if (!camera) return;
+    const transform: LocalPlayerTransform = {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+      yaw: camera.rotation.y,
+      pitch: camera.rotation.x,
+      movementMode: this.movementMode,
+    };
+    this.playerPresence.publishLocalTransform(transform, force);
+  }
+
+  private applyRestoredPose(pose: PlayerPose): void {
+    const camera = this.flyCamera;
+    const metersPerUnit = this.terrainMetersPerUnit;
+    if (!camera || !metersPerUnit) return;
+    camera.position.y = pose.elevationMeters / metersPerUnit;
+    camera.rotation.y = pose.yaw;
+    camera.rotation.x = pose.pitch;
+    if (pose.movementMode !== this.movementMode) this.toggleMovementMode();
+    const groundEyeHeight = this.getGroundEyeHeight(camera.position.x, camera.position.z);
+    if (groundEyeHeight !== undefined && camera.position.y < groundEyeHeight) {
+      camera.position.y = groundEyeHeight;
+    }
   }
 
   private ensurePlayerAboveGround(): void {
