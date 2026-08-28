@@ -72,14 +72,12 @@ import {
   waitForNextFrame,
 } from "./FrameBudget";
 import {
-  adaptiveCameraNearClipMeters,
-  MIN_CAMERA_NEAR_CLIP_METERS,
-} from "./CameraDepth";
-import {
-  advanceWalkerVerticalMotion,
-  FLY_CAMERA_INERTIA,
-  WALK_CAMERA_INERTIA,
-} from "./WalkerMotion";
+  PLAYER_HEIGHT_METERS,
+  PLAYER_RADIUS_METERS,
+  PlayerControls,
+  WALK_MAX_STEP_UP_METERS,
+  WALK_SURFACE_PROBE_DEPTH_METERS,
+} from "./PlayerControls";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -150,15 +148,6 @@ const VEGETATION_FIELD_CONFIG: Readonly<Record<VegetationFieldKind, VegetationFi
   bushField: { category: "bushes", lodDistanceCapMeters: 16 },
   fernField: { category: "grass", lodDistanceCapMeters: 7 },
 };
-const MIN_FLY_SPEED = 0.05;
-const MAX_FLY_SPEED = 10;
-const FLY_SPEED_FACTOR_PER_NOTCH = 1.25;
-const WHEEL_NOTCH_PIXELS = 100;
-const PLAYER_HEIGHT_METERS = 1.8;
-const PLAYER_RADIUS_METERS = 0.3;
-const WALK_MAX_STEP_UP_METERS = 0.35;
-const WALK_SURFACE_PROBE_DEPTH_METERS = 12;
-const WALK_SPEED_METERS_PER_SECOND = 10;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
 /** Share of that horizon the view stays clear before fog takes over. */
@@ -178,8 +167,6 @@ const FAR_TREE_EDGE_OCCUPANCY = 0.24;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 /** Streamed layers dither in and out over this long instead of popping. */
 const LAYER_FADE_DURATION_MS = 700;
-
-type MovementMode = PlayerPose["movementMode"];
 
 /** One streamed world tile and every scene resource it owns. */
 interface StreamedTile {
@@ -274,59 +261,11 @@ export class Game {
   private readonly waterReflectionsEnabled: boolean;
   private screenSpaceReflections?: SSRRenderingPipeline;
   private flyCamera?: UniversalCamera;
-  private flySpeedOutput?: HTMLOutputElement;
-  private movementMode: MovementMode = "fly";
+  private playerControls?: PlayerControls;
   private terrainCoordinateFrame?: SceneGeographicFrame;
   private terrainMetersPerUnit?: number;
-  private readonly heldMovementKeys = new Set<string>();
-  private verticalVelocityMetersPerSecond = 0;
-  private walkerJumpRequested = false;
   private lastVegetationLodDebugLogMilliseconds = 0;
-  private pointerLockWasActive = false;
   private readonly playerPresence: PlayerPresence;
-
-  private readonly handleCanvasClick = (): void => {
-    this.requestPointerLock();
-  };
-
-  private readonly handlePointerLockChange = (): void => {
-    if (document.pointerLockElement === this.canvas) {
-      this.pointerLockWasActive = true;
-      return;
-    }
-
-    if (!this.pointerLockWasActive) return;
-    this.pointerLockWasActive = false;
-    if (!this.sceneControls?.isOpen) this.sceneControls?.setMenuOpen(true);
-  };
-
-  private readonly handleFlySpeedWheel = (event: WheelEvent): void => {
-    if (!this.flyCamera || this.movementMode !== "fly" || event.deltaY === 0) return;
-
-    event.preventDefault();
-    const pixelsPerUnit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-      ? 16
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-        ? Math.max(this.canvas.clientHeight, WHEEL_NOTCH_PIXELS)
-        : 1;
-    const wheelNotches = Math.max(
-      -4,
-      Math.min(4, (event.deltaY * pixelsPerUnit) / WHEEL_NOTCH_PIXELS),
-    );
-    this.flyCamera.speed = Math.max(
-      MIN_FLY_SPEED,
-      Math.min(
-        MAX_FLY_SPEED,
-        this.flyCamera.speed * Math.pow(FLY_SPEED_FACTOR_PER_NOTCH, -wheelNotches),
-      ),
-    );
-    this.updateFlySpeedOutput();
-  };
-
-  private readonly handleWindowBlur = (): void => {
-    this.heldMovementKeys.clear();
-    this.walkerJumpRequested = false;
-  };
 
   private readonly handlePageHide = (event: PageTransitionEvent): void => {
     if (!event.persisted) this.playerPresence.dispose();
@@ -409,6 +348,10 @@ export class Game {
     return this.sceneSettings.value.cloudDensity;
   }
 
+  private get movementMode(): PlayerPose["movementMode"] {
+    return this.playerControls?.movementMode ?? "fly";
+  }
+
   async initialize(onProgress?: InitializationProgress): Promise<void> {
     await reportInitializationProgress(onProgress, "Preparing the scene", 3);
     // Set scene background
@@ -425,43 +368,22 @@ export class Game {
     camera.setTarget(Vector3.Zero());
     camera.attachControl(this.canvas, true);
 
-    // WASD keys for movement (W=87, A=65, S=83, D=68)
-    camera.keysUp = [87]; // W
-    camera.keysDown = [83]; // S
-    camera.keysLeft = [65]; // A
-    camera.keysRight = [68]; // D
-
-    // Movement speed
     camera.speed = 0.5;
     camera.angularSensibility = 1000;
-    camera.inertia = FLY_CAMERA_INERTIA;
     this.flyCamera = camera;
-    this.setupFlySpeedControl();
-    window.addEventListener("blur", this.handleWindowBlur);
-
-    // Add Q/E for vertical movement
-    const verticalSpeed = 0.2;
-    this.scene.onKeyboardObservable.add((kbInfo) => {
-      if (this.sceneControls?.isOpen) return;
-      const key = kbInfo.event.key.toLowerCase();
-      if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
-        if (["w", "a", "s", "d"].includes(key)) this.heldMovementKeys.add(key);
-        if (key === "g" && !(kbInfo.event as KeyboardEvent).repeat) this.toggleMovementMode();
-        if (this.movementMode === "walk" && kbInfo.event.code === "Space"
-            && !(kbInfo.event as KeyboardEvent).repeat) {
-          this.walkerJumpRequested = true;
-          kbInfo.event.preventDefault();
-        }
-        if (this.movementMode !== "fly") return;
-        if (kbInfo.event.key === "q" || kbInfo.event.key === "Q") {
-          camera.position.y -= verticalSpeed;
-        }
-        if (kbInfo.event.key === "e" || kbInfo.event.key === "E") {
-          camera.position.y += verticalSpeed;
-        }
-      } else if (kbInfo.type === KeyboardEventTypes.KEYUP) {
-        this.heldMovementKeys.delete(key);
-      }
+    this.playerControls = new PlayerControls({
+      canvas: this.canvas,
+      engine: this.engine,
+      scene: this.scene,
+      camera,
+      getMetersPerUnit: () => this.terrainMetersPerUnit,
+      getGroundEyeHeight: (x, z, referenceEyeHeight) => (
+        this.getGroundEyeHeight(x, z, referenceEyeHeight)
+      ),
+      isMenuOpen: () => this.sceneControls?.isOpen ?? false,
+      onPointerLockExit: () => {
+        if (!this.sceneControls?.isOpen) this.sceneControls?.setMenuOpen(true);
+      },
     });
 
     const presenceSession = await this.playerPresence.connect(this.worldLocation.value);
@@ -479,7 +401,7 @@ export class Game {
     // Load terrain at the active example location. Only the center tile
     // blocks the loading screen; the rest streams in from the render loop.
     await this.startWorld(location, onProgress);
-    if (presenceSession.restoredPose) this.applyRestoredPose(presenceSession.restoredPose);
+    if (presenceSession.restoredPose) this.playerControls.applyRestoredPose(presenceSession.restoredPose);
     this.publishLocalPlayerPose(true);
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.sceneControls = new SceneControls({
@@ -499,7 +421,6 @@ export class Game {
       onLocationChange: (target) => this.changeToCoordinates(target),
       onMenuOpenChange: (isOpen) => this.setMenuOpen(isOpen),
     });
-    this.setupPointerLockControls();
     this.setupDebugControls();
     await reportInitializationProgress(onProgress, "Ready", 100);
   }
@@ -540,12 +461,7 @@ export class Game {
   /** Drops movement carried over from the outgoing world's local frame. */
   private resetCameraForWorldChange(): void {
     this.playerPresence.clearWorldFrame();
-    if (!this.flyCamera) return;
-    this.flyCamera.position.x = 0;
-    this.flyCamera.position.z = 0;
-    this.flyCamera.cameraDirection.setAll(0);
-    this.heldMovementKeys.clear();
-    this.verticalVelocityMetersPerSecond = 0;
+    this.playerControls?.resetForWorldChange();
   }
 
   /** Brings one tile to the requested state (terrain, then optional detail). */
@@ -623,7 +539,7 @@ export class Game {
       // Gust wavelength is expressed in meters and must follow the stable
       // world frame's scale for every subsequently streamed tile.
       configureWindSceneScale(metersPerUnit);
-      this.configureCameraCollisionBody();
+      this.playerControls?.refreshTerrainScale();
       this.configureLoadHorizon();
       if (this.cloudsEnabled && this.solarLighting) {
         this.cloudLayer = createCloudLayer(this.scene, this.solarLighting, {
@@ -811,7 +727,7 @@ export class Game {
     };
     this.tiles.set(key, record);
     if (previous) this.disposeTile(previous);
-    this.ensurePlayerAboveGround();
+    this.playerControls?.ensureAboveGround();
     return record;
   }
 
@@ -1829,33 +1745,7 @@ export class Game {
   }
 
   private setMenuOpen(isOpen: boolean): void {
-    const camera = this.flyCamera;
-    if (!camera) return;
-    this.heldMovementKeys.clear();
-    document.body.classList.toggle("gameplay-input", !isOpen);
-    if (isOpen) {
-      camera.detachControl();
-      if (document.pointerLockElement === this.canvas) document.exitPointerLock();
-    } else {
-      camera.attachControl(this.canvas, true);
-      this.canvas.focus({ preventScroll: true });
-    }
-  }
-
-  private setupPointerLockControls(): void {
-    document.body.classList.add("gameplay-input");
-    this.canvas.addEventListener("click", this.handleCanvasClick);
-    document.addEventListener("pointerlockchange", this.handlePointerLockChange);
-  }
-
-  private requestPointerLock(): void {
-    if (this.sceneControls?.isOpen || document.pointerLockElement === this.canvas) return;
-    try {
-      const request = this.canvas.requestPointerLock() as void | Promise<void>;
-      if (request instanceof Promise) void request.catch(() => undefined);
-    } catch {
-      // Browsers reject pointer lock without a current user activation.
-    }
+    this.playerControls?.setMenuOpen(isOpen);
   }
 
   private getRenderStatsContext(): Record<string, unknown> {
@@ -1942,7 +1832,7 @@ export class Game {
     this.flyCamera.position.z = position.z;
     const groundEyeHeight = this.getGroundEyeHeight(position.x, position.z);
     if (groundEyeHeight !== undefined) this.flyCamera.position.y = groundEyeHeight;
-    this.verticalVelocityMetersPerSecond = 0;
+    this.playerControls?.resetVerticalMotion();
   }
 
   private updateTerrainStreaming(): void {
@@ -2029,7 +1919,7 @@ export class Game {
   run(): void {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
-      this.updateWalker();
+      this.playerControls?.updateMovement();
       this.publishLocalPlayerPose();
       this.updateTerrainStreaming();
       this.updateLayerFades();
@@ -2037,7 +1927,7 @@ export class Game {
       const vegetationStart = performance.now();
       this.updateVegetationLod();
       const vegetationEnd = performance.now();
-      this.updateCameraDepthPrecision();
+      this.playerControls?.updateDepthPrecision();
       const renderStart = performance.now();
       this.scene.render();
       const renderEnd = performance.now();
@@ -2061,118 +1951,14 @@ export class Game {
   }
 
   dispose(): void {
-    this.canvas.removeEventListener("wheel", this.handleFlySpeedWheel);
-    this.canvas.removeEventListener("click", this.handleCanvasClick);
-    document.removeEventListener("pointerlockchange", this.handlePointerLockChange);
-    window.removeEventListener("blur", this.handleWindowBlur);
     window.removeEventListener("pagehide", this.handlePageHide);
-    document.body.classList.remove("gameplay-input");
-    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
-    this.flySpeedOutput?.remove();
+    this.playerControls?.dispose();
     this.playerPresence.dispose();
     this.fpsCounter.dispose();
     this.sceneControls?.dispose();
     this.cloudLayer?.dispose();
     this.scene.dispose();
     this.engine.dispose();
-  }
-
-  private setupFlySpeedControl(): void {
-    this.canvas.addEventListener("wheel", this.handleFlySpeedWheel, { passive: false });
-    this.flySpeedOutput = document.createElement("output");
-    this.flySpeedOutput.id = "flySpeed";
-    document.body.appendChild(this.flySpeedOutput);
-    this.updateFlySpeedOutput();
-  }
-
-  private updateFlySpeedOutput(): void {
-    if (!this.flyCamera || !this.flySpeedOutput) return;
-    if (this.movementMode === "walk") {
-      this.flySpeedOutput.value = `Walk · ${WALK_SPEED_METERS_PER_SECOND.toFixed(1)} m/s · G: Fly`;
-      this.flySpeedOutput.setAttribute("aria-label", "Walker mode. Press G for fly mode.");
-      return;
-    }
-
-    const speed = this.flyCamera.speed.toFixed(2);
-    this.flySpeedOutput.value = `Fly · Speed ${speed} · G: Walk`;
-    this.flySpeedOutput.setAttribute("aria-label", `Fly mode. Speed ${speed}. Press G for walker mode.`);
-  }
-
-  private toggleMovementMode(): void {
-    if (!this.flyCamera) return;
-
-    this.movementMode = this.movementMode === "fly" ? "walk" : "fly";
-    this.verticalVelocityMetersPerSecond = 0;
-    this.walkerJumpRequested = false;
-    this.flyCamera.cameraDirection.setAll(0);
-    this.flyCamera.cameraRotation.setAll(0);
-    this.heldMovementKeys.clear();
-
-    if (this.movementMode === "walk") {
-      // Babylon's standard free-camera input follows the vertical look angle.
-      // Walker movement is applied separately to remain parallel with the ground.
-      this.flyCamera.keysUp = [];
-      this.flyCamera.keysDown = [];
-      this.flyCamera.keysLeft = [];
-      this.flyCamera.keysRight = [];
-      this.flyCamera.inertia = WALK_CAMERA_INERTIA;
-      this.flyCamera.checkCollisions = true;
-      this.configureCameraCollisionBody();
-      this.ensurePlayerAboveGround();
-    } else {
-      this.flyCamera.keysUp = [87];
-      this.flyCamera.keysDown = [83];
-      this.flyCamera.keysLeft = [65];
-      this.flyCamera.keysRight = [68];
-      this.flyCamera.inertia = FLY_CAMERA_INERTIA;
-      this.flyCamera.checkCollisions = false;
-    }
-
-    this.updateFlySpeedOutput();
-  }
-
-  private updateWalker(): void {
-    const camera = this.flyCamera;
-    const metersPerUnit = this.terrainMetersPerUnit;
-    if (this.movementMode !== "walk" || !camera || !metersPerUnit) return;
-
-    const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
-    const groundEyeHeightBeforeMove = this.getGroundEyeHeight(
-      camera.position.x,
-      camera.position.z,
-      camera.position.y,
-    );
-    const forward = Number(this.heldMovementKeys.has("w")) - Number(this.heldMovementKeys.has("s"));
-    const right = Number(this.heldMovementKeys.has("d")) - Number(this.heldMovementKeys.has("a"));
-    if (forward !== 0 || right !== 0) {
-      const inputLength = Math.hypot(forward, right);
-      const yaw = camera.rotation.y;
-      const distance = WALK_SPEED_METERS_PER_SECOND * deltaSeconds / metersPerUnit;
-      camera.position.x += (
-        Math.sin(yaw) * forward + Math.cos(yaw) * right
-      ) * distance / inputLength;
-      camera.position.z += (
-        Math.cos(yaw) * forward - Math.sin(yaw) * right
-      ) * distance / inputLength;
-    }
-
-    const jumpRequested = this.walkerJumpRequested;
-    this.walkerJumpRequested = false;
-    const verticalMotion = advanceWalkerVerticalMotion({
-      eyeHeight: camera.position.y,
-      verticalVelocityMetersPerSecond: this.verticalVelocityMetersPerSecond,
-      groundEyeHeightBeforeMove,
-      groundEyeHeightAfterMove: this.getGroundEyeHeight(
-        camera.position.x,
-        camera.position.z,
-        camera.position.y,
-      ),
-      metersPerUnit,
-      deltaSeconds,
-      jumpRequested,
-    });
-    camera.position.y = verticalMotion.eyeHeight;
-    this.verticalVelocityMetersPerSecond = verticalMotion.verticalVelocityMetersPerSecond;
   }
 
   /** Hands the locally predicted camera transform to the presence subsystem. */
@@ -2188,32 +1974,6 @@ export class Game {
       movementMode: this.movementMode,
     };
     this.playerPresence.publishLocalTransform(transform, force);
-  }
-
-  private applyRestoredPose(pose: PlayerPose): void {
-    const camera = this.flyCamera;
-    const metersPerUnit = this.terrainMetersPerUnit;
-    if (!camera || !metersPerUnit) return;
-    camera.position.y = pose.elevationMeters / metersPerUnit;
-    camera.rotation.y = pose.yaw;
-    camera.rotation.x = pose.pitch;
-    if (pose.movementMode !== this.movementMode) this.toggleMovementMode();
-    const groundEyeHeight = this.getGroundEyeHeight(camera.position.x, camera.position.z);
-    if (groundEyeHeight !== undefined && camera.position.y < groundEyeHeight) {
-      camera.position.y = groundEyeHeight;
-    }
-  }
-
-  private ensurePlayerAboveGround(): void {
-    if (!this.flyCamera || this.movementMode !== "walk") return;
-    const groundEyeHeight = this.getGroundEyeHeight(
-      this.flyCamera.position.x,
-      this.flyCamera.position.z,
-    );
-    if (groundEyeHeight !== undefined && this.flyCamera.position.y < groundEyeHeight) {
-      this.flyCamera.position.y = groundEyeHeight;
-      this.verticalVelocityMetersPerSecond = 0;
-    }
   }
 
   /** Finds the streamed tile whose footprint contains a scene position. */
@@ -2278,37 +2038,6 @@ export class Game {
       ? hit.pickedPoint.y + PLAYER_HEIGHT_METERS / metersPerUnit
       : -Infinity;
     return Math.max(terrainEyeHeight, structureEyeHeight);
-  }
-
-  private configureCameraCollisionBody(): void {
-    const camera = this.flyCamera;
-    const metersPerUnit = this.terrainMetersPerUnit;
-    if (!camera || !metersPerUnit) return;
-    camera.ellipsoid.set(
-      PLAYER_RADIUS_METERS / metersPerUnit,
-      PLAYER_HEIGHT_METERS / (2 * metersPerUnit),
-      PLAYER_RADIUS_METERS / metersPerUnit,
-    );
-    // Babylon defaults minZ to one whole scene unit. One unit represents many
-    // meters here, causing that near plane to slice through the ground below
-    // a correctly positioned 1.8 m camera.
-    camera.minZ = MIN_CAMERA_NEAR_CLIP_METERS / metersPerUnit;
-    // FreeCamera positions its collision ellipsoid below the camera, placing
-    // its bottom exactly one full player height below the eye point.
-    camera.ellipsoidOffset.setAll(0);
-  }
-
-  /** Uses empty space below the camera to preserve distant depth precision. */
-  private updateCameraDepthPrecision(): void {
-    const camera = this.flyCamera;
-    const metersPerUnit = this.terrainMetersPerUnit;
-    if (!camera || !metersPerUnit) return;
-
-    const groundEyeHeight = this.getGroundEyeHeight(camera.position.x, camera.position.z);
-    if (groundEyeHeight === undefined) return;
-    const groundHeight = groundEyeHeight - PLAYER_HEIGHT_METERS / metersPerUnit;
-    const clearanceMeters = Math.max(0, (camera.position.y - groundHeight) * metersPerUnit);
-    camera.minZ = adaptiveCameraNearClipMeters(clearanceMeters) / metersPerUnit;
   }
 
   /**

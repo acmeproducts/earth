@@ -6,6 +6,10 @@ const settings = readFileSync(new URL("../src/SceneSettings.ts", import.meta.url
 const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url), "utf8");
 const geocoding = readFileSync(new URL("../src/Geocoding.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const playerControls = readFileSync(
+  new URL("../src/PlayerControls.ts", import.meta.url),
+  "utf8",
+);
 const playerPresence = readFileSync(
   new URL("../src/integration/PlayerPresence.ts", import.meta.url),
   "utf8",
@@ -93,16 +97,17 @@ test("location names are geocoded and passed through coordinate navigation", () 
 });
 
 test("gameplay uses pointer lock and only the open menu restores the cursor", () => {
-  const menuOpenHandler = game.match(
-    /private setMenuOpen\([\s\S]*?(?=\n  private setupPointerLockControls)/,
+  const menuOpenHandler = playerControls.match(
+    /setMenuOpen\([\s\S]*?(?=\n  applyRestoredPose)/,
   );
   assert.ok(menuOpenHandler);
-  assert.match(game, /this\.canvas\.requestPointerLock\(\)/);
-  assert.match(game, /document\.addEventListener\("pointerlockchange"/);
+  assert.match(playerControls, /canvas\.requestPointerLock\(\)/);
+  assert.match(playerControls, /document\.addEventListener\("pointerlockchange"/);
   assert.match(game, /this\.sceneControls\?\.setMenuOpen\(true\)/);
-  assert.match(game, /document\.exitPointerLock\(\)/);
-  assert.match(game, /classList\.toggle\("gameplay-input", !isOpen\)/);
+  assert.match(playerControls, /document\.exitPointerLock\(\)/);
+  assert.match(playerControls, /classList\.toggle\("gameplay-input", !isOpen\)/);
   assert.doesNotMatch(menuOpenHandler[0], /this\.requestPointerLock\(\)/);
+  assert.match(game, /this\.playerControls\?\.setMenuOpen\(isOpen\)/);
   assert.match(html, /body\.gameplay-input \*[\s\S]*?cursor: none !important/);
 });
 
@@ -111,9 +116,10 @@ test("changing worlds discards the outgoing camera's local position offset", () 
     game,
     /private async startWorld\([\s\S]*?this\.resetCameraForWorldChange\(\);[\s\S]*?this\.disposeAllTiles\(\)/,
   );
-  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?position\.x = 0/);
-  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?position\.z = 0/);
-  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?cameraDirection\.setAll\(0\)/);
+  assert.match(game, /resetCameraForWorldChange\(\)[\s\S]*?playerControls\?\.resetForWorldChange\(\)/);
+  assert.match(playerControls, /resetForWorldChange\(\)[\s\S]*?position\.x = 0/);
+  assert.match(playerControls, /resetForWorldChange\(\)[\s\S]*?position\.z = 0/);
+  assert.match(playerControls, /resetForWorldChange\(\)[\s\S]*?cameraDirection\.setAll\(0\)/);
 });
 
 test("remote players render as red geographic orbs and the local player stays hidden", () => {
