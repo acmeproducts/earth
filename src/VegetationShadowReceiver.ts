@@ -9,6 +9,13 @@ import {
 } from "@babylonjs/core";
 
 export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
+/**
+ * Fraction of direct sunlight a shadow leaves behind. Skylight bounced off the
+ * surroundings fills a real shadow, so removing the sun outright reads darker
+ * than any overcast sky. Shared with the built-in shadow generator so terrain,
+ * buildings and vegetation sit in shadows of the same depth.
+ */
+export const SHADOW_DARKNESS = 0.3;
 const fallbackShadowTextures = new WeakMap<Scene, RawTexture>();
 
 function fallbackShadowTexture(scene: Scene): RawTexture {
@@ -96,7 +103,7 @@ float vegetationShadowVisibility(void) {
 export function bindVegetationShadowReceiver(material: ShaderMaterial, scene: Scene): void {
   material.setTexture("vegetationShadowSampler", fallbackShadowTexture(scene));
   material.setFloat("vegetationShadowEnabled", 0);
-  material.setFloat("vegetationShadowDarkness", 0.3);
+  material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
   material.setFloat("vegetationShadowAtInstanceRoot", 0);
   material.setFloat("vegetationShadowReverseDepth", scene.getEngine().useReverseDepthBuffer ? 1 : 0);
   const updateShadowUniforms = (): void => {

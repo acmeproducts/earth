@@ -22,23 +22,39 @@ const SEED_HEAD = new Color3(0.63, 0.53, 0.34);
 const DAISY_STEM = new Color3(0.12, 0.36, 0.08);
 const DAISY_LEAF = new Color3(0.18, 0.47, 0.1);
 const DAISY_CENTER = new Color3(1, 0.67, 0.035);
+// Ordered as a hue ramp so the +/-1 drift inside one clump stays within a
+// plausible species range instead of jumping from cream to violet mid-stem.
 const BLOOM_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
+  [new Color3(0.66, 0.63, 0.46), new Color3(1, 0.98, 0.91)],
+  [new Color3(0.68, 0.58, 0.15), new Color3(1, 0.94, 0.55)],
+  [new Color3(0.72, 0.45, 0.06), new Color3(1, 0.82, 0.27)],
+  [new Color3(0.68, 0.2, 0.24), new Color3(1, 0.55, 0.48)],
   [new Color3(0.48, 0.055, 0.22), new Color3(0.96, 0.35, 0.61)],
   [new Color3(0.54, 0.12, 0.38), new Color3(0.96, 0.47, 0.78)],
   [new Color3(0.38, 0.12, 0.52), new Color3(0.79, 0.48, 0.94)],
-  [new Color3(0.68, 0.2, 0.24), new Color3(1, 0.55, 0.48)],
+  [new Color3(0.17, 0.19, 0.55), new Color3(0.51, 0.6, 0.96)],
 ];
 const DAISY_PETAL_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
   [new Color3(0.78, 0.8, 0.7), new Color3(0.98, 0.96, 0.9)],
   [new Color3(0.82, 0.55, 0.67), new Color3(1, 0.78, 0.88)],
   [new Color3(0.64, 0.57, 0.82), new Color3(0.86, 0.8, 1)],
   [new Color3(0.87, 0.65, 0.34), new Color3(1, 0.86, 0.54)],
+  [new Color3(0.45, 0.52, 0.78), new Color3(0.68, 0.78, 1)],
+  [new Color3(0.7, 0.28, 0.24), new Color3(0.97, 0.56, 0.44)],
 ];
 
-export type TallPlantArchetype = "floweringSpire" | "daisyPatch";
+export type TallPlantArchetype = "floweringSpire" | "daisyPatch" | "umbelHead";
+
+const ARCHETYPES: readonly TallPlantArchetype[] = [
+  "floweringSpire",
+  "daisyPatch",
+  "umbelHead",
+];
 
 export function tallPlantArchetypeForVariant(variantIndex: number): TallPlantArchetype {
-  return ((variantIndex % 4) + 4) % 4 === 1 ? "daisyPatch" : "floweringSpire";
+  // The impostor path passes the signed regional seed and the model path its
+  // unsigned twin, so normalise first or the two LODs pick different species.
+  return ARCHETYPES[(variantIndex >>> 0) % ARCHETYPES.length];
 }
 
 export function tallPlantRenderedCaptureSize(renderHeight: number): number {
@@ -102,6 +118,8 @@ function createTallPlantSource(
 
   if (archetype === "daisyPatch") {
     addDaisyPatch();
+  } else if (archetype === "umbelHead") {
+    addUmbelStand();
   } else for (let stemIndex = 0; stemIndex < STEM_COUNT; stemIndex++) {
     const angle = random() * Math.PI * 2;
     const radius = Math.sqrt(random()) * (0.42 + random() * 0.22);
@@ -260,6 +278,92 @@ function createTallPlantSource(
   function addBud(center: Vector3, radius: number, color: Color3): void {
     addQuad(center, Vector3.Right().scale(radius), Vector3.Up().scale(radius * 1.45), color);
     addQuad(center, Vector3.Forward().scale(radius), Vector3.Up().scale(radius * 1.45), color);
+  }
+
+  /** A tiny near-horizontal floret; an umbel is a flat plate built from these. */
+  function addFloret(center: Vector3, radius: number, color: Color3): void {
+    addQuad(center, Vector3.Right().scale(radius), Vector3.Forward().scale(radius), color);
+    addQuad(
+      center.add(new Vector3(0, radius * 0.42, 0)),
+      Vector3.Right().scale(radius * 0.5),
+      Vector3.Up().scale(radius * 0.5),
+      color,
+    );
+  }
+
+  /**
+   * Cow-parsley and yarrow silhouettes: bare lower stems carrying a flat,
+   * slightly domed plate of florets. Reads nothing like a spire or a daisy
+   * patch from any capture angle, which is the point of a third archetype.
+   */
+  function addUmbelStand(): void {
+    const palette = BLOOM_PALETTES[Math.floor(random() * BLOOM_PALETTES.length)];
+    const stemCount = 8 + Math.floor(random() * 6);
+    for (let stem = 0; stem < stemCount; stem++) {
+      const angle = random() * Math.PI * 2;
+      const radius = Math.sqrt(random()) * (0.36 + random() * 0.26);
+      const base = new Vector3(Math.cos(angle) * radius, baseY, Math.sin(angle) * radius);
+      const height = 0.92 + random() * 0.78;
+      const lean = new Vector3(
+        (random() - 0.5) * 0.17,
+        0,
+        (random() - 0.5) * 0.17,
+      ).add(clumpLean.scale(0.6 + random() * 0.85));
+      const head = base.add(new Vector3(lean.x, height, lean.z));
+      addCrossedStem(base, head, 0.008 + random() * 0.008, STEM);
+
+      // Finely divided foliage sits low; the upper stem stays deliberately bare.
+      const leafCount = 3 + Math.floor(random() * 4);
+      const leafPhase = random() * Math.PI * 2;
+      for (let leaf = 0; leaf < leafCount; leaf++) {
+        // Start clear of the ground: these leaves droop, and the umbel is the
+        // one archetype whose lowest leaf sits on a nearly vertical stem.
+        const along = 0.14 + leaf / Math.max(1, leafCount - 1) * 0.3
+          + (random() - 0.5) * 0.05;
+        const leafAngle = leafPhase + leaf * 2.4 + (random() - 0.5) * 0.4;
+        addLanceLeaf(
+          Vector3.Lerp(base, head, along),
+          new Vector3(Math.cos(leafAngle), 0, Math.sin(leafAngle)),
+          0.15 + random() * 0.13,
+          0.018 + random() * 0.014,
+          0.015 + random() * 0.035,
+          0.84 + random() * 0.28,
+        );
+      }
+
+      if (random() < 0.12) {
+        addBud(head, 0.03 + random() * 0.02, LEAF_TIP);
+        continue;
+      }
+
+      const rayCount = 9 + Math.floor(random() * 7);
+      const umbelRadius = 0.11 + random() * 0.1;
+      const umbelPhase = random() * Math.PI * 2;
+      const dome = 0.28 + random() * 0.34;
+      for (let ray = 0; ray < rayCount; ray++) {
+        const rayAngle = umbelPhase + ray / rayCount * Math.PI * 2 + (random() - 0.5) * 0.24;
+        const outward = new Vector3(Math.cos(rayAngle), 0, Math.sin(rayAngle));
+        const rayLength = umbelRadius * (0.7 + random() * 0.46);
+        const tip = head
+          .add(outward.scale(rayLength))
+          .add(new Vector3(0, (umbelRadius - rayLength) * dome + 0.012, 0));
+        addCrossedStem(head, tip, 0.0035 + random() * 0.002, STEM);
+        const floretCount = 3 + Math.floor(random() * 3);
+        for (let floret = 0; floret < floretCount; floret++) {
+          const floretAngle = random() * Math.PI * 2;
+          const floretSpread = rayLength * (0.1 + random() * 0.2);
+          addFloret(
+            tip.add(new Vector3(
+              Math.cos(floretAngle) * floretSpread,
+              (random() - 0.4) * 0.012,
+              Math.sin(floretAngle) * floretSpread,
+            )),
+            0.014 + random() * 0.012,
+            floret === 0 ? palette[1] : Color3.Lerp(palette[0], palette[1], 0.55 + random() * 0.45),
+          );
+        }
+      }
+    }
   }
 
   /** Preserves the old flower impostor's dense, short daisy-patch silhouette. */

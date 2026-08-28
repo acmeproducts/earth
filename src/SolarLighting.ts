@@ -19,6 +19,7 @@ import { getGameDate } from "./GameTime";
 import { Moon } from "./Moon";
 import { shouldUpdateSolarLocation } from "./SolarLocation";
 import { StarField } from "./StarField";
+import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
@@ -42,7 +43,7 @@ const SHADOW_LIGHT_SIZE_UV_RATIO = 0.025;
  * a small cube is plenty and keeps the six extra faces off the frame budget.
  */
 const SKY_PROBE_SIZE = 128;
-const MIN_AMBIENT_INTENSITY = 0.24;
+const MIN_AMBIENT_INTENSITY = 0.32;
 
 /** Mutable output used to share the current sky lighting without allocations. */
 export interface SolarLightingSnapshot {
@@ -85,7 +86,7 @@ export class SolarLighting {
       scene,
     );
     this.ambientLight.diffuse = new Color3(0.64, 0.72, 0.86);
-    this.ambientLight.groundColor = new Color3(0.08, 0.09, 0.12);
+    this.ambientLight.groundColor = new Color3(0.13, 0.14, 0.18);
 
     this.directLight = new DirectionalLight(
       "sunLight",
@@ -120,6 +121,7 @@ export class SolarLighting {
     this.shadows.useContactHardeningShadow = true;
     this.shadows.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
     this.shadows.contactHardeningLightSizeUVRatio = SHADOW_LIGHT_SIZE_UV_RATIO;
+    this.shadows.darkness = SHADOW_DARKNESS;
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
     const shadowMap = this.shadows.getShadowMap();
@@ -361,14 +363,14 @@ export class SolarLighting {
       this.skyMaterial.luminance = 0.06 +
         (0.72 + 0.38 * elevationFactor - 0.06) * twilight;
       this.scene.fogColor = Color3.Lerp(
-        new Color3(0.012, 0.025, 0.065),
+        new Color3(0.035, 0.055, 0.105),
         new Color3(0.3, 0.52, 0.86),
         twilight,
       ).scale(0.75 + this.skyMaterial.luminance * 0.25);
       this.horizonMaterial.setColor3("horizonColor", this.scene.fogColor);
       this.scene.environmentIntensity = daylight
         ? 0.7 + 0.3 * elevationFactor
-        : 0.12;
+        : 0.24;
     }
     if (updateShadowTargets) {
       this.lastShadowUpdate = now;

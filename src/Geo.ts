@@ -205,6 +205,25 @@ export function sceneToLonLat(
 }
 
 /**
+ * Ground metres for a location, for fields that must stay continuous across
+ * streamed tiles. Scene coordinates restart at the centre of every tile, so
+ * noise sampled in them repeats per tile and can never carry a feature larger
+ * than one. A flat approximation around the sample latitude is exact enough
+ * over the few kilometres such a field spans, and is continuous everywhere
+ * except the antimeridian.
+ */
+export function groundMetersAt(
+  longitude: number,
+  latitude: number,
+): { x: number; y: number } {
+  const metersPerDegreeLatitude = 111_320;
+  return {
+    x: longitude * metersPerDegreeLatitude * Math.cos(latitude * Math.PI / 180),
+    y: latitude * metersPerDegreeLatitude,
+  };
+}
+
+/**
  * Positions a locally centered geographic mesh inside a stable scene frame.
  * Adding this offset to any target-local coordinate produces the same scene
  * coordinate as projecting that longitude/latitude directly in the frame.

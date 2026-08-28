@@ -1,3 +1,4 @@
+import { groundMetersAt } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { LandCoverClass } from "./WorldCover";
 import { clamp01 } from "./MathUtils";
@@ -55,7 +56,7 @@ export function varyGroundColor(
   const strength = VARIATION_STRENGTH[landCover] ?? 1;
   if (strength <= 0) return [color[0], color[1], color[2]];
 
-  const { x, y } = groundMeters(longitude, latitude);
+  const { x, y } = groundMetersAt(longitude, latitude);
   const broad = broadNoise.sample(x / BROAD_METERS, y / BROAD_METERS) *
     bandWeight(BROAD_METERS, minimumFeatureMeters);
   const mid = midNoise.sample(x / MID_METERS, y / MID_METERS) *
@@ -87,21 +88,4 @@ function bandWeight(bandMeters: number, minimumFeatureMeters: number): number {
   if (minimumFeatureMeters <= 0) return 1;
   const t = clamp01((bandMeters / minimumFeatureMeters - 2) / 2);
   return t * t * (3 - 2 * t);
-}
-
-/**
- * Local metric coordinates. Only differences over a few hundred metres matter
- * here, so a flat approximation around the sample latitude is exact enough and
- * stays continuous across tile boundaries.
- */
-function groundMeters(
-  longitude: number,
-  latitude: number,
-): { x: number; y: number } {
-  const metersPerDegreeLatitude = 111_320;
-  return {
-    x: longitude * metersPerDegreeLatitude *
-      Math.cos(latitude * Math.PI / 180),
-    y: latitude * metersPerDegreeLatitude,
-  };
 }

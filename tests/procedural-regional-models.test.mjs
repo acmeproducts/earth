@@ -94,4 +94,12 @@ test("bush variants and placements avoid repeated radial silhouettes", () => {
   assert.match(field, /const widthScaleX/);
   assert.match(field, /const widthScaleZ/);
   assert.match(field, /new Vector3\(widthScaleX, heightScale, widthScaleZ\)/);
+  assert.match(field, /const stand = habitat\.sample\(lon, lat\)/);
+  assert.match(field, /const BUSH_SISTER_MODELS = 3/);
+  assert.match(field, /^\s+BUSH_SISTER_MODELS,$/m);
+  assert.match(bushes, /const growthHabit = random\(\)/);
+  assert.match(bushes, /const leafScale = 0\.72 \+ random\(\) \* 0\.66/);
+  assert.match(bushes, /const sprayCount = Math\.round\(258 \/ leafScale\)/);
+  assert.match(bushes, /ACCENT_PALETTES/);
+  assert.match(bushes, /function addAccent/);
 });

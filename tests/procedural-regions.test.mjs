@@ -5,6 +5,7 @@ import test from "node:test";
 register("./ts-extension-resolver.mjs", import.meta.url);
 
 const {
+  proceduralLocalVariantAtLocation,
   proceduralRegionCandidatesAtLocation,
   proceduralRegionSpec,
   proceduralVariantAtLocation,
@@ -85,4 +86,71 @@ test("candidate regions wrap continuously at the antimeridian", () => {
   const west = proceduralRegionCandidatesAtLocation("grass", -180, 0, 99, 128);
   const east = proceduralRegionCandidatesAtLocation("grass", 180, 0, 99, 128);
   assert.deepEqual(east, west);
+});
+
+/** Samples one application tile the way a streamed vegetation field would. */
+function sisterModelsInTile(x, y, sisterModels, worldSeed = 0x1234abcd) {
+  const bounds = worldTileBounds({ level: 16, x, y });
+  const seen = new Set();
+  for (let row = 0; row < 6; row++) {
+    for (let column = 0; column < 6; column++) {
+      const lon = bounds.lonWest
+        + ((column + 0.5) / 6) * (bounds.lonEast - bounds.lonWest);
+      const lat = bounds.latSouth
+        + ((row + 0.5) / 6) * (bounds.latNorth - bounds.latSouth);
+      seen.add(proceduralLocalVariantAtLocation(
+        "bushes",
+        lon,
+        lat,
+        worldSeed,
+        sisterModels,
+      ));
+    }
+  }
+  return seen;
+}
+
+test("one tile normally builds a single sister model", () => {
+  // Every sister model alive in a tile costs its own impostor atlas capture and
+  // its own live mesh, so the whole point of binding the choice to the locality
+  // is that a tile pays for one. Rolling it per placement pays for all of them.
+  const counts = new Map();
+  let tiles = 0;
+  for (let y = 24_000; y < 24_060; y++) {
+    for (let x = 34_000; x < 34_060; x++) {
+      const size = sisterModelsInTile(x, y, 3).size;
+      counts.set(size, (counts.get(size) ?? 0) + 1);
+      tiles++;
+    }
+  }
+  assert.ok(counts.get(1) / tiles > 0.8, `single-model tiles ${counts.get(1)}/${tiles}`);
+  assert.ok((counts.get(3) ?? 0) < tiles * 0.01, `all-three tiles ${counts.get(3)}/${tiles}`);
+});
+
+test("sister models are location-bound and cover the whole palette", () => {
+  const location = locationAtTileCoordinate(34_000.5, 24_000.5);
+  const repeated = proceduralLocalVariantAtLocation("bushes", location.lon, location.lat, 7, 3);
+  assert.equal(
+    proceduralLocalVariantAtLocation("bushes", location.lon, location.lat, 7, 3),
+    repeated,
+  );
+
+  // Localities are wide, so the palette only proves itself over a long walk.
+  const used = new Set();
+  for (let x = 34_000; x < 34_600; x += 8) {
+    for (const model of sisterModelsInTile(x, 24_000, 3)) used.add(model);
+  }
+  assert.deepEqual([...used].sort(), [0, 1, 2]);
+
+  for (const family of ["bushes", "tallPlants"]) {
+    assert.equal(proceduralLocalVariantAtLocation(family, 12, 45, 7, 1), 0);
+    assert.equal(proceduralLocalVariantAtLocation(family, 12, 45, 7), 0);
+  }
+});
+
+test("sister model localities wrap continuously at the antimeridian", () => {
+  assert.equal(
+    proceduralLocalVariantAtLocation("bushes", 180, 12, 99, 3),
+    proceduralLocalVariantAtLocation("bushes", -180, 12, 99, 3),
+  );
 });

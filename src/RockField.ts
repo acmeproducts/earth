@@ -22,6 +22,9 @@ import {
 } from "./VegetationPlacement";
 import { LandCoverClass } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
+import { DEFAULT_WORLD_SEED } from "./WorldGrid";
+import { habitatField } from "./HabitatNoise";
+import type { HabitatFieldSpec } from "./HabitatNoise";
 
 export interface RockFieldResult {
   root: TransformNode;
@@ -34,6 +37,25 @@ const ROCK_VARIANTS = 3;
 const SHORE_PROBE_METERS = 7;
 const SHORE_FORMATION_SCALE_METERS = 38;
 const SHORE_FORMATION_CHANCE = 0.3;
+/**
+ * Stony ground comes in fields. A flat land-cover scatter dusts every hillside
+ * in the world equally, so nothing reads as a boulder field and nothing reads
+ * as clear.
+ */
+const HABITAT: HabitatFieldSpec = {
+  patchMeters: 150,
+  abundanceMeters: 2000,
+  barrenShare: 0.34,
+  richestCoverage: 0.95,
+};
+
+/** Ground that is stony by nature thins out but never clears completely. */
+const STONY_COVERS: ReadonlySet<LandCoverClass> = new Set([
+  LandCoverClass.Bare,
+  LandCoverClass.MossAndLichen,
+  LandCoverClass.SnowAndIce,
+]);
+const STONY_FLOOR = 0.4;
 const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
   [1, 0],
@@ -103,6 +125,7 @@ export async function createRockField(
     meshDepth,
     metersPerUnit,
     seed = 0x524f434b,
+    modelVariantSeed = DEFAULT_WORLD_SEED,
     spacingMeters = 8,
     waterLineMeters = 0,
     landCover,
@@ -115,6 +138,7 @@ export async function createRockField(
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
   const shoreNoise = new SimplexNoise2D(seed ^ 0x53484f52);
+  const habitat = habitatField("rocks", modelVariantSeed, HABITAT);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
@@ -168,9 +192,16 @@ export async function createRockField(
           continue;
         }
 
+        const stand = habitat.sample(lon, lat);
+        const field = STONY_COVERS.has(cover)
+          ? STONY_FLOOR + stand * (1 - STONY_FLOOR)
+          : stand;
+        if (field <= 0) continue;
+
         const occupancy = Math.min(
           1,
-          (INLAND_OCCUPANCY[cover] ?? 0) * Math.max(0, densityScale?.(x, z) ?? 1),
+          (INLAND_OCCUPANCY[cover] ?? 0) * field * 1.8 *
+            Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
 
@@ -319,8 +350,8 @@ function addRock(
   const scaleX = radiusMeters * (0.82 + random() * 0.5) / metersPerUnit;
   const scaleY = radiusMeters * (0.5 + random() * 0.5) / metersPerUnit;
   const scaleZ = radiusMeters * (0.82 + random() * 0.5) / metersPerUnit;
-  const deepSet = random() < 0.18;
-  const burial = deepSet ? 0.58 + random() * 0.18 : 0.2 + random() * 0.3;
+  const deepSet = random() < 0.3;
+  const burial = deepSet ? 0.72 + random() * 0.16 : 0.38 + random() * 0.28;
   const centerY = elevation / metersPerUnit + scaleY * (1 - burial * 2);
   const rotation = Quaternion.RotationYawPitchRoll(
     random() * Math.PI * 2,

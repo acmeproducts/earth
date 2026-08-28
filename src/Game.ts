@@ -69,6 +69,7 @@ import { FpsCounter } from "./FpsCounter";
 import {
   createFrameBudgetYielder,
   FrameBudgetYielder,
+  waitForNextFrame,
 } from "./FrameBudget";
 import {
   adaptiveCameraNearClipMeters,
@@ -2389,5 +2390,5 @@ async function reportInitializationProgress(
 ): Promise<void> {
   if (!onProgress) return;
   onProgress(step, progress);
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await waitForNextFrame();
 }

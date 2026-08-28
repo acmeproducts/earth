@@ -20,11 +20,23 @@ const CAPTURE_DIAMETER = 4.5;
 export function bushRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
 }
+// Ordered dark-to-pale so the per-spray +/-1 drift stays inside one shrub's
+// plausible foliage range while the ends read as different species entirely.
 const FOLIAGE_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
+  [new Color3(0.05, 0.17, 0.1), new Color3(0.14, 0.36, 0.2)],
   [new Color3(0.075, 0.22, 0.065), new Color3(0.23, 0.5, 0.14)],
   [new Color3(0.1, 0.27, 0.07), new Color3(0.34, 0.59, 0.15)],
   [new Color3(0.13, 0.3, 0.08), new Color3(0.42, 0.65, 0.18)],
   [new Color3(0.15, 0.25, 0.065), new Color3(0.48, 0.55, 0.14)],
+  [new Color3(0.19, 0.24, 0.13), new Color3(0.53, 0.57, 0.35)],
+];
+
+/** Berry and blossom accents carried by roughly a third of shrub variants. */
+const ACCENT_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
+  [new Color3(0.31, 0.02, 0.05), new Color3(0.74, 0.08, 0.11)],
+  [new Color3(0.07, 0.03, 0.13), new Color3(0.23, 0.15, 0.38)],
+  [new Color3(0.58, 0.47, 0.15), new Color3(0.99, 0.94, 0.75)],
+  [new Color3(0.5, 0.14, 0.3), new Color3(0.96, 0.62, 0.79)],
 ];
 
 const bushImpostors = createImpostorAssetProvider({
@@ -73,6 +85,9 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   // Each regional seed gets a coherent but asymmetric crown. Low-frequency
   // lobes read as natural growth; exact rotational copies read as a pattern.
   const crownRadius = 0.88 + random() * 0.14;
+  const growthHabit = random();
+  const crownWidth = growthHabit < 0.32 ? 1.16 : growthHabit > 0.72 ? 0.82 : 1;
+  const crownHeight = growthHabit < 0.32 ? 0.78 : growthHabit > 0.72 ? 1.18 : 1;
   const crownRotation = random() * Math.PI * 2;
   const lobePhase = random() * Math.PI * 2;
   const secondaryLobePhase = random() * Math.PI * 2;
@@ -81,6 +96,15 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   const crownLeanX = Math.cos(leanAngle) * leanDistance;
   const crownLeanZ = Math.sin(leanAngle) * leanDistance;
   const paletteCenter = Math.floor(random() * FOLIAGE_PALETTES.length);
+  // Broad-leaved shrubs need fewer sprays than small-leaved ones to fill the
+  // same crown, so trade the two off and keep the silhouette equally dense.
+  const leafScale = 0.72 + random() * 0.66;
+  const sprayCount = Math.round(258 / leafScale);
+  const accent = random() < 0.34
+    ? ACCENT_PALETTES[Math.floor(random() * ACCENT_PALETTES.length)]
+    : undefined;
+  const accentChance = accent ? 0.16 + random() * 0.34 : 0;
+  const accentRadius = 0.014 + random() * 0.016;
 
   const radiusAtAngle = (angle: number): number => crownRadius * (
     1
@@ -93,7 +117,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   const branchCount = 26;
   for (let branch = 0; branch < branchCount; branch++) {
     const angle = random() * Math.PI * 2;
-    const distance = (0.28 + random() * 0.65) * radiusAtAngle(angle);
+    const distance = (0.28 + random() * 0.65) * radiusAtAngle(angle) * crownWidth;
     const startAngle = random() * Math.PI * 2;
     const startRadius = random() * 0.09;
     const start = new Vector3(
@@ -103,7 +127,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     );
     const end = new Vector3(
       Math.cos(angle) * distance + crownLeanX * (0.35 + random() * 0.65),
-      -0.34 + random() * 1.18,
+      -0.34 + random() * 1.18 * crownHeight,
       Math.sin(angle) * distance + crownLeanZ * (0.35 + random() * 0.65),
     );
     const midpoint = Vector3.Lerp(start, end, 0.54).add(new Vector3(
@@ -119,10 +143,9 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   // Build short compound sprays rather than grass-like ribbons. Paired side
   // leaves and a terminal leaf keep the close model legible, while random
   // orientation and gentle camber prevent the atlas from looking like cards.
-  const sprayCount = 260;
   for (let spray = 0; spray < sprayCount; spray++) {
     const baseAngle = random() * Math.PI * 2;
-    const edgeRadius = radiusAtAngle(baseAngle);
+    const edgeRadius = radiusAtAngle(baseAngle) * crownWidth;
     const radius = Math.sqrt(random()) * edgeRadius * 0.98;
     const normalizedRadius = radius / edgeRadius;
     const baseX = Math.cos(baseAngle) * radius + crownLeanX * (1 - normalizedRadius * 0.35);
@@ -130,7 +153,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     const crownDome = Math.pow(Math.max(0, 1 - normalizedRadius * normalizedRadius), 0.42);
     const localTop = Math.min(
       SOURCE_HEIGHT / 2 - 0.07,
-      -0.18 + crownDome * 1.3
+      -0.18 + crownDome * 1.3 * crownHeight
         + Math.sin(baseAngle * 2 + lobePhase) * 0.09
         + (random() - 0.5) * 0.13,
     );
@@ -163,7 +186,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
           .add(lateral.scale(side * (0.86 + random() * 0.24)))
           .add(Vector3.Up().scale(0.08 + random() * 0.2))
           .normalize();
-        const leafLength = (0.13 + random() * 0.1) * (0.9 + along * 0.18);
+        const leafLength = (0.13 + random() * 0.1) * (0.9 + along * 0.18) * leafScale;
         addLeaf(
           positions,
           indices,
@@ -180,7 +203,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
       }
     }
 
-    const terminalLength = 0.17 + random() * 0.11;
+    const terminalLength = (0.17 + random() * 0.11) * leafScale;
     addLeaf(
       positions,
       indices,
@@ -194,6 +217,28 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
       palette,
       brightness * 1.04,
     );
+
+    if (accent && random() < accentChance) {
+      const clusterCenter = Vector3.Lerp(sprayStart, sprayEnd, 0.78 + random() * 0.2);
+      const clusterCount = 3 + Math.floor(random() * 5);
+      for (let berry = 0; berry < clusterCount; berry++) {
+        const scatterAngle = random() * Math.PI * 2;
+        const scatter = accentRadius * (1.1 + random() * 2.4);
+        addAccent(
+          positions,
+          indices,
+          colors,
+          clusterCenter.add(new Vector3(
+            Math.cos(scatterAngle) * scatter,
+            (random() - 0.62) * scatter,
+            Math.sin(scatterAngle) * scatter,
+          )),
+          accentRadius * (0.72 + random() * 0.58),
+          accent,
+          0.86 + random() * 0.3,
+        );
+      }
+    }
   }
 
   const data = new VertexData();
@@ -317,5 +362,40 @@ function addLeaf(
   for (let segment = 0; segment < segments; segment++) {
     const left = vertexStart + segment * 2;
     indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
+  }
+}
+
+/** Adds one small berry or floret as crossed quads, matching the leaf budget. */
+function addAccent(
+  positions: number[],
+  indices: number[],
+  colors: number[],
+  center: Vector3,
+  radius: number,
+  palette: readonly [Color3, Color3],
+  brightness: number,
+): void {
+  for (const across of [new Vector3(radius, 0, 0), new Vector3(0, 0, radius)]) {
+    const up = new Vector3(0, radius, 0);
+    const start = positions.length / 3;
+    const corners = [
+      center.subtract(across).subtract(up),
+      center.add(across).subtract(up),
+      center.add(across).add(up),
+      center.subtract(across).add(up),
+    ];
+    const shades = [0.74, 0.86, 1.06, 0.94];
+    for (let corner = 0; corner < corners.length; corner++) {
+      const mix = corner >= 2 ? 0.82 : 0.24;
+      const light = brightness * shades[corner];
+      positions.push(corners[corner].x, corners[corner].y, corners[corner].z);
+      colors.push(
+        Math.min(1, (palette[0].r + (palette[1].r - palette[0].r) * mix) * light),
+        Math.min(1, (palette[0].g + (palette[1].g - palette[0].g) * mix) * light),
+        Math.min(1, (palette[0].b + (palette[1].b - palette[0].b) * mix) * light),
+        1,
+      );
+    }
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
   }
 }

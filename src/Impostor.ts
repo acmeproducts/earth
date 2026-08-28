@@ -10,6 +10,7 @@ import {
   Vector3,
   Viewport,
 } from "@babylonjs/core";
+import { documentIsHidden, waitForNextFrame as nextFrame } from "./FrameBudget";
 import { waitForVertexColorTextures } from "./ProceduralCaptureMaterial";
 
 export interface ImpostorAssets {
@@ -41,6 +42,7 @@ export interface ImpostorAssets {
 /** Runtime capture work per frame; editor/demo captures retain their faster path. */
 const RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2;
 const OFFLINE_CAPTURE_FRAME_BUDGET_MS = 12;
+const HIDDEN_CAPTURE_VIEWS_PER_SLICE = 16;
 /** Smaller runtime atlases reduce the cost of each indivisible render/readback/upload. */
 const RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES = 4;
 const RUNTIME_CAPTURE_MAX_RESOLUTION = 128;
@@ -552,7 +554,10 @@ export async function captureImpostorAtlases(
       clearPending = true;
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
-          if (cooperative && viewsThisFrame >= 1) {
+          // A hidden tab paints nothing, so capture views no longer have to leave
+          // room for a gameplay frame between them.
+          const viewsPerSlice = documentIsHidden() ? HIDDEN_CAPTURE_VIEWS_PER_SLICE : 1;
+          if (cooperative && viewsThisFrame >= viewsPerSlice) {
             await nextFrame();
             sliceStart = performance.now();
             viewsThisFrame = 0;
@@ -970,8 +975,4 @@ async function yieldCaptureWorkIfNeeded(
   if (!cooperative || performance.now() - slice.startedAt < RUNTIME_CAPTURE_FRAME_BUDGET_MS) return;
   await nextFrame();
   slice.startedAt = performance.now();
-}
-
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }

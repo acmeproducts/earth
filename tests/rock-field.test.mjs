@@ -26,10 +26,15 @@ test("shore rocks form long dense chains aligned to the water boundary", () => {
 
 test("keeps the general grassland rock scatter sparse", () => {
   assert.match(source, /\[LandCoverClass\.Grassland\]: 0\.015/);
+  assert.match(source, /const habitat = habitatField\("rocks", modelVariantSeed, HABITAT\)/);
+  assert.match(source, /const stand = habitat\.sample\(lon, lat\)/);
+  assert.match(source, /const STONY_FLOOR = 0\.4/);
+  assert.match(source, /if \(field <= 0\) continue/);
 });
 
 test("rocks retain burial and upward-facing moss decisions", () => {
-  assert.match(source, /deepSet \? 0\.58 \+ random\(\) \* 0\.18/);
+  assert.match(source, /deepSet \? 0\.72 \+ random\(\) \* 0\.16/);
+  assert.match(source, /: 0\.38 \+ random\(\) \* 0\.28/);
   assert.match(source, /upward > 0\.35/);
   assert.match(source, /exclusionMask\?\.intersects/);
 });

@@ -7,8 +7,7 @@ import {
 import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { smoothstep } from "./MathUtils";
-import { SimplexNoise2D } from "./SimplexNoise";
+import { habitatField } from "./HabitatNoise";
 import type { TerrainData } from "./TerrainData";
 import { LandCoverClass } from "./WorldCover";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
@@ -19,9 +18,11 @@ import {
 } from "./VegetationField";
 import { createSeededRandom } from "./Random";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
   createPlacementGrid,
   addProceduralVariantPlacement,
+  proceduralBucketSuffix,
   packInstanceMatrices,
   ProceduralPlacementBucket,
   VegetationPlacementOptions,
@@ -38,6 +39,26 @@ const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.Mangrove]: 0.22,
   [LandCoverClass.MossAndLichen]: 0.12,
 };
+
+// Sister shrub models available inside one region. Placement binds the choice
+// to the locality, so this is a worldwide palette size rather than a per-tile
+// cost: one tile normally builds a single one of them.
+const BUSH_SISTER_MODELS = 3;
+
+/**
+ * Shrubland aside, most ground carries no shrubs at all, and where it does the
+ * amount swings widely over a few hundred metres.
+ */
+const HABITAT: HabitatFieldSpec = {
+  patchMeters: 90,
+  abundanceMeters: 2400,
+  barrenShare: 0.28,
+  richestCoverage: 0.92,
+};
+
+/** Land cover this dense is shrubland by definition; it thins but never clears. */
+const SHRUBLAND_OCCUPANCY = 0.7;
+const SHRUBLAND_FLOOR = 0.35;
 
 /** Places procedurally captured shrubs over suitable WorldCover cells. */
 export async function createBushField(
@@ -64,14 +85,13 @@ export async function createBushField(
   const root = new TransformNode("bushField", scene);
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
-  const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
+  const habitat = habitatField("bushes", modelVariantSeed, HABITAT);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
     spacingMeters,
     metersPerUnit,
   );
-  const clusterScale = 26 / metersPerUnit;
   const maximumHalfWidth = bushRenderedCaptureSize(bushHeight) * 0.71;
   const matrices: Matrix[] = [];
   const variantBuckets = new Map<string, ProceduralPlacementBucket>();
@@ -83,16 +103,19 @@ export async function createBushField(
         const z = meshDepth / 2 - (row + 0.08 + random() * 0.84) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const occupancy = OCCUPANCY[landCover.sample(lon, lat)] ?? 0;
-        const broadNoise = clusterNoise.sample(x / clusterScale, z / clusterScale) * 0.5 + 0.5;
-        const detailNoise = clusterNoise.sample(
-          x / (clusterScale * 0.42) + 17.3,
-          z / (clusterScale * 0.42) - 29.1,
-        ) * 0.5 + 0.5;
-        const clusterDensity = smoothstep(0.28, 0.72, broadNoise * 0.82 + detailNoise * 0.18);
+        if (occupancy === 0) continue;
+        const stand = habitat.sample(lon, lat);
+        // Shrubland is shrubland wherever the satellite says so, but how much
+        // of it is scrub and how much is open still swings district to
+        // district. Everywhere else the layer is genuinely absent more often
+        // than it is present.
+        const density = occupancy >= SHRUBLAND_OCCUPANCY
+          ? SHRUBLAND_FLOOR + stand * (1 - SHRUBLAND_FLOOR)
+          : stand;
+        if (density <= 0) continue;
         const clusteredOccupancy = Math.min(
           1,
-          occupancy * (0.12 + clusterDensity * 1.88) *
-            Math.max(0, densityScale?.(x, z) ?? 1),
+          occupancy * density * 2.15 * Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > clusteredOccupancy) continue;
 
@@ -130,6 +153,8 @@ export async function createBushField(
           lat,
           modelVariantSeed,
           matrix,
+          undefined,
+          BUSH_SISTER_MODELS,
         );
       }
       await yieldControl?.();
@@ -139,7 +164,7 @@ export async function createBushField(
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   const fields: VegetationFieldResult[] = [];
   for (const bucket of variantBuckets.values()) {
-    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
+    const suffix = proceduralBucketSuffix(bucket);
     const { root: variantRoot, impostor: bush, model: bushModel } =
       await createVegetationFieldRenderers(scene, {
         rootName: `bushField-${suffix}`,

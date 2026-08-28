@@ -125,6 +125,64 @@ function proceduralRegionCandidatesAtCoordinates(
   return candidates;
 }
 
+/**
+ * Sister models inside one region are chosen per locality, not per plant. Each
+ * one alive in a tile costs its own impostor atlas capture and its own live
+ * mesh, so localities are kept far wider than a terrain tile: a tile normally
+ * builds exactly one. A power-of-two span keeps the wrapped columns equal.
+ */
+const LOCALITY_SPAN_TILES = 32;
+const LOCALITY_BLEND_TILES = 1.5;
+
+/**
+ * Returns which sister model dominates a locality, stable across tiles because
+ * it is bound to the location rather than to a per-tile random stream.
+ */
+export function proceduralLocalVariantAtLocation(
+  family: ProceduralRegionFamily,
+  longitude: number,
+  latitude: number,
+  worldSeed = DEFAULT_WORLD_SEED,
+  sisterModels = 1,
+): number {
+  if (sisterModels <= 1) return 0;
+  const position = worldTileCoordinatesAtLocation(latitude, longitude);
+  const scale = 2 ** WORLD_GRID_LEVEL;
+  const label = `${family}Locality`;
+  const xCandidates = axisCandidates(
+    wrap(position.x, scale),
+    LOCALITY_SPAN_TILES,
+    LOCALITY_BLEND_TILES,
+    scale / LOCALITY_SPAN_TILES,
+    true,
+  );
+  const yCandidates = axisCandidates(
+    Math.max(0, Math.min(scale - 1e-9, position.y)),
+    LOCALITY_SPAN_TILES,
+    LOCALITY_BLEND_TILES,
+    Math.ceil(scale / LOCALITY_SPAN_TILES),
+    false,
+  );
+  const cells: AxisCandidate[] = [];
+  for (const x of xCandidates) {
+    for (const y of yCandidates) {
+      cells.push({
+        index: (hashParts(worldSeed, label, x.index, y.index) >>> 0) % sisterModels,
+        weight: x.weight * y.weight,
+      });
+    }
+  }
+  // Dithering individual placements across the narrow overlap gives a mixed
+  // transition instead of one straight line where every shrub changes species.
+  const selection = spatialSelection(worldSeed, label, position.x, position.y);
+  let accumulated = 0;
+  for (const cell of cells) {
+    accumulated += cell.weight;
+    if (selection < accumulated) return cell.index;
+  }
+  return cells[cells.length - 1].index;
+}
+
 /** Selects a stable local model without rendering two variants per placement. */
 export function proceduralVariantAtLocation(
   family: ProceduralRegionFamily,
@@ -213,13 +271,13 @@ function smoothstep(value: number): number {
 
 function spatialSelection(
   worldSeed: number,
-  family: ProceduralRegionFamily,
+  label: string,
   x: number,
   y: number,
 ): number {
   const xFixed = Math.floor(x * 65_536) >>> 0;
   const yFixed = Math.floor(y * 65_536) >>> 0;
-  return (hashParts(worldSeed, family, xFixed, yFixed) >>> 0) / 4_294_967_296;
+  return (hashParts(worldSeed, label, xFixed, yFixed) >>> 0) / 4_294_967_296;
 }
 
 function regionalVariantSeed(

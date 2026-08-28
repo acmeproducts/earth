@@ -1,6 +1,7 @@
 import { Color3, Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { smoothstep } from "./MathUtils";
+import { habitatField } from "./HabitatNoise";
+import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
   acquireTallPlantImpostorAssets,
   createTallPlantModel,
@@ -8,7 +9,6 @@ import {
 } from "./TallPlantImpostor";
 import { setVegetationWindShear } from "./ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
-import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import {
   combineVegetationFieldResults,
@@ -16,8 +16,10 @@ import {
 } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
+  proceduralBucketSuffix,
   createPlacementGrid,
   packInstanceMatrices,
 } from "./VegetationPlacement";
@@ -36,6 +38,22 @@ const COLONY_SPACING_METERS = 9.25;
 const COLONY_MIN_COUNT = 7;
 const COLONY_MAX_COUNT = 14;
 const COLONY_RADIUS_METERS = 6.2;
+// Sister flower models available inside one region. Placement binds the choice
+// to the locality, so neighbouring stands share a species and one tile normally
+// builds a single one of them instead of paying for an atlas per variant.
+const SPECIES_VARIANTS = 3;
+
+/**
+ * Wildflowers are the rarest of the scattered layers and the most uneven: a
+ * meadow solid with them, then nothing for a kilometre. The high barren share
+ * is what makes finding one worth something.
+ */
+const HABITAT: HabitatFieldSpec = {
+  patchMeters: 120,
+  abundanceMeters: 3000,
+  barrenShare: 0.45,
+  richestCoverage: 0.9,
+};
 const GROUND_OFFSET_METERS = 0.025;
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.04,
@@ -71,16 +89,13 @@ export async function createTallPlantField(
   const root = new TransformNode("tallPlantField", scene);
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
-  const colonyNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
-  const regionalNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
+  const habitat = habitatField("tallPlants", modelVariantSeed, HABITAT);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
     spacingMeters,
     metersPerUnit,
   );
-  const colonyScale = 38 / metersPerUnit;
-  const regionScale = 145 / metersPerUnit;
   const maximumHalfWidth = tallPlantRenderedCaptureSize(renderHeight) * 0.58;
   const matrices: Matrix[] = [];
   const variantBuckets = new Map<string, ProceduralPlacementBucket>();
@@ -103,18 +118,9 @@ export async function createTallPlantField(
         )] ?? 0;
         if (coverOccupancy === 0) continue;
 
-        const broad = colonyNoise.sample(anchorX / colonyScale, anchorZ / colonyScale) * 0.5 + 0.5;
-        const detail = colonyNoise.sample(
-          anchorX / (colonyScale * 0.36) + 19.7,
-          anchorZ / (colonyScale * 0.36) - 31.1,
-        ) * 0.5 + 0.5;
-        const regional = regionalNoise.sample(
-          anchorX / regionScale + 7.4,
-          anchorZ / regionScale - 11.8,
-        ) * 0.5 + 0.5;
-        const colonyStrength = smoothstep(0.34, 0.7, broad * 0.78 + detail * 0.22)
-          * smoothstep(0.25, 0.66, regional);
-        const occupancy = Math.min(1, coverOccupancy * (0.22 + colonyStrength * 2.45)
+        const colonyStrength = habitat.sample(anchorLocation.lon, anchorLocation.lat);
+        if (colonyStrength <= 0) continue;
+        const occupancy = Math.min(1, coverOccupancy * colonyStrength * 3.1
           * Math.max(0, densityScale?.(anchorX, anchorZ) ?? 1));
         if (random() > occupancy) continue;
 
@@ -143,7 +149,7 @@ export async function createTallPlantField(
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   const fields: VegetationFieldResult[] = [];
   for (const bucket of variantBuckets.values()) {
-    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
+    const suffix = proceduralBucketSuffix(bucket);
     const { root: variantRoot, impostor: plants, model: plantModel } =
       await createVegetationFieldRenderers(scene, {
         rootName: `tallPlantField-${suffix}`,
@@ -210,6 +216,8 @@ export async function createTallPlantField(
       lat,
       modelVariantSeed,
       matrix,
+      undefined,
+      SPECIES_VARIANTS,
     );
   }
 }
@@ -226,7 +234,7 @@ function configureRenderers(
     mesh.material.setFloat("groundColorBlend", 0.08);
     mesh.material.setColor3("distanceGroundColor", new Color3(0.17, 0.31, 0.1));
     mesh.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    mesh.material.setFloat("vegetationShadowDarkness", 0);
+    mesh.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
   }
   if (plants.material instanceof ShaderMaterial) {
     plants.material.setFloat("impostorLodNear", 26);

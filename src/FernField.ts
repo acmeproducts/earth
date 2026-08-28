@@ -16,6 +16,7 @@ import {
   VegetationFieldResult,
 } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
   createPlacementGrid,
@@ -216,12 +217,12 @@ function configureFernRenderers(
     fern.material.setFloat("distanceFadeFar", Math.min(meshWidth, meshDepth) * 1.75);
     fern.material.setFloat("groundColorBlend", 0.14);
     fern.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    fern.material.setFloat("vegetationShadowDarkness", 0);
+    fern.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
     fern.material.setColor3("distanceGroundColor", new Color3(0.12, 0.25, 0.09));
   }
   if (fernModel.material instanceof ShaderMaterial) {
     fernModel.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    fernModel.material.setFloat("vegetationShadowDarkness", 0);
+    fernModel.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
     fernModel.material.setFloat("groundColorBlend", 0.14);
     fernModel.material.setColor3("distanceGroundColor", new Color3(0.12, 0.25, 0.09));
   }
