@@ -58,6 +58,7 @@ export interface StreamedTile {
   fernField?: VegetationFieldResult;
   rockField?: RockFieldResult;
   mapFeatures?: TransformNode;
+  barrierField?: VegetationFieldResult;
   lakeSurfaces?: TerrainLakeLayer;
   farBuildings?: TransformNode;
   farRoads?: TransformNode;
@@ -102,6 +103,7 @@ export function disposeTileDetail(record: StreamedTile): void {
   record.rockField = undefined;
   if (record.mapFeatures) OpenStreetMap.disposeLayer(record.mapFeatures);
   record.mapFeatures = undefined;
+  record.barrierField = undefined;
   record.detailed = false;
 }
 

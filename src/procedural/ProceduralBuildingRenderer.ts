@@ -34,10 +34,16 @@ const BUILDING_DOOR_HEIGHT_METERS = 2.2;
 const BUILDING_WINDOW_EDGE_CLEARANCE_METERS = 0.08;
 const BUILDING_WINDOW_HEAD_CLEARANCE_METERS = 0.3;
 const BUILDING_WINDOW_CLEAR_DISTANCE_METERS = 9;
-const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 24;
+const BUILDING_WINDOW_OPAQUE_DISTANCE_METERS = 18;
 const BUILDING_WINDOW_CLOSE_ALPHA = 0.16;
 const BUILDING_REFLECTIVE_MARKER_ALPHA = 0.72;
-const BUILDING_INTERIOR_LOAD_DISTANCE_METERS = 42;
+// Interiors are only useful when the camera is close enough to look through
+// windows or an entrance. Keep the load radius deliberately small so walking
+// through a neighbourhood does not leave every visited building resident.
+const BUILDING_INTERIOR_LOAD_DISTANCE_METERS = 18;
+// Hysteresis prevents an interior from being repeatedly created and disposed
+// while the camera hovers around the load boundary.
+const BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS = 27;
 const BUILDING_INTERIOR_CHECK_INTERVAL_MS = 120;
 const BUILDING_INTERIORS_PER_CHECK = 2;
 const BUILDING_STAIR_WIDTH_METERS = 1.15;
@@ -92,6 +98,12 @@ interface DetailedBuildingParts {
 interface PendingBuildingInterior {
   center: Vector3;
   load: () => Mesh | undefined;
+}
+
+interface LoadedBuildingInterior {
+  center: Vector3;
+  pending: PendingBuildingInterior;
+  mesh: Mesh;
 }
 
 interface StairLayout {
@@ -1148,24 +1160,18 @@ function configureBuildingSurfaceMaterials(
     lastUpdateMilliseconds = now;
     const camera = mesh.getScene().activeCamera;
     if (!camera) return;
-    const world = mesh.computeWorldMatrix();
+    // Use the building center for the transition. Per-window distances let
+    // the near facade of a large building remain transparent long after the
+    // building itself has become a distant object.
+    const bounds = mesh.getBoundingInfo().boundingSphere;
+    const center = bounds.centerWorld;
+    const distanceMeters = Vector3.Distance(center, camera.globalPosition) * metersPerUnit;
+    const fade = clamp01(
+      (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
+      (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
+    );
     for (const vertex of windowVertices) {
       const offset = vertex * 3;
-      const worldX = positions[offset] * world.m[0] + positions[offset + 1] * world.m[4] +
-        positions[offset + 2] * world.m[8] + world.m[12];
-      const worldY = positions[offset] * world.m[1] + positions[offset + 1] * world.m[5] +
-        positions[offset + 2] * world.m[9] + world.m[13];
-      const worldZ = positions[offset] * world.m[2] + positions[offset + 1] * world.m[6] +
-        positions[offset + 2] * world.m[10] + world.m[14];
-      const distanceMeters = Math.hypot(
-        worldX - camera.globalPosition.x,
-        worldY - camera.globalPosition.y,
-        worldZ - camera.globalPosition.z,
-      ) * metersPerUnit;
-      const fade = clamp01(
-        (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
-        (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
-      );
       colors[vertex * 4 + 3] = BUILDING_WINDOW_CLOSE_ALPHA +
         (1 - BUILDING_WINDOW_CLOSE_ALPHA) * fade;
     }
@@ -1207,6 +1213,7 @@ function configureLazyInteriors(
   delete exterior.metadata.pendingInterior;
   exterior.metadata.pendingInteriorCount = pendingInteriors.length;
   exterior.metadata.loadedInteriorCount = 0;
+  const loadedInteriors: LoadedBuildingInterior[] = [];
   let lastCheckMilliseconds = -Infinity;
   exterior.onBeforeRenderObservable.add(() => {
     const now = performance.now();
@@ -1219,6 +1226,28 @@ function configureLazyInteriors(
       camera.globalPosition,
       parentWorld.clone().invert(),
     );
+
+    // Release interiors that are no longer near enough to be seen. Their
+    // pending descriptors are retained so returning to the building can load
+    // them again without rebuilding the detailed exterior.
+    for (let index = loadedInteriors.length - 1; index >= 0; index--) {
+      const loadedInterior = loadedInteriors[index];
+      const distanceSquared = (loadedInterior.center.x - localCamera.x) ** 2 +
+        (loadedInterior.center.z - localCamera.z) ** 2;
+      if (Math.sqrt(distanceSquared) * metersPerUnit <=
+          BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS) continue;
+      loadedInterior.mesh.dispose(false, true);
+      pendingInteriors.push(loadedInterior.pending);
+      loadedInteriors.splice(index, 1);
+      exterior.metadata.loadedInteriorCount--;
+    }
+    for (const loadedInterior of loadedInteriors) {
+      // Keep the render cutoff explicit on the interior mesh itself. This is
+      // intentionally separate from residency so a stale/culled exterior
+      // callback can never make an interior visible at distance.
+      loadedInterior.mesh.isVisible = true;
+    }
+
     let loaded = 0;
     while (loaded < BUILDING_INTERIORS_PER_CHECK && pendingInteriors.length > 0) {
       let nearestIndex = 0;
@@ -1244,8 +1273,22 @@ function configureLazyInteriors(
         parent,
       );
       if (!interior) continue;
+      interior.onBeforeRenderObservable.add(() => {
+        const activeCamera = interior.getScene().activeCamera;
+        if (!activeCamera) return;
+        const currentParentWorld = parent.computeWorldMatrix(true);
+        const currentLocalCamera = Vector3.TransformCoordinates(
+          activeCamera.globalPosition,
+          currentParentWorld.clone().invert(),
+        );
+        const distanceSquared = (candidate.center.x - currentLocalCamera.x) ** 2 +
+          (candidate.center.z - currentLocalCamera.z) ** 2;
+        interior.isVisible = Math.sqrt(distanceSquared) * metersPerUnit <=
+          BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS;
+      });
       interior.checkCollisions = true;
       interior.setEnabled(true);
+      loadedInteriors.push({ center: candidate.center, pending: candidate, mesh: interior });
       exterior.metadata.loadedInteriorCount++;
       loaded++;
     }

@@ -770,7 +770,13 @@ function createRoadMeshes(
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
-      const uvs = roadUvs(left, right, options.metersPerUnit, visualStyle);
+      // Asphalt/gravel grain is projected from the tile's scene coordinates so
+      // two ribbons that cross sample the same texture phase at the crossing.
+      // Marked roads keep their strip UVs because the dashed centre marking is
+      // encoded in the texture's across-road axis.
+      const uvs = visualStyle === "marked"
+        ? roadUvs(left, right, options.metersPerUnit, visualStyle)
+        : worldPositionRoadUvs(left, right, options.metersPerUnit, visualStyle);
       meshes.push(stageMapMesh(
         MeshBuilder.CreateRibbon("road", { pathArray: [left, right], uvs }, scene),
       ));
@@ -1046,6 +1052,23 @@ function roadUvs(
     rightUvs.push(new Vector2(u, 1));
   }
   return [...leftUvs, ...rightUvs];
+}
+
+/** Projects road grain in scene/world XZ, avoiding visible texture restarts at overlaps. */
+function worldPositionRoadUvs(
+  left: Vector3[],
+  right: Vector3[],
+  metersPerUnit: number,
+  visualStyle: RoadVisualStyle,
+): Vector2[] {
+  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford"
+    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
+    : 4;
+  const scale = metersPerUnit / repeatMeters;
+  return [
+    ...left.map((point) => new Vector2(point.x * scale, point.z * scale)),
+    ...right.map((point) => new Vector2(point.x * scale, point.z * scale)),
+  ];
 }
 
 /** Keeps a newly registered Babylon mesh out of render lists while its tile is assembled. */

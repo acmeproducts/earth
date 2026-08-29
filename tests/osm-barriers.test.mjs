@@ -29,6 +29,15 @@ test("clips and terrain-conforms barrier geometry before committing it", () => {
   assert.match(barriers, /positiveMeters\(feature\.tags\.height\)/);
 });
 
+test("renders ordinary fences as chain-link and preserves wood-tagged fences", () => {
+  assert.match(barriers, /style: isWoodFence\(feature\) \? "woodFence" : "chainlink"/);
+  assert.match(barriers, /material\.includes\("wood"\)/);
+  assert.match(barriers, /createChainlinkFence\(/);
+  assert.match(barriers, /chainlinkWire/);
+  assert.match(barriers, /case "woodFence"/);
+  assert.match(barriers, /case "chainlink"/);
+});
+
 test("barriers share detailed-map lifecycle and vegetation exclusion", () => {
   assert.match(streamedTile, /barrierFeatures\?: Promise<BarrierFeature\[\]>/);
   assert.match(game, /OpenStreetMapBarriers\.createExclusionMask\(/);

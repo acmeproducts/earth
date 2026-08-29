@@ -894,6 +894,7 @@ export class Game {
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
+    record.barrierField = barrierLayer.hedgeField;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
       record.farBuildings = undefined;
@@ -1530,14 +1531,19 @@ export class Game {
     // Fields sit at per-tile offsets in the stable frame; LOD runs in each
     // field's local space. Reuse one vector because updateLod stores a clone.
     const localPosition = new Vector3();
-    const updateField = (field: VegetationFieldResult, distanceMeters: number): void => {
+    const updateField = (
+      field: VegetationFieldResult,
+      distanceMeters: number,
+      originX = field.root.position.x,
+      originZ = field.root.position.z,
+    ): void => {
       localPosition.copyFrom(cameraPosition);
-      localPosition.x -= field.root.position.x;
-      localPosition.z -= field.root.position.z;
+      localPosition.x -= originX;
+      localPosition.z -= originZ;
       field.updateLod(localPosition, distanceMeters);
     };
     for (const record of this.tiles.values()) {
-      if (!VEGETATION_FIELD_KINDS.some((kind) => record[kind])) continue;
+      if (!VEGETATION_FIELD_KINDS.some((kind) => record[kind]) && !record.barrierField) continue;
       // A freshly built field already renders as pure impostors, and instances
       // beyond the model range stay impostors. Only tiles the model range can
       // actually reach need per-frame LOD work; one final update settles a
@@ -1552,6 +1558,14 @@ export class Game {
       for (const kind of VEGETATION_FIELD_KINDS) {
         const field = record[kind];
         if (field) updateField(field, this.fieldLodDistance(kind));
+      }
+      if (record.barrierField && record.mapFeatures) {
+        updateField(
+          record.barrierField,
+          Math.min(this.vegetationLodDistanceMeters, 16),
+          record.mapFeatures.position.x,
+          record.mapFeatures.position.z,
+        );
       }
     }
     // Camera-relative LOD changes buffer contents but do not change the world

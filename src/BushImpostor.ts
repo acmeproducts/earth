@@ -112,34 +112,6 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     + Math.sin((angle - crownRotation) * 5 + secondaryLobePhase) * 0.075
   );
 
-  // A handful of visible stems gives the mass some structure without turning
-  // it into a bundle of identical radial spokes.
-  const branchCount = 26;
-  for (let branch = 0; branch < branchCount; branch++) {
-    const angle = random() * Math.PI * 2;
-    const distance = (0.28 + random() * 0.65) * radiusAtAngle(angle) * crownWidth;
-    const startAngle = random() * Math.PI * 2;
-    const startRadius = random() * 0.09;
-    const start = new Vector3(
-      Math.cos(startAngle) * startRadius,
-      -SOURCE_HEIGHT / 2,
-      Math.sin(startAngle) * startRadius,
-    );
-    const end = new Vector3(
-      Math.cos(angle) * distance + crownLeanX * (0.35 + random() * 0.65),
-      -0.34 + random() * 1.18 * crownHeight,
-      Math.sin(angle) * distance + crownLeanZ * (0.35 + random() * 0.65),
-    );
-    const midpoint = Vector3.Lerp(start, end, 0.54).add(new Vector3(
-      (random() - 0.5) * 0.12,
-      0.08 + random() * 0.12,
-      (random() - 0.5) * 0.12,
-    ));
-    const radius = 0.018 + random() * 0.026;
-    addBranch(positions, indices, colors, start, midpoint, radius, 5);
-    addBranch(positions, indices, colors, midpoint, end, radius * 0.68, 5);
-  }
-
   // Build short compound sprays rather than grass-like ribbons. Paired side
   // leaves and a terminal leaf keep the close model legible, while random
   // orientation and gentle camber prevent the atlas from looking like cards.
@@ -177,7 +149,6 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     ];
     const brightness = 0.86 + random() * 0.25;
 
-    addBranch(positions, indices, colors, sprayStart, sprayEnd, 0.006, 3);
     const lateral = Vector3.Cross(growthDirection, Vector3.Up()).normalize();
     for (const along of [0.34, 0.66]) {
       const leafBase = Vector3.Lerp(sprayStart, sprayEnd, along);
