@@ -21,6 +21,7 @@ import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
 import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
+import { buildingProfile } from "../BuildingProfile";
 import type { TerrainData } from "../TerrainData";
 
 const BUILDING_GROUND_OVERLAP_METERS = 1;
@@ -225,6 +226,7 @@ export class ProceduralBuildingRenderer {
     for (const part of parts) part.dispose(false, true);
     merged.metadata = {
       buildingId: plan.id,
+      buildingClass: plan.buildingClass,
       enterable: true,
       windowCount: detailed.windowCount,
       windowStyleId: detailed.windowStyleId,
@@ -435,11 +437,16 @@ function createEnterableBuilding(
   part: "exterior" | "interior",
 ): DetailedBuildingParts {
   const usableHeight = Math.max(0, topElevation - baseElevation);
+  const profile = buildingProfile(plan.buildingClass);
   // A partial story is not another floor. Rounding made ordinary 4.7-6.1 m
   // houses grow a second facade row when no level count was mapped.
   const requestedFloors = plan.levels ?? Math.floor(usableHeight / 3.1);
   const floorsThatFit = Math.max(1, Math.floor(usableHeight / 2.4));
-  const floorCount = Math.max(1, Math.min(20, Math.round(requestedFloors), floorsThatFit));
+  const floorCount = Math.max(1, Math.min(
+    profile.maximumInteriorFloors,
+    Math.round(requestedFloors),
+    floorsThatFit,
+  ));
   const storyHeight = usableHeight / floorCount;
   const windowStyle = buildingWindowStyle(plan);
   const glass = varyColor(
@@ -462,7 +469,7 @@ function createEnterableBuilding(
     centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
     widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
   };
-  const stairs = floorCount > 1
+  const stairs = profile.hasStairs && floorCount > 1
     ? findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
     : [];
   const parts: Mesh[] = [];
@@ -1484,6 +1491,7 @@ function resolvedRoofShape(
 }
 
 function buildingAppearance(plan: BuildingPlan): BuildingAppearance {
+  const profile = buildingProfile(plan.buildingClass);
   const palettes: Array<{ wall: string; roof: string }> = [
     { wall: "#d7d0c1", roof: "#655b52" },
     { wall: "#c89677", roof: "#74483a" },
@@ -1504,7 +1512,9 @@ function buildingAppearance(plan: BuildingPlan): BuildingAppearance {
     stone: "#aaa08e",
     wood: "#a98263",
   };
-  const palette = palettes[Math.abs(plan.detailSeed) % palettes.length];
+  const palette = plan.buildingClass === "generic"
+    ? palettes[Math.abs(plan.detailSeed) % palettes.length]
+    : { wall: profile.wall, roof: profile.roof };
   const baseWall = parseBuildingColor(plan.wallColor) ??
     parseBuildingColor(plan.wallMaterial ? materialColors[plan.wallMaterial] : undefined) ??
     parseBuildingColor(palette.wall)!;

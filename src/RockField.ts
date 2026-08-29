@@ -11,6 +11,7 @@ import {
   VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
+import { NoiseProceduralTexture } from "@babylonjs/core/Materials/Textures/Procedurals/noiseProceduralTexture";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createSeededRandom } from "./Random";
 import { SimplexNoise2D } from "./SimplexNoise";
@@ -374,7 +375,23 @@ function createRockMaterial(scene: Scene): StandardMaterial {
   material.diffuseColor = Color3.White();
   material.ambientColor = new Color3(0.16, 0.17, 0.14);
   material.specularColor = new Color3(0.055, 0.06, 0.05);
-  material.specularPower = 28;
+  material.specularPower = 18;
+
+  // One shared procedural texture gives every thin-instance bucket the same
+  // scale of stone grain without adding image assets or per-rock materials.
+  const grain = new NoiseProceduralTexture("rockGrain", 256, scene);
+  grain.octaves = 4;
+  grain.persistence = 0.72;
+  grain.brightness = 0.82;
+  grain.animationSpeedFactor = 0;
+  grain.uScale = 3.8;
+  grain.vScale = 3.8;
+  material.bumpTexture = grain;
+  material.bumpTexture.level = 0.28;
+  material.detailMap.texture = grain;
+  material.detailMap.diffuseBlendLevel = 0.16;
+  material.detailMap.bumpLevel = 0.18;
+  material.detailMap.isEnabled = true;
   material.freeze();
   return material;
 }

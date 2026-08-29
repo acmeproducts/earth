@@ -1,4 +1,5 @@
 import { ShaderMaterial, Vector2 } from "@babylonjs/core";
+import { SimplexNoise2D } from "./SimplexNoise";
 
 /**
  * One shared, looping wind cycle drives grass and bushes. Live geometry bends
@@ -16,6 +17,11 @@ const GUST_DIRECTION = new Vector2(0.78, 0.63);
  * shear. Grass bends further than woody bushes.
  */
 const SHEAR_FRACTIONS = { grass: 0.19, bush: 0.075 } as const;
+const WIND_NOISE = new SimplexNoise2D(0x51a7);
+const WIND_NOISE_RATE = 0.018;
+const WIND_BASE_STRENGTH = 0.68;
+const WIND_GUST_STRENGTH = 0.52;
+const WIND_BASE_SPEED = 20;
 
 export type ShearedVegetation = keyof typeof SHEAR_FRACTIONS;
 
@@ -24,17 +30,47 @@ export const WIND_PHASE_UNIFORMS: readonly string[] = [
   "windPhase",
   "windGustFrequency",
   "windDirection",
+  "windStrength",
 ];
 /** Additional uniform for shaders that lean their subject by a shear. */
 export const WIND_SHEAR_UNIFORMS: readonly string[] = ["windShearFraction"];
 
 const strengthScale = queryStrengthScale();
-// Rebuilt only when the ground scale changes, because every wind-aware
-// material reads it on every bind.
+// Stores the spatial frequency scale for the current ground scale. Every
+// wind-aware material reads the sampled direction on bind.
 const gustFrequency = new Vector2();
+const sampledGustFrequency = new Vector2();
 /** Wind blows the way its gusts travel. */
 const direction = GUST_DIRECTION.clone().normalize();
 let metersPerUnit = 0;
+
+export interface WindState {
+  readonly direction: Vector2;
+  /** Dimensionless gust strength. One is the nominal wind. */
+  readonly strength: number;
+  /** Prevailing speed in meters per second before scene scaling. */
+  readonly speedMetersPerSecond: number;
+}
+
+/** Samples the shared, smoothly varying weather wind layer. */
+export function currentWindState(
+  nowMilliseconds = typeof performance === "undefined" ? 0 : performance.now(),
+): WindState {
+  const seconds = Math.max(0, nowMilliseconds) / 1_000;
+  const time = seconds * WIND_NOISE_RATE;
+  const gust = WIND_NOISE.sample(time, 11.7);
+  const crosswind = WIND_NOISE.sample(time * 0.61, 37.2) * 0.16;
+  const windDirection = new Vector2(
+    direction.x - direction.y * crosswind,
+    direction.y + direction.x * crosswind,
+  ).normalize();
+  const strength = Math.max(0, (WIND_BASE_STRENGTH + gust * WIND_GUST_STRENGTH) * strengthScale);
+  return {
+    direction: windDirection,
+    strength,
+    speedMetersPerSecond: WIND_BASE_SPEED * strength,
+  };
+}
 
 /** Copies the normalized prevailing wind direction on the world's XZ plane. */
 export function copyPrevailingWindDirectionTo(result: Vector2): void {
@@ -72,9 +108,12 @@ export function setWindShear(material: ShaderMaterial, shearFraction: number): v
 
 /** Advances a material through the shared wind loop. */
 export function bindWindPhase(material: ShaderMaterial): void {
+  const state = currentWindState();
+  sampledGustFrequency.copyFrom(state.direction).scaleInPlace(gustFrequency.length());
   material.setFloat("windPhase", currentWindLoopPhase());
-  material.setVector2("windGustFrequency", gustFrequency);
-  material.setVector2("windDirection", direction);
+  material.setVector2("windGustFrequency", sampledGustFrequency);
+  material.setVector2("windDirection", state.direction);
+  material.setFloat("windStrength", state.strength);
 }
 
 /**
@@ -86,6 +125,7 @@ export const windPhaseVertexDeclaration = `
 uniform float windPhase;
 uniform vec2 windGustFrequency;
 uniform vec2 windDirection;
+uniform float windStrength;
 
 float windLoopPhase(vec3 instanceOrigin) {
   return windPhase + dot(instanceOrigin.xz, windGustFrequency);
@@ -108,7 +148,7 @@ float windBend(vec3 instanceOrigin) {
   // An integer harmonic keeps the ripple continuous when windPhase wraps from
   // one back to zero; a fractional multiplier creates a visible movement skip.
   float ripple = windPhase * 2.0 + dot(instanceOrigin.xz, windGustFrequency * 5.0);
-  return sin(6.28318530718 * gust) * 0.74 + sin(6.28318530718 * ripple) * 0.26;
+  return (sin(6.28318530718 * gust) * 0.74 + sin(6.28318530718 * ripple) * 0.26) * windStrength;
 }
 
 /** The world wind direction expressed in one instance's own local axes. */

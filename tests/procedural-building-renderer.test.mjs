@@ -298,6 +298,33 @@ test("one-story buildings keep a single floor and no stairs", () => {
   engine.dispose();
 });
 
+test("building class controls the first interior profile", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const warehouse = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(323, { render_height: 12, levels: 4, class: "warehouse" }),
+    terrain,
+    options,
+  );
+  const school = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(324, { render_height: 12, levels: 4, class: "school" }),
+    terrain,
+    options,
+  );
+  assert.ok(warehouse && school);
+  assert.equal(warehouse.metadata.buildingClass, "warehouse");
+  assert.equal(warehouse.metadata.interiorFloorCount, 1);
+  assert.equal(warehouse.metadata.stairFlightCount, 0);
+  assert.equal(school.metadata.buildingClass, "education");
+  assert.equal(school.metadata.interiorFloorCount, 4);
+  assert.equal(school.metadata.stairFlightCount, 3);
+
+  scene.dispose();
+  engine.dispose();
+});
+
 test("house heights without mapped levels do not round up to a second floor", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

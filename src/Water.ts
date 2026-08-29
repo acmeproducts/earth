@@ -13,6 +13,7 @@ import {
   Texture,
   VertexBuffer,
 } from '@babylonjs/core';
+import { currentWindState } from './Wind';
 
 const WAVE_NORMAL_MAP_URL = 'https://assets.babylonjs.com/textures/waterbump.png';
 /** Ground distance spanned by one repeat of the broad swell normal map. */
@@ -63,6 +64,8 @@ export function createWaterPlane(
     metersPerUnit?: number;
     /** Environment the surface reflects where SSR finds nothing on screen. */
     skyReflection?: Nullable<BaseTexture>;
+    /** Broad visual character of the water body. */
+    kind?: WaterSurfaceKind;
   } = {}
 ): Mesh {
   const {
@@ -74,6 +77,7 @@ export function createWaterPlane(
     elevation = -0.01,
     metersPerUnit = 1,
     skyReflection = null,
+    kind = 'ocean',
   } = options;
 
   // Extend slightly beyond the terrain to avoid edge clipping artifacts
@@ -90,6 +94,7 @@ export function createWaterPlane(
     height: height * 1.2,
     metersPerUnit,
     skyReflection,
+    kind,
   });
 
   waterMesh.material = water;
@@ -105,8 +110,12 @@ export interface WaterSurfaceMaterialOptions {
   metersPerUnit?: number;
   /** Environment the surface reflects where SSR finds nothing on screen. */
   skyReflection?: Nullable<BaseTexture>;
+  /** Ocean is deeper, cooler, and more wind-exposed than an inland lake. */
+  kind?: WaterSurfaceKind;
   name?: string;
 }
+
+export type WaterSurfaceKind = 'ocean' | 'lake';
 
 /** Creates the shared reflective, animated material used by water meshes. */
 export function createWaterSurfaceMaterial(
@@ -119,6 +128,7 @@ export function createWaterSurfaceMaterial(
     metersPerUnit = 1,
     skyReflection = null,
     name = 'waterMaterial',
+    kind = 'ocean',
   } = options;
 
   const water = scene.getEngine().isWebGPU
@@ -133,7 +143,9 @@ export function createWaterSurfaceMaterial(
   // space and converts on output, so convert the authored colour once here
   // instead of re-picking it by eye.
   if (water instanceof PBRMaterial) {
-    water.albedoColor = new Color3(0.05, 0.2, 0.4).toLinearSpace();
+    water.albedoColor = (kind === 'lake'
+      ? new Color3(0.055, 0.24, 0.29)
+      : new Color3(0.05, 0.2, 0.4)).toLinearSpace();
     // Leaving metallic/roughness unset keeps the specular-glossiness workflow,
     // where reflectivity is exactly the F0 the prepass hands to SSR.
     water.reflectivityColor = new Color3(
@@ -141,17 +153,23 @@ export function createWaterSurfaceMaterial(
       WATER_REFLECTIVITY,
       WATER_REFLECTIVITY
     );
-    water.microSurface = 0.9;
+    water.microSurface = kind === 'lake' ? 0.84 : 0.9;
     water.reflectionTexture = skyReflection;
     water.enableSpecularAntiAliasing = true;
     water.useHorizonOcclusion = true;
   } else {
     // Use Babylon's native StandardMaterial WGSL path as the WebGPU baseline.
     // Direct sun specular keeps it readable without a live reflection probe.
-    water.diffuseColor = new Color3(0.035, 0.16, 0.3);
-    water.ambientColor = new Color3(0.015, 0.055, 0.09);
-    water.specularColor = new Color3(0.65, 0.76, 0.86);
-    water.specularPower = 96;
+    water.diffuseColor = kind === 'lake'
+      ? new Color3(0.045, 0.2, 0.22)
+      : new Color3(0.035, 0.16, 0.3);
+    water.ambientColor = kind === 'lake'
+      ? new Color3(0.018, 0.07, 0.065)
+      : new Color3(0.015, 0.055, 0.09);
+    water.specularColor = kind === 'lake'
+      ? new Color3(0.58, 0.72, 0.7)
+      : new Color3(0.65, 0.76, 0.86);
+    water.specularPower = kind === 'lake' ? 72 : 96;
   }
 
   const swellTileUnits = SWELL_TILE_METERS / metersPerUnit;
@@ -174,12 +192,12 @@ export function createWaterSurfaceMaterial(
   // RGB normal map, so the second wave scale is packed into that layout
   // instead of being handed the bump image directly.
   water.detailMap.texture = chop;
-  water.detailMap.bumpLevel = 0.6;
+  water.detailMap.bumpLevel = kind === 'lake' ? 0.38 : 0.6;
   water.detailMap.diffuseBlendLevel = 0;
   water.detailMap.roughnessBlendLevel = 0;
   water.detailMap.isEnabled = true;
 
-  animateWaves(scene, water, swell, chop);
+  animateWaves(scene, water, swell, chop, kind);
   return water;
 }
 
@@ -299,7 +317,8 @@ function animateWaves(
   scene: Scene,
   water: PBRMaterial | StandardMaterial,
   swell: Texture,
-  chop: Texture
+  chop: Texture,
+  kind: WaterSurfaceKind,
 ): void {
   const swellRepeatsPerSecond = SWELL_DRIFT_METERS_PER_SECOND / SWELL_TILE_METERS;
   const chopRepeatsPerSecond =
@@ -307,14 +326,25 @@ function animateWaves(
   const observer: Nullable<Observer<Scene>> = scene.onBeforeRenderObservable.add(() => {
     // Absolute page time keeps separately streamed water materials in phase.
     const seconds = performance.now() / 1000;
+    const wind = currentWindState();
+    const windSpeed = Math.max(0.15, wind.strength);
+    const directionX = wind.direction.x;
+    const directionY = wind.direction.y;
+    const exposure = kind === 'lake' ? 0.62 : 1;
+    const speed = windSpeed * exposure;
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
     // Different starting phases keep the two copies of the same source image
     // from reinforcing its square tile boundaries.
-    swell.uOffset = 0.173 + seconds * swellRepeatsPerSecond * 0.8;
-    swell.vOffset = 0.417 + seconds * swellRepeatsPerSecond * 0.6;
-    chop.uOffset = 0.631 + seconds * chopRepeatsPerSecond * -0.4;
-    chop.vOffset = 0.289 + seconds * chopRepeatsPerSecond;
+    swell.uOffset = 0.173 + seconds * swellRepeatsPerSecond * directionX * speed;
+    swell.vOffset = 0.417 + seconds * swellRepeatsPerSecond * directionY * speed;
+    chop.uOffset = 0.631 - seconds * chopRepeatsPerSecond * directionY * speed * 0.55;
+    chop.vOffset = 0.289 + seconds * chopRepeatsPerSecond * directionX * speed;
+    // Wind makes the surface more broken without changing the authored look
+    // at calm conditions. Lakes respond less dramatically than open sea.
+    const chopLevel = (kind === 'lake' ? 0.38 : 0.6) * (0.72 + wind.strength * 0.28);
+    water.bumpTexture!.level = (kind === 'lake' ? 0.72 : 0.9) * (0.78 + wind.strength * 0.22);
+    water.detailMap.bumpLevel = chopLevel;
   });
 
   // The plane is rebuilt whenever the world moves; the ticker must go with it.

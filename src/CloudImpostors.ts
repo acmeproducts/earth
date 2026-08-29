@@ -28,13 +28,12 @@ import {
   generateCloudDensityAtlasData,
 } from "./CloudVolumeCapture";
 import { createCloudShadowProjector } from "./CloudShadows";
-import { copyPrevailingWindDirectionTo } from "./Wind";
+import { copyPrevailingWindDirectionTo, currentWindState } from "./Wind";
 
 const CLOUD_NEAR_FADE_START_METERS = 2_500;
 const CLOUD_NEAR_FADE_END_METERS = 3_800;
 const CLOUD_FAR_FADE_START_METERS = 12_000;
 const CLOUD_FAR_FADE_END_METERS = 18_000;
-const CLOUD_DRIFT_METERS_PER_SECOND = 20;
 
 export interface CloudLayer {
   readonly mesh: Mesh;
@@ -241,15 +240,20 @@ export function createCloudLayer(
   let centerCellX = Number.NaN;
   let centerCellZ = Number.NaN;
   let density = options.density;
+  let lastWindSampleAt = performance.now();
+  let driftX = 0;
+  let driftZ = 0;
   const driftDirection = Vector2.Zero();
   copyPrevailingWindDirectionTo(driftDirection);
-  const driftStartedAt = performance.now();
   const update = (cameraPosition: Vector3): void => {
     const cellSize = CLOUD_CELL_SIZE_METERS / metersPerUnit;
-    const elapsedSeconds = Math.max(0, performance.now() - driftStartedAt) / 1_000;
-    const driftDistance = elapsedSeconds * CLOUD_DRIFT_METERS_PER_SECOND / metersPerUnit;
-    const driftX = driftDirection.x * driftDistance;
-    const driftZ = driftDirection.y * driftDistance;
+    const now = performance.now();
+    const deltaSeconds = Math.min(0.25, Math.max(0, now - lastWindSampleAt) / 1_000);
+    lastWindSampleAt = now;
+    const wind = currentWindState(now);
+    driftDirection.copyFrom(wind.direction);
+    driftX += driftDirection.x * wind.speedMetersPerSecond * deltaSeconds / metersPerUnit;
+    driftZ += driftDirection.y * wind.speedMetersPerSecond * deltaSeconds / metersPerUnit;
     mesh.position.set(driftX, 0, driftZ);
     shadowProjector.setDrift(driftX, driftZ);
     lighting.copyLightingTo(lightingSnapshot);

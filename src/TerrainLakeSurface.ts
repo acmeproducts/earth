@@ -48,6 +48,7 @@ export async function createTerrainLakeLayer(
   if (!material) {
     material = createWaterSurfaceMaterial(scene, {
       name: "terrainLakeMaterial",
+      kind: "lake",
       width: options.meshWidth,
       height: options.meshDepth,
       metersPerUnit: options.metersPerUnit,

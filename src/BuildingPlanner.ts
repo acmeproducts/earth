@@ -14,6 +14,19 @@ export interface BuildingSource {
 
 export type BuildingDetailLevel = "far" | "detailed";
 
+/** The stable, coarse use categories understood by the renderer. */
+export type BuildingClass =
+  | "residential"
+  | "commercial"
+  | "industrial"
+  | "warehouse"
+  | "garage"
+  | "education"
+  | "medical"
+  | "religious"
+  | "utility"
+  | "generic";
+
 export type BuildingRoofShape =
   | "flat"
   | "gabled"
@@ -32,7 +45,7 @@ export type BuildingRoofShape =
 export interface BuildingPlan {
   id: string;
   footprint: BuildingPolygon;
-  buildingClass: string;
+  buildingClass: BuildingClass;
   heightMeters: number;
   minimumHeightMeters: number;
   levels?: number;
@@ -58,7 +71,7 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
   return {
     id: source.id,
     footprint: source.polygon,
-    buildingClass: textProperty(source.properties.class) ?? "building",
+    buildingClass: normalizeBuildingClass(source.properties.class),
     heightMeters,
     minimumHeightMeters,
     levels: positiveNumber(source.properties.levels),
@@ -77,6 +90,29 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
     ),
     detailSeed: hashString(source.id),
   };
+}
+
+/** Maps provider/OSM-specific values onto the small vocabulary used in-world. */
+export function normalizeBuildingClass(value: unknown): BuildingClass {
+  const normalized = textProperty(value);
+  if (!normalized) return "generic";
+  if (["residential", "house", "detached", "semidetached_house", "apartments",
+    "bungalow", "cabin", "dormitory"].includes(normalized)) return "residential";
+  if (["commercial", "retail", "office", "supermarket", "hotel"].includes(normalized)) {
+    return "commercial";
+  }
+  if (["industrial", "factory", "manufacture"].includes(normalized)) return "industrial";
+  if (["warehouse", "storage"].includes(normalized)) return "warehouse";
+  if (["garage", "carport", "parking"].includes(normalized)) return "garage";
+  if (["school", "college", "university", "kindergarten"].includes(normalized)) {
+    return "education";
+  }
+  if (["hospital", "clinic", "healthcare"].includes(normalized)) return "medical";
+  if (["church", "chapel", "mosque", "temple", "synagogue", "religious"].includes(normalized)) {
+    return "religious";
+  }
+  if (["utility", "service", "transformer_tower"].includes(normalized)) return "utility";
+  return "generic";
 }
 
 function roofShape(value: unknown): BuildingRoofShape {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { planBuilding } from "../src/BuildingPlanner.ts";
+import { normalizeBuildingClass, planBuilding } from "../src/BuildingPlanner.ts";
 
 const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
@@ -120,4 +120,12 @@ test("caches provider-tile source adaptation across application tiles", () => {
   assert.match(openStreetMap, /buildingSourceCache\.get\(tile\.data\)/);
   assert.match(openStreetMap, /buildingSourceCache\.set\(tile\.data, sources\)/);
   assert.match(openStreetMap, /roadSourceCache\.get\(tile\.data\)/);
+});
+
+test("normalizes common OSM building classes for rendering", () => {
+  assert.equal(normalizeBuildingClass("house"), "residential");
+  assert.equal(normalizeBuildingClass("school"), "education");
+  assert.equal(normalizeBuildingClass("warehouse"), "warehouse");
+  assert.equal(normalizeBuildingClass("garage"), "garage");
+  assert.equal(normalizeBuildingClass("unknown_future_value"), "generic");
 });
