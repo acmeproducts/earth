@@ -34,6 +34,12 @@ test("separately streamed water materials animate in phase", () => {
   assert.doesNotMatch(water, /seconds \+= scene\.getEngine\(\)\.getDeltaTime\(\)/);
 });
 
+test("water motion is zero at calm wind and grows sublinearly", () => {
+  assert.match(water, /export function waterMotionSpeed\(windStrength: number, exposure = 1\)/);
+  assert.match(water, /Math\.sqrt\(strength \/ WATER_WIND_RESPONSE\)/);
+  assert.doesNotMatch(water, /Math\.max\(0\.15, wind\.strength\)/);
+});
+
 test("retains the terrain water mask for coastline shaping and bridge clearance", () => {
   assert.match(terrainData, /waterMask\?: Uint8Array/);
   assert.match(worldCover, /terrain\.waterMask = cropWaterMask\(/);

@@ -3,6 +3,7 @@ export interface SceneSettings {
   detailTilesAcross: number;
   terrainTilesAcross: number;
   cloudDensity: number;
+  windSpeedMetersPerSecond: number;
 }
 
 export type SceneSettingKey = keyof SceneSettings;
@@ -64,6 +65,17 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     defaultValue: 0.65,
     format: (value) => value.toFixed(2),
   },
+  {
+    key: "windSpeedMetersPerSecond",
+    label: "Wind speed",
+    ariaLabel: "Manual wind speed in meters per second",
+    queryParameter: "wind-speed",
+    minimum: 0,
+    maximum: 30,
+    step: 1,
+    defaultValue: 14,
+    format: (value) => `${value} m/s`,
+  },
 ] as const;
 
 export const DEFAULT_SCENE_SETTINGS = settingsFromDefinitions();
@@ -94,6 +106,7 @@ export class SceneSettingsStore {
     this.persist();
     return this.current;
   }
+
 
   private persist(): void {
     try {

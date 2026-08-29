@@ -68,6 +68,7 @@ export class SceneControls {
     this.element.appendChild(heading);
 
     const sceneGroup = this.createGroup("Scene");
+    const weatherGroup = this.createGroup("Weather");
     for (const definition of SCENE_SETTING_DEFINITIONS) {
       const control = this.createRangeControl(
         definition,
@@ -75,7 +76,10 @@ export class SceneControls {
         (value) => options.onSettingChange(definition.key, value),
       );
       this.rangeControls.set(definition.key, control);
-      sceneGroup.appendChild(control.row);
+      const targetGroup = definition.key === "windSpeedMetersPerSecond"
+        ? weatherGroup
+        : sceneGroup;
+      targetGroup.appendChild(control.row);
     }
 
     const clockModeRow = document.createElement("label");
@@ -134,6 +138,7 @@ export class SceneControls {
     timeRow.append(timeLabel, this.timeInput, this.timeOutput);
     sceneGroup.appendChild(timeRow);
     this.element.appendChild(sceneGroup);
+    this.element.appendChild(weatherGroup);
 
     const locationGroup = this.createGroup("Location");
     const placeForm = document.createElement("form");

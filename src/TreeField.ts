@@ -62,11 +62,13 @@ import {
 import {
   bindWindPhase,
   setWindShear,
+  windShearFraction,
   windPhaseVertexDeclaration,
   windShearVertexDeclaration,
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
 } from "./Wind";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { proceduralVariantAtLocation } from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
@@ -766,6 +768,9 @@ export async function createTreeField(
     const modelMeshes = includeModels
       ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season)
       : [];
+    // Trees move with the same wind field as their impostors, but at a much
+    // smaller amplitude so the canopy breathes without making trunks wobble.
+    setVegetationWindShear(modelMeshes, windShearFraction("tree"));
     modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
     const fallenLogModel = bucket.fallenLogMatrices.length > 0
       ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season)
@@ -1096,7 +1101,7 @@ export function createImpostorMaterial(
   material.setFloat("upperHemisphereOnly", assets.upperHemisphereOnly ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", 1);
   material.setFloat("instanceColorCoverage", 0);
-  setWindShear(material, 0);
+    setWindShear(material, windShearFraction("tree"));
   material.setFloat("fieldFade", 1);
   material.setFloat("distanceFadeNear", 1e6);
   material.setFloat("distanceFadeFar", 1e6 + 1);

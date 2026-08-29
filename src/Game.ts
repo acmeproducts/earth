@@ -58,7 +58,7 @@ import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
 import { disposeTerrainMesh } from "./TerrainMaterial";
 import { createTerrainMesh as buildTerrainMesh } from "./TerrainMesh";
-import { configureWindSceneScale } from "./Wind";
+import { configureWindSceneScale, setManualWindSpeed } from "./Wind";
 import { SolarLighting } from "./SolarLighting";
 import { hasWinterGroundCover } from "./TreeSeason";
 import { createCloudLayer } from "./CloudImpostors";
@@ -238,6 +238,7 @@ export class Game {
     );
     this.renderScale = queryNumber(query, "render-scale", 1, 0.25, 1);
     this.sceneSettings = createBrowserSceneSettingsStore(query);
+    setManualWindSpeed(this.sceneSettings.value.windSpeedMetersPerSecond);
     this.clockSettings = createBrowserClockSettingsStore(query);
     this.worldLocation = createBrowserWorldLocationStore(EXAMPLE_LOCATIONS[0]);
     this.engine.setHardwareScalingLevel(1 / this.renderScale);
@@ -317,6 +318,7 @@ export class Game {
       getGroundEyeHeight: (x, z, referenceEyeHeight) => (
         this.getGroundEyeHeight(x, z, referenceEyeHeight)
       ),
+      isScenePositionLoaded: (x, z) => this.tileAtScenePosition(x, z) !== undefined,
       isMenuOpen: () => this.sceneControls?.isOpen ?? false,
       onPointerLockExit: () => {
         if (!this.sceneControls?.isOpen) this.sceneControls?.setMenuOpen(true);
@@ -1465,6 +1467,9 @@ export class Game {
     const detailSizeChanged = changed(previous, next, "detailTilesAcross");
     const terrainSizeChanged = changed(previous, next, "terrainTilesAcross");
     const cloudDensityChanged = changed(previous, next, "cloudDensity");
+    const windChanged = changed(previous, next, "windSpeedMetersPerSecond");
+
+    if (windChanged) setManualWindSpeed(next.windSpeedMetersPerSecond);
 
     if (detailSizeChanged && next.detailTilesAcross < previous.detailTilesAcross) {
       const expired = performance.now() - DETAIL_COOLDOWN_MS - 1;
@@ -1800,16 +1805,22 @@ export class Game {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
       this.playerControls?.updateMovement();
-      this.publishLocalPlayerPose();
       this.updateTerrainStreaming();
       this.layerFades.update();
-      if (this.flyCamera) this.cloudLayer?.update(this.flyCamera.globalPosition);
+      if (this.flyCamera) {
+        this.cloudLayer?.update(this.flyCamera.globalPosition);
+      }
       const vegetationStart = performance.now();
       this.updateVegetationLod();
       const vegetationEnd = performance.now();
       this.playerControls?.updateDepthPrecision();
       const renderStart = performance.now();
       this.scene.render();
+      // Camera keyboard input is applied by Babylon during scene rendering.
+      // Apply the same loaded-tile constraint afterward so fly mode cannot
+      // carry the player through a tile that was not ready at the boundary.
+      this.playerControls?.constrainToLoadedTile();
+      this.publishLocalPlayerPose();
       const renderEnd = performance.now();
       let detailTiles = 0;
       for (const tile of this.tiles.values()) {

@@ -40,6 +40,8 @@ interface PlayerControlsOptions {
     z: number,
     referenceEyeHeight?: number,
   ) => number | undefined;
+  /** Returns true only when the terrain containing a scene position is ready. */
+  isScenePositionLoaded: (x: number, z: number) => boolean;
   isMenuOpen: () => boolean;
   onPointerLockExit: () => void;
 }
@@ -52,6 +54,8 @@ export class PlayerControls {
   private pointerLockWasActive = false;
   private flySpeedOutput: HTMLOutputElement;
   private currentMovementMode: MovementMode = "fly";
+  private lastLoadedX?: number;
+  private lastLoadedZ?: number;
 
   constructor(private readonly options: PlayerControlsOptions) {
     const { camera, canvas } = options;
@@ -80,7 +84,21 @@ export class PlayerControls {
   }
 
   updateMovement(): void {
+    this.constrainToLoadedTile();
     this.updateWalker();
+  }
+
+  /** Keeps camera input from carrying the player across an unloaded tile. */
+  constrainToLoadedTile(): void {
+    const { camera } = this.options;
+    if (this.options.isScenePositionLoaded(camera.position.x, camera.position.z)) {
+      this.rememberLoadedPosition();
+      return;
+    }
+    if (this.lastLoadedX !== undefined && this.lastLoadedZ !== undefined) {
+      camera.position.x = this.lastLoadedX;
+      camera.position.z = this.lastLoadedZ;
+    }
   }
 
   updateDepthPrecision(): void {
@@ -112,6 +130,9 @@ export class PlayerControls {
     if (groundEyeHeight !== undefined && camera.position.y < groundEyeHeight) {
       camera.position.y = groundEyeHeight;
     }
+    if (this.options.isScenePositionLoaded(camera.position.x, camera.position.z)) {
+      this.rememberLoadedPosition();
+    }
   }
 
   resetForWorldChange(): void {
@@ -121,6 +142,8 @@ export class PlayerControls {
     camera.cameraDirection.setAll(0);
     this.heldMovementKeys.clear();
     this.verticalVelocityMetersPerSecond = 0;
+    this.lastLoadedX = undefined;
+    this.lastLoadedZ = undefined;
   }
 
   resetVerticalMotion(): void {
@@ -264,6 +287,11 @@ export class PlayerControls {
     const { camera, engine } = this.options;
     const metersPerUnit = this.options.getMetersPerUnit();
     if (this.currentMovementMode !== "walk" || !metersPerUnit) return;
+    // A restored pose or a movement system update can leave the camera just
+    // inside a tile that has since been evicted. Recover before doing any
+    // further walker simulation; an unloaded tile is never a valid surface.
+    if (!this.options.isScenePositionLoaded(camera.position.x, camera.position.z)) return;
+    this.rememberLoadedPosition();
     const deltaSeconds = Math.min(engine.getDeltaTime() / 1000, 0.05);
     const groundEyeHeightBeforeMove = this.options.getGroundEyeHeight(
       camera.position.x,
@@ -276,8 +304,17 @@ export class PlayerControls {
       const inputLength = Math.hypot(forward, right);
       const yaw = camera.rotation.y;
       const distance = WALK_SPEED_METERS_PER_SECOND * deltaSeconds / metersPerUnit;
-      camera.position.x += (Math.sin(yaw) * forward + Math.cos(yaw) * right) * distance / inputLength;
-      camera.position.z += (Math.cos(yaw) * forward - Math.sin(yaw) * right) * distance / inputLength;
+      const nextX = camera.position.x +
+        (Math.sin(yaw) * forward + Math.cos(yaw) * right) * distance / inputLength;
+      const nextZ = camera.position.z +
+        (Math.cos(yaw) * forward - Math.sin(yaw) * right) * distance / inputLength;
+      // Streaming is asynchronous. Stop at the edge until the destination
+      // tile has finished building instead of walking over an empty gap.
+      if (this.options.isScenePositionLoaded(nextX, nextZ)) {
+        camera.position.x = nextX;
+        camera.position.z = nextZ;
+        this.rememberLoadedPosition();
+      }
     }
 
     const jumpRequested = this.walkerJumpRequested;
@@ -307,6 +344,12 @@ export class PlayerControls {
       camera.position.y = groundEyeHeight;
       this.verticalVelocityMetersPerSecond = 0;
     }
+  }
+
+  private rememberLoadedPosition(): void {
+    const { camera } = this.options;
+    this.lastLoadedX = camera.position.x;
+    this.lastLoadedZ = camera.position.z;
   }
 
   private configureCameraCollisionBody(): void {

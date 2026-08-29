@@ -24,6 +24,7 @@ test("loads defaults and normalizes linked terrain sizes", () => {
     detailTilesAcross: 3,
     terrainTilesAcross: 17,
     cloudDensity: 0.65,
+    windSpeedMetersPerSecond: 14,
   });
 
   const reducedTerrain = updateSceneSetting(store.value, "terrainTilesAcross", 3);
@@ -56,12 +57,13 @@ test("URL parameters override remembered settings", () => {
     cloudDensity: 0.25,
   });
   const store = new SceneSettingsStore(new URLSearchParams(
-    "vegetation-distance=75&cloud-density=0.8",
+    "vegetation-distance=75&cloud-density=0.8&wind-speed=22",
   ), storage);
 
   assert.equal(store.value.modelRangeMeters, 75);
   assert.equal(store.value.cloudDensity, 0.8);
   assert.equal(store.value.terrainTilesAcross, 9);
+  assert.equal(store.value.windSpeedMetersPerSecond, 22);
 });
 
 test("ignores malformed stored data", () => {

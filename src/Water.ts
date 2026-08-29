@@ -29,6 +29,12 @@ const SWELL_DRIFT_METERS_PER_SECOND = 0.5;
 /** Chop rides across the swell rather than with it, so the two never lock. */
 const CHOP_DRIFT_METERS_PER_SECOND = 1.4;
 /**
+ * Water responds less than linearly to wind: once the surface is moving,
+ * additional wind mostly makes it rougher rather than proportionally faster.
+ */
+const WATER_WIND_RESPONSE = 1;
+const WATER_MOTION_GAIN = 1.25;
+/**
  * Water reflects almost nothing head-on and almost everything at a grazing
  * angle. This is the head-on value; the material's Fresnel term takes it the
  * rest of the way. It sits above SSR's reflectivity threshold so the ocean is
@@ -116,6 +122,12 @@ export interface WaterSurfaceMaterialOptions {
 }
 
 export type WaterSurfaceKind = 'ocean' | 'lake';
+
+/** Maps wind strength to water motion while preserving exactly still water at zero. */
+export function waterMotionSpeed(windStrength: number, exposure = 1): number {
+  const strength = Math.max(0, windStrength);
+  return WATER_MOTION_GAIN * Math.sqrt(strength / WATER_WIND_RESPONSE) * Math.max(0, exposure);
+}
 
 /** Creates the shared reflective, animated material used by water meshes. */
 export function createWaterSurfaceMaterial(
@@ -327,11 +339,10 @@ function animateWaves(
     // Absolute page time keeps separately streamed water materials in phase.
     const seconds = performance.now() / 1000;
     const wind = currentWindState();
-    const windSpeed = Math.max(0.15, wind.strength);
     const directionX = wind.direction.x;
     const directionY = wind.direction.y;
     const exposure = kind === 'lake' ? 0.62 : 1;
-    const speed = windSpeed * exposure;
+    const speed = waterMotionSpeed(wind.strength, exposure);
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
     // Different starting phases keep the two copies of the same source image

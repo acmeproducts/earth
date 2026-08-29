@@ -16,7 +16,7 @@ const GUST_DIRECTION = new Vector2(0.78, 0.63);
  * Tip displacement as a fraction of height for vegetation that leans by a pure
  * shear. Grass bends further than woody bushes.
  */
-const SHEAR_FRACTIONS = { grass: 0.19, bush: 0.075 } as const;
+const SHEAR_FRACTIONS = { grass: 0.19, bush: 0.075, tree: 0.015 } as const;
 const WIND_NOISE = new SimplexNoise2D(0x51a7);
 const WIND_NOISE_RATE = 0.018;
 const WIND_BASE_STRENGTH = 0.68;
@@ -43,6 +43,7 @@ const sampledGustFrequency = new Vector2();
 /** Wind blows the way its gusts travel. */
 const direction = GUST_DIRECTION.clone().normalize();
 let metersPerUnit = 0;
+let manualSpeedMetersPerSecond: number | undefined;
 
 export interface WindState {
   readonly direction: Vector2;
@@ -65,11 +66,21 @@ export function currentWindState(
     direction.y + direction.x * crosswind,
   ).normalize();
   const strength = Math.max(0, (WIND_BASE_STRENGTH + gust * WIND_GUST_STRENGTH) * strengthScale);
+  const speedMetersPerSecond = manualSpeedMetersPerSecond ?? WIND_BASE_SPEED * strength;
   return {
     direction: windDirection,
-    strength,
-    speedMetersPerSecond: WIND_BASE_SPEED * strength,
+    strength: manualSpeedMetersPerSecond === undefined
+      ? strength
+      : Math.max(0, Math.min(3, speedMetersPerSecond / WIND_BASE_SPEED)),
+    speedMetersPerSecond,
   };
+}
+
+/** Sets the artist/debug weather override used by all wind-aware systems. */
+export function setManualWindSpeed(speedMetersPerSecond: number | undefined): void {
+  manualSpeedMetersPerSecond = speedMetersPerSecond === undefined
+    ? undefined
+    : Math.max(0, Math.min(30, speedMetersPerSecond));
 }
 
 /** Copies the normalized prevailing wind direction on the world's XZ plane. */
