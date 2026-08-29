@@ -16,6 +16,7 @@ export type VegetationFieldKind =
   | "saplingField"
   | "grassField"
   | "tallPlantField"
+  | "wheatField"
   | "rockyBeachField"
   | "bushField"
   | "fernField";
@@ -25,6 +26,7 @@ export const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
   "saplingField",
   "grassField",
   "tallPlantField",
+  "wheatField",
   "rockyBeachField",
   "bushField",
   "fernField",
@@ -50,6 +52,7 @@ export interface StreamedTile {
   saplingField?: VegetationFieldResult;
   grassField?: VegetationFieldResult;
   tallPlantField?: VegetationFieldResult;
+  wheatField?: VegetationFieldResult;
   rockyBeachField?: VegetationFieldResult;
   bushField?: VegetationFieldResult;
   fernField?: VegetationFieldResult;

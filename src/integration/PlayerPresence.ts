@@ -197,6 +197,9 @@ export class PlayerPresence {
       worldId: event.worldId,
       actorId: event.actorId,
       pose: { ...event.pose },
+      temperature: 37,
+      hunger: 100,
+      thirst: 100,
       revision: event.revision,
       updatedAt: event.occurredAt,
     });

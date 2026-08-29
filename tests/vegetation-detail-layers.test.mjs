@@ -24,7 +24,8 @@ test("fern undergrowth shares one directional source between its model and impos
   assert.match(capture, /rotationallySymmetric: false/);
   assert.match(capture, /upperHemisphereOnly: true/);
   assert.match(capture, /export function createFernModel/);
-  assert.match(field, /\[fern\],\s*\[fernModel\],\s*await packInstanceMatrices/);
+  assert.match(field, /\[fern\],\s*\[fernModel\],\s*matrixData/);
+  assert.match(field, /one renderer per terrain tile/);
   assert.match(field, /renderMode = "auto"/);
 });
 

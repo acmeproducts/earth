@@ -150,6 +150,9 @@ export class BrowserBroadcastGameConnection implements GameConnection {
         revision: event.revision,
         updatedAt: event.occurredAt,
         pose: { ...event.pose },
+        temperature: 37,
+        hunger: 100,
+        thirst: 100,
       };
       this.post({ version: 1, type: "player.pose", event });
     }

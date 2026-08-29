@@ -43,9 +43,6 @@ export interface ImpostorAssets {
 const RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2;
 const OFFLINE_CAPTURE_FRAME_BUDGET_MS = 12;
 const HIDDEN_CAPTURE_VIEWS_PER_SLICE = 16;
-/** Smaller runtime atlases reduce the cost of each indivisible render/readback/upload. */
-const RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES = 4;
-const RUNTIME_CAPTURE_MAX_RESOLUTION = 128;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
@@ -218,13 +215,10 @@ export function createImpostorAssetProvider(
     const requestedSampling = { ...getDefaultSampling(), ...overrides };
     const regionalVariant = variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
     const cooperative = requestOptions.cooperative ?? regionalVariant;
-    // Regional atlases must use one stable sampling tier regardless of whether
-    // they are captured synchronously during startup or cooperatively while
-    // streaming. Otherwise the capture mode changes the cache key and the
-    // first streamed tile regenerates every atlas that startup already made.
-    const sampling = regionalVariant
-      ? runtimeCaptureSampling(requestedSampling)
-      : requestedSampling;
+    // Regional variants differ only in their source identity. Capture quality
+    // is shared with startup captures; cooperative mode only spreads the work
+    // across frames while streaming.
+    const sampling = requestedSampling;
     validateSampling(definition, sampling);
     let cache = sceneAssets.get(scene);
     if (!cache) {
@@ -319,20 +313,6 @@ export function createImpostorAssetProvider(
       void entry.promise.then(disposeImpostorAssets, () => undefined);
     }
   }
-}
-
-function runtimeCaptureSampling(sampling: ImpostorSampling): ImpostorSampling {
-  return {
-    horizontalSamples: Math.min(
-      sampling.horizontalSamples,
-      RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES,
-    ),
-    verticalSamples: Math.min(
-      sampling.verticalSamples,
-      RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES,
-    ),
-    resolution: Math.min(sampling.resolution, RUNTIME_CAPTURE_MAX_RESOLUTION),
-  };
 }
 
 function enqueueImpostorCapture<T>(scene: Scene, capture: () => Promise<T>): Promise<T> {

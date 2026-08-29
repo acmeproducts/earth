@@ -1,6 +1,7 @@
 import {
   clonePlayerState,
   isValidPlayerPose,
+  isValidPlayerVitals,
 } from "./GameProtocol";
 import type { PlayerState } from "./GameProtocol";
 
@@ -104,5 +105,10 @@ function isValidPlayerState(state: unknown): state is PlayerState {
     && (candidate.revision ?? -1) >= 0
     && Number.isFinite(candidate.updatedAt)
     && candidate.pose !== undefined
-    && isValidPlayerPose(candidate.pose);
+    && isValidPlayerPose(candidate.pose)
+    && isValidPlayerVitals(
+      candidate.temperature ?? 37,
+      candidate.hunger ?? 100,
+      candidate.thirst ?? 100,
+    );
 }

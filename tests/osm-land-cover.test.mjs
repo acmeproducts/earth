@@ -17,6 +17,7 @@ test("maps OSM natural cover to WorldCover-compatible classes", () => {
 test("maps OSM land use that materially changes vegetation placement", () => {
   assert.match(landCover, /"industrial"[\s\S]*?LandCoverClass\.BuiltUp/);
   assert.match(landCover, /"pitch"[\s\S]*?LandCoverClass\.Grassland/);
+  assert.match(landCover, /"farmland"[\s\S]*?LandCoverClass\.Cropland/);
   assert.doesNotMatch(landCover, /"residential"/);
 });
 

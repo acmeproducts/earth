@@ -28,27 +28,20 @@ test("regional impostor captures are leased, bounded, and serialized", () => {
   assert.match(impostors, /enqueueImpostorCapture/);
 });
 
-test("runtime captures yield between GPU views and pixel-processing slices", () => {
+test("cooperative captures yield between GPU views and pixel-processing slices", () => {
   const impostors = source("Impostor.ts");
   assert.match(impostors, /RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2/);
-  assert.match(impostors, /RUNTIME_CAPTURE_MAX_DIRECTION_SAMPLES = 4/);
-  assert.match(impostors, /RUNTIME_CAPTURE_MAX_RESOLUTION = 128/);
-  assert.match(impostors, /runtimeCaptureSampling\(requestedSampling\)/);
-  assert.match(impostors, /cooperative && viewsThisFrame >= 1/);
+  assert.match(impostors, /cooperative && viewsThisFrame >= viewsPerSlice/);
   assert.match(impostors, /await binaryImage/);
   assert.match(impostors, /await dilateTransparentTileEdgeColors/);
   assert.match(impostors, /yieldCaptureWorkIfNeeded/);
 });
 
-test("startup and streamed requests share the same regional atlas cache key", () => {
+test("startup and streamed requests share the same atlas sampling", () => {
   const impostors = source("Impostor.ts");
   assert.match(
     impostors,
-    /const regionalVariant = variant\.key !== DEFAULT_IMPOSTOR_VARIANT\.key;[\s\S]*?const cooperative = requestOptions\.cooperative \?\? regionalVariant;[\s\S]*?const sampling = regionalVariant[\s\S]*?runtimeCaptureSampling\(requestedSampling\)/,
-  );
-  assert.doesNotMatch(
-    impostors,
-    /const sampling = cooperative\s*\?[\s\S]*?runtimeCaptureSampling\(requestedSampling\)/,
+    /const regionalVariant = variant\.key !== DEFAULT_IMPOSTOR_VARIANT\.key;[\s\S]*?const cooperative = requestOptions\.cooperative \?\? regionalVariant;[\s\S]*?const sampling = requestedSampling;/,
   );
 });
 

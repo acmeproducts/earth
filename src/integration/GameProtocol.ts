@@ -20,6 +20,12 @@ export interface PlayerState {
   worldId: string;
   actorId: string;
   pose: PlayerPose;
+  /** Core body temperature in degrees Celsius. */
+  temperature: number;
+  /** Current food level, where 0 is empty and 100 is full. */
+  hunger: number;
+  /** Current hydration level, where 0 is empty and 100 is full. */
+  thirst: number;
   revision: number;
   updatedAt: number;
 }
@@ -71,6 +77,20 @@ export function isValidPlayerPose(pose: PlayerPose): boolean {
     && Number.isFinite(pose.yaw)
     && Number.isFinite(pose.pitch)
     && (pose.movementMode === "fly" || pose.movementMode === "walk");
+}
+
+export function isValidPlayerVitals(
+  temperature: number,
+  hunger: number,
+  thirst: number,
+): boolean {
+  return Number.isFinite(temperature)
+    && Number.isFinite(hunger)
+    && hunger >= 0
+    && hunger <= 100
+    && Number.isFinite(thirst)
+    && thirst >= 0
+    && thirst <= 100;
 }
 
 export function clonePlayerPose(pose: PlayerPose): PlayerPose {

@@ -1,5 +1,6 @@
 import { sampleElevation } from "./Geo";
 import type { TerrainData } from "./TerrainData";
+import type { TerrainModification } from "./TerrainModification";
 
 export interface TerrainBuildingFootprint {
   outline: ReadonlyArray<{ x: number; z: number }>;
@@ -11,7 +12,7 @@ export interface BuildingTerrainOptions {
   metersPerUnit: number;
 }
 
-interface FoundationPad {
+interface FoundationPad extends TerrainModification {
   outline: ReadonlyArray<{ x: number; z: number }>;
   targetElevation: number;
   flatMargin: number;
@@ -20,6 +21,8 @@ interface FoundationPad {
   maximumX: number;
   minimumZ: number;
   maximumZ: number;
+  targetElevationAt: (x: number, z: number) => number;
+  influenceAt: (x: number, z: number) => number;
 }
 
 /** Levels building sites and eases each foundation apron into the surrounding terrain. */
@@ -64,6 +67,12 @@ export async function conformTerrainToBuildings(
       maximumX: bounds.maximumX + outerMargin,
       minimumZ: bounds.minimumZ - outerMargin,
       maximumZ: bounds.maximumZ + outerMargin,
+      targetElevationAt: () => samples[Math.floor(samples.length / 2)],
+      influenceAt: (x, z) => {
+        const distance = pointInPolygon(x, z, outline) ? 0 : distanceToPolygon(x, z, outline);
+        if (distance >= outerMargin) return 0;
+        return distance <= flatMargin ? 1 : 1 - smoothstep(flatMargin, outerMargin, distance);
+      },
     });
     await yieldControl?.();
   }
@@ -91,15 +100,10 @@ export async function conformTerrainToBuildings(
       const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
       for (let column = columns.minimum; column <= columns.maximum; column++) {
         const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
-        const distance = pointInPolygon(x, z, pad.outline)
-          ? 0
-          : distanceToPolygon(x, z, pad.outline);
-        if (distance >= pad.outerMargin) continue;
-        const blend = distance <= pad.flatMargin
-          ? 1
-          : 1 - smoothstep(pad.flatMargin, pad.outerMargin, distance);
+        const blend = pad.influenceAt(x, z);
+        if (blend <= 0) continue;
         const index = row * terrain.width + column;
-        weightedTargets[index] += pad.targetElevation * blend;
+        weightedTargets[index] += pad.targetElevationAt(x, z) * blend;
         totalWeights[index] += blend;
         strongestBlends[index] = Math.max(strongestBlends[index], blend);
       }

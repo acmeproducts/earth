@@ -10,6 +10,7 @@ export type ProceduralRegionFamily =
   | "grass"
   | "ferns"
   | "tallPlants"
+  | "wheat"
   | "rocks";
 
 export interface ProceduralVariant {
@@ -40,6 +41,7 @@ const OFFSET_FRACTIONS: Readonly<Record<ProceduralRegionFamily, readonly [number
   grass: [0.37, 0.15],
   ferns: [0.74, 0.34],
   tallPlants: [0.88, 0.88],
+  wheat: [0.21, 0.79],
   rocks: [0.9, 0.62],
 };
 

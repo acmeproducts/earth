@@ -1,0 +1,123 @@
+import { Color3, Mesh, Scene, ShaderMaterial, Vector3, VertexData } from "@babylonjs/core";
+import {
+  AXISYMMETRIC_IMPOSTOR_FACES,
+  createImpostorAssetProvider,
+} from "./Impostor";
+import type { ImpostorAssetLease, ImpostorAssets, ImpostorVariant } from "./Impostor";
+import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
+import { createSeededRandom } from "./Random";
+
+export type WheatImpostorAssets = ImpostorAssets;
+const SOURCE_HEIGHT = 1.42;
+const CAPTURE_DIAMETER = 2.15;
+const STEM = new Color3(0.34, 0.42, 0.075);
+const LEAF = new Color3(0.5, 0.55, 0.09);
+const GRAIN = new Color3(0.68, 0.53, 0.19);
+const GRAIN_HIGHLIGHT = new Color3(0.8, 0.68, 0.3);
+
+export function wheatRenderedCaptureSize(renderHeight: number): number {
+  return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
+
+const wheatImpostors = createImpostorAssetProvider({
+  name: "wheatImpostor",
+  queryPrefix: "wheat-impostor",
+  createSource: (scene, variant) => createWheatSource(scene, false, variant.seed),
+  sourceHeight: SOURCE_HEIGHT,
+  captureDiameter: CAPTURE_DIAMETER,
+  faces: AXISYMMETRIC_IMPOSTOR_FACES,
+  rotationallySymmetric: true,
+  rotationalSymmetryOrder: 4,
+  upperHemisphereOnly: true,
+  sampling: {
+    horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
+    verticalSamples: { default: 5, minimum: 1, maximum: 12 },
+    resolution: { default: 112, minimum: 48, maximum: 512 },
+  },
+});
+
+export function acquireWheatImpostorAssets(
+  scene: Scene,
+  variant: ImpostorVariant,
+): Promise<ImpostorAssetLease> {
+  return wheatImpostors.acquireAssets(scene, undefined, variant);
+}
+
+function createWheatSource(scene: Scene, liveLighting = false, seed = 0x57484541): Mesh {
+  const random = createSeededRandom(seed);
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const colors: number[] = [];
+  const baseY = -SOURCE_HEIGHT / 2;
+
+  for (let stalk = 0; stalk < 28; stalk++) {
+    const angle = random() * Math.PI * 2;
+    const radius = Math.sqrt(random()) * 0.72;
+    const base = new Vector3(Math.cos(angle) * radius, baseY, Math.sin(angle) * radius);
+    const height = 0.78 + random() * 0.32;
+    const leanAngle = random() * Math.PI * 2;
+    const lean = 0.025 + random() * 0.1;
+    const top = base.add(new Vector3(Math.cos(leanAngle) * lean, height, Math.sin(leanAngle) * lean));
+    addCrossedStem(base, top, 0.009, STEM);
+    const leafPhase = random() * Math.PI * 2;
+    for (let leaf = 0; leaf < 3; leaf++) {
+      const t = 0.22 + leaf * 0.18 + random() * 0.05;
+      const center = Vector3.Lerp(base, top, t);
+      const direction = new Vector3(Math.cos(leafPhase + leaf * 2.7), 0.12, Math.sin(leafPhase + leaf * 2.7));
+      addQuad(center, direction.scale(0.075), new Vector3(0, 0.14, 0), LEAF);
+    }
+    const head = Vector3.Lerp(base, top, 0.89);
+    // A broad central spike plus offset grainlets makes the seed head survive
+    // atlas capture and read as wheat instead of an undifferentiated grass tip.
+    addQuad(head, new Vector3(0.028, 0, 0), new Vector3(0, 0.15, 0), GRAIN);
+    for (let grain = 0; grain < 7; grain++) {
+      const t = grain / 6;
+      const center = head.add(new Vector3(0, (t - 0.5) * 0.23, 0));
+      const side = new Vector3(Math.cos(leafPhase + grain * 2.4), 0, Math.sin(leafPhase + grain * 2.4));
+      addQuad(center.add(side.scale(0.035)), side.scale(0.045), new Vector3(0, 0.038, 0), grain % 3 === 0 ? GRAIN_HIGHLIGHT : GRAIN);
+      // Short bristles are exaggerated slightly so they remain legible at
+      // the normal in-world viewing distance.
+      addQuad(center.add(side.scale(0.075)), side.scale(0.012), side.scale(0.07), GRAIN_HIGHLIGHT);
+    }
+  }
+
+  const normals = new Float32Array(positions.length);
+  VertexData.ComputeNormals(positions, indices, normals);
+  const data = new VertexData();
+  data.positions = positions; data.indices = indices; data.normals = normals; data.colors = colors;
+  const wheat = new Mesh("wheatImpostorProceduralSource", scene);
+  data.applyToMesh(wheat); wheat.isPickable = false; wheat.useVertexColors = true;
+  wheat.material = createVertexColorCaptureMaterial(scene, "wheatImpostorSourceMaterial", liveLighting);
+  return wheat;
+
+  function push(point: Vector3, color: Color3): number {
+    positions.push(point.x, point.y, point.z); colors.push(color.r, color.g, color.b, 1);
+    return positions.length / 3 - 1;
+  }
+  function addQuad(center: Vector3, across: Vector3, up: Vector3, color: Color3): void {
+    const start = positions.length / 3;
+    push(center.subtract(across).subtract(up), color); push(center.add(across).subtract(up), color);
+    push(center.add(across).add(up), color); push(center.subtract(across).add(up), color);
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+  }
+  function addCrossedStem(start: Vector3, end: Vector3, halfWidth: number, color: Color3): void {
+    const center = Vector3.Center(start, end); const half = end.subtract(start).scale(0.5);
+    addQuad(center, new Vector3(halfWidth, 0, 0), half, color);
+    addQuad(center, new Vector3(0, 0, halfWidth), half, color);
+  }
+}
+
+export function createWheatModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
+  const wheat = createWheatSource(scene, true, seed);
+  wheat.name = "wheatModels";
+  const positions = wheat.getVerticesData("position");
+  if (positions) for (let i = 0; i < positions.length; i += 3) {
+    positions[i] *= renderHeight / SOURCE_HEIGHT;
+    positions[i + 1] = positions[i + 1] * renderHeight / SOURCE_HEIGHT + renderHeight / 2;
+    positions[i + 2] *= renderHeight / SOURCE_HEIGHT;
+  }
+  if (positions) wheat.setVerticesData("position", positions);
+  wheat.refreshBoundingInfo();
+  if (wheat.material instanceof ShaderMaterial) wheat.material.setFloat("modelHeight", renderHeight);
+  return wheat;
+}

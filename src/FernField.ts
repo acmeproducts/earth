@@ -137,15 +137,20 @@ export async function createFernField(
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   const fields: VegetationFieldResult[] = [];
-  for (const bucket of variantBuckets.values()) {
-    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
+  // Ferns are small undergrowth and do not benefit from a separate regional
+  // silhouette. Keep one renderer per terrain tile instead of one impostor
+  // mesh for every regional bucket touched by the tile.
+  const firstBucket = variantBuckets.values().next().value as
+    | ProceduralPlacementBucket
+    | undefined;
+  if (firstBucket) {
     const { root: variantRoot, impostor: fern, model: fernModel } =
       await createVegetationFieldRenderers(scene, {
-        rootName: `fernField-${suffix}`,
-        impostorName: `fernImpostors-${suffix}`,
+        rootName: "fernField-renderer",
+        impostorName: "fernImpostors",
         renderHeight,
-        loadAssets: () => acquireFernImpostorAssets(scene, bucket.variant),
-        createModel: () => createFernModel(scene, renderHeight, bucket.variant.seed),
+        loadAssets: () => acquireFernImpostorAssets(scene, firstBucket.variant),
+        createModel: () => createFernModel(scene, renderHeight, firstBucket.variant.seed),
       });
     variantRoot.parent = root;
     configureFernRenderers(fern, fernModel, meshWidth, meshDepth);
@@ -153,7 +158,7 @@ export async function createFernField(
       variantRoot,
       [fern],
       [fernModel],
-      await packInstanceMatrices(bucket.matrices, yieldControl),
+      matrixData,
       metersPerUnit,
       renderMode,
       undefined,

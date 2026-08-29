@@ -96,6 +96,9 @@ export class GameServer {
       worldId: session.worldId,
       actorId: session.actorId,
       pose: clonePlayerPose(pose),
+      temperature: previous?.temperature ?? 37,
+      hunger: previous?.hunger ?? 100,
+      thirst: previous?.thirst ?? 100,
       revision: (previous?.revision ?? 0) + 1,
       updatedAt: occurredAt,
     };

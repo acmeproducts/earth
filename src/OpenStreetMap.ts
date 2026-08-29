@@ -786,28 +786,24 @@ function createRoadMeshes(
     const length = Math.hypot(dx, dz) || 1;
     const offsetX = (-dz / length) * halfWidth;
     const offsetZ = (dx / length) * halfWidth;
-    const leftElevation = centerElevations?.[index] ?? sampleElevation(
-        terrain,
-        points[index].x + offsetX,
-        points[index].z + offsetZ,
-        options.meshWidth,
-        options.meshDepth,
-      );
-    const rightElevation = centerElevations?.[index] ?? sampleElevation(
-        terrain,
-        points[index].x - offsetX,
-        points[index].z - offsetZ,
-        options.meshWidth,
-        options.meshDepth,
-      );
+    // Roads are planar across their width. Sample the centerline once and
+    // use that elevation for both edges; sampling each edge independently
+    // reintroduces the terrain's cross-slope and lets one edge clip through.
+    const centerElevation = centerElevations?.[index] ?? sampleElevation(
+      terrain,
+      points[index].x,
+      points[index].z,
+      options.meshWidth,
+      options.meshDepth,
+    );
     left.push(new Vector3(
       points[index].x + offsetX,
-      (leftElevation + clearanceMeters) / options.metersPerUnit,
+      (centerElevation + clearanceMeters) / options.metersPerUnit,
       points[index].z + offsetZ,
     ));
     right.push(new Vector3(
       points[index].x - offsetX,
-      (rightElevation + clearanceMeters) / options.metersPerUnit,
+      (centerElevation + clearanceMeters) / options.metersPerUnit,
       points[index].z - offsetZ,
     ));
   }

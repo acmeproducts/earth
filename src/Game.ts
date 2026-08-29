@@ -31,6 +31,7 @@ import { createBushField } from "./BushField";
 import { createSaplingField } from "./SaplingField";
 import { createFernField } from "./FernField";
 import { createTallPlantField } from "./TallPlantField";
+import { createWheatField } from "./WheatField";
 import { createRockyBeachField } from "./RockyBeachField";
 import { createRockField } from "./RockField";
 import { proceduralActorMixAtTile } from "./procedural/ProceduralActorMix";
@@ -133,6 +134,7 @@ const VEGETATION_FIELD_CONFIG: Readonly<Record<VegetationFieldKind, VegetationFi
   saplingField: { category: "trees", lodDistanceCapMeters: 14 },
   grassField: { category: "grass", lodDistanceCapMeters: 8 },
   tallPlantField: { category: "grass", lodDistanceCapMeters: 11 },
+  wheatField: { category: "grass", lodDistanceCapMeters: 10 },
   rockyBeachField: { category: "grass", lodDistanceCapMeters: 10 },
   bushField: { category: "bushes", lodDistanceCapMeters: 16 },
   fernField: { category: "grass", lodDistanceCapMeters: 7 },
@@ -791,6 +793,16 @@ export class Game {
     );
     if (!this.stageTileField(record, "tallPlantField", tallPlantField, generation)) return;
 
+    await reportInitializationProgress(onProgress, "Growing wheat", 76);
+    const wheatField = await createWheatField(this.scene, terrainData, {
+      ...fieldOptions,
+      seed: layerSeed(terrainData.generationSeed, "wheat"),
+      densityScale: () => actorMix.tallPlants.densityScale,
+      renderMode: this.vegetationModes.grass,
+    });
+    await this.prepareTileFieldLod(record, wheatField, this.fieldLodDistance("wheatField"), yieldControl);
+    if (!this.stageTileField(record, "wheatField", wheatField, generation)) return;
+
     await reportInitializationProgress(onProgress, "Adding bushes", 79);
     const bushField = await createBushField(this.scene, terrainData, {
       ...fieldOptions,
@@ -899,6 +911,7 @@ export class Game {
     console.log(
       `Tile ${record.key}: ${treeField.count} trees, ${saplingField.count} saplings, ` +
       `${grassField.count} grass, ${tallPlantField.count} wildflower patches, ` +
+      `${wheatField.count} wheat, ` +
       `${bushField.count} bushes, ` +
       `${fernField.count} ferns, ${rockyBeachField.count} rocky beach patches, ` +
       `${rockField.count} rocks, ` +

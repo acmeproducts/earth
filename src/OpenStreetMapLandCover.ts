@@ -128,6 +128,9 @@ export function landCoverClassForFeature(
   if (["bus_station", "commercial", "garages", "industrial", "railway", "retail"].includes(detail)) {
     return LandCoverClass.BuiltUp;
   }
+  if (["allotments", "farmland", "farmyard", "orchard", "plant_nursery", "vineyard"].includes(detail)) {
+    return LandCoverClass.Cropland;
+  }
   if (["cemetery", "pitch", "playground", "stadium", "track"].includes(detail)) {
     return LandCoverClass.Grassland;
   }

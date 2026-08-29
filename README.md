@@ -57,8 +57,10 @@ The output will be in the `dist/` directory.
 
 Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
 The controls configure the number of samples along each cube-face edge and the
-resolution of each capture. The default produces 500 captures: five faces,
-each with a 10 by 10 grid of 256 by 256 pixel frames.
+resolution of each capture. The default produces 125 captures: five faces,
+each with a 5 by 5 grid of 192 px frames. Streamed regional tree atlases use
+the same directional grid and frame resolution; only their capture scheduling
+is cooperative so the work can be spread across gameplay frames.
 
 The source family contains deterministic procedural birch, pine, and spruce trees. Birch uses
 tapered branches with runtime-generated bark and textured leaf cards; pine and spruce use distinct

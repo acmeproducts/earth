@@ -1,6 +1,7 @@
 import { sampleElevation } from "./Geo";
 import type { RoadStructure } from "./RoadPlanner";
 import type { TerrainData } from "./TerrainData";
+import type { TerrainModification } from "./TerrainModification";
 
 export interface TerrainRoadPath {
   points: ReadonlyArray<{ x: number; z: number }>;
@@ -15,13 +16,15 @@ export interface RoadTerrainOptions {
   metersPerUnit: number;
 }
 
-interface StampingSegment {
+interface StampingSegment extends TerrainModification {
   start: { x: number; z: number };
   end: { x: number; z: number };
   startElevation: number;
   endElevation: number;
   flatRadius: number;
   outerRadius: number;
+  targetElevationAt: (x: number, z: number) => number;
+  influenceAt: (x: number, z: number) => number;
 }
 
 /** Flattens each road carriageway and eases its shoulder back into the source terrain. */
@@ -68,6 +71,20 @@ export async function conformTerrainToRoads(
         endElevation: elevations[index],
         flatRadius,
         outerRadius,
+        minimumX: Math.min(sampled[index - 1].x, sampled[index].x) - outerRadius,
+        maximumX: Math.max(sampled[index - 1].x, sampled[index].x) + outerRadius,
+        minimumZ: Math.min(sampled[index - 1].z, sampled[index].z) - outerRadius,
+        maximumZ: Math.max(sampled[index - 1].z, sampled[index].z) + outerRadius,
+        targetElevationAt: (x, z) => {
+          const closest = closestPointOnSegment(x, z, sampled[index - 1], sampled[index]);
+          return elevations[index - 1] + (elevations[index] - elevations[index - 1]) * closest.amount;
+        },
+        influenceAt: (x, z) => {
+          const closest = closestPointOnSegment(x, z, sampled[index - 1], sampled[index]);
+          const distance = Math.hypot(x - closest.x, z - closest.z);
+          if (distance >= outerRadius) return 0;
+          return distance <= flatRadius ? 1 : 1 - smoothstep(flatRadius, outerRadius, distance);
+        },
       });
     }
     await yieldControl?.();
@@ -90,18 +107,9 @@ export async function conformTerrainToRoads(
       let totalWeight = 0;
       let strongestBlend = 0;
       for (const segment of candidates) {
-        const closest = closestPointOnSegment(x, z, segment.start, segment.end);
-        const distance = Math.hypot(x - closest.x, z - closest.z);
-        if (distance >= segment.outerRadius) continue;
-        const blend = distance <= segment.flatRadius
-          ? 1
-          : 1 - smoothstep(
-            segment.flatRadius,
-            segment.outerRadius,
-            distance,
-          );
-        const targetElevation = segment.startElevation +
-          (segment.endElevation - segment.startElevation) * closest.amount;
+        const blend = segment.influenceAt(x, z);
+        if (blend <= 0) continue;
+        const targetElevation = segment.targetElevationAt(x, z);
         weightedElevation += targetElevation * blend;
         totalWeight += blend;
         strongestBlend = Math.max(strongestBlend, blend);

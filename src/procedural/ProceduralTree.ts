@@ -64,14 +64,14 @@ const FOLIAGE_TEXTURE_URLS: Readonly<Partial<Record<TreeSpecies, string>>> =
   }));
 
 /**
- * A leaf image is one upright leaf on transparency: stem at the bottom, tip at
- * the top, which is the axis a card's own up direction already follows. Only
- * about half of such a card survives the alpha cut, so the card count the
- * flat-colored crown was tuned for leaves a see-through canopy behind it. More
- * cards fill it back in.
+ * A foliage image is one upright palm leaflet on transparency: stem at the
+ * bottom, tip at the top, which is the axis a card's own up direction already
+ * follows. Only about half of such a card survives the alpha cut, so the card
+ * count the flat-colored crown was tuned for leaves a see-through canopy
+ * behind it. More cards fill it back in.
  */
 const FOLIAGE_CARD_DENSITY = 2.6;
-/** Leaves are taller than wide, so an unmeasured image is assumed to be too. */
+/** Leaflets are taller than wide, so an unmeasured image is assumed to be too. */
 const DEFAULT_FOLIAGE_CARD_ASPECT = 0.72;
 const foliageCardAspects = new Map<TreeSpecies, number>();
 let foliageMeasurement: Promise<void> | undefined;
@@ -111,7 +111,7 @@ function measureEveryFoliageTexture(): Promise<void> {
 }
 
 interface FoliageCardShape {
-  /** Card width / length, matching the leaf image. */
+  /** Card width / length, matching the foliage image. */
   aspect: number;
   /** Card count multiplier that fills the crown back in after the alpha cut. */
   density: number;
