@@ -1,5 +1,4 @@
 import type { GameConnection } from "./GameConnection";
-import { LocalGameConnection } from "./GameConnection";
 import type {
   GameAction,
   GameEvent,
@@ -12,10 +11,7 @@ import type {
 } from "./GameProtocol";
 import { isValidPlayerPose } from "./GameProtocol";
 import { GameServer } from "./GameServer";
-import {
-  createBrowserGameStateRepository,
-  type GameStateRepository,
-} from "./GameStateRepository";
+import type { GameStateRepository } from "./GameStateRepository";
 
 const CHANNEL_NAME = "earth.game.v1";
 const ACTOR_ID_STORAGE_KEY = "earth.tab-actor-id.v1";
@@ -168,7 +164,86 @@ export class BrowserBroadcastGameConnection implements GameConnection {
   }
 }
 
-let browserLocalServer: GameServer | undefined;
+/** Browser transport for the real game backend. Game state never touches browser storage. */
+export class WebSocketGameConnection implements GameConnection {
+  private readonly url: string;
+  private readonly listeners = new Set<GameEventListener>();
+  private socket?: WebSocket;
+  private request?: JoinGameRequest;
+  private dispatchQueue: Promise<void> = Promise.resolve();
+  private resolveConnect?: (snapshot: GameSnapshot) => void;
+  private rejectConnect?: (error: Error) => void;
+
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  connect(request: JoinGameRequest): Promise<GameSnapshot> {
+    if (this.socket) return Promise.reject(new Error("This game connection is already open."));
+    this.request = { ...request };
+    this.socket = new WebSocket(this.url);
+    this.socket.onopen = () => this.socket?.send(JSON.stringify({ type: "join", request }));
+    this.socket.onmessage = (message) => this.handleMessage(message.data);
+    this.socket.onerror = () => this.failConnect(new Error("Could not connect to the game backend."));
+    this.socket.onclose = () => {
+      this.failConnect(new Error("The game backend connection closed."));
+      this.socket = undefined;
+    };
+    return new Promise<GameSnapshot>((resolve, reject) => {
+      this.resolveConnect = resolve;
+      this.rejectConnect = reject;
+    });
+  }
+
+  dispatch(action: GameAction): Promise<void> {
+    const dispatched = this.dispatchQueue.then(() => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        throw new Error("The game connection is not open.");
+      }
+      this.socket.send(JSON.stringify({ type: "action", action }));
+    });
+    this.dispatchQueue = dispatched.catch(() => undefined);
+    return dispatched;
+  }
+
+  subscribe(listener: GameEventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  async close(): Promise<void> {
+    await this.dispatchQueue;
+    this.socket?.close();
+    this.socket = undefined;
+    this.request = undefined;
+    this.listeners.clear();
+  }
+
+  private handleMessage(raw: unknown): void {
+    let message: { type?: string; snapshot?: GameSnapshot; event?: GameEvent; message?: string };
+    try {
+      message = JSON.parse(String(raw));
+    } catch {
+      this.failConnect(new Error("The game backend sent invalid data."));
+      return;
+    }
+    if (message.type === "snapshot" && message.snapshot) {
+      this.resolveConnect?.(message.snapshot);
+      this.resolveConnect = undefined;
+      this.rejectConnect = undefined;
+    } else if (message.type === "event" && message.event) {
+      for (const listener of this.listeners) listener(message.event);
+    } else if (message.type === "error") {
+      this.failConnect(new Error(message.message ?? "Game backend request failed."));
+    }
+  }
+
+  private failConnect(error: Error): void {
+    this.rejectConnect?.(error);
+    this.resolveConnect = undefined;
+    this.rejectConnect = undefined;
+  }
+}
 
 export interface BrowserGameConnection {
   connection: GameConnection;
@@ -177,20 +252,14 @@ export interface BrowserGameConnection {
 }
 
 export function createBrowserLocalGameConnection(): BrowserGameConnection {
-  const repository = createBrowserGameStateRepository();
-  const connection = typeof BroadcastChannel === "function"
-    ? new BrowserBroadcastGameConnection(repository, new BroadcastChannel(CHANNEL_NAME))
-    : fallbackConnection(repository);
+  const configuredUrl = new URLSearchParams(window.location.search).get("game-backend");
+  const url = configuredUrl ?? `ws://${window.location.hostname || "localhost"}:3001/game`;
+  const connection = new WebSocketGameConnection(url);
   return {
     connection,
     actorId: loadOrCreateTabActorId(),
     sessionId: createId(),
   };
-}
-
-function fallbackConnection(repository: GameStateRepository): GameConnection {
-  browserLocalServer ??= new GameServer(repository);
-  return new LocalGameConnection(browserLocalServer);
 }
 
 function loadOrCreateTabActorId(): string {

@@ -19,7 +19,7 @@ A 3D Earth visualization built with Babylon.js, TypeScript, and Webpack.
 
 ### Prerequisites
 
-- Node.js 18+ (recommended: 20+)
+- Node.js 22.5+ for the local SQLite backend
 - pnpm (`npm install -g pnpm`)
 
 ### Installation
@@ -42,6 +42,16 @@ pnpm dev
 ```
 
 The app will open at [http://localhost:3000](http://localhost:3000)
+
+The game backend is a separate local process. Start it alongside the frontend:
+
+```bash
+pnpm game:dev
+```
+
+Local player state is persisted in `data/earth.sqlite` by the backend, not in browser storage.
+The browser connects to `ws://localhost:3001/game`; pass `?game-backend=wss://...` when using
+another backend endpoint.
 
 ### Production Build
 

@@ -491,6 +491,24 @@ function createEnterableBuilding(
     }
   }
 
+  // Facade bays are intentionally split around openings, but the outside
+  // corners belong to the footprint rather than to either adjacent wall.
+  // Build those corners once per story from the shared outline vertices so
+  // the two wall runs meet with one continuous mitered outer edge.
+  if (part === "exterior") {
+    for (let floor = 0; floor < floorCount; floor++) {
+      addFacadeCorners(
+        parts,
+        scene,
+        outline,
+        baseElevation + floor * storyHeight,
+        storyHeight,
+        options,
+        appearance.wall,
+      );
+    }
+  }
+
   for (let edgeIndex = 0; part === "exterior" && edgeIndex < outline.length; edgeIndex++) {
     const start = outline[edgeIndex];
     const end = outline[(edgeIndex + 1) % outline.length];
@@ -572,6 +590,87 @@ function createEnterableBuilding(
 
 function facadeBayCount(edgeLengthMeters: number, style: BuildingWindowStyle): number {
   return Math.max(1, Math.min(16, Math.round(edgeLengthMeters / style.baySpacingMeters)));
+}
+
+function addFacadeCorners(
+  parts: Mesh[],
+  scene: Scene,
+  outline: ScenePoint[],
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const halfThickness = BUILDING_WALL_THICKNESS_METERS / 2 / options.metersPerUnit;
+  for (let index = 0; index < outline.length; index++) {
+    const previous = outline[(index + outline.length - 1) % outline.length];
+    const vertex = outline[index];
+    const next = outline[(index + 1) % outline.length];
+    const previousDirection = unitDirection(previous, vertex);
+    const nextDirection = unitDirection(vertex, next);
+    // Concave vertices are internal corners; the adjacent wall panels already
+    // cover them and a convex miter would incorrectly fill the courtyard.
+    const turn = previousDirection.x * nextDirection.z -
+      previousDirection.z * nextDirection.x;
+    if (turn <= 1e-5) continue;
+
+    const previousNormal = outwardNormal(previousDirection);
+    const nextNormal = outwardNormal(nextDirection);
+    const outerMiter = intersectLines(
+      addPoint(vertex, scalePoint(previousNormal, halfThickness)),
+      previousDirection,
+      addPoint(vertex, scalePoint(nextNormal, halfThickness)),
+      nextDirection,
+    );
+    if (!outerMiter) continue;
+
+    const corner = [
+      vertex,
+      addPoint(vertex, scalePoint(previousNormal, halfThickness)),
+      outerMiter,
+      addPoint(vertex, scalePoint(nextNormal, halfThickness)),
+    ];
+    const mesh = createBuildingPrism(
+      scene,
+      corner,
+      bottomElevation + heightMeters,
+      bottomElevation,
+      options,
+    );
+    setSolidVertexColor(mesh, color);
+    parts.push(mesh);
+  }
+}
+
+function unitDirection(start: ScenePoint, end: ScenePoint): ScenePoint {
+  const length = pointDistance(start, end) || 1;
+  return { x: (end.x - start.x) / length, z: (end.z - start.z) / length };
+}
+
+function outwardNormal(direction: ScenePoint): ScenePoint {
+  return { x: direction.z, z: -direction.x };
+}
+
+function scalePoint(point: ScenePoint, scale: number): ScenePoint {
+  return { x: point.x * scale, z: point.z * scale };
+}
+
+function addPoint(first: ScenePoint, second: ScenePoint): ScenePoint {
+  return { x: first.x + second.x, z: first.z + second.z };
+}
+
+function intersectLines(
+  firstPoint: ScenePoint,
+  firstDirection: ScenePoint,
+  secondPoint: ScenePoint,
+  secondDirection: ScenePoint,
+): ScenePoint | undefined {
+  const cross = firstDirection.x * secondDirection.z -
+    firstDirection.z * secondDirection.x;
+  if (Math.abs(cross) < 1e-6) return undefined;
+  const delta = { x: secondPoint.x - firstPoint.x, z: secondPoint.z - firstPoint.z };
+  const amount = (delta.x * secondDirection.z - delta.z * secondDirection.x) / cross;
+  return addPoint(firstPoint, scalePoint(firstDirection, amount));
 }
 
 function addWindowQuad(
@@ -1326,6 +1425,9 @@ function resolvedRoofShape(
 ): BuildingPlan["roofShape"] {
   if (plan.roofShape !== "unknown") {
     if (plan.roofShape === "flat") return "flat";
+    // Mono-pitch roofs read as visibly lopsided in the world view. Keep the
+    // source value accepted for compatibility, but render it symmetrically.
+    if (plan.roofShape === "skillion") return "gabled";
     return isConvex(outline) && outline.length <= 12 ? plan.roofShape : "flat";
   }
   if (outline.length !== 4 || !isConvex(outline) || areaSquareMeters > 650 || plan.heightMeters > 16) {
@@ -1333,9 +1435,8 @@ function resolvedRoofShape(
   }
   const variation = seededUnit(plan.detailSeed ^ 0x7a4d2b);
   if (variation < 0.34) return "gabled";
-  if (variation < 0.58) return "hipped";
-  if (variation < 0.72) return "skillion";
-  if (variation < 0.84) return "pyramidal";
+  if (variation < 0.62) return "hipped";
+  if (variation < 0.78) return "pyramidal";
   return "flat";
 }
 

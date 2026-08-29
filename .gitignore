@@ -22,6 +22,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Local game backend database
+data/
+
 # Environment files
 .env
 .env.local

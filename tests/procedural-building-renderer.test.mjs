@@ -180,7 +180,7 @@ test("stable seeds vary roof construction, overhang, and color", () => {
   engine.dispose();
 });
 
-test("skillion roofs contain no collapsed triangles", () => {
+test("skillion roof metadata renders as a symmetric roof", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
   const mesh = ProceduralBuildingRenderer.createDetailed(

@@ -34,6 +34,9 @@ import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 const ROCK_PATCH_HEIGHT_METERS = 0.62;
 const ROCK_PATCH_SPACING_METERS = 3.4;
 const ROCK_GROUND_OFFSET_METERS = 0.025;
+// Let the outer stones sit just below the shoreline so the patch reads as a
+// natural intertidal band instead of stopping at an artificial hard edge.
+const ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS = 0.18;
 const SHORE_PROBE_METERS = 9;
 const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0], [1, 0], [0, -1], [0, 1],
@@ -104,7 +107,7 @@ export async function createRockyBeachField(
           maximumHalfWidth,
           meshWidth,
           meshDepth,
-          waterLineMeters - 0.06,
+          waterLineMeters - ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS,
         )) continue;
 
         const normal = sampleTerrainNormal(
@@ -238,7 +241,9 @@ function configureRockyBeachRenderers(
     impostor.material.setFloat("impostorLodFar", 30);
     impostor.material.setFloat("instanceColorCoverage", 1);
     impostor.material.setFloat("groundColorBlend", 0.1);
-    impostor.material.setFloat("impostorAmbientUpward", 0.72);
+    // The impostor has a single stable canopy normal; reduce its sky bias so
+    // its average value matches the varied normals used by the live stones.
+    impostor.material.setFloat("impostorAmbientUpward", 0.54);
     impostor.material.setFloat("vegetationShadowAtInstanceRoot", 1);
     impostor.material.setFloat("vegetationShadowDarkness", 0.42);
     impostor.material.setColor3("distanceGroundColor", new Color3(0.43, 0.42, 0.39));

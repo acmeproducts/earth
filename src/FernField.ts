@@ -36,6 +36,7 @@ const FERN_GROUND_OFFSET_METERS = 0.035;
 const FERN_CLUSTER_MIN_COUNT = 3;
 const FERN_CLUSTER_MAX_COUNT = 5;
 const FERN_CLUSTER_RADIUS_METERS = 1.8;
+const FERN_CLUSTER_ANCHOR_SCALE = 0.62;
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.24,
   [LandCoverClass.Shrubland]: 0.035,
@@ -96,9 +97,13 @@ export async function createFernField(
           z / (clusterScale * 0.38) - 13.9,
         ) * 0.5 + 0.5;
         const clusterDensity = smoothstep(0.3, 0.68, broad * 0.8 + detail * 0.2);
+        // Let the habitat noise decide where a patch exists, then let the
+        // patch itself supply most of the density. This keeps neighboring
+        // grid cells from each becoming equally convincing little clusters.
         const occupancy = Math.min(
           1,
-          coverOccupancy * (0.12 + clusterDensity * 0.88) *
+          coverOccupancy * FERN_CLUSTER_ANCHOR_SCALE *
+            (0.04 + clusterDensity * 0.96) *
             Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
@@ -120,9 +125,11 @@ export async function createFernField(
         const clusterRotation = random() * Math.PI * 2;
         addFern(x, z, 1);
         for (let member = 1; member < clusterCount; member++) {
-          const angle = clusterRotation + member * Math.PI * 2 / (clusterCount - 1) +
-            (random() - 0.5) * 0.65;
-          const distance = (0.45 + random() * 0.55) *
+          // Ferns grow in clumps, not in a regular wheel. A square-rooted
+          // radius keeps most fronds near the parent while leaving a few
+          // irregular outer plants to break up the silhouette.
+          const angle = clusterRotation + random() * Math.PI * 2;
+          const distance = Math.sqrt(0.12 + random() * 0.88) *
             FERN_CLUSTER_RADIUS_METERS / metersPerUnit;
           addFern(
             x + Math.cos(angle) * distance,

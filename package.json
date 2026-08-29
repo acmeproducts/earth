@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "webpack serve --mode development",
+    "game:dev": "yarn node --experimental-sqlite server/local-game-server.mjs",
     "build": "webpack --mode production",
     "build:stars": "node scripts/build-star-catalog.mjs",
     "test": "node --test tests/*.test.mjs",
@@ -23,6 +24,7 @@
     "@types/earcut": "^3.0.0",
     "@types/node": "^20.10.0",
     "@types/suncalc": "^1.9.2",
+    "@types/ws": "^8",
     "html-webpack-plugin": "^5.6.0",
     "rimraf": "^5.0.5",
     "ts-loader": "^9.5.1",
@@ -39,7 +41,8 @@
     "earcut": "^3.2.3",
     "lerc": "^4.2.0",
     "pbf": "^5.1.2",
-    "suncalc": "^2.0.1"
+    "suncalc": "^2.0.1",
+    "ws": "^8.21.3"
   },
   "packageManager": "yarn@4.13.0+sha512.5c20ba010c99815433e5c8453112165e673f1c7948d8d2b267f4b5e52097538658388ebc9f9580656d9b75c5cc996f990f611f99304a2197d4c56d21eea370e7"
 }

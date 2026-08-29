@@ -776,7 +776,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8.5.10":
+"@types/ws@npm:^8, @types/ws@npm:^8.5.10":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:
@@ -1144,6 +1144,7 @@ __metadata:
     "@types/earcut": "npm:^3.0.0"
     "@types/node": "npm:^20.10.0"
     "@types/suncalc": "npm:^1.9.2"
+    "@types/ws": "npm:^8"
     astronomy-engine: "npm:^2.1.19"
     earcut: "npm:^3.2.3"
     html-webpack-plugin: "npm:^5.6.0"
@@ -1156,6 +1157,7 @@ __metadata:
     webpack: "npm:^5.89.0"
     webpack-cli: "npm:^5.1.4"
     webpack-dev-server: "npm:^5.2.3"
+    ws: "npm:^8.21.3"
   languageName: unknown
   linkType: soft
 
@@ -4179,6 +4181,21 @@ __metadata:
     utf-8-validate:
       optional: true
   checksum: 10c0/82d687bbfbccce04e91266ff9911b27c67ca622fd8fbacc6a64d467a43fbd7ecaa3ef6d820b315c060682f901463f57cac01a02b00c4379f49c747ec7da83169
+  languageName: node
+  linkType: hard
+
+"ws@npm:^8.21.3":
+  version: 8.21.3
+  resolution: "ws@npm:8.21.3"
+  peerDependencies:
+    bufferutil: ^4.0.1
+    utf-8-validate: ">=5.0.2"
+  peerDependenciesMeta:
+    bufferutil:
+      optional: true
+    utf-8-validate:
+      optional: true
+  checksum: 10c0/7b28dc2863ea0e2cece68d142a3eee90361021b73f750431e6d8076bb7dede5fdfdb75b3d29534b62f411261147b76b1bc80fb5cc63ab0aabd467280e85b22e0
   languageName: node
   linkType: hard
 
