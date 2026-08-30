@@ -374,6 +374,50 @@ Detailed OSM hedges, fences, walls, guard rails, and roadside noise barriers com
 from small cached Overpass queries because the general-purpose OpenMapTiles schema
 omits them; four level-16 terrain tiles share each level-14 query region.
 
+### Interior building layouts
+
+`BuildingLayoutPlanner.ts` contains the renderer-independent interface for
+dividing a local, meter-based building footprint into apartment, hallway, and
+stair polygons. Footprints up to 120 m² remain one apartment shell. Larger
+footprints receive common circulation and are divided into apartment shells no
+larger than 120 m². The same algorithm is currently used for every building
+type. The stair core sits beside one continuous hallway and is placed
+deterministically so matching floors retain the same vertical core. A supplied
+exterior door creates an entrance-lobby branch to the hallway; the stair moves
+beside that lobby instead of occupying the doorway. Apartment entrance doors
+are generated on each shared apartment–hallway boundary.
+
+`ApartmentLayoutPlanner.ts` recursively bisects an apartment into equally sized
+rooms with orthogonal walls. It stops before either resulting room would be
+smaller than 10 m² and tries the other axis when a proposed wall intersects a
+supplied door or window segment.
+
+```typescript
+import { planBuildingLayout } from "./BuildingLayoutPlanner";
+import { renderFloorPlanSvg } from "./FloorPlan";
+
+const layout = planBuildingLayout({
+  buildingType: "apartment-building",
+  buildingPolygon: {
+    outer: [
+      { x: 0, y: 0 }, { x: 20, y: 0 },
+      { x: 20, y: 12 }, { x: 0, y: 12 },
+    ],
+  },
+});
+
+const svgImage = renderFloorPlanSvg(layout, { width: 900, height: 600 });
+```
+
+`renderFloorPlanSvg` depends only on the generic `PolygonLayout` contract, so
+the apartment-room planner and other future planners can use the same image
+pipeline. Callers can display the returned SVG directly or save it as an
+`.svg` file for design review. Optional `door` and `window` opening segments are
+included in planner output and drawn over the plan outline.
+
+Run `yarn layouts:examples` to regenerate rectangular, tapered, and angled
+example plans in `data/layout-examples`.
+
 ### Modifying the Scene
 
 Edit `src/Game.ts` to customize:
