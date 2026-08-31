@@ -20,6 +20,13 @@ import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
+import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
+import { planApartmentLayout, type ApartmentLayout } from "../ApartmentLayoutPlanner";
+import type { Opening2D, Point2D, PolygonLayout } from "../FloorPlan";
+import {
+  captureEncounteredBuildingLayout,
+  retainCurrentBuildingLayoutCaptures,
+} from "../BuildingLayoutDebugCapture";
 import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
 import { buildingProfile } from "../BuildingProfile";
 import type { TerrainData } from "../TerrainData";
@@ -94,6 +101,18 @@ interface DetailedBuildingParts {
   stairFlightCenters: ScenePoint[];
   windowStyleId: string;
   windowRegion: string;
+  plannedInterior: boolean;
+}
+
+interface PlannedInterior {
+  building: BuildingLayout;
+  apartments: ApartmentLayout[];
+}
+
+interface InteriorPlanningAttempt {
+  input: Parameters<typeof planBuildingLayout>[0];
+  interior?: PlannedInterior;
+  failure?: string;
 }
 
 interface PendingBuildingInterior {
@@ -151,11 +170,13 @@ export class ProceduralBuildingRenderer {
     // faithful mass so a real building inside a courtyard does not appear to
     // sit on top of a second, incorrectly filled building.
     if (prepared.holes.length > 0) {
+      captureUnplannedBuilding(plan, prepared, options, "Courtyard footprints use the massing renderer.");
       return createCourtyardBuilding(scene, plan, prepared, options, appearance);
     }
     const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
     const towerBlend = highRiseBlend(plan.heightMeters);
     if (seededUnit(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
+      captureUnplannedBuilding(plan, prepared, options, "High-rise buildings use the tower renderer.");
       return createHighRiseBuilding(scene, plan, prepared, options, appearance, towerBlend);
     }
     const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
@@ -231,6 +252,7 @@ export class ProceduralBuildingRenderer {
       windowCount: detailed.windowCount,
       windowStyleId: detailed.windowStyleId,
       windowRegion: detailed.windowRegion,
+      plannedInterior: detailed.plannedInterior,
       interiorFloorCount: detailed.floorCount,
       stairFlightCount: detailed.stairFlightCount,
       entranceEdgeIndex: detailed.entranceEdgeIndex,
@@ -286,6 +308,9 @@ export class ProceduralBuildingRenderer {
 
   static merge(meshes: Mesh[], name: string, parent: TransformNode): Mesh | undefined {
     if (meshes.length === 0) return undefined;
+    const buildingIds = meshes
+      .map((mesh) => mesh.metadata?.buildingId)
+      .filter((id): id is string => typeof id === "string");
     const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
     const skyReflection = meshes.find((mesh) => mesh.metadata?.skyReflection)?.metadata
       ?.skyReflection as BaseTexture | null | undefined;
@@ -306,6 +331,7 @@ export class ProceduralBuildingRenderer {
     result.material = material;
     result.parent = parent;
     result.checkCollisions = name === "buildings" || name === "detailedBuildings";
+    retainCurrentBuildingLayoutCaptures(buildingIds, result);
     if (Number.isFinite(metersPerUnit)) {
       const shadowRanges = configureBuildingSurfaceMaterials(
         result,
@@ -314,12 +340,41 @@ export class ProceduralBuildingRenderer {
         skyReflection,
       );
       if (name === "buildings" || name === "detailedBuildings") {
-        createBuildingShadowCaster(result, parent, material, shadowRanges);
+        createBuildingShadowCaster(result, parent, shadowRanges);
       }
       configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
     }
     return result;
   }
+}
+
+function captureUnplannedBuilding(
+  plan: BuildingPlan,
+  prepared: PreparedBuildingFootprint,
+  options: BuildingRenderOptions,
+  fallbackReason: string,
+): void {
+  const project = (point: ScenePoint): Point2D => ({
+    x: point.x * options.metersPerUnit,
+    y: point.z * options.metersPerUnit,
+  });
+  captureEncounteredBuildingLayout({
+    id: plan.id,
+    buildingClass: plan.buildingClass,
+    heightMeters: plan.heightMeters,
+    levels: plan.levels,
+    geographicFootprint: plan.footprint,
+    plannerInput: {
+      buildingType: "house",
+      buildingPolygon: {
+        outer: prepared.outline.map(project),
+        holes: prepared.holes.map((hole) => hole.map(project)),
+      },
+      openings: [],
+    },
+    facadeOpenings: [],
+    fallbackReason,
+  });
 }
 
 function createCourtyardBuilding(
@@ -469,8 +524,57 @@ function createEnterableBuilding(
     centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
     widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
   };
+  // The doorway is the only façade opening the building planner needs.  Once
+  // its shells exist, choose windows from the apartment-facing exterior walls;
+  // this keeps circulation and stair walls opaque by construction.
+  const entranceOpenings = plannedEntranceOpenings(
+    outline, entranceEdge, windowStyle, options,
+  );
+  const planningAttempt = profile.interiorLayout === "rooms"
+    ? createPlannedInterior(outline, entranceOpenings, options)
+    : undefined;
+  const plannedInterior = planningAttempt?.interior;
+  const facadeOpenings = plannedFacadeOpenings(
+    plan, outline, floorCount, storyHeight, entranceEdge, windowStyle, options,
+    plannedInterior?.building,
+  );
+  if (plannedInterior) {
+    const apartmentPlanning = planApartmentLayouts(plannedInterior.building, facadeOpenings);
+    plannedInterior.apartments = apartmentPlanning.apartments;
+    if (apartmentPlanning.failure) planningAttempt.failure = apartmentPlanning.failure;
+  }
+  if (part === "exterior" && planningAttempt) {
+    captureEncounteredBuildingLayout({
+      id: plan.id,
+      buildingClass: plan.buildingClass,
+      heightMeters: plan.heightMeters,
+      levels: plan.levels,
+      geographicFootprint: plan.footprint,
+      plannerInput: planningAttempt.input,
+      facadeOpenings,
+      buildingLayout: plannedInterior?.building,
+      apartmentLayouts: plannedInterior?.apartments,
+      fallbackReason: planningAttempt.failure,
+    });
+  } else if (part === "exterior") {
+    captureEncounteredBuildingLayout({
+      id: plan.id,
+      buildingClass: plan.buildingClass,
+      heightMeters: plan.heightMeters,
+      levels: plan.levels,
+      geographicFootprint: plan.footprint,
+      plannerInput: plannerInputFromOutline(outline, facadeOpenings, options),
+      facadeOpenings,
+      fallbackReason: `The ${plan.buildingClass} profile uses an open interior.`,
+    });
+  }
+  const plannedStair = plannedInterior
+    ? stairLayoutFromPlan(plannedInterior.building, options)
+    : undefined;
   const stairs = profile.hasStairs && floorCount > 1
-    ? findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
+    ? plannedStair
+      ? Array.from({ length: floorCount - 1 }, () => plannedStair)
+      : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
     : [];
   const parts: Mesh[] = [];
   const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
@@ -505,6 +609,21 @@ function createEnterableBuilding(
           floor % 2 === 1,
           options,
           floorColor,
+        );
+      }
+    }
+
+    if (plannedInterior) {
+      const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
+      for (let floor = 0; floor < floorCount; floor++) {
+        addPlannedInteriorWalls(
+          parts,
+          scene,
+          plannedInterior,
+          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+          storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+          options,
+          wallColor,
         );
       }
     }
@@ -568,7 +687,11 @@ function createEnterableBuilding(
         const sillHeight = windowStyle.sillMeters;
         const windowFits = bayWidth >= apertureWidth + BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
           storyHeight >= sillHeight + apertureHeight + BUILDING_WINDOW_HEAD_CLEARANCE_METERS;
-        if (windowFits) {
+        const plannedOpening = facadeOpenings.find((opening) =>
+          opening.id === `window-${edgeIndex}-${bay}`
+        );
+        if (windowFits && (!plannedInterior || !plannedOpening ||
+            !plannedInteriorBlocksOpening(plannedInterior, plannedOpening))) {
           const apertureOffset = (bayWidth - apertureWidth) / 2;
           addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
             storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
@@ -604,11 +727,340 @@ function createEnterableBuilding(
     stairFlightCenters: stairs.map(stairCenter),
     windowStyleId: windowStyle.id,
     windowRegion: windowStyle.region,
+    plannedInterior: plannedInterior !== undefined,
   };
 }
 
 function facadeBayCount(edgeLengthMeters: number, style: BuildingWindowStyle): number {
   return Math.max(1, Math.min(16, Math.round(edgeLengthMeters / style.baySpacingMeters)));
+}
+
+function plannedFacadeOpenings(
+  plan: BuildingPlan,
+  outline: readonly ScenePoint[],
+  _floorCount: number,
+  storyHeight: number,
+  entranceEdge: number,
+  windowStyle: BuildingWindowStyle,
+  options: BuildingRenderOptions,
+  buildingLayout?: BuildingLayout,
+): Opening2D[] {
+  const openings: Opening2D[] = [];
+  for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
+    const start = outline[edgeIndex];
+    const end = outline[(edgeIndex + 1) % outline.length];
+    const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
+    if (edgeLengthMeters < 0.35) continue;
+    const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
+    const bayWidth = edgeLengthMeters / bayCount;
+    for (let bay = 0; bay < bayCount; bay++) {
+      const isEntrance = edgeIndex === entranceEdge && bay === Math.floor(bayCount / 2);
+      if (isEntrance) {
+        const width = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
+        openings.push(openingAlongSceneEdge(
+          "building-entrance", "door", start, end,
+          bay * bayWidth + (bayWidth - width) / 2, width, options,
+        ));
+        continue;
+      }
+      const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
+        (bay * 0x119de1f3);
+      const blankBay = bayCount > 2 &&
+        seededUnit(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
+      const windowFits = bayWidth >= windowStyle.widthMeters +
+          BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
+        storyHeight >= windowStyle.sillMeters + windowStyle.heightMeters +
+          BUILDING_WINDOW_HEAD_CLEARANCE_METERS;
+      if (!blankBay && windowFits) {
+        const window = openingAlongSceneEdge(
+          `window-${edgeIndex}-${bay}`, "window", start, end,
+          bay * bayWidth + (bayWidth - windowStyle.widthMeters) / 2,
+          windowStyle.widthMeters, options,
+        );
+        if (!buildingLayout || facadeOpeningServesApartment(window, buildingLayout)) {
+          openings.push(window);
+        }
+      }
+    }
+  }
+  return openings;
+}
+
+function plannedEntranceOpenings(
+  outline: readonly ScenePoint[],
+  entranceEdge: number,
+  windowStyle: BuildingWindowStyle,
+  options: BuildingRenderOptions,
+): Opening2D[] {
+  const start = outline[entranceEdge];
+  const end = outline[(entranceEdge + 1) % outline.length];
+  const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
+  const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
+  const bayWidth = edgeLengthMeters / bayCount;
+  const bay = Math.floor(bayCount / 2);
+  const width = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
+  return [openingAlongSceneEdge(
+    "building-entrance", "door", start, end,
+    bay * bayWidth + (bayWidth - width) / 2, width, options,
+  )];
+}
+
+function openingAlongSceneEdge(
+  id: string,
+  type: "door" | "window",
+  start: ScenePoint,
+  end: ScenePoint,
+  offsetMeters: number,
+  widthMeters: number,
+  options: BuildingRenderOptions,
+): Opening2D {
+  const direction = unitDirection(start, end);
+  const point = (offset: number): Point2D => ({
+    x: start.x * options.metersPerUnit + direction.x * offset,
+    y: start.z * options.metersPerUnit + direction.z * offset,
+  });
+  return { id, type, start: point(offsetMeters), end: point(offsetMeters + widthMeters) };
+}
+
+function createPlannedInterior(
+  outline: readonly ScenePoint[],
+  facadeOpenings: readonly Opening2D[],
+  options: BuildingRenderOptions,
+): InteriorPlanningAttempt {
+  const input = plannerInputFromOutline(outline, facadeOpenings, options);
+  try {
+    const building = planBuildingLayout(input);
+    return {
+      input,
+      interior: { building, apartments: [] },
+    };
+  } catch (error) {
+    // Courtyards and malformed or unusually narrow footprints retain the
+    // proven open interior until their topology receives a dedicated planner.
+    return { input, failure: errorMessage(error) };
+  }
+}
+
+function planApartmentLayouts(
+  building: BuildingLayout,
+  facadeOpenings: readonly Opening2D[],
+): { apartments: ApartmentLayout[]; failure?: string } {
+  const failures: string[] = [];
+  const apartments = building.rooms
+    .filter((room) => room.type === "apartment")
+    .flatMap((room) => {
+      try {
+        return [planApartmentLayout({
+          apartmentPolygon: room.polygon,
+          openings: [...(building.openings ?? []), ...facadeOpenings]
+            .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
+        })];
+      } catch (error) {
+        failures.push(`${room.id}: ${errorMessage(error)}`);
+        return [];
+      }
+    });
+  return {
+    apartments,
+    failure: failures.length > 0
+      ? `Apartment planning failed for ${failures.join("; ")}`
+      : undefined,
+  };
+}
+
+function plannerInputFromOutline(
+  outline: readonly ScenePoint[],
+  facadeOpenings: readonly Opening2D[],
+  options: BuildingRenderOptions,
+): Parameters<typeof planBuildingLayout>[0] {
+  return {
+    buildingPolygon: {
+      outer: outline.map((point) => ({
+        x: point.x * options.metersPerUnit,
+        y: point.z * options.metersPerUnit,
+      })),
+    },
+    buildingType: "house",
+    openings: facadeOpenings.filter((opening) => opening.type === "door"),
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function plannedInteriorBlocksOpening(
+  interior: PlannedInterior,
+  opening: Opening2D,
+): boolean {
+  const stair = interior.building.rooms.find((room) => room.type === "stairs");
+  if (stair && openingTouchesBoundary(opening, stair.polygon.outer)) return true;
+  const layouts: readonly PolygonLayout[] = [interior.building, ...interior.apartments];
+  return layouts.some((layout) => layout.rooms.some((room) => {
+    const polygon = room.polygon.outer;
+    return polygon.some((start, index) => {
+      const end = polygon[(index + 1) % polygon.length];
+      if (segmentOnPolygonBoundary(start, end, layout.boundary.outer)) return false;
+      return pointOnSegment2D(start, opening.start, opening.end) ||
+        pointOnSegment2D(end, opening.start, opening.end);
+    });
+  }));
+}
+
+function openingTouchesBoundary(opening: Opening2D, polygon: readonly Point2D[]): boolean {
+  const center = {
+    x: (opening.start.x + opening.end.x) / 2,
+    y: (opening.start.y + opening.end.y) / 2,
+  };
+  return polygon.some((start, index) =>
+    pointOnSegment2D(center, start, polygon[(index + 1) % polygon.length])
+  );
+}
+
+function facadeOpeningServesApartment(opening: Opening2D, layout: BuildingLayout): boolean {
+  return layout.rooms.some((room) => room.type === "apartment" &&
+    openingTouchesBoundary(opening, room.polygon.outer));
+}
+
+function pointOnSegment2D(point: Point2D, start: Point2D, end: Point2D): boolean {
+  const cross = (end.x - start.x) * (point.y - start.y) -
+    (end.y - start.y) * (point.x - start.x);
+  if (Math.abs(cross) > 1e-5) return false;
+  return point.x >= Math.min(start.x, end.x) - 1e-5 &&
+    point.x <= Math.max(start.x, end.x) + 1e-5 &&
+    point.y >= Math.min(start.y, end.y) - 1e-5 &&
+    point.y <= Math.max(start.y, end.y) + 1e-5;
+}
+
+function stairLayoutFromPlan(
+  layout: BuildingLayout,
+  options: BuildingRenderOptions,
+): StairLayout | undefined {
+  const stair = layout.rooms.find((room) => room.type === "stairs");
+  if (!stair) return undefined;
+  const points = stair.polygon.outer;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const horizontal = maxX - minX >= maxY - minY;
+  const availableRun = (horizontal ? maxX - minX : maxY - minY) - 0.4;
+  const availableWidth = (horizontal ? maxY - minY : maxX - minX) - 0.3;
+  const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, availableRun);
+  const widthMeters = Math.min(BUILDING_STAIR_WIDTH_METERS, availableWidth);
+  if (runMeters < BUILDING_STAIR_MIN_RUN_METERS || widthMeters < 0.75) return undefined;
+  const startMeters = horizontal
+    ? { x: minX + 0.2, y: (minY + maxY) / 2 }
+    : { x: (minX + maxX) / 2, y: minY + 0.2 };
+  return {
+    edgeIndex: -1,
+    start: { x: startMeters.x / options.metersPerUnit, z: startMeters.y / options.metersPerUnit },
+    direction: horizontal ? { x: 1, z: 0 } : { x: 0, z: 1 },
+    inward: horizontal ? { x: 0, z: 1 } : { x: -1, z: 0 },
+    runMeters,
+    widthMeters,
+  };
+}
+
+function addPlannedInteriorWalls(
+  parts: Mesh[],
+  scene: Scene,
+  interior: PlannedInterior,
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  addLayoutWalls(parts, scene, interior.building, bottomElevation, heightMeters, options, color);
+  for (const apartment of interior.apartments) {
+    addLayoutWalls(parts, scene, apartment, bottomElevation, heightMeters, options, color);
+  }
+}
+
+function addLayoutWalls(
+  parts: Mesh[],
+  scene: Scene,
+  layout: PolygonLayout,
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const edges = new Map<string, readonly [Point2D, Point2D]>();
+  for (const room of layout.rooms) {
+    const polygon = room.polygon.outer;
+    for (let index = 0; index < polygon.length; index++) {
+      const start = polygon[index];
+      const end = polygon[(index + 1) % polygon.length];
+      if (segmentOnPolygonBoundary(start, end, layout.boundary.outer)) continue;
+      const key = canonicalSegmentKey(start, end);
+      if (!edges.has(key)) edges.set(key, [start, end]);
+    }
+  }
+  for (const [start, end] of edges.values()) {
+    addInteriorWall(parts, scene, start, end, layout.openings ?? [],
+      bottomElevation, heightMeters, options, color);
+  }
+}
+
+function segmentOnPolygonBoundary(
+  start: Point2D,
+  end: Point2D,
+  boundary: readonly Point2D[],
+): boolean {
+  return boundary.some((edgeStart, index) => {
+    const edgeEnd = boundary[(index + 1) % boundary.length];
+    return pointOnSegment2D(start, edgeStart, edgeEnd) && pointOnSegment2D(end, edgeStart, edgeEnd);
+  });
+}
+
+function canonicalSegmentKey(start: Point2D, end: Point2D): string {
+  const pointKey = (point: Point2D): string => `${point.x.toFixed(5)},${point.y.toFixed(5)}`;
+  const first = pointKey(start);
+  const second = pointKey(end);
+  return first < second ? `${first}|${second}` : `${second}|${first}`;
+}
+
+function addInteriorWall(
+  parts: Mesh[],
+  scene: Scene,
+  start: Point2D,
+  end: Point2D,
+  openings: readonly Opening2D[],
+  bottomElevation: number,
+  heightMeters: number,
+  options: BuildingRenderOptions,
+  color: Color3,
+): void {
+  const length = Math.hypot(end.x - start.x, end.y - start.y);
+  if (length < 0.05) return;
+  const direction = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+  const doors = openings
+    .filter((opening) => opening.type === "door" &&
+      pointOnSegment2D(opening.start, start, end) && pointOnSegment2D(opening.end, start, end))
+    .map((opening) => {
+      const first = (opening.start.x - start.x) * direction.x +
+        (opening.start.y - start.y) * direction.y;
+      const second = (opening.end.x - start.x) * direction.x +
+        (opening.end.y - start.y) * direction.y;
+      return { minimum: Math.max(0, Math.min(first, second)), maximum: Math.min(length, Math.max(first, second)) };
+    })
+    .filter((door) => door.maximum - door.minimum > 0.2)
+    .sort((a, b) => a.minimum - b.minimum);
+  const sceneStart = { x: start.x / options.metersPerUnit, z: start.y / options.metersPerUnit };
+  const sceneEnd = { x: end.x / options.metersPerUnit, z: end.y / options.metersPerUnit };
+  let cursor = 0;
+  const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, heightMeters - 0.12);
+  for (const door of doors) {
+    addFacadePanel(parts, scene, sceneStart, sceneEnd, length, cursor,
+      door.minimum - cursor, bottomElevation, heightMeters, options, color);
+    addFacadePanel(parts, scene, sceneStart, sceneEnd, length, door.minimum,
+      door.maximum - door.minimum, bottomElevation + doorHeight,
+      heightMeters - doorHeight, options, color);
+    cursor = Math.max(cursor, door.maximum);
+  }
+  addFacadePanel(parts, scene, sceneStart, sceneEnd, length, cursor,
+    length - cursor, bottomElevation, heightMeters, options, color);
 }
 
 function addFacadeCorners(
@@ -1147,19 +1599,20 @@ function configureBuildingSurfaceMaterials(
   addSurface(reflectiveIndices, reflectiveMaterial);
   mesh.material = materials;
 
-  const shadowRanges: BuildingShadowRange[] = [];
-  if (solidIndices.length > 0) {
-    shadowRanges.push({ indexStart: 0, indexCount: solidIndices.length });
-  }
-  if (reflectiveIndices.length > 0) {
-    shadowRanges.push({
-      indexStart: solidIndices.length + windowIndices.length,
-      indexCount: reflectiveIndices.length,
-    });
-  }
+  // Include window triangles in the depth pass. The dedicated caster uses an
+  // opaque material, so the whole building always casts a solid silhouette.
+  const shadowRanges: BuildingShadowRange[] = indices.length > 0
+    ? [{ indexStart: 0, indexCount: indices.length }]
+    : [];
 
   if (windowVertices.length === 0) return shadowRanges;
   mesh.markVerticesDataAsUpdatable(VertexBuffer.ColorKind, true);
+  if (mesh.metadata?.interiorsLoaded !== true) {
+    // Apply the residency rule before the first render as well as during the
+    // distance update below. This avoids one frame of see-through geometry.
+    for (const vertex of windowVertices) colors[vertex * 4 + 3] = 1;
+    mesh.updateVerticesData(VertexBuffer.ColorKind, colors, false, false);
+  }
   let lastUpdateMilliseconds = -Infinity;
   mesh.onBeforeRenderObservable.add(() => {
     const now = performance.now();
@@ -1173,10 +1626,14 @@ function configureBuildingSurfaceMaterials(
     const bounds = mesh.getBoundingInfo().boundingSphere;
     const center = bounds.centerWorld;
     const distanceMeters = Vector3.Distance(center, camera.globalPosition) * metersPerUnit;
-    const fade = clamp01(
-      (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
-      (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
-    );
+    // Keep the shell opaque until its interior is resident. A transparent
+    // window with no loaded interior exposes the terrain behind the house.
+    const fade = mesh.metadata?.interiorsLoaded === true
+      ? clamp01(
+        (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
+        (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
+      )
+      : 1;
     for (const vertex of windowVertices) {
       const offset = vertex * 3;
       colors[vertex * 4 + 3] = BUILDING_WINDOW_CLOSE_ALPHA +
@@ -1190,7 +1647,6 @@ function configureBuildingSurfaceMaterials(
 function createBuildingShadowCaster(
   source: Mesh,
   parent: TransformNode,
-  material: StandardMaterial,
   ranges: readonly BuildingShadowRange[],
 ): Mesh | undefined {
   if (!source.geometry || ranges.length === 0) return undefined;
@@ -1200,12 +1656,19 @@ function createBuildingShadowCaster(
   for (const range of ranges) {
     SubMesh.CreateFromIndices(0, range.indexStart, range.indexCount, caster);
   }
-  caster.material = material;
+  const shadowMaterial = new StandardMaterial(`${source.name}ShadowMaterial`, source.getScene());
+  shadowMaterial.diffuseColor = Color3.White();
+  shadowMaterial.specularColor = Color3.Black();
+  shadowMaterial.backFaceCulling = false;
+  shadowMaterial.transparencyMode = Material.MATERIAL_OPAQUE;
+  shadowMaterial.alpha = 1;
+  caster.material = shadowMaterial;
   caster.parent = parent;
   caster.isPickable = false;
   caster.receiveShadows = false;
   caster.isVisible = false;
   caster.metadata = { buildingShadowCaster: true, shadowOnly: true };
+  caster.onDisposeObservable.addOnce(() => shadowMaterial.dispose());
   return caster;
 }
 
@@ -1222,11 +1685,17 @@ function configureLazyInteriors(
   exterior.metadata.loadedInteriorCount = 0;
   const loadedInteriors: LoadedBuildingInterior[] = [];
   let lastCheckMilliseconds = -Infinity;
-  exterior.onBeforeRenderObservable.add(() => {
+  const scene = exterior.getScene();
+  // Creating and merging an interior mutates the scene graph. Doing that from
+  // onBeforeRender lets the main pass, SSR, and transparent windows observe
+  // different scene contents in one frame, which produces visible flashes.
+  // Queue the residency work after the frame so the next frame sees a stable
+  // set of meshes across every render pass.
+  const afterRenderObserver = scene.onAfterRenderObservable.add(() => {
     const now = performance.now();
     if (now - lastCheckMilliseconds < BUILDING_INTERIOR_CHECK_INTERVAL_MS) return;
     lastCheckMilliseconds = now;
-    const camera = exterior.getScene().activeCamera;
+    const camera = scene.activeCamera;
     if (!camera) return;
     const parentWorld = parent.computeWorldMatrix(true);
     const localCamera = Vector3.TransformCoordinates(
@@ -1301,6 +1770,9 @@ function configureLazyInteriors(
     }
     exterior.metadata.pendingInteriorCount = pendingInteriors.length;
     exterior.metadata.interiorsLoaded = pendingInteriors.length === 0;
+  });
+  exterior.onDisposeObservable.add(() => {
+    scene.onAfterRenderObservable.remove(afterRenderObserver);
   });
 }
 

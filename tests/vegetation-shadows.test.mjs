@@ -49,8 +49,9 @@ test("buildings cast stable opaque geometry without proximity-fading windows", (
     "utf8",
   );
   assert.match(buildings, /function createBuildingShadowCaster\(/);
-  assert.match(buildings, /shadowRanges\.push\(\{ indexStart: 0, indexCount: solidIndices\.length \}\)/);
-  assert.match(buildings, /solidIndices\.length \+ windowIndices\.length/);
+  assert.match(buildings, /const shadowRanges: BuildingShadowRange\[\] = indices\.length > 0/);
+  assert.match(buildings, /indexCount: indices\.length/);
+  assert.match(buildings, /transparencyMode = Material\.MATERIAL_OPAQUE/);
   assert.match(buildings, /buildingShadowCaster: true, shadowOnly: true/);
 });
 

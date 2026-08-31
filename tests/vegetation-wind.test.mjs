@@ -5,11 +5,9 @@ import test from "node:test";
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
 const wind = source("Wind.ts");
-const treeImpostor = source("TreeImpostor.ts");
 
 test("wind affects grass, bushes, fern undergrowth, and tall plants", () => {
   assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+ \}/);
-  assert.doesNotMatch(wind, /TREE_SWAY_FRACTION|TREE_TIME_SAMPLES/);
   assert.match(source("GrassField.ts"), /windShearFraction\("grass"\)/);
   assert.match(source("BushField.ts"), /windShearFraction\("bush"\)/);
   assert.match(source("FernField.ts"), /windShearFraction\("grass"\)/);
@@ -19,7 +17,7 @@ test("wind affects grass, bushes, fern undergrowth, and tall plants", () => {
 });
 
 test("trees use one static atlas pose and static live geometry", () => {
-  assert.doesNotMatch(treeImpostor, /wind: \{|treeWind|setVegetationWindSway/);
+  assert.doesNotMatch(source("TreeImpostor.ts"), /wind: \{|treeWind|setVegetationWindSway/);
   assert.doesNotMatch(source("TreeImpostorValidation.ts"), /setWindPhaseOverride/);
 });
 

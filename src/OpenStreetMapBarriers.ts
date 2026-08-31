@@ -309,6 +309,7 @@ function createHedgeMatrices(
   const matrices: Matrix[] = [];
   const spacing = 0.86 / options.metersPerUnit;
   const across = [-0.32, 0, 0.32].map((offset) => offset / options.metersPerUnit);
+  const burialDepth = 0.12 / options.metersPerUnit;
   for (let index = 1; index < points.length; index++) {
     const start = points[index - 1];
     const end = points[index];
@@ -325,18 +326,22 @@ function createHedgeMatrices(
       const centerZ = start.z + dz * amount;
       const ground = sampleElevation(terrain, centerX, centerZ, options.meshWidth, options.meshDepth) /
         options.metersPerUnit;
-      for (const offset of across) {
+      across.forEach((offset, acrossIndex) => {
         const scale = 0.58 + ((index * 17 + step * 7 + Math.round(offset * 100)) % 5) * 0.028;
+        // Keep each bush's orientation stable while avoiding a visible repeating
+        // three-angle pattern along the hedge line.
+        const instanceSeed = index * 92821 + step * 68917 + acrossIndex * 283;
+        const rotationJitter = Math.sin(instanceSeed) * 0.18;
         matrices.push(Matrix.Compose(
           new Vector3(
             scale,
             (heightMeters / 1.6) * (0.86 + scale * 0.38),
             scale,
           ),
-          new Vector3(0, yaw + (step % 3 - 1) * 0.13, 0).toQuaternion(),
-          new Vector3(centerX + normalX * offset, ground, centerZ + normalZ * offset),
+          new Vector3(0, yaw + rotationJitter, 0).toQuaternion(),
+          new Vector3(centerX + normalX * offset, ground - burialDepth, centerZ + normalZ * offset),
         ));
-      }
+      });
     }
   }
   return matrices;

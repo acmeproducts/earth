@@ -47,14 +47,16 @@ export interface FloorPlanSvgOptions {
   padding?: number;
   showLabels?: boolean;
   background?: string;
+  /** Width of interior partition lines in rendered SVG pixels. */
+  wallWidth?: number;
   roomStyles?: Readonly<Record<string, RoomRenderStyle>>;
 }
 
 const DEFAULT_STYLES: Readonly<Record<string, RoomRenderStyle>> = {
-  apartment: { fill: "#d9ead3", text: "#223322" },
-  room: { fill: "#e4d7f5", text: "#352647" },
-  hallway: { fill: "#fce5cd", text: "#4a3525" },
-  stairs: { fill: "#cfe2f3", text: "#21394d" },
+  apartment: { fill: "url(#apartment-fill)", text: "#183b2e" },
+  room: { fill: "url(#room-fill)", text: "#39245d" },
+  hallway: { fill: "url(#hallway-fill)", text: "#6c3615" },
+  stairs: { fill: "url(#stairs-fill)", text: "#17436b" },
 };
 
 /**
@@ -82,15 +84,19 @@ export function renderFloorPlanSvg(
     y: height - offsetY - (point.y - bounds.minY) * scale,
   });
   const roomStyles = { ...DEFAULT_STYLES, ...options.roomStyles };
-  const rooms = layout.rooms.map((room) => {
+  const wallWidth = Math.max(0.5, options.wallWidth ?? 0.9);
+  const rooms = layout.rooms.map((room, roomIndex) => {
     const style = roomStyles[room.type] ?? { fill: "#e5e7eb", text: "#1f2937" };
+    const fill = room.type === "room" && style.fill === DEFAULT_STYLES.room.fill
+      ? `url(#room-fill-${roomIndex % 4})`
+      : style.fill;
     const path = polygonPath(room.polygon, project);
     const label = room.label ?? titleCase(room.type);
     const center = project(polygonCentroid(room.polygon.outer));
     const text = options.showLabels === false
       ? ""
       : `<text x="${number(center.x)}" y="${number(center.y)}" text-anchor="middle" dominant-baseline="central" fill="${escapeXml(style.text ?? "#1f2937")}" font-family="sans-serif" font-size="13">${escapeXml(label)}</text>`;
-    return `<g data-room-id="${escapeXml(room.id)}" data-room-type="${escapeXml(room.type)}"><path d="${path}" fill="${escapeXml(style.fill)}" stroke="${escapeXml(style.stroke ?? "#374151")}" stroke-width="1.5" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>${text}</g>`;
+    return `<g data-room-id="${escapeXml(room.id)}" data-room-type="${escapeXml(room.type)}"><path d="${path}" fill="${escapeXml(fill)}" stroke="${escapeXml(style.stroke ?? "#334155")}" stroke-width="${number(wallWidth)}" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>${text}</g>`;
   }).join("");
   const outline = polygonPath(layout.boundary, project);
   const openings = (layout.openings ?? []).map((opening) => {
@@ -103,7 +109,8 @@ export function renderFloorPlanSvg(
   const title = options.title
     ? `<text x="${number(width / 2)}" y="18" text-anchor="middle" fill="#111827" font-family="sans-serif" font-size="16" font-weight="600">${escapeXml(options.title)}</text>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Floor plan")}"><rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#ffffff")}"/>${title}${rooms}<path d="${outline}" fill="none" stroke="#111827" stroke-width="3" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>${openings}</svg>`;
+  const defs = `<defs><linearGradient id="apartment-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#edf8ed"/><stop offset="1" stop-color="#b9ddc1"/></linearGradient><linearGradient id="room-fill-0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7f2ff"/><stop offset="1" stop-color="#d8c6ed"/></linearGradient><linearGradient id="room-fill-1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#eff7ff"/><stop offset="1" stop-color="#c5dcef"/></linearGradient><linearGradient id="room-fill-2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff7ee"/><stop offset="1" stop-color="#f1d1ac"/></linearGradient><linearGradient id="room-fill-3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f1fbf7"/><stop offset="1" stop-color="#c4e2d2"/></linearGradient><linearGradient id="hallway-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff5e9"/><stop offset="1" stop-color="#f2c999"/></linearGradient><linearGradient id="stairs-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#edf8ff"/><stop offset="1" stop-color="#b9d9ed"/></linearGradient></defs>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Floor plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#f8fafc")}"/>${title}${rooms}<path d="${outline}" fill="none" stroke="#172033" stroke-width="1.6" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>${openings}</svg>`;
 }
 
 function polygonPath(polygon: Polygon2D, project: (point: Point2D) => Point2D): string {

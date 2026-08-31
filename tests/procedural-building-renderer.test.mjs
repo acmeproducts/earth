@@ -233,18 +233,15 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   assert.ok(detailed && far);
   assert.equal(detailed.metadata.enterable, true);
   assert.equal(detailed.metadata.interiorsLoaded, false);
+  assert.equal(detailed.metadata.plannedInterior, true);
   assert.equal(detailed.metadata.interiorFloorCount, 3);
   assert.equal(detailed.metadata.stairFlightCount, 2);
-  assert.notEqual(detailed.metadata.stairEdgeIndex, detailed.metadata.entranceEdgeIndex);
+  assert.equal(detailed.metadata.stairEdgeIndex, -1);
   assert.equal(detailed.metadata.stairFlightCenters.length, 2);
-  assert.notDeepEqual(
+  assert.deepEqual(
     detailed.metadata.stairFlightCenters[0],
     detailed.metadata.stairFlightCenters[1],
   );
-  assert.ok(Math.hypot(
-    detailed.metadata.stairFlightCenters[1].x - detailed.metadata.stairFlightCenters[0].x,
-    detailed.metadata.stairFlightCenters[1].z - detailed.metadata.stairFlightCenters[0].z,
-  ) > 4.5);
   assert.ok(detailed.metadata.windowCount >= 8);
   const colors = detailed.getVerticesData(VertexBuffer.ColorKind);
   assert.ok(colors.some((_, index) => index % 4 === 3 && colors[index] < 0.5));
@@ -265,13 +262,13 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   assert.equal(shadowCaster.geometry, merged.geometry);
   assert.equal(shadowCaster.metadata.shadowOnly, true);
   assert.equal(shadowCaster.isVisible, false);
-  assert.ok(
-    shadowCaster.subMeshes.reduce((sum, subMesh) => sum + subMesh.indexCount, 0) <
-      merged.getTotalIndices(),
+  assert.equal(
+    shadowCaster.subMeshes.reduce((sum, subMesh) => sum + subMesh.indexCount, 0),
+    merged.getTotalIndices(),
   );
 
   scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
-  merged.onBeforeRenderObservable.notifyObservers(merged);
+  scene.onAfterRenderObservable.notifyObservers(scene);
   assert.ok(scene.getMeshByName("buildingInteriors"));
   assert.equal(merged.metadata.loadedInteriorCount, 1);
   assert.equal(merged.metadata.pendingInteriorCount, 0);

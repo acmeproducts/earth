@@ -295,6 +295,16 @@ configuration, scene resource totals, and every active mesh's geometry and
 instance counts. Enable the expanded counter with `F` at least one second before
 capturing when the detailed instrumentation is not already enabled.
 
+Press `Shift+B` to download the building polygons from the detailed tile that is
+currently loaded in the scene. No startup option is required. The JSON includes
+source and metre-space polygons, facade openings, planner results, apartment
+layouts, and fallback errors. Replay and render it with:
+
+`yarn layouts:captured <earth-building-layouts.json>`
+
+The command writes SVG plans, a machine-readable summary, and an `index.html`
+gallery to `data/captured-building-layouts`.
+
 
 ## Project Structure
 

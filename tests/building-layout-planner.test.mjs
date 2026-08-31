@@ -132,6 +132,28 @@ test("keeps the stair core aligned for matching upper floors", () => {
   );
 });
 
+test("plans a concave footprint instead of discarding its interior", () => {
+  const layout = planBuildingLayout({
+    buildingType: "house",
+    buildingPolygon: {
+      outer: [
+        { x: 0, y: 0 }, { x: 22, y: 0 }, { x: 22, y: 8 },
+        { x: 10, y: 8 }, { x: 10, y: 18 }, { x: 0, y: 18 },
+      ],
+    },
+    openings: [{ id: "door", type: "door", start: { x: 2, y: 0 }, end: { x: 3.2, y: 0 } }],
+  });
+  assert.ok(layout.rooms.length > 1);
+  assert.ok(layout.rooms.some((room) => room.type === "hallway"));
+  assert.ok(layout.rooms.some((room) => room.type === "apartment"));
+  assert.ok(layout.openings.some((opening) => opening.id.endsWith("-door")));
+  const hallway = layout.rooms.find((room) => room.type === "hallway");
+  const entrance = { x: 2.6, y: 0 };
+  assert.ok(hallway.polygon.outer.some((point, index, points) =>
+    pointOnSegment(entrance, point, points[(index + 1) % points.length])),
+  "the exterior entry should lead into the shared hallway");
+});
+
 function polygonArea(points) {
   return Math.abs(points.reduce((area, point, index) => {
     const next = points[(index + 1) % points.length];
@@ -146,4 +168,11 @@ function polygonBounds(points) {
     maxX: Math.max(...points.map((point) => point.x)),
     maxY: Math.max(...points.map((point) => point.y)),
   };
+}
+
+function pointOnSegment(point, start, end) {
+  const cross = (point.x - start.x) * (end.y - start.y) - (point.y - start.y) * (end.x - start.x);
+  if (Math.abs(cross) > 1e-7) return false;
+  return point.x >= Math.min(start.x, end.x) - 1e-7 && point.x <= Math.max(start.x, end.x) + 1e-7 &&
+    point.y >= Math.min(start.y, end.y) - 1e-7 && point.y <= Math.max(start.y, end.y) + 1e-7;
 }
