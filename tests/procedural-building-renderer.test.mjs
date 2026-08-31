@@ -15,7 +15,7 @@ import {
 import { planBuilding } from "../src/BuildingPlanner.ts";
 
 register("./ts-extension-resolver.mjs", import.meta.url);
-const { ProceduralBuildingRenderer } = await import(
+const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
 );
 
@@ -100,6 +100,17 @@ function windowDimensions(mesh) {
     });
   }
   return dimensions;
+}
+
+function pointInPolygon(point, polygon) {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    if ((a.y > point.y) !== (b.y > point.y) &&
+        point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 test("inferred roofs rise above the mapped massing without clipping its cap", () => {
@@ -337,6 +348,28 @@ test("house heights without mapped levels do not round up to a second floor", ()
 
   scene.dispose();
   engine.dispose();
+});
+
+test("fits planned stairs inside a clipped stair room", () => {
+  const stairRoom = {
+    outer: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }],
+  };
+  const stair = stairLayoutFromPlan({
+    buildingType: "house",
+    boundary: stairRoom,
+    rooms: [{ id: "stairs-1", type: "stairs", polygon: stairRoom }],
+  }, options);
+  assert.ok(stair);
+  const corners = [
+    [0, -stair.widthMeters / 2],
+    [stair.runMeters, -stair.widthMeters / 2],
+    [stair.runMeters, stair.widthMeters / 2],
+    [0, stair.widthMeters / 2],
+  ].map(([along, across]) => ({
+    x: stair.start.x + stair.direction.x * along + stair.inward.x * across,
+    y: stair.start.z + stair.direction.z * along + stair.inward.z * across,
+  }));
+  assert.ok(corners.every((point) => pointInPolygon(point, stairRoom.outer)));
 });
 
 test("facade windows keep one coherent size per building", () => {

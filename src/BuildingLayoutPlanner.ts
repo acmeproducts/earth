@@ -554,7 +554,11 @@ function sharedRoomEntranceDoors(
   const hallway = rooms.find((room) => room.id === "hallway-1");
   if (!hallway) return [];
   return rooms
-    .filter((room) => room.type === "apartment" || room.type === "stairs")
+    // The entrance lobby is a secondary hallway room. It needs its own
+    // opening into the main hallway or the exterior door can lead into a
+    // sealed pocket of the plan.
+    .filter((room) => room.type === "apartment" || room.type === "stairs" ||
+      (room.type === "hallway" && room.id !== "hallway-1"))
     .flatMap((room) => {
       const shared = longestSharedSegment(
         room.polygon.outer,

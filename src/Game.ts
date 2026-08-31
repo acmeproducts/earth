@@ -422,7 +422,15 @@ export class Game {
       if (!record) return;
       if (generation === this.streamingGeneration) onTerrainReady?.();
       if (wantDetail && !record.detailed) {
-        await this.buildTileDetail(record, generation, onProgress);
+        try {
+          await this.buildTileDetail(record, generation, onProgress);
+        } catch (error: unknown) {
+          // Detail is assembled in stages. Keep anything that did finish
+          // visible when one optional feature compiler fails, instead of
+          // leaving a successfully loaded destination as bare terrain.
+          console.error(`Failed to build detail for tile ${key}.`, error);
+          if (generation === this.streamingGeneration) this.activateTileVegetation(record);
+        }
       } else if (!wantDetail) {
         // Runs for undetailed tiles, and for detailed tiles the scheduler
         // queued ahead of a demotion (the stand-ins commit hidden there).
@@ -698,12 +706,20 @@ export class Game {
       skyReflection: this.solarLighting?.skyReflectionTexture,
       startDisabled,
     };
-    const mappedExclusionMask = await OpenStreetMap.createVegetationExclusionMask(
-      mapWays,
-      terrainData,
-      mapOptions,
-      yieldControl,
-    );
+    let mappedExclusionMask;
+    try {
+      mappedExclusionMask = await OpenStreetMap.createVegetationExclusionMask(
+        mapWays,
+        terrainData,
+        mapOptions,
+        yieldControl,
+      );
+    } catch (error: unknown) {
+      // The exclusion mask is only a placement aid. Keep the natural layers
+      // renderable when an individual provider feature is malformed.
+      console.warn("Could not build the map exclusion mask; continuing without it.", error);
+      mappedExclusionMask = { intersects: () => false };
+    }
     if (generation !== this.streamingGeneration) return;
     const barrierExclusionMask = OpenStreetMapBarriers.createExclusionMask(
       barrierFeatures,
@@ -1060,7 +1076,14 @@ export class Game {
   }
 
   private loadBarrierFeatures(record: StreamedTile): Promise<BarrierFeature[]> {
-    record.barrierFeatures ??= OpenStreetMapBarriers.fetch(record.terrainData.bounds);
+    record.barrierFeatures ??= OpenStreetMapBarriers.fetch(record.terrainData.bounds)
+      .catch((error: unknown) => {
+        // Barriers are an optional detail layer. An Overpass request can fail
+        // or time out for a newly selected address; that must not prevent the
+        // rest of the tile (vegetation, buildings, and roads) from committing.
+        console.warn("Overpass unavailable; barrier layers were skipped.", error);
+        return [];
+      });
     return record.barrierFeatures;
   }
 

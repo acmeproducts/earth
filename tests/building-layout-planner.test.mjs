@@ -114,6 +114,8 @@ test("does not place an apartment wall in front of an exterior door", () => {
     return !reachesDoor || point.x < 13 - 1e-7 || point.x > 15 + 1e-7;
   })));
   assert.ok(layout.rooms.some((room) => room.id === "entrance-lobby"));
+  assert.ok(layout.openings.some((opening) => opening.id === "entrance-lobby-door"),
+    "the entrance lobby should open into the main hallway");
   const stairs = polygonBounds(layout.rooms.find((room) => room.type === "stairs").polygon.outer);
   assert.ok(stairs.maxX < 13 - 1e-7 || stairs.minX > 15 + 1e-7);
   assert.equal(

@@ -932,34 +932,86 @@ function pointOnSegment2D(point: Point2D, start: Point2D, end: Point2D): boolean
     point.y <= Math.max(start.y, end.y) + 1e-5;
 }
 
-function stairLayoutFromPlan(
+export function stairLayoutFromPlan(
   layout: BuildingLayout,
   options: BuildingRenderOptions,
 ): StairLayout | undefined {
   const stair = layout.rooms.find((room) => room.type === "stairs");
   if (!stair) return undefined;
   const points = stair.polygon.outer;
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
-  const horizontal = maxX - minX >= maxY - minY;
-  const availableRun = (horizontal ? maxX - minX : maxY - minY) - 0.4;
-  const availableWidth = (horizontal ? maxY - minY : maxX - minX) - 0.3;
-  const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, availableRun);
-  const widthMeters = Math.min(BUILDING_STAIR_WIDTH_METERS, availableWidth);
-  if (runMeters < BUILDING_STAIR_MIN_RUN_METERS || widthMeters < 0.75) return undefined;
-  const startMeters = horizontal
-    ? { x: minX + 0.2, y: (minY + maxY) / 2 }
-    : { x: (minX + maxX) / 2, y: minY + 0.2 };
+  const center = points.reduce(
+    (sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }),
+    { x: 0, y: 0 },
+  );
+  let best: { edge: readonly [Point2D, Point2D]; start: number; run: number; width: number } | undefined;
+  for (let index = 0; index < points.length; index++) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    const edgeLength = Math.hypot(end.x - start.x, end.y - start.y);
+    if (edgeLength < BUILDING_STAIR_MIN_RUN_METERS + 0.4) continue;
+    const direction = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
+    let inward = { x: -direction.y, y: direction.x };
+    if ((center.x - (start.x + end.x) / 2) * inward.x +
+        (center.y - (start.y + end.y) / 2) * inward.y < 0) {
+      inward = { x: -inward.x, y: -inward.y };
+    }
+    const maxRun = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLength - 0.4);
+    for (let run = maxRun; run >= BUILDING_STAIR_MIN_RUN_METERS; run -= 0.1) {
+      const alongStarts = [0.2, (edgeLength - run) / 2, edgeLength - run - 0.2]
+        .filter((along) => along >= 0.2 && along + run <= edgeLength - 0.2);
+      for (let width = BUILDING_STAIR_WIDTH_METERS; width >= 0.75; width -= 0.05) {
+        for (const alongStart of alongStarts) {
+          const acrossStart = BUILDING_STAIR_WALL_CLEARANCE_METERS;
+          const corners = [
+            [alongStart, acrossStart], [alongStart + run, acrossStart],
+            [alongStart + run, acrossStart + width], [alongStart, acrossStart + width],
+          ].map(([along, across]) => ({
+            x: start.x + direction.x * along + inward.x * across,
+            y: start.y + direction.y * along + inward.y * across,
+          }));
+          if (!corners.every((point) => pointInPolygonInclusive(point, points))) continue;
+          const candidate = { edge: [start, end] as const, start: alongStart, run, width };
+          if (!best || run * width > best.run * best.width) best = candidate;
+        }
+      }
+    }
+  }
+  if (!best) return undefined;
+  const edgeLength = Math.hypot(best.edge[1].x - best.edge[0].x, best.edge[1].y - best.edge[0].y);
+  const directionMeters = {
+    x: (best.edge[1].x - best.edge[0].x) / edgeLength,
+    y: (best.edge[1].y - best.edge[0].y) / edgeLength,
+  };
+  let inwardMeters = { x: -directionMeters.y, y: directionMeters.x };
+  if ((center.x - (best.edge[0].x + best.edge[1].x) / 2) * inwardMeters.x +
+      (center.y - (best.edge[0].y + best.edge[1].y) / 2) * inwardMeters.y < 0) {
+    inwardMeters = { x: -inwardMeters.x, y: -inwardMeters.y };
+  }
+  const startMeters = {
+    x: best.edge[0].x + directionMeters.x * best.start + inwardMeters.x *
+      (BUILDING_STAIR_WALL_CLEARANCE_METERS + best.width / 2),
+    y: best.edge[0].y + directionMeters.y * best.start + inwardMeters.y *
+      (BUILDING_STAIR_WALL_CLEARANCE_METERS + best.width / 2),
+  };
   return {
     edgeIndex: -1,
     start: { x: startMeters.x / options.metersPerUnit, z: startMeters.y / options.metersPerUnit },
-    direction: horizontal ? { x: 1, z: 0 } : { x: 0, z: 1 },
-    inward: horizontal ? { x: 0, z: 1 } : { x: -1, z: 0 },
-    runMeters,
-    widthMeters,
+    direction: { x: directionMeters.x, z: directionMeters.y },
+    inward: { x: inwardMeters.x, z: inwardMeters.y },
+    runMeters: best.run,
+    widthMeters: best.width,
   };
+}
+
+function pointInPolygonInclusive(point: Point2D, polygon: readonly Point2D[]): boolean {
+  return polygon.some((start, index) => pointOnSegment2D(
+    point,
+    start,
+    polygon[(index + 1) % polygon.length],
+  )) || pointInPolygon(
+    { x: point.x, z: point.y },
+    polygon.map(({ x, y }) => ({ x, z: y })),
+  );
 }
 
 function addPlannedInteriorWalls(
