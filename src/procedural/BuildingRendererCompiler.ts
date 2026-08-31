@@ -112,6 +112,9 @@ export class ProceduralBuildingRenderer {
     // mapped roof height; inferred construction sits above the mapped massing.
     const wallTopElevation = prepared.baseElevation + plan.heightMeters -
       (plan.roofHeightMeters === undefined ? 0 : roofHeightMeters);
+    const sharedFacadeEdges = findSharedFacadeEdges(
+      plan.footprint, prepared.outline, terrain, options,
+    );
     const roofEaveElevation = wallTopElevation + BUILDING_ROOF_EAVE_CLEARANCE_METERS;
     const detailed = createEnterableBuilding(
       scene,
@@ -122,6 +125,7 @@ export class ProceduralBuildingRenderer {
       options,
       appearance,
       "exterior",
+      sharedFacadeEdges,
     );
     const parts = detailed.parts;
     const showRoofs = options.showRoofs !== false;
@@ -418,6 +422,7 @@ function createEnterableBuilding(
   options: BuildingRenderOptions,
   appearance: BuildingAppearance,
   part: "exterior" | "interior",
+  blockedFacadeEdges: ReadonlySet<number> = new Set(),
 ): DetailedBuildingParts {
   const usableHeight = Math.max(0, topElevation - baseElevation);
   const profile = buildingProfile(plan.buildingClass);
@@ -437,7 +442,7 @@ function createEnterableBuilding(
     seededUnit(plan.detailSeed ^ 0x45f3a921) * 0.1,
     0,
   );
-  const entranceEdge = longestPolygonEdge(outline);
+  const entranceEdge = longestPolygonEdge(outline, blockedFacadeEdges);
   const entranceEdgeLengthMeters = pointDistance(
     outline[entranceEdge],
     outline[(entranceEdge + 1) % outline.length],
@@ -465,6 +470,7 @@ function createEnterableBuilding(
   const facadeOpenings = plannedFacadeOpenings(
     plan, outline, storyHeight, entranceEdge, windowStyle, options,
     plannedInterior?.building,
+    blockedFacadeEdges,
   );
   if (plannedInterior) {
     const apartmentPlanning = planApartmentLayouts(
@@ -587,6 +593,15 @@ function createEnterableBuilding(
     const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
     const bayWidth = edgeLengthMeters / bayCount;
 
+    if (blockedFacadeEdges.has(edgeIndex)) {
+      for (let floor = 0; floor < floorCount; floor++) {
+        addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
+          edgeLengthMeters, baseElevation + floor * storyHeight, storyHeight,
+          options, appearance.wall);
+      }
+      continue;
+    }
+
     for (let floor = 0; floor < floorCount; floor++) {
       const storyBottom = baseElevation + floor * storyHeight;
       for (let bay = 0; bay < bayCount; bay++) {
@@ -675,6 +690,7 @@ function plannedFacadeOpenings(
   windowStyle: BuildingWindowStyle,
   options: BuildingRenderOptions,
   buildingLayout?: BuildingLayout,
+  blockedFacadeEdges: ReadonlySet<number> = new Set(),
 ): Opening2D[] {
   const openings: Opening2D[] = [];
   for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
@@ -682,6 +698,7 @@ function plannedFacadeOpenings(
     const end = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
     if (edgeLengthMeters < 0.35) continue;
+    if (blockedFacadeEdges.has(edgeIndex)) continue;
     const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
     const bayWidth = edgeLengthMeters / bayCount;
     for (let bay = 0; bay < bayCount; bay++) {
@@ -1056,6 +1073,12 @@ function addInteriorWall(
 ): void {
   const length = Math.hypot(end.x - start.x, end.y - start.y);
   if (length < 0.05) return;
+  // A clipped room edge can cross the exterior entrance without containing
+  // both doorway endpoints. Do not put an opaque panel across that opening.
+  if (openings.some((opening) => opening.type === "door" &&
+      segmentsIntersect(start, end, opening.start, opening.end) &&
+      !(pointOnSegment2D(opening.start, start, end) &&
+        pointOnSegment2D(opening.end, start, end)))) return;
   const direction = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
   const doors = openings
     .filter((opening) => opening.type === "door" &&
@@ -1349,6 +1372,55 @@ function prepareBuildingFootprint(
   );
   if (elevations.some((elevation) => elevation <= SEA_LEVEL_METERS)) return undefined;
   return { outline, holes, baseElevation: Math.max(...elevations) };
+}
+
+function findSharedFacadeEdges(
+  footprint: BuildingPlan["footprint"],
+  outline: readonly ScenePoint[],
+  terrain: TerrainData,
+  options: BuildingRenderOptions,
+): ReadonlySet<number> {
+  const neighbors = options.neighboringBuildingFootprints ?? [];
+  const ownPoints = footprint.outer;
+  const sameFootprint = (other: BuildingPlan["footprint"]): boolean => {
+    if (other.outer.length !== ownPoints.length) return false;
+    return other.outer.every(([lon, lat]) => ownPoints.some((point) =>
+      Math.abs(lon - point[0]) < 1e-9 && Math.abs(lat - point[1]) < 1e-9));
+  };
+  const projected = (ring: readonly (readonly [number, number])[]): ScenePoint[] =>
+    ring.map(([lon, lat]) => lonLatToScene(
+      lon, lat, terrain.bounds, options.meshWidth, options.meshDepth));
+  const tolerance = 0.25 / options.metersPerUnit;
+  const minimumOverlap = 0.5 / options.metersPerUnit;
+  const blocked = new Set<number>();
+  for (const neighbor of neighbors) {
+    if (sameFootprint(neighbor)) continue;
+    const ring = projected(neighbor.outer);
+    for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
+      const start = outline[edgeIndex];
+      const end = outline[(edgeIndex + 1) % outline.length];
+      const dx = end.x - start.x;
+      const dz = end.z - start.z;
+      const length = Math.hypot(dx, dz);
+      if (length < minimumOverlap) continue;
+      for (let index = 0; index < ring.length; index++) {
+        const otherStart = ring[index];
+        const otherEnd = ring[(index + 1) % ring.length];
+        const cross = (point: ScenePoint) =>
+          Math.abs(dx * (point.z - start.z) - dz * (point.x - start.x)) / length;
+        if (cross(otherStart) > tolerance || cross(otherEnd) > tolerance) continue;
+        const along = (point: ScenePoint) =>
+          ((point.x - start.x) * dx + (point.z - start.z) * dz) / length;
+        const overlap = Math.min(length, Math.max(along(otherStart), along(otherEnd))) -
+          Math.max(0, Math.min(along(otherStart), along(otherEnd)));
+        if (overlap >= minimumOverlap) {
+          blocked.add(edgeIndex);
+          break;
+        }
+      }
+    }
+  }
+  return blocked;
 }
 
 function createBuildingPrism(
@@ -2180,17 +2252,18 @@ function pointDistance(a: ScenePoint, b: ScenePoint): number {
   return Math.hypot(b.x - a.x, b.z - a.z);
 }
 
-function longestPolygonEdge(points: ScenePoint[]): number {
-  let longest = 0;
-  for (let index = 1; index < points.length; index++) {
+function longestPolygonEdge(points: ScenePoint[], excluded: ReadonlySet<number> = new Set()): number {
+  let longest = -1;
+  for (let index = 0; index < points.length; index++) {
+    if (excluded.has(index)) continue;
     if (
-      pointDistance(points[index], points[(index + 1) % points.length]) >
+      longest < 0 || pointDistance(points[index], points[(index + 1) % points.length]) >
       pointDistance(points[longest], points[(longest + 1) % points.length])
     ) {
       longest = index;
     }
   }
-  return longest;
+  return longest >= 0 ? longest : 0;
 }
 
 /** Expands a counter-clockwise convex ring to create a physical roof eave. */

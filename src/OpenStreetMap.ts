@@ -231,6 +231,11 @@ export class OpenStreetMap {
     const junctionCandidates: RoadJunctionCandidate[] = [];
     const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
     const waterways: Mesh[] = [];
+    const renderOptions = {
+      ...options,
+      neighboringBuildingFootprints: tiles.flatMap((tile) =>
+        buildingSources(tile).map((source) => source.polygon)),
+    };
 
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
@@ -239,7 +244,7 @@ export class OpenStreetMap {
           scene,
           planBuilding(source),
           terrain,
-          options,
+          renderOptions,
         );
         if (mesh) buildings.push(mesh);
         await yieldControl?.();
@@ -370,13 +375,18 @@ export class OpenStreetMap {
     const root = new TransformNode(name, scene);
     if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
+    const renderOptions = {
+      ...options,
+      neighboringBuildingFootprints: tiles.flatMap((tile) =>
+        buildingSources(tile).map((source) => source.polygon)),
+    };
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
         await yieldControl?.();
         const plan = planBuilding(source);
         const mesh = detail === "far"
-          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, options)
-          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, options);
+          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
+          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
         if (mesh) buildings.push(mesh);
         await yieldControl?.();
       }
