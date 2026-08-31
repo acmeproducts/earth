@@ -348,6 +348,7 @@ export class Game {
       clockSettings: this.clockSettings.value,
       initialLocation: location,
       onSettingChange: (key, value) => this.changeSceneSetting(key, value),
+      onRoofsVisibilityChange: (visible) => this.changeRoofsVisibility(visible),
       onClockModeChange: (mode) => this.changeClockMode(mode),
       onDateChange: (date) => {
         this.clockSettings.setManualDate(date);
@@ -429,7 +430,9 @@ export class Game {
           // visible when one optional feature compiler fails, instead of
           // leaving a successfully loaded destination as bare terrain.
           console.error(`Failed to build detail for tile ${key}.`, error);
-          if (generation === this.streamingGeneration) this.activateTileVegetation(record);
+          if (generation === this.streamingGeneration) {
+            await this.activateTileVegetation(record, generation);
+          }
         }
       } else if (!wantDetail) {
         // Runs for undetailed tiles, and for detailed tiles the scheduler
@@ -704,6 +707,7 @@ export class Game {
       metersPerUnit,
       preCarvingElevations: record.preCarvingElevations,
       skyReflection: this.solarLighting?.skyReflectionTexture,
+      showRoofs: this.sceneSettings.value.showRoofs,
       startDisabled,
     };
     let mappedExclusionMask;
@@ -883,7 +887,7 @@ export class Game {
     }
     setTransformNodeOffset(rockField.root, record.offsetX, record.offsetZ);
     record.rockField = rockField;
-    this.activateTileVegetation(record);
+    await this.activateTileVegetation(record, generation);
 
     await reportInitializationProgress(onProgress, "Creating map features", 88);
     const mapFeatures = await OpenStreetMap.createLayer(
@@ -906,8 +910,10 @@ export class Game {
       return;
     }
     barrierLayer.root.parent = mapFeatures.root;
+    await this.streamingYielder.nextFrame();
     barrierLayer.root.setEnabled(true);
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
+    await this.streamingYielder.nextFrame();
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
@@ -1018,6 +1024,7 @@ export class Game {
         meshWidth: record.meshWidth,
         meshDepth: record.meshDepth,
         metersPerUnit,
+        showRoofs: this.sceneSettings.value.showRoofs,
         startDisabled: true,
       },
       "far",
@@ -1134,19 +1141,27 @@ export class Game {
   }
 
   /** Cross-fades the complete vegetation layer against its distant stand-in. */
-  private activateTileVegetation(record: StreamedTile): void {
+  private async activateTileVegetation(record: StreamedTile, generation: number): Promise<void> {
     const fields = VEGETATION_FIELD_KINDS
       .map((kind) => record[kind])
       .filter((field): field is VegetationFieldResult => field !== undefined);
     for (const field of fields) {
+      if (generation !== this.streamingGeneration || record.terrain.isDisposed()) return;
       field.setFade(0);
       field.root.setEnabled(true);
+      // Enabling a new field can compile shaders and upload instance buffers.
+      // Give Babylon a complete render opportunity between those commits.
+      await this.streamingYielder.nextFrame();
     }
     const rockField = record.rockField;
     if (rockField) {
+      if (generation !== this.streamingGeneration || record.terrain.isDisposed()) return;
       rockField.setFade(0);
       rockField.root.setEnabled(true);
+      await this.streamingYielder.nextFrame();
     }
+
+    if (generation !== this.streamingGeneration || record.terrain.isDisposed()) return;
 
     const farTrees = record.farTreeField;
     this.layerFades.begin(0, 1, (fade) => {
@@ -1513,6 +1528,25 @@ export class Game {
     if (detailSizeChanged) this.updateGrassDetailDistance();
     if (modelRangeChanged) this.updateVegetationLod();
     if (cloudDensityChanged) this.cloudLayer?.setDensity(next.cloudDensity);
+  }
+
+  private changeRoofsVisibility(visible: boolean): void {
+    this.sceneSettings.setRoofsVisible(visible);
+    this.streamingGeneration++;
+    for (const record of this.tiles.values()) {
+      if (record.mapFeatures) {
+        const layer = record.mapFeatures;
+        record.mapFeatures = undefined;
+        OpenStreetMap.disposeLayer(layer);
+      }
+      if (record.farBuildings) {
+        const layer = record.farBuildings;
+        record.farBuildings = undefined;
+        OpenStreetMap.disposeLayer(layer);
+      }
+      record.detailed = false;
+    }
+    this.requestStreamingUpdate();
   }
 
   private changeClockMode(mode: ClockMode): void {

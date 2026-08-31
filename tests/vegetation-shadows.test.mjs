@@ -45,7 +45,7 @@ test("roads and waterways receive shadows without casting ground streaks", () =>
 
 test("buildings cast stable opaque geometry without proximity-fading windows", () => {
   const buildings = readFileSync(
-    new URL("../src/procedural/ProceduralBuildingRenderer.ts", import.meta.url),
+    new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
     "utf8",
   );
   assert.match(buildings, /function createBuildingShadowCaster\(/);

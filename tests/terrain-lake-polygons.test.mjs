@@ -59,6 +59,34 @@ test("uses the OSM outline and one robust interior DEM level", async () => {
   assert.equal(lakes[0].elevationMeters, 40);
 });
 
+test("caps an elevated interior DEM level at the lower surrounding shoreline", async () => {
+  const grid = terrain(new Array(25).fill(50));
+  const elevations = new Float32Array(25).fill(42);
+  for (let row = 1; row <= 3; row++) {
+    for (let column = 1; column <= 3; column++) {
+      elevations[row * 5 + column] = 80;
+    }
+  }
+  // A few steep bank samples must not pull the whole water surface uphill.
+  elevations[0] = 95;
+  elevations[4] = 95;
+
+  const lakes = await conformTerrainToLakePolygons(
+    grid,
+    elevations,
+    [square()],
+    {
+      meshWidth: 10,
+      meshDepth: 10,
+      metersPerUnit: 1,
+      shorelineBlendMeters: 2,
+    },
+  );
+
+  assert.equal(lakes[0].elevationMeters, 42);
+  assert.equal(grid.elevations[2 * 5 + 2], 40);
+});
+
 test("slopes the lake bed down from the vector shore and leaves distant terrain alone", async () => {
   const grid = terrain(new Array(25).fill(50));
   await conformTerrainToLakePolygons(

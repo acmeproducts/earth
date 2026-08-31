@@ -52,6 +52,31 @@ export interface FloorPlanSvgOptions {
   roomStyles?: Readonly<Record<string, RoomRenderStyle>>;
 }
 
+export function segmentsIntersect(
+  firstStart: Point2D,
+  firstEnd: Point2D,
+  secondStart: Point2D,
+  secondEnd: Point2D,
+): boolean {
+  const epsilon = 1e-7;
+  const orientation = (a: Point2D, b: Point2D, c: Point2D): number =>
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const onSegment = (a: Point2D, point: Point2D, b: Point2D): boolean =>
+    point.x >= Math.min(a.x, b.x) - epsilon && point.x <= Math.max(a.x, b.x) + epsilon &&
+    point.y >= Math.min(a.y, b.y) - epsilon && point.y <= Math.max(a.y, b.y) + epsilon;
+  const first = orientation(firstStart, firstEnd, secondStart);
+  const second = orientation(firstStart, firstEnd, secondEnd);
+  const third = orientation(secondStart, secondEnd, firstStart);
+  const fourth = orientation(secondStart, secondEnd, firstEnd);
+  const crosses = (a: number, b: number): boolean =>
+    (a > epsilon && b < -epsilon) || (a < -epsilon && b > epsilon);
+  return (crosses(first, second) && crosses(third, fourth)) ||
+    (Math.abs(first) <= epsilon && onSegment(firstStart, secondStart, firstEnd)) ||
+    (Math.abs(second) <= epsilon && onSegment(firstStart, secondEnd, firstEnd)) ||
+    (Math.abs(third) <= epsilon && onSegment(secondStart, firstStart, secondEnd)) ||
+    (Math.abs(fourth) <= epsilon && onSegment(secondStart, firstEnd, secondEnd));
+}
+
 const DEFAULT_STYLES: Readonly<Record<string, RoomRenderStyle>> = {
   apartment: { fill: "url(#apartment-fill)", text: "#183b2e" },
   room: { fill: "url(#room-fill)", text: "#39245d" },

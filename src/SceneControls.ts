@@ -16,6 +16,7 @@ export interface SceneControlsOptions {
   clockSettings: Readonly<ClockSettings>;
   initialLocation: WorldLocation;
   onSettingChange: (key: SceneSettingKey, value: number) => void;
+  onRoofsVisibilityChange: (visible: boolean) => void;
   onClockModeChange: (mode: ClockMode) => void;
   onDateChange: (date: string) => void;
   onTimeOfDayChange: (hours: number) => void;
@@ -81,6 +82,18 @@ export class SceneControls {
         : sceneGroup;
       targetGroup.appendChild(control.row);
     }
+
+    const roofsRow = document.createElement("label");
+    roofsRow.className = "scene-control-row visibility-control-row";
+    const roofsLabel = document.createElement("span");
+    roofsLabel.textContent = "Show roofs";
+    const roofsInput = document.createElement("input");
+    roofsInput.type = "checkbox";
+    roofsInput.checked = options.settings.showRoofs;
+    roofsInput.setAttribute("aria-label", "Show building roofs");
+    roofsInput.addEventListener("change", () => options.onRoofsVisibilityChange(roofsInput.checked));
+    roofsRow.append(roofsLabel, roofsInput);
+    sceneGroup.appendChild(roofsRow);
 
     const clockModeRow = document.createElement("label");
     clockModeRow.className = "scene-control-row clock-mode-row";

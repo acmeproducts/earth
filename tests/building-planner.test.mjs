@@ -6,7 +6,7 @@ import { normalizeBuildingClass, planBuilding } from "../src/BuildingPlanner.ts"
 const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
-  new URL("../src/procedural/ProceduralBuildingRenderer.ts", import.meta.url),
+  new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
   "utf8",
 );
 

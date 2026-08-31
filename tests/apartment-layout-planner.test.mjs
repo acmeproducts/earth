@@ -51,6 +51,27 @@ test("leaves an indivisible area as one room", () => {
   assert.equal(polygonArea(layout.rooms[0].polygon.outer), 15);
 });
 
+test("supports different room-size limits for different apartments", () => {
+  const largerRooms = planApartmentLayout({
+    apartmentPolygon: apartment,
+    minimumRoomAreaSquareMeters: 30,
+  });
+  const smallerRooms = planApartmentLayout({
+    apartmentPolygon: apartment,
+    minimumRoomAreaSquareMeters: 12,
+  });
+  assert.ok(largerRooms.rooms.length < smallerRooms.rooms.length);
+  assert.ok(largerRooms.rooms.every((room) => polygonArea(room.polygon.outer) >= 30 - 1e-7));
+  assert.ok(smallerRooms.rooms.every((room) => polygonArea(room.polygon.outer) >= 12 - 1e-7));
+});
+
+test("rejects unreasonable per-apartment room-size limits", () => {
+  assert.throws(() => planApartmentLayout({
+    apartmentPolygon: apartment,
+    minimumRoomAreaSquareMeters: 10,
+  }), /between 12 and 30/);
+});
+
 test("rejects apartments smaller than the minimum room area", () => {
   assert.throws(() => planApartmentLayout({
     apartmentPolygon: { outer: [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }] },

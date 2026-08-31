@@ -89,6 +89,7 @@ interface MapLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   skyReflection?: BaseTexture | null;
+  showRoofs?: boolean;
   /** Provider elevations retained before coastline shaping for bridge clearance. */
   preCarvingElevations?: Float32Array;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
@@ -233,6 +234,7 @@ export class OpenStreetMap {
 
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
+        await yieldControl?.();
         const mesh = ProceduralBuildingRenderer.createDetailed(
           scene,
           planBuilding(source),
@@ -240,6 +242,7 @@ export class OpenStreetMap {
           options,
         );
         if (mesh) buildings.push(mesh);
+        await yieldControl?.();
       }
       await yieldControl?.();
       for (const source of roadSources(tile)) {
@@ -369,11 +372,13 @@ export class OpenStreetMap {
     const buildings: Mesh[] = [];
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
+        await yieldControl?.();
         const plan = planBuilding(source);
         const mesh = detail === "far"
           ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, options)
           : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, options);
         if (mesh) buildings.push(mesh);
+        await yieldControl?.();
       }
       await yieldControl?.();
     }

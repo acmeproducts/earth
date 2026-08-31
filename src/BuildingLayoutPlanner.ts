@@ -1,4 +1,4 @@
-import type { LayoutRoom, Opening2D, Point2D, Polygon2D, PolygonLayout } from "./FloorPlan";
+import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "./PlanningFrame.mjs";
 import { isConvexPolygon } from "./PolygonDecomposition.mjs";
 type CartesianAxis = "x" | "y";
@@ -27,7 +27,7 @@ interface BuildingEntrance extends Interval {
 }
 
 export const MAXIMUM_APARTMENT_AREA_SQUARE_METERS = 120;
-const MINIMUM_APARTMENT_AREA_SQUARE_METERS = 10;
+const MINIMUM_APARTMENT_AREA_SQUARE_METERS = 12;
 
 export type BuildingLayoutType = "house" | "apartment-building";
 export type BuildingRoomType = "apartment" | "hallway" | "stairs";
@@ -567,7 +567,7 @@ function sharedRoomEntranceDoors(
       if (!shared) return [];
       const length = Math.hypot(shared[1].x - shared[0].x, shared[1].y - shared[0].y);
       if (length < 0.8) return [];
-      const doorLength = Math.min(1, length * 0.5);
+      const doorLength = Math.min(1.15, length * 0.58);
       const center = {
         x: (shared[0].x + shared[1].x) / 2,
         y: (shared[0].y + shared[1].y) / 2,
@@ -875,27 +875,6 @@ function cutSegment(
   return axis === "x"
     ? [{ x: coordinate, y: minimum }, { x: coordinate, y: maximum }]
     : [{ x: minimum, y: coordinate }, { x: maximum, y: coordinate }];
-}
-
-function segmentsIntersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D): boolean {
-  const epsilon = 1e-7;
-  const orientation = (p: Point2D, q: Point2D, r: Point2D): number =>
-    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
-  const onSegment = (p: Point2D, q: Point2D, r: Point2D): boolean =>
-    q.x >= Math.min(p.x, r.x) - epsilon && q.x <= Math.max(p.x, r.x) + epsilon &&
-    q.y >= Math.min(p.y, r.y) - epsilon && q.y <= Math.max(p.y, r.y) + epsilon;
-  const first = orientation(a, b, c);
-  const second = orientation(a, b, d);
-  const third = orientation(c, d, a);
-  const fourth = orientation(c, d, b);
-  if (((first > epsilon && second < -epsilon) || (first < -epsilon && second > epsilon)) &&
-      ((third > epsilon && fourth < -epsilon) || (third < -epsilon && fourth > epsilon))) {
-    return true;
-  }
-  return Math.abs(first) <= epsilon && onSegment(a, c, b) ||
-    Math.abs(second) <= epsilon && onSegment(a, d, b) ||
-    Math.abs(third) <= epsilon && onSegment(c, a, d) ||
-    Math.abs(fourth) <= epsilon && onSegment(c, b, d);
 }
 
 function samePoint(a: Point2D, b: Point2D): boolean {

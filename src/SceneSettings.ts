@@ -4,9 +4,10 @@ export interface SceneSettings {
   terrainTilesAcross: number;
   cloudDensity: number;
   windSpeedMetersPerSecond: number;
+  showRoofs: boolean;
 }
 
-export type SceneSettingKey = keyof SceneSettings;
+export type SceneSettingKey = Exclude<keyof SceneSettings, "showRoofs">;
 
 export interface SceneSettingDefinition<K extends SceneSettingKey = SceneSettingKey> {
   key: K;
@@ -107,6 +108,12 @@ export class SceneSettingsStore {
     return this.current;
   }
 
+  setRoofsVisible(value: boolean): Readonly<SceneSettings> {
+    this.current = { ...this.current, showRoofs: value };
+    this.persist();
+    return this.current;
+  }
+
 
   private persist(): void {
     try {
@@ -148,7 +155,11 @@ function loadSceneSettings(
   let settings = DEFAULT_SCENE_SETTINGS;
   try {
     const stored = storage?.getItem(STORAGE_KEY);
-    if (stored) settings = normalizeSettings({ ...settings, ...JSON.parse(stored) });
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      settings = normalizeSettings({ ...settings, ...parsed });
+      settings.showRoofs = parsed.showRoofs !== false;
+    }
   } catch {
     // Ignore malformed or inaccessible storage and retain safe defaults.
   }
@@ -159,6 +170,8 @@ function loadSceneSettings(
     const value = Number(requested);
     if (Number.isFinite(value)) settings = updateSceneSetting(settings, definition.key, value);
   }
+  const requestedRoofs = query.get("roofs");
+  if (requestedRoofs !== null) settings.showRoofs = !["0", "off", "false"].includes(requestedRoofs.toLowerCase());
   return settings;
 }
 
@@ -179,6 +192,7 @@ function settingsFromDefinitions(candidate: Partial<SceneSettings> = {}): SceneS
       definition,
     );
   }
+  settings.showRoofs = candidate.showRoofs ?? true;
   return settings;
 }
 

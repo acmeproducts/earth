@@ -34,6 +34,9 @@ export interface TerrainLakePolygonOptions {
 /** Maximum default distance at which an OSM lake can alter neighboring terrain. */
 export const LAKE_TERRAIN_CONTEXT_METERS = 240;
 
+/** Low shoreline samples capture outlets without letting steep banks set the lake level. */
+const LAKE_SHORE_LEVEL_PERCENTILE = 0.15;
+
 interface Bounds {
   minimumX: number;
   maximumX: number;
@@ -160,23 +163,49 @@ function lakeLevels(
       continue;
     }
 
-    const samples: number[] = [];
+    const interiorSamples: number[] = [];
+    const shoreSamples: number[] = [];
     const bounds = combinedBounds(pieces);
-    const columns = gridRange(bounds.minimumX, bounds.maximumX, options.meshWidth, terrain.width, false);
-    const rows = gridRange(bounds.minimumZ, bounds.maximumZ, options.meshDepth, terrain.height, true);
+    const sampleSpacing = Math.max(
+      options.meshWidth / Math.max(1, terrain.width - 1),
+      options.meshDepth / Math.max(1, terrain.height - 1),
+    );
+    const shoreSampleWidth = Math.max(
+      (options.shorelineBlendMeters ?? 24) / options.metersPerUnit,
+      sampleSpacing * 2,
+    );
+    const columns = gridRange(
+      bounds.minimumX - shoreSampleWidth,
+      bounds.maximumX + shoreSampleWidth,
+      options.meshWidth,
+      terrain.width,
+      false,
+    );
+    const rows = gridRange(
+      bounds.minimumZ - shoreSampleWidth,
+      bounds.maximumZ + shoreSampleWidth,
+      options.meshDepth,
+      terrain.height,
+      true,
+    );
     for (let row = rows.minimum; row <= rows.maximum; row++) {
       const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
       for (let column = columns.minimum; column <= columns.maximum; column++) {
         const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
+        const elevation = elevations[row * terrain.width + column];
         if (pieces.some((piece) => pointInLake(x, z, piece))) {
-          samples.push(elevations[row * terrain.width + column]);
+          interiorSamples.push(elevation);
+          continue;
+        }
+        if (pieces.some((piece) => distanceToRings(x, z, piece) <= shoreSampleWidth)) {
+          shoreSamples.push(elevation);
         }
       }
     }
-    if (samples.length === 0) {
+    if (interiorSamples.length === 0 && shoreSamples.length === 0) {
       for (const piece of pieces) {
         for (const point of piece.outline) {
-          samples.push(sampleGridElevation(
+          shoreSamples.push(sampleGridElevation(
             terrain,
             point.x,
             point.z,
@@ -187,13 +216,24 @@ function lakeLevels(
         }
       }
     }
-    if (samples.length === 0) continue;
-    samples.sort((a, b) => a - b);
-    const level = samples[Math.floor(samples.length / 2)];
+    if (interiorSamples.length === 0 && shoreSamples.length === 0) continue;
+    interiorSamples.sort((a, b) => a - b);
+    shoreSamples.sort((a, b) => a - b);
+    const interiorLevel = interiorSamples.length === 0
+      ? Infinity
+      : percentile(interiorSamples, 0.5);
+    const shoreLevel = shoreSamples.length === 0
+      ? Infinity
+      : percentile(shoreSamples, LAKE_SHORE_LEVEL_PERCENTILE);
+    const level = Math.min(interiorLevel, shoreLevel);
     levels.set(sourceId, level);
     options.sharedLakeElevations?.set(sourceId, level);
   }
   return levels;
+}
+
+function percentile(sorted: readonly number[], fraction: number): number {
+  return sorted[Math.floor(Math.max(0, Math.min(1, fraction)) * (sorted.length - 1))];
 }
 
 function sampleGridElevation(

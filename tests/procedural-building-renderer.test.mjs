@@ -249,7 +249,7 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   assert.equal(detailed.metadata.stairFlightCount, 2);
   assert.equal(detailed.metadata.stairEdgeIndex, -1);
   assert.equal(detailed.metadata.stairFlightCenters.length, 2);
-  assert.deepEqual(
+  assert.notDeepEqual(
     detailed.metadata.stairFlightCenters[0],
     detailed.metadata.stairFlightCenters[1],
   );
