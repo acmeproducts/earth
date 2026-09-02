@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import {
+import { register } from "node:module";
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   providerElevationTileRange,
   providerPixelCrop,
-} from "../src/TerrainElevationSource.ts";
-import {
+} = await import("../src/TerrainElevationSource.ts");
+const {
   createTerrainSkirtGeometry,
   stitchTerrainEdges,
   stitchTerrainMeshEdges,
-} from "../src/TerrainStitching.ts";
-import { worldTileBounds } from "../src/WorldGrid.ts";
+} = await import("../src/TerrainStitching.ts");
+const { worldTileBounds } = await import("../src/WorldGrid.ts");
 
 const PROVIDER_LEVEL = 15;
 const PROVIDER_TILE_SIZE = 256;

@@ -1,14 +1,14 @@
 import { Color3, Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
-import { smoothstep } from "./MathUtils";
 import {
   acquireFernImpostorAssets,
   createFernModel,
   fernRenderedCaptureSize,
 } from "./FernImpostor";
 import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
+import { habitatField } from "./HabitatNoise";
+import type { HabitatFieldSpec } from "./HabitatNoise";
 import { createSeededRandom } from "./Random";
-import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import {
   combineVegetationFieldResults,
@@ -36,7 +36,18 @@ const FERN_GROUND_OFFSET_METERS = 0.035;
 const FERN_CLUSTER_MIN_COUNT = 3;
 const FERN_CLUSTER_MAX_COUNT = 5;
 const FERN_CLUSTER_RADIUS_METERS = 1.8;
-const FERN_CLUSTER_ANCHOR_SCALE = 0.62;
+/**
+ * Ferns arrive as damp patches on a forest floor, not as an even dusting of it.
+ * The patch wavelength matches the old tile-local cluster field; the abundance
+ * wavelength is new, and is what makes one wood ferny and the next one bare.
+ * Calibrated so the mean density matches the field this replaced.
+ */
+const HABITAT: HabitatFieldSpec = {
+  patchMeters: 22,
+  abundanceMeters: 1800,
+  barrenShare: 0.15,
+  richestCoverage: 0.95,
+};
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.24,
   [LandCoverClass.Shrubland]: 0.035,
@@ -70,15 +81,13 @@ export async function createFernField(
   if (startDisabled) root.setEnabled(false);
 
   const random = createSeededRandom(seed);
-  const clusterNoise = new SimplexNoise2D(seed ^ 0x9e3779b9);
-  const detailNoise = new SimplexNoise2D(seed ^ 0x243f6a88);
+  const habitat = habitatField("ferns", modelVariantSeed, HABITAT);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
     spacingMeters,
     metersPerUnit,
   );
-  const clusterScale = 22 / metersPerUnit;
   const maximumHalfWidth = fernRenderedCaptureSize(renderHeight) * 0.62;
   const matrices: Matrix[] = [];
   const variantBuckets = new Map<string, ProceduralPlacementBucket>();
@@ -91,20 +100,14 @@ export async function createFernField(
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const coverOccupancy = OCCUPANCY[landCover.sample(lon, lat)] ?? 0;
         if (coverOccupancy === 0) continue;
-        const broad = clusterNoise.sample(x / clusterScale, z / clusterScale) * 0.5 + 0.5;
-        const detail = detailNoise.sample(
-          x / (clusterScale * 0.38) + 21.7,
-          z / (clusterScale * 0.38) - 13.9,
-        ) * 0.5 + 0.5;
-        const clusterDensity = smoothstep(0.3, 0.68, broad * 0.8 + detail * 0.2);
-        // Let the habitat noise decide where a patch exists, then let the
-        // patch itself supply most of the density. This keeps neighboring
-        // grid cells from each becoming equally convincing little clusters.
+        // Anchored to the location rather than to this tile's local frame, so
+        // a patch crosses a tile boundary intact instead of the whole pattern
+        // restarting once per tile.
+        const stand = habitat.sample(lon, lat);
+        if (stand <= 0) continue;
         const occupancy = Math.min(
           1,
-          coverOccupancy * FERN_CLUSTER_ANCHOR_SCALE *
-            (0.04 + clusterDensity * 0.96) *
-            Math.max(0, densityScale?.(x, z) ?? 1),
+          coverOccupancy * stand * Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
         if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;

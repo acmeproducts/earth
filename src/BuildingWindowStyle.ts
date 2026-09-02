@@ -1,4 +1,5 @@
 import type { BuildingPlan, LonLat } from "./BuildingPlanner";
+import { unitFromSeed } from "./Random";
 
 export type BuildingWindowRegion =
   | "nordic"
@@ -107,14 +108,14 @@ export function buildingWindowStyle(plan: BuildingPlan): BuildingWindowStyle {
   const [longitude, latitude] = footprintCenter(plan.footprint.outer);
   const region = windowRegionAt(longitude, latitude);
   const palette = REGION_STYLES[region];
-  const selection = seededUnit(plan.detailSeed ^ 0x621bca1d);
+  const selection = unitFromSeed(plan.detailSeed ^ 0x621bca1d);
   const template = STYLES[palette[Math.min(palette.length - 1, Math.floor(selection * palette.length))]];
-  const proportion = seededUnit(plan.detailSeed ^ 0x2c1b3c6d);
+  const proportion = unitFromSeed(plan.detailSeed ^ 0x2c1b3c6d);
   return {
     ...template,
     region,
     widthMeters: interpolate(template.widthMeters, proportion),
-    heightMeters: interpolate(template.heightMeters, seededUnit(plan.detailSeed ^ 0x53a8f9d1)),
+    heightMeters: interpolate(template.heightMeters, unitFromSeed(plan.detailSeed ^ 0x53a8f9d1)),
   };
 }
 
@@ -148,11 +149,4 @@ function samePoint(a: LonLat, b: LonLat): boolean {
 
 function interpolate(range: readonly [number, number], amount: number): number {
   return range[0] + (range[1] - range[0]) * amount;
-}
-
-function seededUnit(seed: number): number {
-  let value = seed | 0;
-  value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-  value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-  return ((value ^ (value >>> 16)) >>> 0) / 4_294_967_296;
 }

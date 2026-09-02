@@ -1,3 +1,4 @@
+import { smoothstep } from "./MathUtils";
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 export const FICTIONAL_MOON_PHASE_DAYS = 6;
 export const FICTIONAL_MOON_PHASE_EPOCH = Date.UTC(2026, 0, 1);
@@ -13,9 +14,4 @@ export function fictionalMoonPhase(date: Date): number {
 export function fictionalMoonSkyVisibility(sunAltitudeDegrees: number): number {
   const daylight = smoothstep(-4, 20, sunAltitudeDegrees);
   return 1 - daylight * 0.72;
-}
-
-function smoothstep(start: number, end: number, value: number): number {
-  const amount = Math.max(0, Math.min(1, (value - start) / (end - start)));
-  return amount * amount * (3 - 2 * amount);
 }

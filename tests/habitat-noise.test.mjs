@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { register } from "node:module";
 import test from "node:test";
 
@@ -134,4 +135,22 @@ test("the barren share and richest coverage bound the field", () => {
   assert.ok(dense.filter((value) => value > 0).length / dense.length > 0.45);
   assert.ok(dense.every((value) => value <= 1));
   assert.ok(scan(nowhere, { spanMeters: 6_000, step: 40 }).values.every((v) => v === 0));
+});
+
+test("no scattered layer seeds a spatial field from its per-tile stream", () => {
+  // `seed` is the per-tile placement stream in every *Field module; world-level
+  // fields take `modelVariantSeed`/`speciesSeed`. Seeding noise from the tile
+  // seed reseeds and rephases the pattern at every tile edge, which is the
+  // visible seam this whole module exists to avoid — so it must stay absent.
+  const fields = readdirSync(new URL("../src/", import.meta.url))
+    .filter((name) => name.endsWith("Field.ts"));
+  assert.ok(fields.length >= 8, `expected the field modules, found ${fields}`);
+  for (const name of fields) {
+    const source = readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
+    assert.doesNotMatch(
+      source,
+      /new SimplexNoise2D\(\s*seed\b/,
+      `${name} seeds a spatial noise field from its per-tile seed`,
+    );
+  }
 });

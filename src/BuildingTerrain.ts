@@ -1,4 +1,5 @@
 import { sampleElevation } from "./Geo";
+import { smoothstep } from "./MathUtils";
 import type { TerrainData } from "./TerrainData";
 import type { TerrainModification } from "./TerrainModification";
 
@@ -223,11 +224,6 @@ function polygonBounds(points: ReadonlyArray<{ x: number; z: number }>): {
     minimumZ: Math.min(bounds.minimumZ, point.z),
     maximumZ: Math.max(bounds.maximumZ, point.z),
   }), { minimumX: Infinity, maximumX: -Infinity, minimumZ: Infinity, maximumZ: -Infinity });
-}
-
-function smoothstep(minimum: number, maximum: number, value: number): number {
-  const amount = Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum)));
-  return amount * amount * (3 - 2 * amount);
 }
 
 function updateElevationRange(terrain: TerrainData): void {

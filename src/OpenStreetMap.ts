@@ -26,7 +26,9 @@ import {
   sampleElevation,
   SEA_LEVEL_METERS,
 } from "./Geo";
+import { cellRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
+import { tiledValueNoise } from "./ValueNoise";
 import type { TileBounds } from "./WorldGrid";
 import {
   BuildingDetailLevel,
@@ -70,6 +72,8 @@ const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
 const BRIDGE_WATER_CLEARANCE_METERS = 3;
 const WATERWAY_SURFACE_CLEARANCE_METERS = 0.08;
 const ROAD_TEXTURE_SIZE = 128;
+/** Non-repeating per-pixel grain, distinct from the seamless octaves. */
+const ROAD_GRAIN_SEED = 0x726f6164;
 /** A deliberately non-round span keeps gravel repeats from lining up with road sampling. */
 const LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6.7;
 
@@ -1357,14 +1361,14 @@ function createRoadTexture(
   for (let y = 0; y < ROAD_TEXTURE_SIZE; y++) {
     for (let x = 0; x < ROAD_TEXTURE_SIZE; x++) {
       const offset = (y * ROAD_TEXTURE_SIZE + x) * 4;
-      const fine = hashNoise(x, y);
-      const coarse = hashNoise(Math.floor(x / 4), Math.floor(y / 4));
+      const fine = cellRandom(ROAD_GRAIN_SEED, x, y);
+      const coarse = cellRandom(ROAD_GRAIN_SEED, Math.floor(x / 4), Math.floor(y / 4));
       // Periodic value noise crosses the wrapped edges smoothly. Several
       // incommensurate scales read as varied aggregate without the old square
       // four-pixel clumps advertising each texture tile.
-      const gravelBroad = tiledRoadNoise(x, y, 7, 0x45d9f3b);
-      const gravelCluster = tiledRoadNoise(x, y, 23, 0x119de1f3);
-      const gravelGrain = tiledRoadNoise(x, y, 53, 0x3449f5);
+      const gravelBroad = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 7, 0x45d9f3b);
+      const gravelCluster = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 23, 0x119de1f3);
+      const gravelGrain = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 53, 0x3449f5);
       const centerMark = visualStyle === "marked" &&
         Math.abs(y - (ROAD_TEXTURE_SIZE - 1) / 2) <= 1.25 &&
         x < ROAD_TEXTURE_SIZE * 0.58;
@@ -1408,34 +1412,6 @@ function createRoadTexture(
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   texture.anisotropicFilteringLevel = 12;
   return texture;
-}
-
-function hashNoise(x: number, y: number): number {
-  let hash = Math.imul(x ^ 0x6d2b79f5, 0x1b873593) ^ Math.imul(y ^ 0x85ebca6b, 0xc2b2ae35);
-  hash ^= hash >>> 15;
-  hash = Math.imul(hash, 0x85ebca6b);
-  hash ^= hash >>> 13;
-  return (hash >>> 0) / 0xffffffff;
-}
-
-/** Seamless smooth noise whose lattice repeats exactly at the texture boundary. */
-function tiledRoadNoise(x: number, y: number, frequency: number, seed: number): number {
-  const sampleX = (x / ROAD_TEXTURE_SIZE) * frequency;
-  const sampleY = (y / ROAD_TEXTURE_SIZE) * frequency;
-  const cellX = Math.floor(sampleX);
-  const cellY = Math.floor(sampleY);
-  const fractionX = sampleX - cellX;
-  const fractionY = sampleY - cellY;
-  const smoothX = fractionX * fractionX * (3 - 2 * fractionX);
-  const smoothY = fractionY * fractionY * (3 - 2 * fractionY);
-  const wrapped = (value: number): number => (value + frequency) % frequency;
-  const topLeft = hashNoise(wrapped(cellX) ^ seed, wrapped(cellY));
-  const topRight = hashNoise(wrapped(cellX + 1) ^ seed, wrapped(cellY));
-  const bottomLeft = hashNoise(wrapped(cellX) ^ seed, wrapped(cellY + 1));
-  const bottomRight = hashNoise(wrapped(cellX + 1) ^ seed, wrapped(cellY + 1));
-  const top = topLeft + (topRight - topLeft) * smoothX;
-  const bottom = bottomLeft + (bottomRight - bottomLeft) * smoothX;
-  return top + (bottom - top) * smoothY;
 }
 
 function truthy(value: unknown): boolean {

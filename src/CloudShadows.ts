@@ -7,6 +7,7 @@ import {
   Vector3,
   Vector4,
 } from "@babylonjs/core";
+import { smoothstep } from "./MathUtils";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
 import type { CloudPlacement } from "./CloudDistribution";
 import {
@@ -416,9 +417,4 @@ function createShadowAtlas(scene: Scene): {
     dimensions: new Vector2(atlas.width, atlas.height),
     tileStride: new Vector2(atlas.tileStrideX, atlas.tileStrideY),
   };
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  const amount = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
-  return amount * amount * (3 - 2 * amount);
 }

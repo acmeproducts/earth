@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { register } from "node:module";
 
-import { treeSeasonAt } from "../src/TreeSeason.ts";
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const { treeSeasonAt } = await import("../src/TreeSeason.ts");
 
 test("temperate deciduous seasons follow the calendar and hemisphere", () => {
   const august = new Date(2026, 7, 23);

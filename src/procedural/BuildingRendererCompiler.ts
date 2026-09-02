@@ -19,6 +19,7 @@ import {
 import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
+import { unitFromSeed } from "../Random";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
 import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
 import { planApartmentLayout, type ApartmentLayout } from "../ApartmentLayoutPlanner";
@@ -95,7 +96,7 @@ export class ProceduralBuildingRenderer {
     }
     const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
     const towerBlend = highRiseBlend(plan.heightMeters);
-    if (seededUnit(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
+    if (unitFromSeed(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
       captureUnplannedBuilding(plan, prepared, options, "High-rise buildings use the tower renderer.");
       return createHighRiseBuilding(scene, plan, prepared, options, appearance, towerBlend);
     }
@@ -439,7 +440,7 @@ function createEnterableBuilding(
   const windowStyle = buildingWindowStyle(plan);
   const glass = varyColor(
     new Color3(...windowStyle.glass),
-    seededUnit(plan.detailSeed ^ 0x45f3a921) * 0.1,
+    unitFromSeed(plan.detailSeed ^ 0x45f3a921) * 0.1,
     0,
   );
   const entranceEdge = longestPolygonEdge(outline, blockedFacadeEdges);
@@ -623,7 +624,7 @@ function createEnterableBuilding(
         const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
           (floor * 0x45d9f3b) ^ (bay * 0x119de1f3);
         const blankBay = bayCount > 2 && !isEntrance &&
-          seededUnit(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
+          unitFromSeed(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
         if (blankBay) {
           addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
             bayWidth, storyBottom, storyHeight, options, appearance.wall);
@@ -714,7 +715,7 @@ function plannedFacadeOpenings(
       const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
         (bay * 0x119de1f3);
       const blankBay = bayCount > 2 &&
-        seededUnit(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
+        unitFromSeed(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
       const windowFits = bayWidth >= windowStyle.widthMeters +
           BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
         storyHeight >= windowStyle.sillMeters + windowStyle.heightMeters +
@@ -824,7 +825,7 @@ function planApartmentLayouts(
 function apartmentRoomAreaTarget(buildingSeed: number, apartmentIndex: number): number {
   // Keep the 12-30 m² variation bounded and deterministic: room proportions change by
   // building and apartment, but a rebuild never produces a different layout.
-  const variation = seededUnit(buildingSeed ^ (apartmentIndex * 0x1f123bb5) ^ 0x3c6ef372);
+  const variation = unitFromSeed(buildingSeed ^ (apartmentIndex * 0x1f123bb5) ^ 0x3c6ef372);
   return 12 + variation * 18;
 }
 
@@ -910,10 +911,9 @@ function stairLayoutsFromPlan(
     const available = candidates.filter((candidate) =>
       layouts.every((placed) => !stairLayoutsOverlap(candidate, placed, options)));
     if (available.length === 0) break;
-    const choiceIndex = Math.floor(
-      seededUnit(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * available.length,
-    );
-    layouts.push(available[Math.min(choiceIndex, available.length - 1)]);
+    layouts.push(available[Math.floor(
+      unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * available.length,
+    )]);
   }
   return layouts;
 }
@@ -1521,10 +1521,9 @@ function findStairLayouts(
       : candidates;
     if (separated.length === 0) break;
     const choices = separated;
-    const choiceIndex = Math.floor(
-      seededUnit(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
-    );
-    layouts.push(choices[Math.min(choiceIndex, choices.length - 1)]);
+    layouts.push(choices[Math.floor(
+      unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
+    )]);
   }
   return layouts;
 }
@@ -1922,7 +1921,7 @@ function createRoofTrim(
 ): Mesh | undefined {
   if (outline.length > 12) return undefined;
   const trimHeight = BUILDING_ROOF_TRIM_METERS +
-    (seededUnit(detailSeed ^ 0x683a9f) - 0.5) * 0.16;
+    (unitFromSeed(detailSeed ^ 0x683a9f) - 0.5) * 0.16;
   const trim = createBuildingPrism(
     scene,
     outline,
@@ -1931,7 +1930,7 @@ function createRoofTrim(
     options,
   );
   const center = averagePoint(outline);
-  const trimScale = 1.006 + seededUnit(detailSeed ^ 0x915cb4) * 0.016;
+  const trimScale = 1.006 + unitFromSeed(detailSeed ^ 0x915cb4) * 0.016;
   const positions = trim.getVerticesData(VertexBuffer.PositionKind);
   if (positions) {
     for (let index = 0; index < positions.length; index += 3) {
@@ -2059,14 +2058,14 @@ function inferredRoofHeight(
       (pointDistance(outline[1], outline[2]) + pointDistance(outline[3], outline[0])) / 2,
     ) * options.metersPerUnit
     : Math.sqrt(areaSquareMeters);
-  const pitchDegrees = 32 + seededUnit(detailSeed ^ 0x46a31d) * 16;
+  const pitchDegrees = 32 + unitFromSeed(detailSeed ^ 0x46a31d) * 16;
   const rise = spanMeters / 2 * Math.tan(pitchDegrees * Math.PI / 180);
   return Math.max(1.8, Math.min(6, rise));
 }
 
 function roofOverhangMeters(detailSeed: number): number {
   return BUILDING_ROOF_OVERHANG_METERS +
-    (seededUnit(detailSeed ^ 0x31bd72) - 0.5) * 0.3;
+    (unitFromSeed(detailSeed ^ 0x31bd72) - 0.5) * 0.3;
 }
 
 function resolvedRoofShape(
@@ -2084,7 +2083,7 @@ function resolvedRoofShape(
   if (outline.length !== 4 || !isConvex(outline) || areaSquareMeters > 650 || plan.heightMeters > 16) {
     return "flat";
   }
-  const variation = seededUnit(plan.detailSeed ^ 0x7a4d2b);
+  const variation = unitFromSeed(plan.detailSeed ^ 0x7a4d2b);
   if (variation < 0.34) return "gabled";
   if (variation < 0.62) return "hipped";
   if (variation < 0.78) return "pyramidal";
@@ -2124,13 +2123,13 @@ function buildingAppearance(plan: BuildingPlan): BuildingAppearance {
     parseBuildingColor(palette.roof)!;
   const wall = varyColor(
     baseWall,
-    seededUnit(plan.detailSeed ^ 0x128fa3) - 0.5,
-    seededUnit(plan.detailSeed ^ 0x74c921) - 0.5,
+    unitFromSeed(plan.detailSeed ^ 0x128fa3) - 0.5,
+    unitFromSeed(plan.detailSeed ^ 0x74c921) - 0.5,
   );
   const roof = varyColor(
     baseRoof,
-    seededUnit(plan.detailSeed ^ 0x5e219b) - 0.5,
-    seededUnit(plan.detailSeed ^ 0x2794df) - 0.5,
+    unitFromSeed(plan.detailSeed ^ 0x5e219b) - 0.5,
+    unitFromSeed(plan.detailSeed ^ 0x2794df) - 0.5,
   );
   return { wall, roof, trim: mixColor(wall, roof, 0.72) };
 }
@@ -2236,16 +2235,6 @@ function setSolidVertexColor(mesh: Mesh, color: Color3): void {
   }
   mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   mesh.useVertexColors = true;
-}
-
-function seededUnit(seed: number): number {
-  let value = seed | 0;
-  value ^= value >>> 16;
-  value = Math.imul(value, 0x7feb352d);
-  value ^= value >>> 15;
-  value = Math.imul(value, 0x846ca68b);
-  value ^= value >>> 16;
-  return (value >>> 0) / 0xffffffff;
 }
 
 function pointDistance(a: ScenePoint, b: ScenePoint): number {

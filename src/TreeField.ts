@@ -13,7 +13,12 @@ import {
   Vector3,
   VertexData,
 } from "@babylonjs/core";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import {
+  groundMetersAt,
+  isTerrainFootprintAbove,
+  sceneToLonLat,
+  sampleElevation,
+} from "./Geo";
 import type { TerrainData } from "./TerrainData";
 import {
   acquireTreeImpostorAssets,
@@ -84,7 +89,6 @@ const MAX_TREE_SPECIES_PER_VARIANT = 3;
 const FALLEN_LOG_CHANCE = 0.015;
 /** Fallen wood is reserved for the established interior of dense forest cover. */
 const FALLEN_LOG_MINIMUM_INTERIOR_DEPTH = 0.7;
-const METERS_PER_DEGREE = 111_320;
 const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   acacia: 0.92,
   beech: 1.02,
@@ -667,11 +671,12 @@ export async function createTreeField(
         const treeDistribution = treeDistributionAt(location.lon, location.lat);
         // Geographic meters anchor the grove noise to the world rather than
         // to this tile's local frame, keeping groves seamless across tiles.
+        const ground = groundMetersAt(location.lon, location.lat);
         const species = sampleTreeSpecies(
           speciesNoise,
           speciesDetailNoise,
-          location.lon * METERS_PER_DEGREE * Math.cos(location.lat * Math.PI / 180),
-          location.lat * METERS_PER_DEGREE,
+          ground.x,
+          ground.y,
           treeDistribution,
           random(),
         );

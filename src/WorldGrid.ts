@@ -1,3 +1,6 @@
+import { wrap } from "./MathUtils";
+import { deriveSeed } from "./Random";
+
 /** The application-owned detailed grid. Provider zooms must not define this value. */
 export const WORLD_GRID_LEVEL = 16;
 export const DEFAULT_WORLD_SEED = 0x45415254;
@@ -209,21 +212,6 @@ export function layerSeed(seed: number, layer: string): number {
   return deriveSeed(seed, layer);
 }
 
-function deriveSeed(seed: number, label: string, ...values: number[]): number {
-  let hash = (seed ^ 0x811c9dc5) >>> 0;
-  for (let index = 0; index < label.length; index++) {
-    hash = Math.imul(hash ^ label.charCodeAt(index), 0x01000193) >>> 0;
-  }
-  for (const value of values) {
-    let part = value | 0;
-    for (let byte = 0; byte < 4; byte++) {
-      hash = Math.imul(hash ^ (part & 0xff), 0x01000193) >>> 0;
-      part >>= 8;
-    }
-  }
-  return hash | 0;
-}
-
 function normalizeLevel(level: number): number {
   return Math.max(0, Math.min(30, Math.round(level)));
 }
@@ -250,8 +238,4 @@ function clampLatitude(latitude: number): number {
 
 function mercatorRowToLatitude(row: number, scale: number): number {
   return Math.atan(Math.sinh(Math.PI * (1 - 2 * row / scale))) * 180 / Math.PI;
-}
-
-function wrap(value: number, modulus: number): number {
-  return ((value % modulus) + modulus) % modulus;
 }

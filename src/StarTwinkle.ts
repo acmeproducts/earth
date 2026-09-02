@@ -1,3 +1,4 @@
+import { lerp } from "./MathUtils";
 export const TWINKLE_ALTITUDE_EXPONENT = 1.8;
 export const TWINKLE_ZENITH_PROBABILITY = 0.06;
 export const TWINKLE_HORIZON_PROBABILITY = 0.55;
@@ -14,12 +15,12 @@ export function starTwinkleProfile(altitudeSine: number): StarTwinkleProfile {
   const altitude = Math.max(0, Math.min(1, altitudeSine));
   const horizonProximity = Math.pow(1 - altitude, TWINKLE_ALTITUDE_EXPONENT);
   return {
-    eventProbability: mix(
+    eventProbability: lerp(
       TWINKLE_ZENITH_PROBABILITY,
       TWINKLE_HORIZON_PROBABILITY,
       horizonProximity,
     ),
-    eventStrength: mix(
+    eventStrength: lerp(
       TWINKLE_ZENITH_STRENGTH,
       TWINKLE_HORIZON_STRENGTH,
       horizonProximity,
@@ -27,6 +28,3 @@ export function starTwinkleProfile(altitudeSine: number): StarTwinkleProfile {
   };
 }
 
-function mix(start: number, end: number, amount: number): number {
-  return start + (end - start) * amount;
-}

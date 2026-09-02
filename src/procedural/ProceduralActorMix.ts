@@ -29,6 +29,23 @@ export type ProceduralActorMix = Readonly<Record<ProceduralActorFamily, Procedur
 /** Broad enough that crossing one tile edge cannot noticeably reshuffle the mix. */
 const MIX_NOISE_SPAN_TILES = 32;
 
+/**
+ * One field per family per world, built once. Each `SimplexNoise2D` shuffles a
+ * 256-entry permutation on construction, and this runs for every streamed tile.
+ */
+const fields = new Map<number, readonly SimplexNoise2D[]>();
+
+function familyNoise(worldSeed: number): readonly SimplexNoise2D[] {
+  let noise = fields.get(worldSeed);
+  if (!noise) {
+    noise = PROCEDURAL_ACTOR_FAMILIES.map((family) => new SimplexNoise2D(
+      layerSeed(worldSeed, `proceduralActorMix/${family}`),
+    ));
+    fields.set(worldSeed, noise);
+  }
+  return noise;
+}
+
 /** Creates a stable, spatially smooth actor composition at one tile ID. */
 export function proceduralActorMixAtTile(
   tile: WorldTileId,
@@ -38,11 +55,9 @@ export function proceduralActorMixAtTile(
   const worldScale = 2 ** WORLD_GRID_LEVEL;
   const x = tile.x * levelScale;
   const y = tile.y * levelScale;
-  const weights = PROCEDURAL_ACTOR_FAMILIES.map((family) => {
-    const noise = new SimplexNoise2D(layerSeed(worldSeed, `proceduralActorMix/${family}`));
-    const value = sampleWrappedX(noise, x, y, worldScale);
-    return Math.exp(value * 1.2);
-  });
+  const weights = familyNoise(worldSeed).map(
+    (noise) => Math.exp(sampleWrappedX(noise, x, y, worldScale) * 1.2),
+  );
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   const familyCount = PROCEDURAL_ACTOR_FAMILIES.length;
   const entries = PROCEDURAL_ACTOR_FAMILIES.map((family, index) => {

@@ -3,7 +3,8 @@ import {
   createVertexColorCaptureMaterial,
   getTreeBarkTexture,
 } from "./ProceduralCaptureMaterial";
-import { createSeededRandom } from "../Random";
+import { lerp } from "../MathUtils";
+import { createSeededRandom, hashString, unitFromSeed } from "../Random";
 import type { TreeSeasonAppearance } from "../TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
@@ -1160,7 +1161,7 @@ function applySeasonalFoliage(
 
     // Geometry order is deterministic, so this keeps the same scattered leaves
     // in models and captures without consuming or perturbing the tree RNG.
-    const retained = deterministicUnit(vertex ^ hashString(season.key)) < season.leafCoverage;
+    const retained = unitFromSeed(vertex ^ hashString(season.key)) < season.leafCoverage;
     for (let corner = 0; corner < 4; corner++) {
       const index = vertex + corner;
       if (!retained) droppedVertices.add(index);
@@ -1174,21 +1175,6 @@ function applySeasonalFoliage(
   if (droppedVertices.size > 0) {
     buffers.indices = buffers.indices.filter((index) => !droppedVertices.has(index));
   }
-}
-
-function deterministicUnit(value: number): number {
-  let hash = value | 0;
-  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
-  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
-  return ((hash ^ (hash >>> 16)) >>> 0) / 4_294_967_296;
-}
-
-function hashString(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index++) {
-    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
-  }
-  return hash;
 }
 
 function createTreePartMesh(
@@ -1553,8 +1539,4 @@ function scaleColor(color: Color3, scale: number): Color3 {
 
 function pushColor(target: number[], color: Color3, alpha: number): void {
   target.push(color.r, color.g, color.b, alpha);
-}
-
-function lerp(from: number, to: number, amount: number): number {
-  return from + (to - from) * amount;
 }

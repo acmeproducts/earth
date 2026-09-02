@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { register } from "node:module";
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   fictionalMoonPhase,
   fictionalMoonSkyVisibility,
   FICTIONAL_MOON_PHASE_EPOCH,
-} from "../src/FictionalMoon.ts";
+} = await import("../src/FictionalMoon.ts");
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const atDay = (day) => new Date(FICTIONAL_MOON_PHASE_EPOCH + day * DAY_MILLISECONDS);

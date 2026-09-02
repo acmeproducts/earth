@@ -19,6 +19,7 @@ import {
 import { landCoverSurfaceColor } from "./WorldCover";
 import type { LandCoverClass, LandCoverSampler } from "./WorldCover";
 import { yieldToNextFrame } from "./FrameBudget";
+import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 import type { FrameBudgetYielder } from "./FrameBudget";
 
 const GROUND_COVER_BLEND_METERS = 12;
@@ -34,6 +35,8 @@ export interface TerrainMeshOptions {
   landCover?: LandCoverSampler;
   yieldControl?: FrameBudgetYielder;
   snowCovered?: boolean;
+  /** World-level seed for the ground color bands, not the per-tile seed. */
+  worldSeed?: number;
 }
 
 interface TerrainMeshMetadata {
@@ -57,6 +60,7 @@ export async function createTerrainMesh(
     landCover,
     yieldControl,
     snowCovered = false,
+    worldSeed = DEFAULT_WORLD_SEED,
   } = options;
 
   // Ground creation allocates and uploads the initial flat vertex buffers.
@@ -158,6 +162,7 @@ export async function createTerrainMesh(
       meshWidth,
       meshDepth,
       metersPerVertex,
+      worldSeed,
     }, yieldControl);
   }
 
@@ -242,7 +247,12 @@ async function applyGroundVariation(
   coverClasses: Uint8Array,
   positions: Float32Array | number[],
   terrain: TerrainData,
-  options: { meshWidth: number; meshDepth: number; metersPerVertex: number },
+  options: {
+    meshWidth: number;
+    meshDepth: number;
+    metersPerVertex: number;
+    worldSeed: number;
+  },
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
   for (let index = 0; index < coverClasses.length; index++) {
@@ -260,6 +270,7 @@ async function applyGroundVariation(
       lat,
       coverClasses[index] as LandCoverClass,
       options.metersPerVertex,
+      options.worldSeed,
     );
     colors[target] = red;
     colors[target + 1] = green;

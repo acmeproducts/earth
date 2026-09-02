@@ -12,9 +12,9 @@ import {
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
-import { planBuilding } from "../src/BuildingPlanner.ts";
 
 register("./ts-extension-resolver.mjs", import.meta.url);
+const { planBuilding } = await import("../src/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
 );

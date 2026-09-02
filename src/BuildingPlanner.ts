@@ -1,3 +1,5 @@
+import { hashString } from "./Random";
+
 export type LonLat = [longitude: number, latitude: number];
 
 export interface BuildingPolygon {
@@ -152,12 +154,4 @@ function colorProperty(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   return normalized || undefined;
-}
-
-function hashString(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index++) {
-    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
-  }
-  return hash | 0;
 }

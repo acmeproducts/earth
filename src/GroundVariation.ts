@@ -2,6 +2,7 @@ import { groundMetersAt } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { LandCoverClass } from "./WorldCover";
 import { clamp01 } from "./MathUtils";
+import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 
 /**
  * Ground color variation coarser than the terrain textures can carry.
@@ -13,16 +14,31 @@ import { clamp01 } from "./MathUtils";
  * cannot fill it: its classes are flat fields with hard edges.
  */
 
-const VARIATION_SEED = 0x5eed0a17;
-
 /** Wavelength of each variation band, in metres of ground. */
-const BROAD_METERS = 74;
-const MID_METERS = 23;
-const FINE_METERS = 7.5;
+const BANDS = [
+  { meters: 74, shade: 0.07, tone: 0.72 },
+  { meters: 23, shade: 0.032, tone: 0.28 },
+  { meters: 7.5, shade: 0.022, tone: 0 },
+] as const;
 
-const broadNoise = new SimplexNoise2D(VARIATION_SEED);
-const midNoise = new SimplexNoise2D(VARIATION_SEED ^ 0x1d872b);
-const fineNoise = new SimplexNoise2D(VARIATION_SEED ^ 0x7c4a19);
+/**
+ * Built once per world rather than held in a module constant, so re-rolling the
+ * world seed re-rolls the ground with everything else. Keyed like the habitat
+ * fields: a rise being the dry one is a property of the place, not of whichever
+ * tile is streaming it.
+ */
+const fields = new Map<number, readonly SimplexNoise2D[]>();
+
+function bandNoise(worldSeed: number): readonly SimplexNoise2D[] {
+  let noise = fields.get(worldSeed);
+  if (!noise) {
+    noise = BANDS.map((band) => new SimplexNoise2D(
+      layerSeed(worldSeed, `groundVariation/${band.meters}`),
+    ));
+    fields.set(worldSeed, noise);
+  }
+  return noise;
+}
 
 /**
  * How much of the variation each surface accepts. Engineered and frozen
@@ -52,23 +68,26 @@ export function varyGroundColor(
   latitude: number,
   landCover: LandCoverClass,
   minimumFeatureMeters = 0,
+  worldSeed = DEFAULT_WORLD_SEED,
 ): [number, number, number] {
   const strength = VARIATION_STRENGTH[landCover] ?? 1;
   if (strength <= 0) return [color[0], color[1], color[2]];
 
   const { x, y } = groundMetersAt(longitude, latitude);
-  const broad = broadNoise.sample(x / BROAD_METERS, y / BROAD_METERS) *
-    bandWeight(BROAD_METERS, minimumFeatureMeters);
-  const mid = midNoise.sample(x / MID_METERS, y / MID_METERS) *
-    bandWeight(MID_METERS, minimumFeatureMeters);
-  const fine = fineNoise.sample(x / FINE_METERS, y / FINE_METERS) *
-    bandWeight(FINE_METERS, minimumFeatureMeters);
-
+  const noise = bandNoise(worldSeed);
   // Brightness carries most of the read; the tone shift keeps it from looking
-  // like a single color under a dimmer. Weighted towards the broad band because
-  // that is the one even coarse terrain meshes can represent reliably.
-  const shade = 1 + (broad * 0.07 + mid * 0.032 + fine * 0.022) * strength;
-  const tone = broad * 0.72 + mid * 0.28;
+  // like a single color under a dimmer. Both are weighted towards the broad
+  // band because that is the one even coarse terrain meshes can represent.
+  let shade = 0;
+  let tone = 0;
+  for (let index = 0; index < BANDS.length; index++) {
+    const band = BANDS[index];
+    const value = noise[index].sample(x / band.meters, y / band.meters) *
+      bandWeight(band.meters, minimumFeatureMeters);
+    shade += value * band.shade;
+    tone += value * band.tone;
+  }
+  shade = 1 + shade * strength;
   const dry = Math.max(0, tone) * strength;
   const lush = Math.max(0, -tone) * strength;
 

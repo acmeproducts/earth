@@ -21,7 +21,8 @@ test("shore rocks form long dense chains aligned to the water boundary", () => {
   assert.match(source, /tangentX: -waterZ \/ length/);
   assert.match(source, /lengthMeters = 12 \+ random\(\) \* 18/);
   assert.match(source, /count = Math\.max\(6, Math\.round\(lengthMeters \/ spacingMeters\)\)/);
-  assert.match(source, /shoreNoise\.sample/);
+  assert.match(source, /shoreHabitat = habitatField\("rockShores", modelVariantSeed/);
+  assert.match(source, /const formation = shoreHabitat\.sample\(lon, lat\)/);
   assert.match(source, /do not mix in the even inland scatter/);
 });
 

@@ -1,4 +1,5 @@
 import type { TreeSpecies } from "./procedural/ProceduralTree";
+import { lerp } from "./MathUtils";
 
 export type TreeSeason = "spring" | "summer" | "autumn" | "winter";
 
@@ -66,11 +67,11 @@ export function treeSeasonAt(
   return {
     key: `${climateStrength < 1 ? "mild-" : ""}${season}`,
     season,
-    leafCoverage: mix(1, seasonal.leafCoverage, climateStrength),
+    leafCoverage: lerp(1, seasonal.leafCoverage, climateStrength),
     foliageTint: [
-      mix(1, seasonal.foliageTint[0], climateStrength),
-      mix(1, seasonal.foliageTint[1], climateStrength),
-      mix(1, seasonal.foliageTint[2], climateStrength),
+      lerp(1, seasonal.foliageTint[0], climateStrength),
+      lerp(1, seasonal.foliageTint[1], climateStrength),
+      lerp(1, seasonal.foliageTint[2], climateStrength),
     ],
   };
 }
@@ -119,6 +120,3 @@ function deciduousAppearance(
   }
 }
 
-function mix(from: number, to: number, amount: number): number {
-  return from + (to - from) * amount;
-}

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { register } from "node:module";
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   layerSeed,
   WORLD_GRID_LEVEL,
   WORLD_TILE_PROJECTED_SIZE_METERS,
@@ -11,8 +16,7 @@ import {
   worldTileCoordinatesAtLocation,
   worldTileSeed,
   worldTileWindowOffsetsAtLocation,
-} from "../src/WorldGrid.ts";
-
+} = await import("../src/WorldGrid.ts");
 test("maps a location into the fixed application-owned grid", () => {
   const latitude = 59.8888085995981;
   const longitude = 10.593090176648504;

@@ -69,7 +69,7 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /mergeRoads\(roadShoulders\.paved, "pavedRoadShoulders", "pavedShoulder"/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
   assert.match(openStreetMap, /LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6\.7/);
-  assert.match(openStreetMap, /function tiledRoadNoise/);
+  assert.match(openStreetMap, /tiledValueNoise\(x, y, ROAD_TEXTURE_SIZE/);
   assert.match(openStreetMap, /relief\.level = 0\.24/);
 });
 

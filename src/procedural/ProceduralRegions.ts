@@ -1,3 +1,5 @@
+import { smoothstep, wrap } from "../MathUtils";
+import { deriveSeed } from "../Random";
 import {
   DEFAULT_WORLD_SEED,
   WORLD_GRID_LEVEL,
@@ -169,7 +171,7 @@ export function proceduralLocalVariantAtLocation(
   for (const x of xCandidates) {
     for (const y of yCandidates) {
       cells.push({
-        index: (hashParts(worldSeed, label, x.index, y.index) >>> 0) % sisterModels,
+        index: (deriveSeed(worldSeed, label, x.index, y.index) >>> 0) % sisterModels,
         weight: x.weight * y.weight,
       });
     }
@@ -225,14 +227,14 @@ function axisCandidates(
   const cell = Math.floor(coordinate / span);
   const local = coordinate - cell * span;
   if (local < blend && (wraps || cell > 0)) {
-    const rightWeight = smoothstep((local + blend) / (blend * 2));
+    const rightWeight = smoothstep(0, 1, (local + blend) / (blend * 2));
     return [
       { index: normalizeIndex(cell - 1, count, wraps), weight: 1 - rightWeight },
       { index: normalizeIndex(cell, count, wraps), weight: rightWeight },
     ];
   }
   if (local > span - blend && (wraps || cell + 1 < count)) {
-    const rightWeight = smoothstep((local - (span - blend)) / (blend * 2));
+    const rightWeight = smoothstep(0, 1, (local - (span - blend)) / (blend * 2));
     return [
       { index: normalizeIndex(cell, count, wraps), weight: 1 - rightWeight },
       { index: normalizeIndex(cell + 1, count, wraps), weight: rightWeight },
@@ -266,11 +268,6 @@ function normalizeIndex(index: number, count: number, wraps: boolean): number {
   return wraps ? wrap(index, count) : Math.max(0, Math.min(count - 1, index));
 }
 
-function smoothstep(value: number): number {
-  const t = Math.max(0, Math.min(1, value));
-  return t * t * (3 - 2 * t);
-}
-
 function spatialSelection(
   worldSeed: number,
   label: string,
@@ -279,7 +276,7 @@ function spatialSelection(
 ): number {
   const xFixed = Math.floor(x * 65_536) >>> 0;
   const yFixed = Math.floor(y * 65_536) >>> 0;
-  return (hashParts(worldSeed, label, xFixed, yFixed) >>> 0) / 4_294_967_296;
+  return (deriveSeed(worldSeed, label, xFixed, yFixed) >>> 0) / 4_294_967_296;
 }
 
 function regionalVariantSeed(
@@ -288,24 +285,5 @@ function regionalVariantSeed(
   regionX: number,
   regionY: number,
 ): number {
-  return hashParts(worldSeed, `${family}Region`, regionX, regionY) | 0;
-}
-
-function hashParts(seed: number, label: string, ...values: number[]): number {
-  let hash = (seed ^ 0x811c9dc5) >>> 0;
-  for (let index = 0; index < label.length; index++) {
-    hash = Math.imul(hash ^ label.charCodeAt(index), 0x01000193) >>> 0;
-  }
-  for (const value of values) {
-    let part = value >>> 0;
-    for (let byte = 0; byte < 4; byte++) {
-      hash = Math.imul(hash ^ (part & 0xff), 0x01000193) >>> 0;
-      part >>>= 8;
-    }
-  }
-  return hash;
-}
-
-function wrap(value: number, modulus: number): number {
-  return ((value % modulus) + modulus) % modulus;
+  return deriveSeed(worldSeed, `${family}Region`, regionX, regionY);
 }

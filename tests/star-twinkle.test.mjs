@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import { register } from "node:module";
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   starTwinkleProfile,
   TWINKLE_HORIZON_PROBABILITY,
   TWINKLE_HORIZON_STRENGTH,
   TWINKLE_ZENITH_PROBABILITY,
   TWINKLE_ZENITH_STRENGTH,
-} from "../src/StarTwinkle.ts";
+} = await import("../src/StarTwinkle.ts");
 
 test("stars flicker more often and more strongly toward the horizon", () => {
   const horizon = starTwinkleProfile(0);

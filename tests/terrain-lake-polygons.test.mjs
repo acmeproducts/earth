@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { register } from "node:module";
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
 
 const { conformTerrainToLakePolygons } = await import("../src/TerrainLakePolygons.ts");
 

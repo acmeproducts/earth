@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { register } from "node:module";
 import { readFileSync } from "node:fs";
-import {
+
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const {
   CLOUD_VARIANT_COUNT,
   cloudPlacementsAround,
   cloudWeatherForSeed,
-} from "../src/CloudDistribution.ts";
-
+} = await import("../src/CloudDistribution.ts");
 const source = readFileSync(new URL("../src/CloudImpostors.ts", import.meta.url), "utf8");
 const volumeSource = readFileSync(
   new URL("../src/CloudVolumeCapture.ts", import.meta.url),

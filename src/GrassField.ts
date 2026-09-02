@@ -199,6 +199,7 @@ export async function createGrassField(
           lat,
           coverClass,
           surfaceColor,
+          modelVariantSeed,
         );
         matrices.push(matrix);
         addProceduralVariantPlacement(
@@ -290,12 +291,15 @@ export function grassGroundColorMultiplier(
   latitude: number,
   landCover: LandCoverClass,
   surfaceColor = landCoverSurfaceColor(landCover),
+  worldSeed = DEFAULT_WORLD_SEED,
 ): readonly [number, number, number] {
   const ground = varyGroundColor(
     surfaceColor,
     longitude,
     latitude,
     landCover,
+    0,
+    worldSeed,
   );
   return ground.map((channel, index) => {
     const ratio = channel / GRASSLAND_REFERENCE_COLOR[index];

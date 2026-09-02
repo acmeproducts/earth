@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { normalizeBuildingClass, planBuilding } from "../src/BuildingPlanner.ts";
+import { register } from "node:module";
 
+// These sources use webpack-style extensionless relative imports, which
+// node's type stripping cannot resolve without this hook.
+register("./ts-extension-resolver.mjs", import.meta.url);
+const { normalizeBuildingClass, planBuilding } = await import("../src/BuildingPlanner.ts");
 const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
@@ -36,7 +40,7 @@ test("keeps far massing cheap while detailed buildings add stable architectural 
   assert.match(proceduralBuildings, /function createPitchedRoof\(/);
   assert.match(proceduralBuildings, /roofOverhangMeters\(detailSeed\) \/ options\.metersPerUnit/);
   assert.match(proceduralBuildings, /function inferredRoofHeight\(/);
-  assert.match(proceduralBuildings, /const pitchDegrees = 32 \+ seededUnit/);
+  assert.match(proceduralBuildings, /const pitchDegrees = 32 \+ unitFromSeed/);
   assert.match(proceduralBuildings, /BUILDING_ROOF_EAVE_CLEARANCE_METERS/);
   assert.match(proceduralBuildings, /roofShape === "skillion"/);
   assert.match(proceduralBuildings, /function varyColor\(/);

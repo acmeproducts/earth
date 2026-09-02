@@ -1,3 +1,6 @@
+import { lerp } from "./MathUtils";
+import { cellRandom } from "./Random";
+
 export const CLOUD_CELL_SIZE_METERS = 8_000;
 export const CLOUD_VARIANT_COUNT = 8;
 
@@ -58,20 +61,20 @@ export function cloudPlacementsAround(
     for (let dx = -radiusCells; dx <= radiusCells; dx++) {
       const cellX = centerCellX + dx;
       const cellZ = centerCellZ + dz;
-      if (cloudRandom(cellX, cellZ, weatherSeed, 0) >= occupancy) continue;
+      if (cellRandom(weatherSeed, cellX, cellZ, 0) >= occupancy) continue;
       const xMeters = (
-        cellX + 0.12 + cloudRandom(cellX, cellZ, weatherSeed, 1) * 0.76
+        cellX + 0.12 + cellRandom(weatherSeed, cellX, cellZ, 1) * 0.76
       ) * CLOUD_CELL_SIZE_METERS;
       const zMeters = (
-        cellZ + 0.12 + cloudRandom(cellX, cellZ, weatherSeed, 2) * 0.76
+        cellZ + 0.12 + cellRandom(weatherSeed, cellX, cellZ, 2) * 0.76
       ) * CLOUD_CELL_SIZE_METERS;
       const widthVariation = average(
-        cloudRandom(cellX, cellZ, weatherSeed, 3),
-        cloudRandom(cellX, cellZ, weatherSeed, 6),
+        cellRandom(weatherSeed, cellX, cellZ, 3),
+        cellRandom(weatherSeed, cellX, cellZ, 6),
       );
       const aspectVariation = average(
-        cloudRandom(cellX, cellZ, weatherSeed, 4),
-        cloudRandom(cellX, cellZ, weatherSeed, 7),
+        cellRandom(weatherSeed, cellX, cellZ, 4),
+        cellRandom(weatherSeed, cellX, cellZ, 7),
       );
       const width = lerp(
         CLOUD_WIDTH_MIN_METERS,
@@ -93,12 +96,12 @@ export function cloudPlacementsAround(
         depth: width * lerp(
           0.42,
           0.62,
-          cloudRandom(cellX, cellZ, weatherSeed, 9),
+          cellRandom(weatherSeed, cellX, cellZ, 9),
         ) / metersPerUnit,
         variant: Math.floor(
-          cloudRandom(cellX, cellZ, weatherSeed, 5) * CLOUD_VARIANT_COUNT,
+          cellRandom(weatherSeed, cellX, cellZ, 5) * CLOUD_VARIANT_COUNT,
         ),
-        mirrored: cloudRandom(cellX, cellZ, weatherSeed, 8) < 0.5,
+        mirrored: cellRandom(weatherSeed, cellX, cellZ, 8) < 0.5,
       });
     }
   }
@@ -111,32 +114,12 @@ export function cloudWeatherForSeed(seed: number): CloudWeatherProfile {
     (total, profile) => total + profile.weight,
     0,
   );
-  let selection = cloudRandom(0, 0, seed, 97) * totalWeight;
+  let selection = cellRandom(seed, 0, 0, 97) * totalWeight;
   for (const profile of CLOUD_WEATHER_PROFILES) {
     selection -= profile.weight;
     if (selection < 0) return profile;
   }
   return CLOUD_WEATHER_PROFILES[CLOUD_WEATHER_PROFILES.length - 1];
-}
-
-export function cloudRandom(
-  x: number,
-  z: number,
-  seed: number,
-  channel: number,
-): number {
-  let hash = seed | 0;
-  hash = Math.imul(hash ^ (x | 0), 0x45d9f3b);
-  hash = Math.imul(hash ^ (z | 0), 0x45d9f3b);
-  hash = Math.imul(hash ^ channel, 0x45d9f3b);
-  hash ^= hash >>> 16;
-  hash = Math.imul(hash, 0x7feb352d);
-  hash ^= hash >>> 15;
-  return (hash >>> 0) / 4_294_967_296;
-}
-
-function lerp(from: number, to: number, amount: number): number {
-  return from + (to - from) * amount;
 }
 
 function average(first: number, second: number): number {

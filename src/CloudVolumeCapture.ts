@@ -1,5 +1,6 @@
-import { CLOUD_VARIANT_COUNT, cloudRandom } from "./CloudDistribution";
-import { clamp01 } from "./MathUtils";
+import { CLOUD_VARIANT_COUNT } from "./CloudDistribution";
+import { cellRandom } from "./Random";
+import { clamp01, lerp, smoothstep } from "./MathUtils";
 
 export const CLOUD_TEXTURE_WIDTH = 128;
 export const CLOUD_TEXTURE_HEIGHT = 64;
@@ -323,7 +324,7 @@ function makeLobe(
 }
 
 function lobeRandom(variant: number, index: number, channel: number): number {
-  return cloudRandom(variant, index, 7_491, channel);
+  return cellRandom(7_491, variant, index, channel);
 }
 
 function cloudDensity(
@@ -395,11 +396,11 @@ function valueNoise3D(x: number, y: number, z: number, seed: number): number {
   const x0 = Math.floor(x);
   const y0 = Math.floor(y);
   const z0 = Math.floor(z);
-  const tx = smoothFraction(x - x0);
-  const ty = smoothFraction(y - y0);
-  const tz = smoothFraction(z - z0);
+  const tx = smoothstep(0, 1, x - x0);
+  const ty = smoothstep(0, 1, y - y0);
+  const tz = smoothstep(0, 1, z - z0);
   const sample = (dx: number, dy: number, dz: number): number => (
-    cloudRandom(x0 + dx, z0 + dz, seed * 1_009 + y0 + dy, 13)
+    cellRandom(seed * 1_009 + y0 + dy, x0 + dx, z0 + dz, 13)
   );
   const x00 = lerp(sample(0, 0, 0), sample(1, 0, 0), tx);
   const x10 = lerp(sample(0, 1, 0), sample(1, 1, 0), tx);
@@ -436,17 +437,4 @@ function writeAtlasTile(
       atlas[target + 3] = tile[source + 3];
     }
   }
-}
-
-function smoothFraction(value: number): number {
-  return value * value * (3 - 2 * value);
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-  const amount = clamp01((value - edge0) / (edge1 - edge0));
-  return amount * amount * (3 - 2 * amount);
-}
-
-function lerp(from: number, to: number, amount: number): number {
-  return from + (to - from) * amount;
 }

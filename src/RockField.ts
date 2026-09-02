@@ -14,7 +14,6 @@ import {
 import { NoiseProceduralTexture } from "@babylonjs/core/Materials/Textures/Procedurals/noiseProceduralTexture";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createSeededRandom } from "./Random";
-import { SimplexNoise2D } from "./SimplexNoise";
 import type { TerrainData } from "./TerrainData";
 import {
   createPlacementGrid,
@@ -36,8 +35,19 @@ export interface RockFieldResult {
 
 const ROCK_VARIANTS = 3;
 const SHORE_PROBE_METERS = 7;
-const SHORE_FORMATION_SCALE_METERS = 38;
-const SHORE_FORMATION_CHANCE = 0.3;
+/**
+ * Shore boulders come in formations with clear stretches between them, on the
+ * same world-anchored footing as the inland scatter. Multiplying by the stand
+ * rather than thresholding it lets a formation thin out at its margins instead
+ * of ending on a contour line. Calibrated to the mean the old threshold gave.
+ */
+const SHORE_HABITAT: HabitatFieldSpec = {
+  patchMeters: 38,
+  abundanceMeters: 1200,
+  barrenShare: 0.1,
+  richestCoverage: 0.85,
+};
+const SHORE_FORMATION_CHANCE = 0.55;
 /**
  * Stony ground comes in fields. A flat land-cover scatter dusts every hillside
  * in the world equally, so nothing reads as a boulder field and nothing reads
@@ -138,8 +148,8 @@ export async function createRockField(
   const root = new TransformNode("rockField", scene);
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
-  const shoreNoise = new SimplexNoise2D(seed ^ 0x53484f52);
   const habitat = habitatField("rocks", modelVariantSeed, HABITAT);
+  const shoreHabitat = habitatField("rockShores", modelVariantSeed, SHORE_HABITAT);
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
@@ -178,13 +188,13 @@ export async function createRockField(
           metersPerUnit,
         );
         if (shore) {
-          const noiseScale = SHORE_FORMATION_SCALE_METERS / metersPerUnit;
-          const formationNoise = shoreNoise.sample(x / noiseScale, z / noiseScale) * 0.5 + 0.5;
+          const formation = shoreHabitat.sample(lon, lat);
           if (
-            formationNoise > 0.46 &&
+            formation > 0 &&
             random() < Math.min(
               1,
-              SHORE_FORMATION_CHANCE * Math.max(0, densityScale?.(x, z) ?? 1),
+              SHORE_FORMATION_CHANCE * formation *
+                Math.max(0, densityScale?.(x, z) ?? 1),
             )
           ) {
             addShoreFormation(placement, shore, x, z);

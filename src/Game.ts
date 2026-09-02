@@ -2010,6 +2010,7 @@ export class Game {
   ): Promise<Mesh> {
     return buildTerrainMesh(this.scene, name, terrain, {
       ...options,
+      worldSeed: this.worldSeed,
       snowCovered: hasWinterGroundCover(
         this.vegetationDate,
         (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,

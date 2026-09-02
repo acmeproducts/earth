@@ -1,4 +1,5 @@
 import { sampleElevation } from "./Geo";
+import { smoothstep } from "./MathUtils";
 import type { RoadStructure } from "./RoadPlanner";
 import type { TerrainData } from "./TerrainData";
 import type { TerrainModification } from "./TerrainModification";
@@ -200,10 +201,4 @@ function resamplePath(
     }
   }
   return sampled;
-}
-
-function smoothstep(minimum: number, maximum: number, value: number): number {
-  if (maximum <= minimum) return value < minimum ? 0 : 1;
-  const amount = Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum)));
-  return amount * amount * (3 - 2 * amount);
 }

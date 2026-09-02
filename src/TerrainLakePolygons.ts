@@ -1,4 +1,5 @@
 import type { TerrainData } from "./TerrainData";
+import { smoothstep } from "./MathUtils";
 
 export interface TerrainLakePoint {
   x: number;
@@ -347,11 +348,6 @@ function gridRange(
     minimum: Math.max(0, Math.floor(Math.min(a, b))),
     maximum: Math.min(count - 1, Math.ceil(Math.max(a, b))),
   };
-}
-
-function smoothstep(minimum: number, maximum: number, value: number): number {
-  const amount = Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum)));
-  return amount * amount * (3 - 2 * amount);
 }
 
 function updateElevationRange(terrain: TerrainData): void {
