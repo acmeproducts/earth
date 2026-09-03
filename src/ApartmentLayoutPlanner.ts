@@ -29,7 +29,7 @@ const MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 60;
 
 export type ApartmentRoomType = "room" | "living-room" | "toilet" | "kitchen";
 
-/** Rooms below this area are suitable candidates for the first bathroom. */
+/** Rooms up to this area are suitable candidates for the first bathroom. */
 export const SMALL_ROOM_AREA_SQUARE_METERS = 25;
 
 export interface ApartmentPlannerInput {
@@ -85,13 +85,7 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
     throw new Error(`An apartment needs at least ${minimumRoomArea} square meters.`);
   }
   const openings = input.openings ?? [];
-  const pieces = mergeUndersizedConvexPieces(decomposeToConvexPolygons(boundary.outer), minimumRoomArea);
-  // Concave decomposition is a planning aid, not a license to turn a narrow
-  // leftover wedge into a room. If no convex neighbour can absorb every
-  // fragment, retain the shell rather than emit a substandard room.
-  const polygons = pieces && pieces.every((polygon) => isUsableRoom(polygon, minimumRoomArea))
-    ? pieces.flatMap((polygon) => subdivideRooms(polygon, openings, minimumRoomArea))
-    : [[...boundary.outer]];
+  const polygons = subdivideRooms(boundary.outer, openings, minimumRoomArea);
   const rooms: LayoutRoom<ApartmentRoomType>[] = polygons.map((outer, index) => ({
     id: `room-${index + 1}`,
     type: "room",
@@ -120,9 +114,24 @@ export function assignApartmentRoomTypes(
   }
 
   const area = (room: LayoutRoom<ApartmentRoomType>): number => polygonArea(room.polygon.outer);
+  const comparePosition = (
+    first: LayoutRoom<ApartmentRoomType>,
+    second: LayoutRoom<ApartmentRoomType>,
+  ): number => {
+    const firstCenter = polygonCenter(first.polygon.outer);
+    const secondCenter = polygonCenter(second.polygon.outer);
+    return firstCenter.x - secondCenter.x || firstCenter.y - secondCenter.y || first.id.localeCompare(second.id);
+  };
+  const compareArea = (
+    first: LayoutRoom<ApartmentRoomType>,
+    second: LayoutRoom<ApartmentRoomType>,
+  ): number => {
+    const difference = area(first) - area(second);
+    return Math.abs(difference) > 1e-7 ? difference : comparePosition(first, second);
+  };
   const smallRoom = rooms
-    .filter((room) => area(room) < SMALL_ROOM_AREA_SQUARE_METERS)
-    .sort((first, second) => area(first) - area(second))[0];
+    .filter((room) => area(room) <= SMALL_ROOM_AREA_SQUARE_METERS + 1e-7)
+    .sort(compareArea)[0];
   if (smallRoom) {
     smallRoom.type = "toilet";
     smallRoom.label = "Toilet";
@@ -130,11 +139,18 @@ export function assignApartmentRoomTypes(
 
   const kitchen = rooms
     .filter((room) => room !== smallRoom)
-    .sort((first, second) => area(second) - area(first))[0];
+    .sort((first, second) => compareArea(second, first))[0];
   if (kitchen) {
     kitchen.type = "kitchen";
     kitchen.label = "Kitchen";
   }
+}
+
+function polygonCenter(points: readonly Point2D[]): Point2D {
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+  };
 }
 
 function internalRoomDoors(rooms: readonly LayoutRoom<ApartmentRoomType>[]): Opening2D[] {
@@ -209,11 +225,21 @@ function subdivideRooms(
     return [[...polygon]];
   }
   const split = bestSplit(polygon, openings, minimumRoomArea);
-  if (!split) return [[...polygon]];
-  return [
-    ...subdivideRooms(split.first, openings, minimumRoomArea),
-    ...subdivideRooms(split.second, openings, minimumRoomArea),
-  ];
+  if (split) {
+    return [
+      ...subdivideRooms(split.first, openings, minimumRoomArea),
+      ...subdivideRooms(split.second, openings, minimumRoomArea),
+    ];
+  }
+
+  const pieces = decomposeToConvexPolygons(polygon);
+  if (pieces.length === 1) return [[...polygon]];
+  const merged = mergeUndersizedConvexPieces(pieces, minimumRoomArea);
+  // Decomposition is a local fallback for topology that an axis-aligned wall
+  // cannot cross once. It must not choose the first walls for the whole shell.
+  return merged && merged.every((piece) => isUsableRoom(piece, minimumRoomArea))
+    ? merged.flatMap((piece) => subdivideRooms(piece, openings, minimumRoomArea))
+    : [[...polygon]];
 }
 
 function bestSplit(
@@ -226,18 +252,21 @@ function bestSplit(
     ? "x"
     : "y";
   const axes: readonly CartesianAxis[] = [preferredAxis, preferredAxis === "x" ? "y" : "x"];
-  const offsets = [0, 0.025, -0.025, 0.05, -0.05, 0.1, -0.1, 0.15, -0.15, 0.2, -0.2];
-  let best: { split: PolygonSplit; score: number } | undefined;
-  axes.forEach((axis, axisIndex) => {
+  const offsets = [0, ...Array.from({ length: 16 }, (_, index) => {
+    const offset = (index + 1) * 0.025;
+    return [offset, -offset];
+  }).flat()];
+  for (const axis of axes) {
     const equal = splitConvexPolygonEqual(polygon, axis);
-    if (!equal) return;
+    if (!equal) continue;
     const span = axis === "x" ? bounds.maxX - bounds.minX : bounds.maxY - bounds.minY;
+    let best: { split: PolygonSplit; imbalance: number; aspectPenalty: number } | undefined;
     for (const offset of offsets) {
       const split = splitAtCoordinate(polygon, axis, equal.coordinate + span * offset);
       if (!split ||
           !isUsableRoom(split.first, minimumRoomArea) ||
           !isUsableRoom(split.second, minimumRoomArea) ||
-          openings.some((opening) => segmentsIntersect(
+          openings.some((opening) => opening.type === "door" && segmentsIntersect(
             split.wall[0], split.wall[1], opening.start, opening.end,
           ))) {
         continue;
@@ -245,15 +274,17 @@ function bestSplit(
       const firstArea = polygonArea(split.first);
       const secondArea = polygonArea(split.second);
       const imbalance = Math.abs(firstArea - secondArea) / (firstArea + secondArea);
-      const aspectPenalty = (Math.max(aspectRatio(split.first), aspectRatio(split.second)) - 1) * 0.25;
-      // Prefer splitting along the polygon's longest axis. The other axis is
-      // retained as a fallback for footprints where the preferred cut is
-      // blocked by an opening or cannot produce usable rooms.
-      const score = imbalance + aspectPenalty + axisIndex * 1_000_000;
-      if (!best || score < best.score) best = { split, score };
+      const aspectPenalty = Math.max(aspectRatio(split.first), aspectRatio(split.second));
+      if (!best || imbalance < best.imbalance - 1e-7 ||
+          (Math.abs(imbalance - best.imbalance) <= 1e-7 && aspectPenalty < best.aspectPenalty)) {
+        best = { split, imbalance, aspectPenalty };
+      }
     }
-  });
-  return best?.split;
+    // Axis priority is strict. Shape and opening constraints may force the
+    // fallback axis, but aspect ratio can never outweigh a longest-axis cut.
+    if (best) return best.split;
+  }
+  return undefined;
 }
 
 function isUsableRoom(polygon: readonly Point2D[], minimumRoomArea: number): boolean {

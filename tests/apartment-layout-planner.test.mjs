@@ -88,6 +88,42 @@ test("splits long apartments along their longest axis", () => {
   }));
 });
 
+test("keeps longest-axis room splits balanced despite facade windows", () => {
+  const layout = planApartmentLayout({
+    apartmentPolygon: {
+      outer: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 8 }, { x: 0, y: 8 }],
+    },
+    openings: [{
+      id: "central-window",
+      type: "window",
+      start: { x: 6, y: 8 },
+      end: { x: 14, y: 8 },
+    }],
+    minimumRoomAreaSquareMeters: 40,
+  });
+  assert.equal(layout.rooms.length, 4);
+  assert.ok(layout.rooms.every((room) => Math.abs(polygonArea(room.polygon.outer) - 40) < 1e-6));
+  assert.ok(layout.rooms.some((room) => room.polygon.outer.some((point, index, points) => {
+    const next = points[(index + 1) % points.length];
+    return Math.abs(point.x - 10) < 1e-7 && Math.abs(next.x - 10) < 1e-7 &&
+      Math.min(point.y, next.y) < 1e-7 && Math.max(point.y, next.y) > 8 - 1e-7;
+  })), "the first wall should bisect the apartment's long dimension");
+});
+
+test("balances the longest-axis split for an angled footprint", () => {
+  const layout = planApartmentLayout({
+    apartmentPolygon: {
+      outer: [
+        { x: 0, y: 0 }, { x: 14, y: 0 }, { x: 14, y: 4 },
+        { x: 10, y: 8 }, { x: 0, y: 8 },
+      ],
+    },
+    minimumRoomAreaSquareMeters: 45,
+  });
+  assert.equal(layout.rooms.length, 2);
+  assert.ok(layout.rooms.every((room) => Math.abs(polygonArea(room.polygon.outer) - 52) < 1e-6));
+});
+
 test("supports different room-size limits for different apartments", () => {
   const largerRooms = planApartmentLayout({
     apartmentPolygon: apartment,
@@ -128,6 +164,40 @@ test("subdivides concave apartments without extending beyond their outline", () 
   assert.ok(layout.rooms.every((room) => polygonArea(room.polygon.outer) > 0));
 });
 
+test("splits a complete concave shell before decomposing its corners", () => {
+  const layout = planApartmentLayout({
+    apartmentPolygon: {
+      outer: [
+        { x: 0, y: 0 }, { x: 14, y: 0 }, { x: 14, y: 5 },
+        { x: 5, y: 5 }, { x: 5, y: 12 }, { x: 0, y: 12 },
+      ],
+    },
+    minimumRoomAreaSquareMeters: 20,
+  });
+  const equalCut = 52.5 / 12;
+  const cutEdges = layout.rooms.flatMap((room) => room.polygon.outer.map((point, index, points) => [
+    point,
+    points[(index + 1) % points.length],
+  ])).filter(([start, end]) =>
+    Math.abs(start.x - equalCut) < 1e-6 && Math.abs(end.x - equalCut) < 1e-6);
+  assert.ok(cutEdges.length >= 2, "the first wall should bisect the complete concave shell");
+  assert.ok(Math.min(...cutEdges.flatMap(([start, end]) => [start.y, end.y])) < 1e-7);
+  assert.ok(Math.max(...cutEdges.flatMap(([start, end]) => [start.y, end.y])) > 12 - 1e-7);
+});
+
+test("keeps room geometry and roles stable across equivalent polygon rings", () => {
+  const rings = [];
+  for (let shift = 0; shift < apartment.outer.length; shift++) {
+    const rotated = [...apartment.outer.slice(shift), ...apartment.outer.slice(0, shift)];
+    rings.push(rotated, [...rotated].reverse());
+  }
+  const signatures = rings.map((outer) => planApartmentLayout({
+    apartmentPolygon: { outer },
+    minimumRoomAreaSquareMeters: 12,
+  }).rooms.map((room) => `${room.type}:${roomCenterKey(room.polygon.outer)}`).sort());
+  for (const signature of signatures) assert.deepEqual(signature, signatures[0]);
+});
+
 function polygonArea(points) {
   return Math.abs(points.reduce((area, point, index) => {
     const next = points[(index + 1) % points.length];
@@ -148,4 +218,10 @@ function roomBounds(points) {
     maxX: Math.max(...points.map((point) => point.x)),
     maxY: Math.max(...points.map((point) => point.y)),
   };
+}
+
+function roomCenterKey(points) {
+  const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+  const y = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+  return `${x.toFixed(6)},${y.toFixed(6)}`;
 }

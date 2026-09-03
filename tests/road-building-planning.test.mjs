@@ -73,6 +73,87 @@ test("records clipped building-site polygons in the same construction plan", () 
   assert.ok(plan.buildingSites[0].outline.every((point) => Math.abs(point.x) <= 6));
 });
 
+test("places street lamps just beyond lit road beds and keeps mapped lamps authoritative", () => {
+  const wideOptions = { meshWidth: 200, meshDepth: 200, metersPerUnit: 1 };
+  const plan = planRoadsAndBuildings([
+    { id: "avenue", paths: [[{ x: -90, z: 0 }, { x: 90, z: 0 }]], appearance },
+    {
+      id: "trail",
+      paths: [[{ x: -90, z: 60 }, { x: 90, z: 60 }]],
+      appearance: { ...appearance, roadClass: "path" },
+    },
+  ], [], wideOptions, [
+    { id: "lamp/far", position: { x: 0, z: -80 } },
+    { id: "lamp/roadside", position: { x: 0, z: 2.7 } },
+    { id: "lamp/outside", position: { x: 500, z: 0 } },
+  ]);
+
+  const mapped = plan.streetLamps.filter((lamp) => lamp.source === "mapped");
+  assert.deepEqual(mapped.map((lamp) => lamp.sourceId).sort(), ["lamp/far", "lamp/roadside"]);
+  const procedural = plan.streetLamps.filter((lamp) => lamp.source === "procedural");
+  assert.ok(procedural.length >= 4, `expected roadside infill, got ${procedural.length}`);
+  const offset = appearance.widthMeters / 2 + appearance.shoulderWidthMeters + 0.7;
+  const sides = new Set();
+  for (const lamp of procedural) {
+    assert.equal(lamp.sourceId, "avenue", "unlit road classes must not receive lamps");
+    assert.ok(Math.abs(Math.abs(lamp.position.z) - offset) < 1e-6,
+      "lamps must stand just beyond the planned road bed");
+    assert.ok(Math.hypot(lamp.position.x, lamp.position.z - 2.7) >= 25 - 1e-6,
+      "procedural lamps must keep clear of mapped lamps");
+    sides.add(Math.sign(lamp.position.z));
+  }
+  assert.equal(sides.size, 2, "lamps should alternate road sides");
+});
+
+test("keeps procedural lamps off every planned road bed, including crossing roads", () => {
+  const wideOptions = { meshWidth: 200, meshDepth: 200, metersPerUnit: 1 };
+  const wide = { ...appearance, widthMeters: 12, shoulderWidthMeters: 2 };
+  const plan = planRoadsAndBuildings([
+    { id: "east-west", paths: [[{ x: -90, z: 0 }, { x: 90, z: 0 }]], appearance: wide },
+    { id: "north-south", paths: [[{ x: 0, z: -90 }, { x: 0, z: 90 }]], appearance: wide },
+    { id: "diagonal", paths: [[{ x: -90, z: -90 }, { x: 90, z: 90 }]], appearance: wide },
+  ], [], wideOptions);
+
+  const procedural = plan.streetLamps.filter((lamp) => lamp.source === "procedural");
+  assert.ok(procedural.length >= 6);
+  for (const lamp of procedural) {
+    for (const bed of [...plan.roads, ...plan.shoulders]) {
+      assert.equal(pointInPolygon(lamp.position.x, lamp.position.z, bed.outline), false,
+        `lamp from ${lamp.sourceId} at ${lamp.position.x},${lamp.position.z} stands on a road bed`);
+    }
+  }
+});
+
+test("designates building plots that attach to road beds and to each other", () => {
+  const wideOptions = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
+  const plan = planRoadsAndBuildings([
+    { id: "street", paths: [[{ x: -45, z: 0 }, { x: 45, z: 0 }]], appearance },
+  ], [
+    { id: "west", outline: [{ x: -12, z: 6 }, { x: -4, z: 6 }, { x: -4, z: 12 }, { x: -12, z: 12 }] },
+    { id: "east", outline: [{ x: 4, z: 6 }, { x: 12, z: 6 }, { x: 12, z: 12 }, { x: 4, z: 12 }] },
+  ], wideOptions);
+
+  assert.deepEqual(plan.plots.map((plot) => plot.sourceId).sort(), ["east", "west"]);
+  const west = plan.plots.find((plot) => plot.sourceId === "west");
+  const east = plan.plots.find((plot) => plot.sourceId === "east");
+  assert.ok(pointInPolygon(-8, 9, west.outline), "a plot must contain its building");
+  assert.ok(pointInPolygon(8, 9, east.outline), "a plot must contain its building");
+  assert.equal(hasPositiveAreaIntersection(west.outline, east.outline), false);
+  for (const plot of plan.plots) {
+    for (const road of [...plan.roads, ...plan.shoulders]) {
+      assert.equal(hasPositiveAreaIntersection(plot.outline, road.outline), false,
+        `plot ${plot.sourceId} must not cover the road bed`);
+    }
+  }
+  const roadBedEdge = appearance.widthMeters / 2 + appearance.shoulderWidthMeters;
+  assert.ok(Math.abs(Math.min(...west.outline.map((point) => point.z)) - roadBedEdge) < 1e-6,
+    "plots must butt flush against the road bed");
+  assert.ok(Math.abs(Math.max(...west.outline.map((point) => point.x))) < 1e-6,
+    "neighboring plots must meet on their shared bisector");
+  assert.ok(Math.abs(Math.min(...east.outline.map((point) => point.x))) < 1e-6,
+    "neighboring plots must meet on their shared bisector");
+});
+
 test("separates true overpasses while treating fords as ground-level roads", () => {
   const across = (id, overrides) => ({
     id,
@@ -137,6 +218,43 @@ test("grades roads across their width and building sites to one elevation in one
     for (let column = 2; column <= 4; column++) buildingValues.push(terrain.elevations[row * width + column]);
   }
   assert.equal(new Set(buildingValues).size, 1);
+});
+
+test("reuses one building pad elevation across independently processed tiles", async () => {
+  const sharedBuildingElevations = new Map();
+  const makeTerrain = (fill, x) => ({
+    elevations: new Float32Array(25).fill(fill),
+    minElevation: fill,
+    maxElevation: fill,
+    width: 5,
+    height: 5,
+    worldTile: { level: 16, x, y: 1 },
+    generationSeed: 1,
+    groundWidthMeters: 4,
+    groundHeightMeters: 4,
+    bounds: { lonWest: x, lonEast: x + 1, latNorth: 1, latSouth: 0 },
+  });
+  const plan = planRoadsAndBuildings([], [{
+    id: "cross-boundary-building",
+    outline: [
+      { x: -1, z: -1 }, { x: 1, z: -1 }, { x: 1, z: 1 }, { x: -1, z: 1 },
+    ],
+  }], { meshWidth: 4, meshDepth: 4, metersPerUnit: 1 });
+  const first = makeTerrain(10, 1);
+  const second = makeTerrain(30, 2);
+  const options = {
+    meshWidth: 4,
+    meshDepth: 4,
+    metersPerUnit: 1,
+    sharedBuildingElevations,
+  };
+
+  await conformTerrainToPlannedFeatures(first, plan, options);
+  await conformTerrainToPlannedFeatures(second, plan, options);
+
+  assert.equal(sharedBuildingElevations.get("cross-boundary-building"), 10);
+  assert.equal(first.elevations[12], 10);
+  assert.equal(second.elevations[12], 10);
 });
 
 function pointInPolygon(x, z, points) {

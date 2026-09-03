@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
 
 test("keeps far-tree impostors visible through the native terrain upgrade", () => {
   assert.match(
@@ -19,6 +20,20 @@ test("applies the mapped vegetation exclusions to distant trees", () => {
   );
   assert.match(farTreeBuild, /OpenStreetMap\.createVegetationExclusionMask\(/);
   assert.match(farTreeBuild, /createTreeField[\s\S]*?exclusionMask,/);
+});
+
+test("renders forced far-tree impostors with detailed dithered coverage", () => {
+  const farTreeBuild = game.slice(
+    game.indexOf("private async buildFarTrees"),
+    game.indexOf("private async buildFarBuildings"),
+  );
+  assert.match(farTreeBuild, /forceLowestImpostorLod: true/);
+  assert.match(treeField, /float lodBlend = max\(\s*forceLowestLod,/);
+  assert.match(treeField, /float alpha = highColor\.a/);
+  assert.doesNotMatch(
+    treeField,
+    /if \(forceLowestLod > 0\.5\)[\s\S]*?return lowColor/,
+  );
 });
 
 test("keeps far building massing visible through the native terrain upgrade", () => {

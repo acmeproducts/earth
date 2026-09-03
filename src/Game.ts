@@ -59,6 +59,7 @@ import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
 import { disposeTerrainMesh } from "./TerrainMaterial";
 import { createTerrainMesh as buildTerrainMesh } from "./TerrainMesh";
+import { TerrainSurface } from "./TerrainSurface";
 import { configureWindSceneScale, setManualWindSpeed } from "./Wind";
 import { SolarLighting } from "./SolarLighting";
 import { hasWinterGroundCover } from "./TreeSeason";
@@ -168,6 +169,7 @@ export class Game {
   private readonly activeTileBuilds = new Set<string>();
   private readonly terrainEdgeElevations = new Map<string, number>();
   private readonly lakeElevations = new Map<string, number>();
+  private readonly buildingElevations = new Map<string, number>();
   private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
   /** Streaming CPU work yields when it has consumed its frame slice. */
@@ -378,6 +380,7 @@ export class Game {
     this.disposeAllTiles();
     this.terrainEdgeElevations.clear();
     this.lakeElevations.clear();
+    this.buildingElevations.clear();
     this.terrainCoordinateFrame = undefined;
     this.terrainMetersPerUnit = undefined;
     this.solarLighting?.setLocation(target.lat, target.lon);
@@ -576,7 +579,12 @@ export class Game {
       await OpenStreetMap.conformTerrainToPlan(
         roadAndBuildingPlan,
         terrainData,
-        { meshWidth, meshDepth, metersPerUnit },
+        {
+          meshWidth,
+          meshDepth,
+          metersPerUnit,
+          sharedBuildingElevations: this.buildingElevations,
+        },
         yieldControl,
       );
       if (generation !== this.streamingGeneration) return undefined;
@@ -710,6 +718,12 @@ export class Game {
       showRoofs: this.sceneSettings.value.showRoofs,
       startDisabled,
       planning: record.roadAndBuildingPlan,
+      sharedBuildingElevations: this.buildingElevations,
+      terrainSurface: TerrainSurface.fromGroundMesh(
+        record.terrain,
+        record.meshWidth,
+        record.meshDepth,
+      ),
     };
     let mappedExclusionMask;
     try {
@@ -805,7 +819,7 @@ export class Game {
     const tallPlantField = await createTallPlantField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "tallPlants"),
-      densityScale: () => actorMix.tallPlants.densityScale,
+      densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
@@ -830,7 +844,7 @@ export class Game {
     const bushField = await createBushField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "bushes"),
-      densityScale: () => actorMix.bushes.densityScale,
+      densityScale: () => winterGroundCover ? 0 : actorMix.bushes.densityScale,
       renderMode: this.vegetationModes.bushes,
     });
     await this.prepareTileFieldLod(
@@ -845,7 +859,7 @@ export class Game {
     const fernField = await createFernField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "ferns"),
-      densityScale: () => actorMix.ferns.densityScale,
+      densityScale: () => winterGroundCover ? 0 : actorMix.ferns.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
@@ -860,7 +874,7 @@ export class Game {
     const rockyBeachField = await createRockyBeachField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
-      densityScale: () => actorMix.rocks.densityScale,
+      densityScale: () => winterGroundCover ? 0 : actorMix.rocks.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
@@ -908,7 +922,7 @@ export class Game {
     const streetLampLayer = StreetLamps.createLayer(
       this.scene,
       streetLamps,
-      OpenStreetMap.roadsideDetailRoads(mapWays),
+      record.roadAndBuildingPlan.streetLamps,
       terrainData,
       mapOptions,
     );
@@ -1074,6 +1088,11 @@ export class Game {
         preCarvingElevations: record.preCarvingElevations,
         startDisabled: true,
         planning: record.roadAndBuildingPlan,
+        terrainSurface: TerrainSurface.fromGroundMesh(
+          record.terrain,
+          record.meshWidth,
+          record.meshDepth,
+        ),
       },
       this.streamingYielder,
     );

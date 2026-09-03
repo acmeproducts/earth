@@ -12,7 +12,7 @@ test("plans apartments around a continuous hallway with adjacent stairs", () => 
     buildingPolygon: rectangle,
     buildingType: "apartment-building",
   });
-  assert.equal(layout.rooms.filter((room) => room.type === "apartment").length, 3);
+  assert.ok(layout.rooms.filter((room) => room.type === "apartment").length >= 3);
   assert.equal(layout.rooms.filter((room) => room.type === "hallway").length, 1);
   assert.equal(layout.rooms.filter((room) => room.type === "stairs").length, 1);
   assert.ok(layout.rooms.every((room) => room.polygon.outer.length >= 3));
@@ -124,6 +124,28 @@ test("does not place an apartment wall in front of an exterior door", () => {
   );
 });
 
+test("does not emit undersized apartments beside an off-center entrance", () => {
+  const layout = planBuildingLayout({
+    buildingPolygon: {
+      outer: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 12 }, { x: 0, y: 12 }],
+    },
+    buildingType: "apartment-building",
+    openings: [{
+      id: "front-door",
+      type: "door",
+      start: { x: 1.6, y: 0 },
+      end: { x: 2.4, y: 0 },
+    }],
+  });
+  assert.ok(layout.rooms.filter((room) => room.type === "apartment").every(
+    (room) => polygonArea(room.polygon.outer) >= 24 - 1e-7,
+  ));
+  assert.ok(layout.rooms.some((room) => room.id.startsWith("common-area-")));
+  assert.ok(Math.abs(layout.rooms.reduce(
+    (area, room) => area + polygonArea(room.polygon.outer), 0,
+  ) - 240) < 1e-6);
+});
+
 test("keeps the stair core aligned for matching upper floors", () => {
   const input = { buildingPolygon: rectangle, buildingType: "apartment-building" };
   const first = planBuildingLayout(input);
@@ -148,12 +170,58 @@ test("plans a concave footprint instead of discarding its interior", () => {
   assert.ok(layout.rooms.length > 1);
   assert.ok(layout.rooms.some((room) => room.type === "hallway"));
   assert.ok(layout.rooms.some((room) => room.type === "apartment"));
+  assert.ok(layout.rooms.filter((room) => room.type === "apartment").every((room) =>
+    polygonArea(room.polygon.outer) <= 120 + 1e-7));
   assert.ok(layout.openings.some((opening) => opening.id.endsWith("-door")));
-  const hallway = layout.rooms.find((room) => room.type === "hallway");
   const entrance = { x: 2.6, y: 0 };
-  assert.ok(hallway.polygon.outer.some((point, index, points) =>
-    pointOnSegment(entrance, point, points[(index + 1) % points.length])),
+  assert.ok(layout.rooms.filter((room) => room.type === "hallway").some((hallway) =>
+    hallway.polygon.outer.some((point, index, points) =>
+      pointOnSegment(entrance, point, points[(index + 1) % points.length]))),
   "the exterior entry should lead into the shared hallway");
+});
+
+test("keeps captured concave apartments below the maximum area", () => {
+  const capturedOutlines = [
+    [
+      { x: -155.9395034421023, y: -148.67113665761795 },
+      { x: -122.43687574946314, y: -115.73635013141448 },
+      { x: -130.05110931597204, y: -107.8175472317824 },
+      { x: -127.30998523202884, y: -105.38099249004478 },
+      { x: -134.61964945587738, y: -98.07132827061032 },
+      { x: -124.56886114808563, y: -88.32510931088284 },
+      { x: -130.66024800129276, y: -82.5382918078334 },
+      { x: -155.9395034421023, y: -107.33756136927036 },
+    ],
+    [
+      { x: -70.35551815454225, y: -57.868175064804355 },
+      { x: -63.65499261601442, y: -60.913868491073536 },
+      { x: -67.00525538527833, y: -67.91896336824219 },
+      { x: -68.83267144124046, y: -67.00525534216726 },
+      { x: -73.09664223848546, y: -76.75147429828313 },
+      { x: -69.74637946922154, y: -78.27432101250118 },
+      { x: -72.48750355316474, y: -84.6702772022491 },
+      { x: -63.35042327335406, y: -88.62967865531554 },
+      { x: -50.25394153895875, y: -60.00016046499856 },
+      { x: -53.60420430822266, y: -58.47731375222512 },
+      { x: -50.55851088161911, y: -51.47221887577874 },
+      { x: -64.56870064399548, y: -45.07626268169696 },
+    ],
+  ];
+
+  for (const outer of capturedOutlines) {
+    const layout = planBuildingLayout({
+      buildingPolygon: { outer },
+      buildingType: "house",
+    });
+    assert.ok(layout.rooms.filter((room) => room.type === "apartment").every((room) =>
+      polygonArea(room.polygon.outer) <= 120 + 1e-7));
+    assert.ok(layout.rooms.filter((room) => room.type === "apartment").every((room) =>
+      polygonCompactness(room.polygon.outer) >= 0.35),
+    "captured apartments should not collapse into long or bridged strips");
+    assert.ok(layout.rooms.filter((room) => room.type === "apartment").every((room) =>
+      layout.openings.some((opening) => openingTouchesPolygon(opening, room.polygon.outer))));
+    assert.ok(layout.rooms.some((room) => room.type === "stairs"));
+  }
 });
 
 function polygonArea(points) {
@@ -177,4 +245,21 @@ function pointOnSegment(point, start, end) {
   if (Math.abs(cross) > 1e-7) return false;
   return point.x >= Math.min(start.x, end.x) - 1e-7 && point.x <= Math.max(start.x, end.x) + 1e-7 &&
     point.y >= Math.min(start.y, end.y) - 1e-7 && point.y <= Math.max(start.y, end.y) + 1e-7;
+}
+
+function polygonCompactness(points) {
+  const perimeter = points.reduce((length, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return length + Math.hypot(next.x - point.x, next.y - point.y);
+  }, 0);
+  return 4 * Math.PI * polygonArea(points) / (perimeter * perimeter);
+}
+
+function openingTouchesPolygon(opening, polygon) {
+  const center = {
+    x: (opening.start.x + opening.end.x) / 2,
+    y: (opening.start.y + opening.end.y) / 2,
+  };
+  return polygon.some((start, index) =>
+    pointOnSegment(center, start, polygon[(index + 1) % polygon.length]));
 }

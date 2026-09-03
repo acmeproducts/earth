@@ -19,9 +19,16 @@ const SOURCE_HEIGHT = 0.85;
 // Keeping the patch compact and relatively tall lets its blades use the square
 // capture efficiently instead of collapsing into a thin strip of pixels.
 const CAPTURE_DIAMETER = 3.8;
+/** Nominal blade radius of the clump, in source units. */
+const CLUMP_RADIUS = 1.3;
 
 export function grassRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
+}
+
+/** How far the clump's near edge stands in front of its center once rendered. */
+export function grassRenderedClumpRadius(renderHeight: number): number {
+  return CLUMP_RADIUS * renderHeight / SOURCE_HEIGHT;
 }
 // Keep grass in the same cool-green family as the tree canopy, but bias the
 // blades toward muted olive tones. Highly green tips become neon once direct
@@ -70,7 +77,7 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
 
   for (let blade = 0; blade < bladeCount / symmetryOrder; blade++) {
     const baseAngle = random() * sectorAngle;
-    const edgeRadius = 1.3 + (random() - 0.5) * 0.22;
+    const edgeRadius = CLUMP_RADIUS + (random() - 0.5) * 0.22;
     const radius = Math.sqrt(random()) * edgeRadius;
     const bladeAngle = random() * Math.PI * 2;
     const bendAngle = baseAngle + (random() - 0.5) * 1.8;

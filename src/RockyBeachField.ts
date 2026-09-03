@@ -226,6 +226,7 @@ function configureRockyBeachRenderers(
     impostor.material.setFloat("impostorLodFar", 30);
     impostor.material.setFloat("instanceColorCoverage", 1);
     impostor.material.setFloat("groundColorBlend", 0.1);
+    impostor.material.setFloat("impostorColorContrast", 1.2);
     // The impostor has a single stable canopy normal; reduce its sky bias so
     // its average value matches the varied normals used by the live stones.
     impostor.material.setFloat("impostorAmbientUpward", 0.54);

@@ -1,5 +1,6 @@
 import type { TerrainData } from "./TerrainData";
 import { smoothstep } from "./MathUtils";
+import { distanceToRing, pointInRing } from "./PlanarGeometry";
 
 export interface TerrainLakePoint {
   x: number;
@@ -261,46 +262,17 @@ function sampleGridElevation(
 }
 
 function pointInLake(x: number, z: number, polygon: TerrainLakeSource): boolean {
-  return pointInRing(x, z, polygon.outline) &&
-    !polygon.holes.some((hole) => pointInRing(x, z, hole));
-}
-
-function pointInRing(x: number, z: number, points: readonly TerrainLakePoint[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
-    const a = points[index];
-    const b = points[previous];
-    if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) {
-      inside = !inside;
-    }
-  }
-  return inside;
+  const point = { x, z };
+  return pointInRing(point, polygon.outline) &&
+    !polygon.holes.some((hole) => pointInRing(point, hole));
 }
 
 function distanceToRings(x: number, z: number, polygon: TerrainLakeSource): number {
+  const point = { x, z };
   return Math.min(
-    distanceToRing(x, z, polygon.outline),
-    ...polygon.holes.map((hole) => distanceToRing(x, z, hole)),
+    distanceToRing(point, polygon.outline),
+    ...polygon.holes.map((hole) => distanceToRing(point, hole)),
   );
-}
-
-function distanceToRing(x: number, z: number, points: readonly TerrainLakePoint[]): number {
-  let distance = Infinity;
-  for (let index = 0; index < points.length; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0
-      ? 0
-      : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
-    distance = Math.min(distance, Math.hypot(
-      x - (start.x + dx * amount),
-      z - (start.z + dz * amount),
-    ));
-  }
-  return distance;
 }
 
 function polygonBounds(polygon: TerrainLakeSource): Bounds {

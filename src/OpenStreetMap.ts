@@ -34,6 +34,7 @@ import { cellRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
 import { tiledValueNoise } from "./ValueNoise";
 import { worldTileAtLocation, type TileBounds } from "./WorldGrid";
+import { buildingBelongsToWorldTile } from "./BuildingTileOwnership";
 import {
   BuildingDetailLevel,
   BuildingSource,
@@ -53,10 +54,14 @@ import {
 } from "./RoadPlanner";
 import {
   planRoadsAndBuildings,
+  roadGradeAmount,
   PlannedRoadPolygon,
   RoadAndBuildingPlan,
 } from "./RoadAndBuildingPlanner";
 import { conformTerrainToPlannedFeatures } from "./PlannedFeatureTerrain";
+import { clipToBounds, pointInRing, signedArea } from "./PlanarGeometry";
+import { conformDecalPolygon } from "./TerrainSurface";
+import type { TerrainSurface } from "./TerrainSurface";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "./TerrainLakePolygons";
@@ -93,13 +98,6 @@ interface RoadSource {
   properties: Readonly<Record<string, unknown>>;
 }
 
-/** Road centerlines retained for small roadside detail systems. */
-export interface RoadsideDetailRoad {
-  id: string;
-  paths: LonLat[][];
-  properties: Readonly<Record<string, unknown>>;
-}
-
 const buildingSourceCache = new WeakMap<VectorTile, readonly BuildingSource[]>();
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
@@ -115,13 +113,10 @@ interface MapLayerOptions {
   startDisabled?: boolean;
   /** Shared geometry plan prepared before terrain construction. */
   planning?: RoadAndBuildingPlan;
-}
-
-interface MapClipBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
+  /** Stable pad height shared by every tile touched by one building. */
+  sharedBuildingElevations?: Map<string, number>;
+  /** The rendered ground, so terrain-conforming decals cannot sink into it. */
+  terrainSurface?: TerrainSurface;
 }
 
 interface RoadSegment {
@@ -254,6 +249,7 @@ export class OpenStreetMap {
     const waterways: Mesh[] = [];
     const renderOptions = {
       ...options,
+      renderWholeBuildingFootprints: true,
       neighboringBuildingFootprints: tiles.flatMap((tile) =>
         buildingSources(tile).map((source) => source.polygon)),
     };
@@ -277,6 +273,7 @@ export class OpenStreetMap {
 
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
+        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
         await yieldControl?.();
         const mesh = ProceduralBuildingRenderer.createDetailed(
           scene,
@@ -365,15 +362,6 @@ export class OpenStreetMap {
     };
   }
 
-  /**
-   * Exposes mapped road geometry without coupling roadside-detail renderers to
-   * the vector-tile implementation.  The geometry remains in longitude /
-   * latitude so it can be projected into the terrain tile that owns it.
-   */
-  static roadsideDetailRoads(tiles: readonly MapTile[]): readonly RoadsideDetailRoad[] {
-    return tiles.flatMap((tile) => roadSources(tile));
-  }
-
   /** Projects map features once so terrain, meshes, and placement share one plan. */
   static planRoadsAndBuildings(
     tiles: readonly MapTile[],
@@ -386,7 +374,14 @@ export class OpenStreetMap {
       const appearance = planRoad(source.properties);
       return appearance ? [{
         id: source.id,
-        paths: source.paths.map((path) => path.map(project)),
+        // Grade each application-tile section from the elevations at its own
+        // boundary crossings. Keeping an off-tile source segment here makes
+        // both tiles clamp different endpoints and produces a visible lip.
+        paths: source.paths.flatMap((path) => clipPolyline(
+          path.map(project),
+          options.meshWidth / 2,
+          options.meshDepth / 2,
+        )),
         appearance,
       }] : [];
     }));
@@ -401,7 +396,10 @@ export class OpenStreetMap {
   static conformTerrainToPlan(
     planning: RoadAndBuildingPlan,
     terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    options: Pick<
+      MapLayerOptions,
+      "meshWidth" | "meshDepth" | "metersPerUnit" | "sharedBuildingElevations"
+    >,
     yieldControl?: () => Promise<void>,
   ): Promise<number> {
     return conformTerrainToPlannedFeatures(terrain, planning, options, yieldControl);
@@ -432,12 +430,12 @@ export class OpenStreetMap {
         const waterPolygons = polygonRings(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
           const rings = waterPolygons[polygonIndex];
-          const outline = clipPolygon(withoutClosingPoint(rings[0]).map(project), clipBounds);
+          const outline = clipToBounds(withoutClosingPoint(rings[0]).map(project), clipBounds);
           if (outline.length < 3) continue;
           const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
           const holes = rings.slice(1)
-            .map((ring) => clipPolygon(withoutClosingPoint(ring).map(project), clipBounds))
-            .filter((ring) => ring.length >= 3 && pointInPolygon(ring[0], outline));
+            .map((ring) => clipToBounds(withoutClosingPoint(ring).map(project), clipBounds))
+            .filter((ring) => ring.length >= 3 && pointInRing(ring[0], outline));
           results.push({ sourceId, outline, holes });
         }
       });
@@ -459,11 +457,13 @@ export class OpenStreetMap {
     const buildings: Mesh[] = [];
     const renderOptions = {
       ...options,
+      renderWholeBuildingFootprints: true,
       neighboringBuildingFootprints: tiles.flatMap((tile) =>
         buildingSources(tile).map((source) => source.polygon)),
     };
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
+        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
         await yieldControl?.();
         const plan = planBuilding(source);
         const mesh = detail === "far"
@@ -804,55 +804,39 @@ function createPlannedRoadBatch(
   const positions: number[] = [];
   const indices: number[] = [];
   const uvs: number[] = [];
+  const clearance = clearanceMeters / options.metersPerUnit;
   for (const road of roads) {
     const outline = signedArea(road.outline) >= 0
       ? road.outline
       : [...road.outline].reverse();
     if (outline.length < 3) continue;
-    const vertexOffset = positions.length / 3;
-    const startElevation = sampleElevation(
-      terrain,
-      road.centerline[0].x,
-      road.centerline[0].z,
-      options.meshWidth,
-      options.meshDepth,
+    const grade = plannedRoadGrade(road, terrain, options);
+    // Splitting the carriageway along the ground's own triangles keeps the
+    // road surface from ever cutting through the terrain it decorates.
+    const rings = conformDecalPolygon(
+      outline,
+      (point) => grade(point) / options.metersPerUnit,
+      clearance,
+      options.terrainSurface,
     );
-    const endElevation = sampleElevation(
-      terrain,
-      road.centerline[1].x,
-      road.centerline[1].z,
-      options.meshWidth,
-      options.meshDepth,
-    );
-    const dx = road.centerline[1].x - road.centerline[0].x;
-    const dz = road.centerline[1].z - road.centerline[0].z;
-    const lengthSquared = dx * dx + dz * dz;
-    for (const point of outline) {
-      const amount = lengthSquared <= 1e-12
-        ? 0
-        : Math.max(0, Math.min(1, (
-          (point.x - road.centerline[0].x) * dx +
-          (point.z - road.centerline[0].z) * dz
-        ) / lengthSquared));
-      positions.push(
-        point.x,
-        (startElevation + (endElevation - startElevation) * amount +
-          clearanceMeters) / options.metersPerUnit,
-        point.z,
-      );
-      const uv = plannedRoadUv(point, road, options.metersPerUnit, forceWorldUvs);
-      uvs.push(uv.x, uv.y);
-    }
-    const localIndices = earcut(outline.flatMap((point) => [point.x, point.z]));
-    for (let index = 0; index < localIndices.length; index += 3) {
-      // Babylon's left-handed ground/ribbon convention uses this winding for
-      // the face visible from above. Reversing it makes the whole road batch
-      // back-facing and therefore invisible with the default material culling.
-      indices.push(
-        vertexOffset + localIndices[index],
-        vertexOffset + localIndices[index + 1],
-        vertexOffset + localIndices[index + 2],
-      );
+    for (const ring of rings) {
+      const vertexOffset = positions.length / 3;
+      for (const point of ring) {
+        positions.push(point.x, point.y, point.z);
+        const uv = plannedRoadUv(point, road, options.metersPerUnit, forceWorldUvs);
+        uvs.push(uv.x, uv.y);
+      }
+      const localIndices = earcut(ring.flatMap((point) => [point.x, point.z]));
+      for (let index = 0; index < localIndices.length; index += 3) {
+        // Babylon's left-handed ground/ribbon convention uses this winding for
+        // the face visible from above. Reversing it makes the whole road batch
+        // back-facing and therefore invisible with the default material culling.
+        indices.push(
+          vertexOffset + localIndices[index],
+          vertexOffset + localIndices[index + 1],
+          vertexOffset + localIndices[index + 2],
+        );
+      }
     }
   }
   const normals: number[] = [];
@@ -866,6 +850,30 @@ function createPlannedRoadBatch(
   vertexData.applyToMesh(mesh, false);
   mesh.isPickable = false;
   return stageMapMesh(mesh);
+}
+
+/** The planned longitudinal grade of one carriageway polygon, in meters. */
+function plannedRoadGrade(
+  road: PlannedRoadPolygon,
+  terrain: TerrainData,
+  options: MapLayerOptions,
+): (point: { x: number; z: number }) => number {
+  const startElevation = sampleElevation(
+    terrain,
+    road.centerline[0].x,
+    road.centerline[0].z,
+    options.meshWidth,
+    options.meshDepth,
+  );
+  const endElevation = sampleElevation(
+    terrain,
+    road.centerline[1].x,
+    road.centerline[1].z,
+    options.meshWidth,
+    options.meshDepth,
+  );
+  return (point) => startElevation +
+    (endElevation - startElevation) * roadGradeAmount(road, point);
 }
 
 function plannedRoadUv(
@@ -1133,7 +1141,7 @@ function createRoadJunctions(
         z: center.z + Math.sin(angle) * radius,
       };
     });
-    const clipped = clipPolygon(circle, clipBounds);
+    const clipped = clipToBounds(circle, clipBounds);
     if (clipped.length < 3) continue;
     if (signedArea(clipped) < 0) clipped.reverse();
     const mesh = new PolygonMeshBuilder(
@@ -1290,82 +1298,6 @@ function worldPositionRoadUvs(
 function stageMapMesh<T extends Mesh>(mesh: T): T {
   mesh.setEnabled(false);
   return mesh;
-}
-
-function clipPolygon(
-  points: Array<{ x: number; z: number }>,
-  bounds: MapClipBounds,
-): Array<{ x: number; z: number }> {
-  const edges: Array<{
-    inside: (point: { x: number; z: number }) => boolean;
-    intersect: (start: { x: number; z: number }, end: { x: number; z: number }) => { x: number; z: number };
-  }> = [
-    { inside: (p) => p.x >= bounds.minX, intersect: (a, b) => atX(a, b, bounds.minX) },
-    { inside: (p) => p.x <= bounds.maxX, intersect: (a, b) => atX(a, b, bounds.maxX) },
-    { inside: (p) => p.z >= bounds.minZ, intersect: (a, b) => atZ(a, b, bounds.minZ) },
-    { inside: (p) => p.z <= bounds.maxZ, intersect: (a, b) => atZ(a, b, bounds.maxZ) },
-  ];
-  let output = points;
-  for (const edge of edges) {
-    const input = output;
-    output = [];
-    for (let index = 0; index < input.length; index++) {
-      const start = input[(index + input.length - 1) % input.length];
-      const end = input[index];
-      const startInside = edge.inside(start);
-      const endInside = edge.inside(end);
-      if (endInside) {
-        if (!startInside) output.push(edge.intersect(start, end));
-        output.push(end);
-      } else if (startInside) {
-        output.push(edge.intersect(start, end));
-      }
-    }
-  }
-  return output;
-}
-
-function pointInPolygon(
-  point: { x: number; z: number },
-  polygon: readonly { x: number; z: number }[],
-): boolean {
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
-    const a = polygon[index];
-    const b = polygon[previous];
-    if ((a.z > point.z) !== (b.z > point.z) &&
-        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-function atX(
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-  x: number,
-): { x: number; z: number } {
-  const amount = (x - start.x) / (end.x - start.x);
-  return { x, z: start.z + amount * (end.z - start.z) };
-}
-
-function atZ(
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-  z: number,
-): { x: number; z: number } {
-  const amount = (z - start.z) / (end.z - start.z);
-  return { x: start.x + amount * (end.x - start.x), z };
-}
-
-function signedArea(points: Array<{ x: number; z: number }>): number {
-  let area = 0;
-  for (let index = 0; index < points.length; index++) {
-    const next = points[(index + 1) % points.length];
-    area += points[index].x * next.z - next.x * points[index].z;
-  }
-  return area / 2;
 }
 
 function mergeRoads(

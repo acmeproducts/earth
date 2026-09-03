@@ -10,6 +10,10 @@ export interface BuildingRenderOptions {
   metersPerUnit: number;
   skyReflection?: BaseTexture | null;
   showRoofs?: boolean;
+  /** Render the complete source polygon when its streamed tile owns it. */
+  renderWholeBuildingFootprints?: boolean;
+  /** Stable terrain-pad heights keyed by source building ID. */
+  sharedBuildingElevations?: ReadonlyMap<string, number>;
   /** Other footprints in the current map batch, used to detect party walls. */
   neighboringBuildingFootprints?: readonly BuildingPolygon[];
 }

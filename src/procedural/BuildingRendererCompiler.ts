@@ -19,6 +19,7 @@ import {
 import earcut from "earcut";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
+import { averagePoint, clipToBounds, pointInRing, signedArea } from "../PlanarGeometry";
 import { unitFromSeed } from "../Random";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
 import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
@@ -39,7 +40,6 @@ import type {
   BuildingAppearance,
   BuildingRenderOptions,
   BuildingShadowRange,
-  Bounds,
   DetailedBuildingParts,
   EntranceClearance,
   InteriorPlanningAttempt,
@@ -60,7 +60,6 @@ import {
   BUILDING_INTERIOR_LOAD_DISTANCE_METERS,
   BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
   BUILDING_INTERIORS_PER_CHECK,
-  BUILDING_REFLECTIVE_MARKER_ALPHA,
   BUILDING_ROOF_EAVE_CLEARANCE_METERS,
   BUILDING_ROOF_OVERHANG_METERS,
   BUILDING_ROOF_TRIM_METERS,
@@ -86,7 +85,7 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.footprint, terrain, options);
+    const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
     if (!prepared) return undefined;
 
     const appearance = buildingAppearance(plan);
@@ -99,11 +98,6 @@ export class ProceduralBuildingRenderer {
       return createCourtyardBuilding(scene, plan, prepared, options, appearance);
     }
     const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
-    const towerBlend = highRiseBlend(plan.heightMeters);
-    if (unitFromSeed(plan.detailSeed ^ 0x4d3a91) < towerBlend) {
-      captureUnplannedBuilding(plan, prepared, options, "High-rise buildings use the tower renderer.");
-      return createHighRiseBuilding(scene, plan, prepared, options, appearance, towerBlend);
-    }
     const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
     const roofHeightMeters = roofShape === "flat"
       ? 0
@@ -225,7 +219,7 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.footprint, terrain, options);
+    const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
     if (!prepared) return undefined;
     const bottomElevation = plan.minimumHeightMeters > 0
       ? prepared.baseElevation + plan.minimumHeightMeters
@@ -337,46 +331,6 @@ function createCourtyardBuilding(
     enterable: false,
     complexFootprint: true,
     courtyardCount: prepared.holes.length,
-    metersPerUnit: options.metersPerUnit,
-    skyReflection: options.skyReflection,
-  };
-  return mesh;
-}
-
-function highRiseBlend(heightMeters: number): number {
-  const height01 = clamp01((heightMeters - 22) / 58);
-  return height01 * height01 * (3 - 2 * height01);
-}
-
-function createHighRiseBuilding(
-  scene: Scene,
-  plan: BuildingPlan,
-  prepared: PreparedBuildingFootprint,
-  options: BuildingRenderOptions,
-  appearance: BuildingAppearance,
-  towerBlend: number,
-): Mesh {
-  const bottomElevation = plan.minimumHeightMeters > 0
-    ? prepared.baseElevation + plan.minimumHeightMeters
-    : prepared.baseElevation - BUILDING_GROUND_OVERLAP_METERS;
-  const mesh = createBuildingPrism(
-    scene,
-    prepared.outline,
-    prepared.baseElevation + plan.heightMeters,
-    bottomElevation,
-    options,
-  );
-  const glass = mixColor(
-    appearance.wall,
-    new Color3(0.32, 0.48, 0.56),
-    0.48 + towerBlend * 0.32,
-  );
-  colorReflectiveBuildingMass(mesh, glass, appearance.roof);
-  mesh.metadata = {
-    buildingId: plan.id,
-    enterable: false,
-    highRise: true,
-    highRiseBlend: towerBlend,
     metersPerUnit: options.metersPerUnit,
     skyReflection: options.skyReflection,
   };
@@ -915,13 +869,19 @@ function stairLayoutsFromPlan(
   detailSeed: number,
 ): StairLayout[] {
   const candidates = stairLayoutCandidatesFromPlan(layout, options);
+  if (candidates.length === 0) return [];
   const layouts: StairLayout[] = [];
   for (let flight = 0; flight < flightCount; flight++) {
-    const available = candidates.filter((candidate) =>
-      layouts.every((placed) => !stairLayoutsOverlap(candidate, placed, options)));
-    if (available.length === 0) break;
-    layouts.push(available[Math.floor(
-      unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * available.length,
+    const previous = layouts[flight - 1];
+    const separated = previous
+      ? candidates.filter((candidate) => !stairLayoutsOverlap(candidate, previous, options))
+      : candidates;
+    // Flights on non-adjacent storeys are vertically separated and can reuse
+    // the same shaft position. If a narrow core has only one viable position,
+    // stacking is still preferable to silently ending the stairs partway up.
+    const choices = separated.length > 0 ? separated : candidates;
+    layouts.push(choices[Math.floor(
+      unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
     )]);
   }
   return layouts;
@@ -1004,7 +964,7 @@ function pointInPolygonInclusive(point: Point2D, polygon: readonly Point2D[]): b
     point,
     start,
     polygon[(index + 1) % polygon.length],
-  )) || pointInPolygon(
+  )) || pointInRing(
     { x: point.x, z: point.y },
     polygon.map(({ x, y }) => ({ x, z: y })),
   );
@@ -1347,6 +1307,7 @@ function addFacadePanel(
 }
 
 function prepareBuildingFootprint(
+  buildingId: string,
   footprint: BuildingPolygon,
   terrain: TerrainData,
   options: BuildingRenderOptions,
@@ -1362,7 +1323,7 @@ function prepareBuildingFootprint(
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
     );
     if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
-    return clipPolygon(points, clipBounds);
+    return options.renderWholeBuildingFootprints ? points : clipToBounds(points, clipBounds);
   };
   const outline = projectRing(footprint.outer);
   if (outline.length < 3) return undefined;
@@ -1370,8 +1331,8 @@ function prepareBuildingFootprint(
   const holes = footprint.holes
     .map(projectRing)
     .filter((hole) => hole.length >= 3 && Math.abs(signedArea(hole)) > 1e-10)
-    .filter((hole) => hole.some((point) => pointInPolygon(point, outline)) ||
-      pointInPolygon(averagePoint(hole), outline));
+    .filter((hole) => hole.some((point) => pointInRing(point, outline)) ||
+      pointInRing(averagePoint(hole), outline));
   for (const hole of holes) {
     if (signedArea(hole) > 0) hole.reverse();
   }
@@ -1380,7 +1341,11 @@ function prepareBuildingFootprint(
     sampleElevation(terrain, point.x, point.z, options.meshWidth, options.meshDepth)
   );
   if (elevations.some((elevation) => elevation <= SEA_LEVEL_METERS)) return undefined;
-  return { outline, holes, baseElevation: Math.max(...elevations) };
+  return {
+    outline,
+    holes,
+    baseElevation: options.sharedBuildingElevations?.get(buildingId) ?? Math.max(...elevations),
+  };
 }
 
 function findSharedFacadeEdges(
@@ -1515,7 +1480,7 @@ function findStairLayouts(
         runMeters,
         widthMeters: BUILDING_STAIR_WIDTH_METERS,
       };
-      if (stairOpening(layout, options).every((point) => pointInPolygon(point, outline))) {
+      if (stairOpening(layout, options).every((point) => pointInRing(point, outline))) {
         candidates.push(layout);
       }
     }
@@ -1528,8 +1493,7 @@ function findStairLayouts(
     const separated = previous
       ? candidates.filter((candidate) => !stairLayoutsOverlap(candidate, previous, options))
       : candidates;
-    if (separated.length === 0) break;
-    const choices = separated;
+    const choices = separated.length > 0 ? separated : candidates;
     layouts.push(choices[Math.floor(
       unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
     )]);
@@ -1640,19 +1604,6 @@ function createStairFlight(
   }
 }
 
-function pointInPolygon(point: ScenePoint, polygon: readonly ScenePoint[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
-    const a = polygon[index];
-    const b = polygon[previous];
-    if ((a.z > point.z) !== (b.z > point.z) &&
-        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
 function configureBuildingSurfaceMaterials(
   mesh: Mesh,
   metersPerUnit: number,
@@ -1747,21 +1698,34 @@ function configureBuildingSurfaceMaterials(
     lastUpdateMilliseconds = now;
     const camera = mesh.getScene().activeCamera;
     if (!camera) return;
-    // Use the building center for the transition. Per-window distances let
-    // the near facade of a large building remain transparent long after the
-    // building itself has become a distant object.
-    const bounds = mesh.getBoundingInfo().boundingSphere;
-    const center = bounds.centerWorld;
-    const distanceMeters = Vector3.Distance(center, camera.globalPosition) * metersPerUnit;
-    // Keep the shell opaque until its interior is resident. A transparent
-    // window with no loaded interior exposes the terrain behind the house.
-    const fade = mesh.metadata?.interiorsLoaded === true
-      ? clamp01(
-        (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
-        (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
-      )
-      : 1;
+    const localCamera = Vector3.TransformCoordinates(
+      camera.globalPosition,
+      mesh.computeWorldMatrix(true).clone().invert(),
+    );
+    const loadedInteriors = (mesh.metadata?.loadedInteriors ?? []) as LoadedBuildingInterior[];
     for (const vertex of windowVertices) {
+      const positionOffset = vertex * 3;
+      const x = positions[positionOffset];
+      const y = positions[positionOffset + 1];
+      const z = positions[positionOffset + 2];
+      // Merged tile meshes contain many buildings. Only reveal a window when
+      // the interior belonging to its footprint is resident; distant pending
+      // interiors must not keep every window in the tile opaque.
+      const hasLoadedInterior = loadedInteriors.some((interior) =>
+        Math.hypot(x - interior.center.x, z - interior.center.z) * metersPerUnit <=
+          interior.pending.radiusMeters + BUILDING_WALL_THICKNESS_METERS,
+      );
+      const distanceMeters = Math.hypot(
+        x - localCamera.x,
+        y - localCamera.y,
+        z - localCamera.z,
+      ) * metersPerUnit;
+      const fade = hasLoadedInterior
+        ? clamp01(
+          (distanceMeters - BUILDING_WINDOW_CLEAR_DISTANCE_METERS) /
+          (BUILDING_WINDOW_OPAQUE_DISTANCE_METERS - BUILDING_WINDOW_CLEAR_DISTANCE_METERS),
+        )
+        : 1;
       colors[vertex * 4 + 3] = BUILDING_WINDOW_CLOSE_ALPHA +
         (1 - BUILDING_WINDOW_CLOSE_ALPHA) * fade;
     }
@@ -1810,6 +1774,7 @@ function configureLazyInteriors(
   exterior.metadata.pendingInteriorCount = pendingInteriors.length;
   exterior.metadata.loadedInteriorCount = 0;
   const loadedInteriors: LoadedBuildingInterior[] = [];
+  exterior.metadata.loadedInteriors = loadedInteriors;
   let lastCheckMilliseconds = -Infinity;
   const scene = exterior.getScene();
   // Creating and merging an interior mutates the scene graph. Doing that from
@@ -2184,30 +2149,6 @@ function colorBuildingMass(mesh: Mesh, appearance: BuildingAppearance): void {
   mesh.useVertexColors = true;
 }
 
-function colorReflectiveBuildingMass(mesh: Mesh, wall: Color3, roof: Color3): void {
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
-  if (!positions) return;
-  const colors: number[] = [];
-  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
-    const normalX = normals?.[vertex * 3] ?? 0;
-    const normalY = normals?.[vertex * 3 + 1] ?? 0;
-    const normalZ = normals?.[vertex * 3 + 2] ?? 0;
-    const base = normalY > 0.55 ? roof : wall;
-    const light = normalY > 0.55
-      ? 0.9
-      : Math.max(0.72, Math.min(1.06, 0.9 + normalX * 0.1 - normalZ * 0.06));
-    colors.push(
-      clamp01(base.r * light),
-      clamp01(base.g * light),
-      clamp01(base.b * light),
-      BUILDING_REFLECTIVE_MARKER_ALPHA,
-    );
-  }
-  mesh.setVerticesData(VertexBuffer.ColorKind, colors);
-  mesh.useVertexColors = true;
-}
-
 function colorRoofMesh(mesh: Mesh, color: Color3): void {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
@@ -2355,63 +2296,6 @@ function polygonCentroid(points: ScenePoint[]): ScenePoint {
   return Math.abs(area) < 1e-8
     ? averagePoint(points)
     : { x: x / (3 * area), z: z / (3 * area) };
-}
-
-function clipPolygon(points: ScenePoint[], bounds: Bounds): ScenePoint[] {
-  const edges: Array<{
-    inside: (point: ScenePoint) => boolean;
-    intersect: (start: ScenePoint, end: ScenePoint) => ScenePoint;
-  }> = [
-    { inside: (point) => point.x >= bounds.minX, intersect: (a, b) => atX(a, b, bounds.minX) },
-    { inside: (point) => point.x <= bounds.maxX, intersect: (a, b) => atX(a, b, bounds.maxX) },
-    { inside: (point) => point.z >= bounds.minZ, intersect: (a, b) => atZ(a, b, bounds.minZ) },
-    { inside: (point) => point.z <= bounds.maxZ, intersect: (a, b) => atZ(a, b, bounds.maxZ) },
-  ];
-  let output = points;
-  for (const edge of edges) {
-    const input = output;
-    output = [];
-    for (let index = 0; index < input.length; index++) {
-      const start = input[(index + input.length - 1) % input.length];
-      const end = input[index];
-      const startInside = edge.inside(start);
-      const endInside = edge.inside(end);
-      if (endInside) {
-        if (!startInside) output.push(edge.intersect(start, end));
-        output.push(end);
-      } else if (startInside) {
-        output.push(edge.intersect(start, end));
-      }
-    }
-  }
-  return output;
-}
-
-function atX(start: ScenePoint, end: ScenePoint, x: number): ScenePoint {
-  const amount = (x - start.x) / (end.x - start.x);
-  return { x, z: start.z + amount * (end.z - start.z) };
-}
-
-function atZ(start: ScenePoint, end: ScenePoint, z: number): ScenePoint {
-  const amount = (z - start.z) / (end.z - start.z);
-  return { x: start.x + amount * (end.x - start.x), z };
-}
-
-function signedArea(points: ScenePoint[]): number {
-  let area = 0;
-  for (let index = 0; index < points.length; index++) {
-    const next = points[(index + 1) % points.length];
-    area += points[index].x * next.z - next.x * points[index].z;
-  }
-  return area / 2;
-}
-
-function averagePoint(points: ScenePoint[]): ScenePoint {
-  const total = points.reduce(
-    (sum, point) => ({ x: sum.x + point.x, z: sum.z + point.z }),
-    { x: 0, z: 0 },
-  );
-  return { x: total.x / points.length, z: total.z / points.length };
 }
 
 function samePoint(a: ScenePoint, b: ScenePoint): boolean {

@@ -1,10 +1,33 @@
 import type { RoadPlan, RoadSurface, RoadVisualStyle } from "./RoadPlanner";
 import earcut from "earcut";
+import { hashString } from "./Random";
+import {
+  averagePoint,
+  boundsOverlap,
+  clipHalfPlane,
+  clipToBounds,
+  convexHull,
+  convexPolygonsOverlap,
+  cross,
+  deduplicateRing,
+  distanceToRing,
+  offsetConvexPolygon,
+  PlanarCellIndex,
+  pointBounds,
+  pointInRing,
+  polygonArea,
+  polygonsOverlapArea,
+  removeCollinearPoints,
+  samePoint,
+  segmentIntersection,
+  signedArea,
+  subtractConvex,
+  withoutClosingPoint,
+  type PlanarBounds,
+  type PlanarPoint,
+} from "./PlanarGeometry";
 
-export interface PlanningPoint {
-  x: number;
-  z: number;
-}
+export type PlanningPoint = PlanarPoint;
 
 export interface PlanningRoadInput {
   id: string;
@@ -22,6 +45,12 @@ export interface PlannedRoadPolygon {
   sourceId: string;
   outline: PlanningPoint[];
   centerline: readonly [PlanningPoint, PlanningPoint];
+  /**
+   * Normalized span of the centerline over which the grade rises. Outside it
+   * the polygon is level with the junction disc it runs into, so a short piece
+   * between two junctions cannot step at the seam.
+   */
+  gradeRange: readonly [number, number];
   /** Optional direction used only to keep strip textures coherent across joins. */
   textureAxis?: readonly [PlanningPoint, PlanningPoint];
   /** Distance from the beginning of the source path to centerline[0], in scene units. */
@@ -40,12 +69,26 @@ export interface PlannedBuildingSite {
   holes: PlanningPoint[][];
 }
 
-export interface RoadAndBuildingPlanBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
+export interface PlanningLampInput {
+  id: string;
+  position: PlanningPoint;
 }
+
+export interface PlannedStreetLamp {
+  sourceId: string;
+  position: PlanningPoint;
+  /** Facing of the adjacent carriageway, radians about +Y. Mapped lamps use 0. */
+  orientationRadians: number;
+  source: "mapped" | "procedural";
+}
+
+/** Convex parcel around one building, butted against roads and neighbors. */
+export interface PlannedPlot {
+  sourceId: string;
+  outline: PlanningPoint[];
+}
+
+export type RoadAndBuildingPlanBounds = PlanarBounds;
 
 export interface RoadAndBuildingPlan {
   /** Full scene-space planning extent, including portions without features. */
@@ -55,6 +98,9 @@ export interface RoadAndBuildingPlan {
   /** Mutually exclusive outer road beds; carriageways render above them. */
   shoulders: PlannedRoadPolygon[];
   buildingSites: PlannedBuildingSite[];
+  streetLamps: PlannedStreetLamp[];
+  /** One plot per building site; plots attach to each other and to road beds. */
+  plots: PlannedPlot[];
 }
 
 export interface RoadAndBuildingPlanningOptions {
@@ -76,13 +122,18 @@ interface NetworkSegment {
   splits: number[];
 }
 
+interface NetworkIncident {
+  input: PlanningRoadInput;
+  startDistance: number;
+  textureAxis: readonly [PlanningPoint, PlanningPoint];
+  /** True when the node sits at the piece's start rather than its end. */
+  atStart: boolean;
+  length: number;
+}
+
 interface NetworkNode {
   point: PlanningPoint;
-  incidents: Array<{
-    input: PlanningRoadInput;
-    startDistance: number;
-    textureAxis: readonly [PlanningPoint, PlanningPoint];
-  }>;
+  incidents: NetworkIncident[];
 }
 
 interface NetworkPiece {
@@ -103,6 +154,7 @@ export function planRoadsAndBuildings(
   roadInputs: readonly PlanningRoadInput[],
   buildingInputs: readonly PlanningBuildingInput[],
   options: RoadAndBuildingPlanningOptions,
+  lampInputs: readonly PlanningLampInput[] = [],
 ): RoadAndBuildingPlan {
   const bounds = {
     minX: -options.meshWidth / 2,
@@ -115,16 +167,15 @@ export function planRoadsAndBuildings(
     options,
   );
 
-  const planningCellSize = Math.max(0.25, 20 / options.metersPerUnit);
   const roads = mergeCompatiblePolygons(partitionCandidates(
     triangulateCandidates(surfaceCandidates),
     bounds,
-    planningCellSize,
+    options,
   ));
   const shoulders = mergeCompatiblePolygons(partitionCandidates(
     triangulateCandidates(outerCandidates),
     bounds,
-    planningCellSize,
+    options,
   ));
   const buildingSites = buildingInputs.flatMap((building) => {
     const outline = clipToBounds(withoutClosingPoint(building.outline), bounds);
@@ -138,7 +189,284 @@ export function planRoadsAndBuildings(
     }];
   });
 
-  return { bounds, roads, shoulders, buildingSites };
+  const streetLamps = planStreetLamps(roadInputs, lampInputs, shoulders, bounds, options);
+  const plots = planBuildingPlots(buildingSites, outerCandidates, bounds, options);
+  return { bounds, roads, shoulders, buildingSites, streetLamps, plots };
+}
+
+const LAMP_SPACING_METERS = 34;
+const MAPPED_LAMP_CLEARANCE_METERS = 25;
+const LAMP_EDGE_MARGIN_METERS = 0.7;
+const LAMP_ROAD_CLASSES = new Set(["primary", "secondary", "tertiary", "minor", "service"]);
+const PLOT_DEPTH_METERS = 12;
+
+/**
+ * Street-lamp nodes are sparse in mapped data, so the plan keeps every mapped
+ * lamp and fills the remaining lit road classes with deterministic road-side
+ * placements. Lamps stand just beyond the planned road bed, alternating sides
+ * so avenues do not read as rigidly mirrored boulevards.
+ */
+function planStreetLamps(
+  roadInputs: readonly PlanningRoadInput[],
+  lampInputs: readonly PlanningLampInput[],
+  roadBeds: readonly PlannedRoadPolygon[],
+  bounds: RoadAndBuildingPlanBounds,
+  options: RoadAndBuildingPlanningOptions,
+): PlannedStreetLamp[] {
+  // Lamps stand clear of their own road, but near junctions the lateral
+  // offset can land on a crossing road's bed; those spots are rejected.
+  const bedClearance = 0.3 / options.metersPerUnit;
+  const bedIndex = new PlanarCellIndex<PlannedRoadPolygon>(planningCellSize(options));
+  for (const bed of roadBeds) {
+    if (bed.structure === "bridge") continue;
+    bedIndex.add(bed, pointBounds(bed.outline), bedClearance);
+  }
+  const onAnyRoadBed = (position: PlanningPoint): boolean =>
+    bedIndex.queryPoint(position).some((bed) =>
+      pointInRing(position, bed.outline) || distanceToRing(position, bed.outline) < bedClearance
+    );
+
+  const lamps: PlannedStreetLamp[] = [];
+  const mapped: PlanningPoint[] = [];
+  for (const lamp of lampInputs) {
+    if (!insideBounds(lamp.position, bounds)) continue;
+    mapped.push(lamp.position);
+    lamps.push({
+      sourceId: lamp.id,
+      position: lamp.position,
+      orientationRadians: 0,
+      source: "mapped",
+    });
+  }
+
+  const spacing = LAMP_SPACING_METERS / options.metersPerUnit;
+  const clearanceSquared = (MAPPED_LAMP_CLEARANCE_METERS / options.metersPerUnit) ** 2;
+  for (const input of roadInputs) {
+    const appearance = input.appearance;
+    if (appearance.isTunnel || appearance.structure !== "surface") continue;
+    if (!LAMP_ROAD_CLASSES.has(appearance.roadClass)) continue;
+    const offset = (
+      appearance.widthMeters / 2 + appearance.shoulderWidthMeters + LAMP_EDGE_MARGIN_METERS
+    ) / options.metersPerUnit;
+    for (const path of input.paths) {
+      if (path.length < 2) continue;
+      const phase = hashString(input.id) >>> 0;
+      let distance = (phase % 1000) / 1000 * spacing;
+      for (let index = 1; index < path.length; index++) {
+        const start = path[index - 1];
+        const end = path[index];
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const length = Math.hypot(dx, dz);
+        if (length < 1e-8) continue;
+        while (distance <= length) {
+          const amount = distance / length;
+          const side = ((Math.floor((distance + index * spacing) / spacing) + phase) & 1)
+            ? 1 : -1;
+          const position = {
+            x: start.x + dx * amount - dz / length * offset * side,
+            z: start.z + dz * amount + dx / length * offset * side,
+          };
+          if (insideBounds(position, bounds) && !onAnyRoadBed(position) && !mapped.some((lamp) =>
+            (lamp.x - position.x) ** 2 + (lamp.z - position.z) ** 2 < clearanceSquared,
+          )) {
+            lamps.push({
+              sourceId: input.id,
+              position,
+              orientationRadians: Math.atan2(dx, dz),
+              source: "procedural",
+            });
+          }
+          distance += spacing;
+        }
+        distance -= length;
+      }
+    }
+  }
+  return lamps;
+}
+
+/**
+ * Grows one convex plot per building: the convex hull of the building site
+ * offset outward, then cut flush against every nearby road bed edge, the
+ * planning bounds, and the bisector toward each neighboring plot. The cuts
+ * are all half-planes, so plots stay convex and neighboring plots share their
+ * dividing boundary exactly — the attachment line for later hedges and fences.
+ */
+function planBuildingPlots(
+  buildingSites: readonly PlannedBuildingSite[],
+  roadCandidates: readonly Candidate[],
+  bounds: RoadAndBuildingPlanBounds,
+  options: RoadAndBuildingPlanningOptions,
+): PlannedPlot[] {
+  const depth = PLOT_DEPTH_METERS / options.metersPerUnit;
+  const plots: Array<{
+    sourceId: string;
+    outline: PlanningPoint[];
+    centroid: PlanningPoint;
+    hull: PlanningPoint[];
+  }> = [];
+  for (const site of buildingSites) {
+    const hull = convexHull(site.outline);
+    if (hull.length < 3) continue;
+    const outline = clipToBounds(offsetConvexPolygon(hull, depth), bounds);
+    if (outline.length < 3) continue;
+    plots.push({ sourceId: site.sourceId, outline, centroid: averagePoint(hull), hull });
+  }
+
+  const groundRoads = roadCandidates
+    .filter((candidate) => candidate.structure !== "bridge")
+    .map((candidate) => ({ candidate, bounds: pointBounds(candidate.outline) }));
+  for (const plot of plots) {
+    for (const { candidate, bounds: roadBounds } of groundRoads) {
+      if (plot.outline.length < 3) break;
+      const plotBounds = pointBounds(plot.outline);
+      if (plotBounds.minX >= roadBounds.maxX || plotBounds.maxX <= roadBounds.minX ||
+          plotBounds.minZ >= roadBounds.maxZ || plotBounds.maxZ <= roadBounds.minZ) continue;
+      if (!polygonsOverlapArea(plot.outline, candidate.outline)) continue;
+      const cut = roadEdgeLineTowards(candidate, plot.centroid, options);
+      if (!cut) continue;
+      plot.outline = clipHalfPlane(
+        plot.outline,
+        cut.a,
+        cut.b,
+        cross(cut.a, cut.b, plot.centroid) >= 0,
+      );
+    }
+  }
+
+  for (let left = 0; left < plots.length; left++) {
+    for (let right = left + 1; right < plots.length; right++) {
+      const first = plots[left];
+      const second = plots[right];
+      if (first.outline.length < 3 || second.outline.length < 3) continue;
+      if (!boundsOverlap(first.outline, second.outline) ||
+          !convexPolygonsOverlap(first.outline, second.outline)) continue;
+      const bisector = plotBisector(first.hull, second.hull);
+      if (!bisector) continue;
+      first.outline = clipHalfPlane(
+        first.outline,
+        bisector.a,
+        bisector.b,
+        cross(bisector.a, bisector.b, first.centroid) >= 0,
+      );
+      second.outline = clipHalfPlane(
+        second.outline,
+        bisector.a,
+        bisector.b,
+        cross(bisector.a, bisector.b, second.centroid) >= 0,
+      );
+    }
+  }
+
+  return plots
+    .filter((plot) => plot.outline.length >= 3 && polygonArea(plot.outline) > 1e-10)
+    .map(({ sourceId, outline }) => ({ sourceId, outline }));
+}
+
+/** The road-bed edge facing the plot, as a half-plane cut line. */
+function roadEdgeLineTowards(
+  candidate: Candidate,
+  towards: PlanningPoint,
+  options: RoadAndBuildingPlanningOptions,
+): { a: PlanningPoint; b: PlanningPoint } | undefined {
+  const [start, end] = candidate.centerline;
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const length = Math.hypot(dx, dz);
+  if (length > 1e-8) {
+    const outerHalfWidth = (
+      candidate.widthMeters / 2 + candidate.shoulderWidthMeters
+    ) / options.metersPerUnit;
+    const nx = -dz / length;
+    const nz = dx / length;
+    const side = cross(start, end, towards) >= 0 ? 1 : -1;
+    return {
+      a: { x: start.x + nx * outerHalfWidth * side, z: start.z + nz * outerHalfWidth * side },
+      b: { x: end.x + nx * outerHalfWidth * side, z: end.z + nz * outerHalfWidth * side },
+    };
+  }
+  // Junction discs carry a degenerate centerline; cut along the tangent that
+  // faces the plot instead of a strip edge.
+  const radius = Math.max(...candidate.outline.map((point) =>
+    Math.hypot(point.x - start.x, point.z - start.z)
+  ));
+  const towardsX = towards.x - start.x;
+  const towardsZ = towards.z - start.z;
+  const distance = Math.hypot(towardsX, towardsZ);
+  if (distance <= radius + 1e-8) return undefined;
+  const tangentPoint = {
+    x: start.x + towardsX / distance * radius,
+    z: start.z + towardsZ / distance * radius,
+  };
+  return {
+    a: tangentPoint,
+    b: { x: tangentPoint.x - towardsZ / distance, z: tangentPoint.z + towardsX / distance },
+  };
+}
+
+/** Perpendicular bisector between the closest points of two building hulls. */
+function plotBisector(
+  first: readonly PlanningPoint[],
+  second: readonly PlanningPoint[],
+): { a: PlanningPoint; b: PlanningPoint } | undefined {
+  const closest = closestPointsBetweenRings(first, second);
+  let from = closest.onFirst;
+  let to = closest.onSecond;
+  if (closest.distance <= 1e-8) {
+    // Touching or overlapping hulls: fall back to the centroid bisector.
+    from = averagePoint(first);
+    to = averagePoint(second);
+    if (Math.hypot(to.x - from.x, to.z - from.z) <= 1e-8) return undefined;
+  }
+  const midpoint = { x: (from.x + to.x) / 2, z: (from.z + to.z) / 2 };
+  const length = Math.hypot(to.x - from.x, to.z - from.z);
+  const directionX = (to.x - from.x) / length;
+  const directionZ = (to.z - from.z) / length;
+  return {
+    a: midpoint,
+    b: { x: midpoint.x - directionZ, z: midpoint.z + directionX },
+  };
+}
+
+function closestPointsBetweenRings(
+  first: readonly PlanningPoint[],
+  second: readonly PlanningPoint[],
+): { onFirst: PlanningPoint; onSecond: PlanningPoint; distance: number } {
+  let best = { onFirst: first[0], onSecond: second[0], distance: Infinity };
+  const consider = (
+    points: readonly PlanningPoint[],
+    ring: readonly PlanningPoint[],
+    pointsAreFirst: boolean,
+  ) => {
+    for (const point of points) {
+      for (let index = 0; index < ring.length; index++) {
+        const start = ring[index];
+        const end = ring[(index + 1) % ring.length];
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const lengthSquared = dx * dx + dz * dz;
+        const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+          ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared
+        ));
+        const nearest = { x: start.x + dx * amount, z: start.z + dz * amount };
+        const distance = Math.hypot(point.x - nearest.x, point.z - nearest.z);
+        if (distance < best.distance) {
+          best = pointsAreFirst
+            ? { onFirst: point, onSecond: nearest, distance }
+            : { onFirst: nearest, onSecond: point, distance };
+        }
+      }
+    }
+  };
+  consider(first, second, true);
+  consider(second, first, false);
+  return best;
+}
+
+function insideBounds(point: PlanningPoint, bounds: RoadAndBuildingPlanBounds): boolean {
+  return point.x >= bounds.minX && point.x <= bounds.maxX &&
+    point.z >= bounds.minZ && point.z <= bounds.maxZ;
 }
 
 function triangulateCandidates(candidates: readonly Candidate[]): Candidate[] {
@@ -241,37 +569,20 @@ function ringPath(
   }
 }
 
-function removeCollinearPoints(points: readonly PlanningPoint[]): PlanningPoint[] {
-  let result = deduplicate(points);
-  let changed = true;
-  while (changed && result.length > 3) {
-    changed = false;
-    for (let index = 0; index < result.length; index++) {
-      const previous = result[(index + result.length - 1) % result.length];
-      const current = result[index];
-      const next = result[(index + 1) % result.length];
-      if (Math.abs(cross(previous, current, next)) > 1e-9) continue;
-      result = [...result.slice(0, index), ...result.slice(index + 1)];
-      changed = true;
-      break;
-    }
-  }
-  return result;
-}
-
-function samePoint(first: PlanningPoint, second: PlanningPoint): boolean {
-  return Math.hypot(first.x - second.x, first.z - second.z) <= 1e-8;
-}
-
 /** Splits centerlines at crossings so every approach ends on one shared, level junction. */
 function buildRoadNetworkCandidates(
   roadInputs: readonly PlanningRoadInput[],
   options: RoadAndBuildingPlanningOptions,
 ): { surfaceCandidates: Candidate[]; outerCandidates: Candidate[] } {
   const segments: NetworkSegment[] = [];
+  const nodeTolerance = Math.max(1e-7, 0.03 / options.metersPerUnit);
+  const shared = sharedPathPoints(roadInputs, nodeTolerance);
   for (const input of roadInputs) {
     if (input.appearance.isTunnel) continue;
-    for (const path of input.paths) {
+    const width = input.appearance.widthMeters / options.metersPerUnit;
+    for (const source of input.paths) {
+      const path = simplifyPath(source, width, width * SHAPE_DEVIATION_WIDTHS, (point) =>
+        shared.has(pointKey(point, nodeTolerance)));
       let distance = 0;
       for (let index = 1; index < path.length; index++) {
         const start = path[index - 1];
@@ -290,8 +601,7 @@ function buildRoadNetworkCandidates(
     }
   }
 
-  splitAtCrossings(segments, Math.max(0.25, 20 / options.metersPerUnit));
-  const nodeTolerance = Math.max(1e-7, 0.03 / options.metersPerUnit);
+  splitAtCrossings(segments, planningCellSize(options));
   const nodes = new Map<string, NetworkNode>();
   const pieces: NetworkPiece[] = [];
   const surfaceCandidates: Candidate[] = [];
@@ -307,7 +617,15 @@ function buildRoadNetworkCandidates(
       const end = interpolate(segment.start, segment.end, endAmount);
       const startDistance = segment.startDistance + segment.length * startAmount;
       pieces.push({ input: segment.input, start, end, startDistance });
-      addNetworkNode(nodes, start, segment.input, startDistance, [start, end], nodeTolerance);
+      addNetworkNode(
+        nodes,
+        start,
+        segment.input,
+        startDistance,
+        [start, end],
+        nodeTolerance,
+        true,
+      );
       addNetworkNode(
         nodes,
         end,
@@ -315,6 +633,7 @@ function buildRoadNetworkCandidates(
         startDistance,
         [start, end],
         nodeTolerance,
+        false,
       );
     }
   }
@@ -326,6 +645,15 @@ function buildRoadNetworkCandidates(
     if (!winner) continue;
     const halfWidth = nodeRadius(node, options, false);
     const outerHalfWidth = nodeRadius(node, options, true);
+    if (isBendNode(node)) {
+      // A shape vertex inside one carriageway is not a junction. Filling only
+      // the outer wedge with a mitered join keeps both approaches whole, where
+      // a full junction disc swallows them on any curve sampled more finely
+      // than the road is wide.
+      addBendJoin(surfaceCandidates, node, halfWidth);
+      addBendJoin(outerCandidates, node, outerHalfWidth);
+      continue;
+    }
     const common = candidateProperties(
       winner.input,
       node.point,
@@ -357,10 +685,10 @@ function buildRoadNetworkCandidates(
     const outerHalfWidth = halfWidth +
       piece.input.appearance.shoulderWidthMeters / options.metersPerUnit;
     const common = candidateProperties(piece.input, piece.start, piece.end, piece.startDistance);
-    const startSurfaceRadius = nodeRadius(startNode, options, false);
-    const endSurfaceRadius = nodeRadius(endNode, options, false);
-    const startOuterRadius = nodeRadius(startNode, options, true);
-    const endOuterRadius = nodeRadius(endNode, options, true);
+    const startSurfaceRadius = trimRadius(startNode, options, false);
+    const endSurfaceRadius = trimRadius(endNode, options, false);
+    const startOuterRadius = trimRadius(startNode, options, true);
+    const endOuterRadius = trimRadius(endNode, options, true);
     const surfaceOutline = approachPolygon(
       piece.start,
       piece.end,
@@ -376,13 +704,24 @@ function buildRoadNetworkCandidates(
       endOuterRadius,
     );
     const priority = roadPriority(piece.input.appearance);
+    const length = Math.hypot(piece.end.x - piece.start.x, piece.end.z - piece.start.z);
     if (surfaceOutline.length >= 3) surfaceCandidates.push({
       ...common,
+      gradeRange: gradeRange(
+        length,
+        { junction: startSurfaceRadius, interlock: halfWidth },
+        { junction: endSurfaceRadius, interlock: halfWidth },
+      ),
       outline: surfaceOutline,
       priority,
     });
     if (outerOutline.length >= 3) outerCandidates.push({
       ...common,
+      gradeRange: gradeRange(
+        length,
+        { junction: startOuterRadius, interlock: outerHalfWidth },
+        { junction: endOuterRadius, interlock: outerHalfWidth },
+      ),
       outline: outerOutline,
       priority,
     });
@@ -390,62 +729,108 @@ function buildRoadNetworkCandidates(
   return { surfaceCandidates, outerCandidates };
 }
 
-function splitAtCrossings(segments: NetworkSegment[], cellSize: number): void {
-  const cells = new Map<string, NetworkSegment[]>();
-  const checked = new Set<string>();
-  const ids = new Map(segments.map((segment, index) => [segment, index]));
-  for (const segment of segments) {
-    const bounds = pointBounds([segment.start, segment.end]);
-    const candidates = new Set<NetworkSegment>();
-    for (let z = Math.floor(bounds.minZ / cellSize); z <= Math.floor(bounds.maxZ / cellSize); z++) {
-      for (let x = Math.floor(bounds.minX / cellSize); x <= Math.floor(bounds.maxX / cellSize); x++) {
-        const key = `${physicalLayerKey(segment.input.appearance)}/${x}/${z}`;
-        for (const candidate of cells.get(key) ?? []) candidates.add(candidate);
+/**
+ * Drops shape vertices packed closer together than the carriageway is wide.
+ * A curve sampled that finely cannot be built from separate pieces: the
+ * junction discs at either end consume whole pieces, and whatever grade is
+ * left has to rise inside a sliver. The chord that replaces the dropped
+ * vertices stays within a tenth of the road's width of the original line, so
+ * roundabouts and sweeping bends keep their shape.
+ */
+function simplifyPath(
+  path: ReadonlyArray<PlanningPoint>,
+  minimumSpacing: number,
+  maximumDeviation: number,
+  isShared: (point: PlanningPoint) => boolean,
+): PlanningPoint[] {
+  if (path.length <= 2) return [...path];
+  const result: PlanningPoint[] = [path[0]];
+  let anchor = 0;
+  for (let index = 1; index < path.length - 1; index++) {
+    const spacing = Math.hypot(
+      path[index].x - path[anchor].x,
+      path[index].z - path[anchor].z,
+    );
+    const keep = spacing >= minimumSpacing ||
+      isShared(path[index]) ||
+      chordDeviation(path, anchor, index + 1) > maximumDeviation;
+    if (!keep) continue;
+    result.push(path[index]);
+    anchor = index;
+  }
+  result.push(path[path.length - 1]);
+  return result;
+}
+
+/**
+ * Vertices more than one way passes through. Moving one of those would take a
+ * side road's junction with it, so simplification has to leave them alone.
+ */
+function sharedPathPoints(
+  roadInputs: readonly PlanningRoadInput[],
+  tolerance: number,
+): Set<string> {
+  const owners = new Map<string, string>();
+  const shared = new Set<string>();
+  for (const input of roadInputs) {
+    for (const path of input.paths) {
+      for (const point of path) {
+        const key = pointKey(point, tolerance);
+        const owner = owners.get(key);
+        if (owner === undefined) owners.set(key, input.id);
+        else if (owner !== input.id) shared.add(key);
       }
     }
-    for (const candidate of candidates) {
-      const pairKey = `${ids.get(candidate)}/${ids.get(segment)}`;
-      if (checked.has(pairKey)) continue;
-      checked.add(pairKey);
+  }
+  return shared;
+}
+
+function pointKey(point: PlanningPoint, tolerance: number): string {
+  return `${Math.round(point.x / tolerance)}/${Math.round(point.z / tolerance)}`;
+}
+
+/** Furthest the vertices between two path indices stray from their chord. */
+function chordDeviation(
+  path: ReadonlyArray<PlanningPoint>,
+  from: number,
+  to: number,
+): number {
+  const start = path[from];
+  const dx = path[to].x - start.x;
+  const dz = path[to].z - start.z;
+  const lengthSquared = dx * dx + dz * dz;
+  let deviation = 0;
+  for (let index = from + 1; index < to; index++) {
+    const point = path[index];
+    const amount = lengthSquared <= 1e-12 ? 0 : Math.max(0, Math.min(1, (
+      (point.x - start.x) * dx + (point.z - start.z) * dz
+    ) / lengthSquared));
+    deviation = Math.max(deviation, Math.hypot(
+      point.x - (start.x + dx * amount),
+      point.z - (start.z + dz * amount),
+    ));
+  }
+  return deviation;
+}
+
+/** How far a simplified centerline may stray, as a share of the road width. */
+const SHAPE_DEVIATION_WIDTHS = 0.1;
+
+function splitAtCrossings(segments: NetworkSegment[], cellSize: number): void {
+  // Each unordered pair is examined exactly once because a segment is only
+  // indexed after it has been checked against everything indexed before it.
+  const index = new PlanarCellIndex<NetworkSegment>(cellSize);
+  for (const segment of segments) {
+    const bounds = pointBounds([segment.start, segment.end]);
+    const group = physicalLayerKey(segment.input.appearance);
+    for (const candidate of index.query(bounds, 0, group)) {
       const crossing = segmentIntersection(candidate.start, candidate.end, segment.start, segment.end);
       if (!crossing) continue;
       candidate.splits.push(crossing.firstAmount);
       segment.splits.push(crossing.secondAmount);
     }
-    for (let z = Math.floor(bounds.minZ / cellSize); z <= Math.floor(bounds.maxZ / cellSize); z++) {
-      for (let x = Math.floor(bounds.minX / cellSize); x <= Math.floor(bounds.maxX / cellSize); x++) {
-        const key = `${physicalLayerKey(segment.input.appearance)}/${x}/${z}`;
-        const cell = cells.get(key);
-        if (cell) cell.push(segment);
-        else cells.set(key, [segment]);
-      }
-    }
+    index.add(segment, bounds, 0, group);
   }
-}
-
-function segmentIntersection(
-  a: PlanningPoint,
-  b: PlanningPoint,
-  c: PlanningPoint,
-  d: PlanningPoint,
-): { firstAmount: number; secondAmount: number } | undefined {
-  const adx = b.x - a.x;
-  const adz = b.z - a.z;
-  const bdx = d.x - c.x;
-  const bdz = d.z - c.z;
-  const denominator = adx * bdz - adz * bdx;
-  if (Math.abs(denominator) <= 1e-10) return undefined;
-  const ox = c.x - a.x;
-  const oz = c.z - a.z;
-  const firstAmount = (ox * bdz - oz * bdx) / denominator;
-  const secondAmount = (ox * adz - oz * adx) / denominator;
-  const epsilon = 1e-7;
-  if (firstAmount < -epsilon || firstAmount > 1 + epsilon ||
-      secondAmount < -epsilon || secondAmount > 1 + epsilon) return undefined;
-  return {
-    firstAmount: Math.max(0, Math.min(1, firstAmount)),
-    secondAmount: Math.max(0, Math.min(1, secondAmount)),
-  };
 }
 
 function addNetworkNode(
@@ -455,11 +840,22 @@ function addNetworkNode(
   startDistance: number,
   textureAxis: readonly [PlanningPoint, PlanningPoint],
   tolerance: number,
+  atStart: boolean,
 ): void {
   const key = networkNodeKey(input, point, tolerance);
+  const incident: NetworkIncident = {
+    input,
+    startDistance,
+    textureAxis,
+    atStart,
+    length: Math.hypot(
+      textureAxis[1].x - textureAxis[0].x,
+      textureAxis[1].z - textureAxis[0].z,
+    ),
+  };
   const node = nodes.get(key);
-  if (node) node.incidents.push({ input, startDistance, textureAxis });
-  else nodes.set(key, { point, incidents: [{ input, startDistance, textureAxis }] });
+  if (node) node.incidents.push(incident);
+  else nodes.set(key, { point, incidents: [incident] });
 }
 
 function networkNodeKey(
@@ -473,6 +869,120 @@ function networkNodeKey(
     Math.round(point.z / tolerance),
   ].join("/");
 }
+
+/**
+ * True when a node is only a shape vertex of one continuous carriageway:
+ * exactly two pieces of identical appearance meet, so the road runs through.
+ */
+function isBendNode(node: NetworkNode): boolean {
+  if (node.incidents.length !== 2) return false;
+  const [first, second] = node.incidents;
+  return roadAppearanceKey(first.input.appearance) ===
+    roadAppearanceKey(second.input.appearance);
+}
+
+function roadAppearanceKey(appearance: RoadPlan): string {
+  return [
+    appearance.widthMeters,
+    appearance.shoulderWidthMeters,
+    appearance.visualStyle,
+    appearance.surface,
+    appearance.structure,
+    appearance.layer,
+  ].join("|");
+}
+
+/** How far an approach stops short of a node; a bend is run straight through. */
+function trimRadius(
+  node: NetworkNode,
+  options: RoadAndBuildingPlanningOptions,
+  includeShoulder: boolean,
+): number {
+  return isBendNode(node) ? 0 : nodeRadius(node, options, includeShoulder);
+}
+
+/**
+ * Adds the wedge two square-ended approaches leave on the outside of a bend.
+ * They already overlap on the inside, so this completes a mitered strip that
+ * carries the road's own grade and texture direction instead of a disc that
+ * has neither.
+ */
+function addBendJoin(
+  candidates: Candidate[],
+  node: NetworkNode,
+  halfWidth: number,
+): void {
+  const ends = node.incidents.map((incident) => farEnd(node, incident));
+  if (halfWidth <= 0 || !ends[0] || !ends[1]) return;
+  const [from, to] = ends[0].distance <= ends[1].distance
+    ? [ends[0], ends[1]]
+    : [ends[1], ends[0]];
+  const incoming = { x: -from.direction.x, z: -from.direction.z };
+  const outgoing = to.direction;
+  const turn = incoming.x * outgoing.z - incoming.z * outgoing.x;
+  if (Math.abs(turn) <= 1e-9) return;
+  const side = turn > 0 ? -1 : 1;
+  const start = {
+    x: node.point.x - side * halfWidth * incoming.z,
+    z: node.point.z + side * halfWidth * incoming.x,
+  };
+  const end = {
+    x: node.point.x - side * halfWidth * outgoing.z,
+    z: node.point.z + side * halfWidth * outgoing.x,
+  };
+  const along = ((end.x - start.x) * outgoing.z - (end.z - start.z) * outgoing.x) / turn;
+  const miter = { x: start.x + incoming.x * along, z: start.z + incoming.z * along };
+  // A hairpin's miter spikes far past the carriageway, so bevel it instead.
+  const corners = Math.hypot(miter.x - node.point.x, miter.z - node.point.z) >
+      MAXIMUM_MITER_WIDTHS * halfWidth
+    ? [node.point, start, end]
+    : [node.point, start, miter, end];
+  const outline = deduplicateRing(
+    signedArea(corners) >= 0 ? corners : [...corners].reverse(),
+  );
+  if (outline.length < 3 || polygonArea(outline) <= 1e-10) return;
+  candidates.push({
+    // Both approaches read their shared end face as exactly the node's own
+    // elevation, so a level wedge seams into them without a lip. The chord
+    // through the bend is kept only to carry lane markings around the curve.
+    ...candidateProperties(from.incident.input, node.point, node.point, from.distance),
+    textureAxis: [from.point, to.point],
+    outline,
+    // Just below the approaches it completes, so a rounding overlap costs the
+    // join rather than the carriageway.
+    priority: roadPriority(from.incident.input.appearance) - 0.5,
+  });
+}
+
+interface NetworkIncidentEnd {
+  point: PlanningPoint;
+  distance: number;
+  direction: PlanningPoint;
+  incident: NetworkIncident;
+}
+
+/** The end of an incident piece away from the node, with its path distance. */
+function farEnd(
+  node: NetworkNode,
+  incident: NetworkIncident,
+): NetworkIncidentEnd | undefined {
+  const point = incident.atStart ? incident.textureAxis[1] : incident.textureAxis[0];
+  const dx = point.x - node.point.x;
+  const dz = point.z - node.point.z;
+  const length = Math.hypot(dx, dz);
+  if (length <= 1e-9) return undefined;
+  return {
+    point,
+    distance: incident.atStart
+      ? incident.startDistance + incident.length
+      : incident.startDistance,
+    direction: { x: dx / length, z: dz / length },
+    incident,
+  };
+}
+
+/** Beyond this the join is beveled, so a hairpin cannot grow a spike. */
+const MAXIMUM_MITER_WIDTHS = 4;
 
 function nodeRadius(
   node: NetworkNode,
@@ -507,7 +1017,7 @@ function approachPolygon(
   const endBoundary = junctionBoundary(
     end, ux, uz, nx, nz, halfWidth, endRadius, false,
   ).reverse();
-  return deduplicate([...startBoundary, ...endBoundary]);
+  return deduplicateRing([...startBoundary, ...endBoundary]);
 }
 
 /** Returns the exact chain on the regular junction polygon facing the approach. */
@@ -521,6 +1031,12 @@ function junctionBoundary(
   radius: number,
   forward: boolean,
 ): PlanningPoint[] {
+  if (radius <= 0) {
+    return [
+      { x: center.x + nx * halfWidth, z: center.z + nz * halfWidth },
+      { x: center.x - nx * halfWidth, z: center.z - nz * halfWidth },
+    ];
+  }
   const vertices = circlePolygon(center, radius).map((point) => {
     const x = point.x - center.x;
     const z = point.z - center.z;
@@ -585,6 +1101,7 @@ function candidateProperties(
   return {
     sourceId: input.id,
     centerline: [start, end],
+    gradeRange: [0, 1],
     startDistance,
     widthMeters: input.appearance.widthMeters,
     shoulderWidthMeters: input.appearance.shoulderWidthMeters,
@@ -595,16 +1112,77 @@ function candidateProperties(
   };
 }
 
+/**
+ * Where a point sits along a carriageway's grade, from 0 at the low end to 1
+ * at the high end. Points beyond the ramp are level with the junction there.
+ */
+export function roadGradeAmount(
+  road: Pick<PlannedRoadPolygon, "centerline" | "gradeRange">,
+  point: PlanarPoint,
+): number {
+  const dx = road.centerline[1].x - road.centerline[0].x;
+  const dz = road.centerline[1].z - road.centerline[0].z;
+  const lengthSquared = dx * dx + dz * dz;
+  if (lengthSquared <= 1e-12) return 0;
+  const along = (
+    (point.x - road.centerline[0].x) * dx + (point.z - road.centerline[0].z) * dz
+  ) / lengthSquared;
+  const [from, to] = road.gradeRange;
+  if (to - from <= 1e-9) return 0;
+  return Math.max(0, Math.min(1, (along - from) / (to - from)));
+}
+
+/** How far either end of a piece wants to stay level with what it meets. */
+interface GradeEnd {
+  /** Radius of the junction disc there, which must be level with the road. */
+  junction: number;
+  /** How far the neighbouring piece reaches around the shared node. */
+  interlock: number;
+}
+
+/**
+ * The span of a piece over which its grade rises.
+ *
+ * Two pieces meeting at a bend overlap in a wedge as deep as the road is
+ * wide, and whichever of them the partition hands that wedge to decides where
+ * the seam falls. Holding both ends level over that depth makes every point in
+ * the wedge read the shared node's own height, so the seam cannot leave a lip
+ * wherever it lands. A junction disc is level by construction and so is
+ * honoured first; the interlock only takes what is left after the ramp keeps a
+ * minimum run, which is what stops a short piece from rising like a step.
+ */
+function gradeRange(
+  length: number,
+  start: GradeEnd,
+  end: GradeEnd,
+): readonly [number, number] {
+  if (length <= 1e-9) return [0, 1];
+  const from = Math.min(1, start.junction / length);
+  const to = Math.max(from, 1 - end.junction / length);
+  const room = to - from;
+  if (room <= 1e-6) return [0, 1];
+  const wantedFrom = Math.max(0, start.interlock - start.junction) / length;
+  const wantedTo = Math.max(0, end.interlock - end.junction) / length;
+  const wanted = wantedFrom + wantedTo;
+  const spare = Math.max(0, room - MINIMUM_RAMP_SHARE);
+  const share = wanted <= 1e-9 ? 0 : Math.min(1, spare / wanted);
+  return [from + wantedFrom * share, to - wantedTo * share];
+}
+
+/** Shortest run, as a share of a piece, the grade may rise over. */
+const MINIMUM_RAMP_SHARE = 0.4;
+
 function partitionCandidates(
   candidates: readonly Candidate[],
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-  cellSize: number,
+  bounds: PlanarBounds,
+  options: RoadAndBuildingPlanningOptions,
 ): PlannedRoadPolygon[] {
   const accepted: PlannedRoadPolygon[] = [];
-  const index = new Map<string, Set<PlannedRoadPolygon>>();
+  const index = new PlanarCellIndex<PlannedRoadPolygon>(planningCellSize(options));
   for (const candidate of [...candidates].sort((a, b) => b.priority - a.priority)) {
     let pieces = [clipToBounds(candidate.outline, bounds)];
-    for (const previous of indexedOverlaps(candidate, index, cellSize)) {
+    const overlaps = index.query(pointBounds(candidate.outline), 0, physicalLayerKey(candidate));
+    for (const previous of overlaps) {
       pieces = pieces.flatMap((piece) => boundsOverlap(piece, previous.outline)
         && polygonsOverlapArea(piece, previous.outline)
         ? subtractConvex(piece, previous.outline)
@@ -615,10 +1193,15 @@ function partitionCandidates(
       if (polygonArea(outline) <= 1e-10) continue;
       const road = { ...candidate, outline };
       accepted.push(road);
-      addToPolygonIndex(road, index, cellSize);
+      index.add(road, pointBounds(outline), 0, physicalLayerKey(road));
     }
   }
   return accepted;
+}
+
+/** Cell size shared by every planning spatial index: roughly 20 meters. */
+function planningCellSize(options: RoadAndBuildingPlanningOptions): number {
+  return Math.max(0.25, 20 / options.metersPerUnit);
 }
 
 function physicalLayerKey(road: Pick<PlannedRoadPolygon, "layer" | "structure">): string {
@@ -627,224 +1210,10 @@ function physicalLayerKey(road: Pick<PlannedRoadPolygon, "layer" | "structure">)
   return `${road.layer}/${road.structure === "bridge" ? "bridge" : "ground"}`;
 }
 
-function addToPolygonIndex(
-  road: PlannedRoadPolygon,
-  index: Map<string, Set<PlannedRoadPolygon>>,
-  cellSize: number,
-): void {
-  for (const key of polygonCellKeys(road, cellSize)) {
-    const cell = index.get(key);
-    if (cell) cell.add(road);
-    else index.set(key, new Set([road]));
-  }
-}
-
-function indexedOverlaps(
-  road: PlannedRoadPolygon,
-  index: ReadonlyMap<string, ReadonlySet<PlannedRoadPolygon>>,
-  cellSize: number,
-): PlannedRoadPolygon[] {
-  const result = new Set<PlannedRoadPolygon>();
-  for (const key of polygonCellKeys(road, cellSize)) {
-    for (const candidate of index.get(key) ?? []) result.add(candidate);
-  }
-  return [...result];
-}
-
-function polygonCellKeys(road: PlannedRoadPolygon, cellSize: number): string[] {
-  const bounds = pointBounds(road.outline);
-  const keys: string[] = [];
-  for (let z = Math.floor(bounds.minZ / cellSize); z <= Math.floor(bounds.maxZ / cellSize); z++) {
-    for (let x = Math.floor(bounds.minX / cellSize); x <= Math.floor(bounds.maxX / cellSize); x++) {
-      keys.push(`${physicalLayerKey(road)}/${x}/${z}`);
-    }
-  }
-  return keys;
-}
-
 function circlePolygon(center: PlanningPoint, radius: number): PlanningPoint[] {
   if (radius <= 0) return [];
   return Array.from({ length: 12 }, (_, index) => {
     const angle = index / 12 * Math.PI * 2;
     return { x: center.x + Math.cos(angle) * radius, z: center.z + Math.sin(angle) * radius };
   });
-}
-
-/** Partitions subject-minus-clip into non-overlapping convex polygons. */
-function subtractConvex(subject: readonly PlanningPoint[], clip: readonly PlanningPoint[]): PlanningPoint[][] {
-  if (subject.length < 3 || clip.length < 3) return subject.length >= 3 ? [[...subject]] : [];
-  const ccwClip = signedArea(clip) >= 0 ? clip : [...clip].reverse();
-  let inside = [...subject];
-  const outside: PlanningPoint[][] = [];
-  for (let index = 0; index < ccwClip.length && inside.length >= 3; index++) {
-    const a = ccwClip[index];
-    const b = ccwClip[(index + 1) % ccwClip.length];
-    const removed = clipHalfPlane(inside, a, b, false);
-    if (removed.length >= 3) outside.push(removed);
-    inside = clipHalfPlane(inside, a, b, true);
-  }
-  return outside;
-}
-
-function clipHalfPlane(
-  polygon: readonly PlanningPoint[],
-  a: PlanningPoint,
-  b: PlanningPoint,
-  keepLeft: boolean,
-): PlanningPoint[] {
-  const result: PlanningPoint[] = [];
-  for (let index = 0; index < polygon.length; index++) {
-    const current = polygon[index];
-    const previous = polygon[(index + polygon.length - 1) % polygon.length];
-    const currentSide = cross(a, b, current);
-    const previousSide = cross(a, b, previous);
-    const currentInside = keepLeft ? currentSide >= -1e-9 : currentSide <= 1e-9;
-    const previousInside = keepLeft ? previousSide >= -1e-9 : previousSide <= 1e-9;
-    if (currentInside !== previousInside) {
-      const amount = previousSide / (previousSide - currentSide);
-      result.push({
-        x: previous.x + (current.x - previous.x) * amount,
-        z: previous.z + (current.z - previous.z) * amount,
-      });
-    }
-    if (currentInside) result.push(current);
-  }
-  return deduplicate(result);
-}
-
-function clipToBounds(
-  polygon: readonly PlanningPoint[],
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-): PlanningPoint[] {
-  let result = [...polygon];
-  const edges: Array<[PlanningPoint, PlanningPoint]> = [
-    [{ x: bounds.minX, z: bounds.minZ }, { x: bounds.maxX, z: bounds.minZ }],
-    [{ x: bounds.maxX, z: bounds.minZ }, { x: bounds.maxX, z: bounds.maxZ }],
-    [{ x: bounds.maxX, z: bounds.maxZ }, { x: bounds.minX, z: bounds.maxZ }],
-    [{ x: bounds.minX, z: bounds.maxZ }, { x: bounds.minX, z: bounds.minZ }],
-  ];
-  for (const [a, b] of edges) result = clipHalfPlane(result, a, b, true);
-  return result;
-}
-
-function cross(a: PlanningPoint, b: PlanningPoint, p: PlanningPoint): number {
-  return (b.x - a.x) * (p.z - a.z) - (b.z - a.z) * (p.x - a.x);
-}
-
-function signedArea(points: readonly PlanningPoint[]): number {
-  let twiceArea = 0;
-  for (let index = 0; index < points.length; index++) {
-    const next = points[(index + 1) % points.length];
-    twiceArea += points[index].x * next.z - next.x * points[index].z;
-  }
-  return twiceArea / 2;
-}
-
-function polygonArea(points: readonly PlanningPoint[]): number {
-  return Math.abs(signedArea(points));
-}
-
-function boundsOverlap(a: readonly PlanningPoint[], b: readonly PlanningPoint[]): boolean {
-  const left = pointBounds(a);
-  const right = pointBounds(b);
-  return left.minX < right.maxX - 1e-9 && left.maxX > right.minX + 1e-9 &&
-    left.minZ < right.maxZ - 1e-9 && left.maxZ > right.minZ + 1e-9;
-}
-
-function polygonsOverlapArea(
-  a: readonly PlanningPoint[],
-  b: readonly PlanningPoint[],
-): boolean {
-  const epsilon = 1e-8;
-  const cross = (p: PlanningPoint, q: PlanningPoint, r: PlanningPoint) =>
-    (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
-  for (let ai = 0; ai < a.length; ai++) {
-    const a1 = a[ai];
-    const a2 = a[(ai + 1) % a.length];
-    for (let bi = 0; bi < b.length; bi++) {
-      const b1 = b[bi];
-      const b2 = b[(bi + 1) % b.length];
-      if (cross(a1, a2, b1) * cross(a1, a2, b2) < -epsilon &&
-          cross(b1, b2, a1) * cross(b1, b2, a2) < -epsilon) return true;
-    }
-  }
-  const strictlyInside = (point: PlanningPoint, polygon: readonly PlanningPoint[]) =>
-    pointInRing(point, polygon) && distanceToRing(point, polygon) > epsilon;
-  if (a.some((point) => strictlyInside(point, b)) ||
-      b.some((point) => strictlyInside(point, a))) return true;
-  return strictlyInside(averagePoint(a), b) || strictlyInside(averagePoint(b), a);
-}
-
-function pointInRing(point: PlanningPoint, polygon: readonly PlanningPoint[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
-    const a = polygon[index];
-    const b = polygon[previous];
-    if ((a.z > point.z) !== (b.z > point.z) &&
-        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) inside = !inside;
-  }
-  return inside;
-}
-
-function distanceToRing(point: PlanningPoint, polygon: readonly PlanningPoint[]): number {
-  let distance = Infinity;
-  for (let index = 0; index < polygon.length; index++) {
-    const start = polygon[index];
-    const end = polygon[(index + 1) % polygon.length];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
-      ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared
-    ));
-    distance = Math.min(distance, Math.hypot(
-      point.x - start.x - dx * amount,
-      point.z - start.z - dz * amount,
-    ));
-  }
-  return distance;
-}
-
-function averagePoint(points: readonly PlanningPoint[]): PlanningPoint {
-  const sum = points.reduce((result, point) => ({
-    x: result.x + point.x,
-    z: result.z + point.z,
-  }), { x: 0, z: 0 });
-  return { x: sum.x / points.length, z: sum.z / points.length };
-}
-
-function pointBounds(points: readonly PlanningPoint[]): {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-} {
-  return points.reduce((result, point) => ({
-    minX: Math.min(result.minX, point.x),
-    maxX: Math.max(result.maxX, point.x),
-    minZ: Math.min(result.minZ, point.z),
-    maxZ: Math.max(result.maxZ, point.z),
-  }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
-}
-
-function deduplicate(points: readonly PlanningPoint[]): PlanningPoint[] {
-  const result: PlanningPoint[] = [];
-  for (const point of points) {
-    const previous = result[result.length - 1];
-    if (!previous || Math.hypot(point.x - previous.x, point.z - previous.z) > 1e-8) result.push(point);
-  }
-  if (result.length > 1 && Math.hypot(
-    result[0].x - result[result.length - 1].x,
-    result[0].z - result[result.length - 1].z,
-  ) <= 1e-8) result.pop();
-  return result;
-}
-
-function withoutClosingPoint(points: ReadonlyArray<PlanningPoint>): PlanningPoint[] {
-  if (points.length < 2) return [...points];
-  const first = points[0];
-  const last = points[points.length - 1];
-  return Math.hypot(first.x - last.x, first.z - last.z) <= 1e-8
-    ? points.slice(0, -1)
-    : [...points];
 }

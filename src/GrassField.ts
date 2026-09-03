@@ -13,6 +13,7 @@ import {
   acquireGrassImpostorAssets,
   createGrassModel,
   grassRenderedCaptureSize,
+  grassRenderedClumpRadius,
 } from "./GrassImpostor";
 import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
@@ -57,6 +58,10 @@ const GRASS_AMBIENT_UPWARD = 0.58;
 // terrain. Retain a little direct fill in full shadow so grass settles into
 // the shaded ground instead of forming an unnaturally darker carpet over it.
 const GRASS_SHADOW_DARKNESS = 0.3;
+/** Per-instance width spread applied at placement, kept as its own constants
+ * so the impostor's depth plane can account for the average clump footprint. */
+const GRASS_WIDTH_SCALE_MINIMUM = 1.1;
+const GRASS_WIDTH_SCALE_SPAN = 0.42;
 
 type GrassFieldOptions = VegetationPlacementOptions;
 
@@ -171,7 +176,7 @@ export async function createGrassField(
         )) continue;
 
         const heightScale = 0.72 + random() * 0.56;
-        const widthScale = 1.1 + random() * 0.42;
+        const widthScale = GRASS_WIDTH_SCALE_MINIMUM + random() * GRASS_WIDTH_SCALE_SPAN;
         const yaw = random() * Math.PI * 2;
         const normal = sampleTerrainNormal(
           terrain,
@@ -229,7 +234,7 @@ export async function createGrassField(
         createModel: () => createGrassModel(scene, grassHeight, bucket.variant.seed),
       });
     variantRoot.parent = root;
-    configureGrassRenderers(grass, grassModel, meshWidth, meshDepth);
+    configureGrassRenderers(grass, grassModel, meshWidth, meshDepth, grassHeight);
     fields.push(await createVegetationFieldResult(
       variantRoot,
       [grass],
@@ -244,13 +249,26 @@ export async function createGrassField(
   return combineVegetationFieldResults(root, fields, matrixData);
 }
 
+/**
+ * Distance the impostor's depth plane moves toward the camera. A clump is
+ * roughly three times wider than it is tall, so depth taken at its centre lets
+ * the ground under its near edge occlude the lower half of the captured image.
+ * The average placed footprint puts that edge here.
+ */
+export function grassImpostorDepthPull(renderHeight: number): number {
+  const averageWidthScale = GRASS_WIDTH_SCALE_MINIMUM + GRASS_WIDTH_SCALE_SPAN / 2;
+  return grassRenderedClumpRadius(renderHeight) * averageWidthScale;
+}
+
 function configureGrassRenderers(
   grass: import("@babylonjs/core").Mesh,
   grassModel: import("@babylonjs/core").Mesh,
   meshWidth: number,
   meshDepth: number,
+  grassHeight: number,
 ): void {
   if (grass.material instanceof ShaderMaterial) {
+    grass.material.setFloat("impostorDepthPull", grassImpostorDepthPull(grassHeight));
     grass.material.setFloat("impostorLodNear", 40);
     grass.material.setFloat("impostorLodFar", 80);
     grass.material.setFloat("instanceColorCoverage", 1);

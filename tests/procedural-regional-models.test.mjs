@@ -72,6 +72,15 @@ test("tree sister variants alter macro silhouette and foliage character", () => 
   assert.match(trees, /textureU < 0 \|\| textureU >= 1\.5/);
 });
 
+test("tree sister variants retain the shared broad locality span", () => {
+  const field = source("TreeField.ts");
+  const selection = field.match(
+    /proceduralLocalVariantAtLocation\([\s\S]*?TREE_SISTER_MODELS,([\s\S]*?)\);/,
+  );
+  assert.ok(selection, "tree sister variant selection is present");
+  assert.match(selection[1], /^\s*$/);
+});
+
 test("bush variants and placements avoid repeated radial silhouettes", () => {
   const bushes = source("BushImpostor.ts");
   const field = source("BushField.ts");

@@ -9,7 +9,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { lonLatToScene, sampleElevation } from "./Geo";
-import type { RoadsideDetailRoad } from "./OpenStreetMap";
+import type { PlannedStreetLamp } from "./RoadAndBuildingPlanner";
 import type { TerrainData } from "./TerrainData";
 import { worldTileAtLocation, worldTileBounds, type TileBounds } from "./WorldGrid";
 
@@ -36,14 +36,14 @@ export interface StreetLampLayer {
 const QUERY_ZOOM = 14;
 const ENDPOINT = "https://overpass-api.de/api/interpreter";
 const cache = new Map<string, Promise<StreetLampFeature[]>>();
-const PROCEDURAL_SPACING_METERS = 34;
 const MAPPED_CLEARANCE_METERS = 25;
 
 /**
  * Street-lamp nodes are sparse in the vector-tile schema, so this layer uses
- * the authoritative OSM nodes where available and deterministic road-side
- * infill elsewhere. Lamps are emissive geometry rather than PointLights:
- * hundreds of dynamic lights would make streamed tiles prohibitively costly.
+ * the authoritative OSM nodes where available and the placements from the
+ * road/building plan elsewhere. Lamps are emissive geometry rather than
+ * PointLights: hundreds of dynamic lights would make streamed tiles
+ * prohibitively costly.
  */
 export class StreetLamps {
   static fetch(bounds: TileBounds): Promise<StreetLampFeature[]> {
@@ -63,7 +63,7 @@ export class StreetLamps {
   static createLayer(
     scene: Scene,
     mapped: readonly StreetLampFeature[],
-    roads: readonly RoadsideDetailRoad[],
+    planned: readonly PlannedStreetLamp[],
     terrain: TerrainData,
     options: StreetLampOptions,
   ): StreetLampLayer {
@@ -78,16 +78,18 @@ export class StreetLamps {
       placements.push({ x: point.x, z: point.z, angle: 0 });
     }
 
-    for (const road of roads) {
-      const roadClass = String(road.properties.class ?? "").toLowerCase();
-      if (!eligibleRoad(roadClass, road.properties)) continue;
-      const roadWidth = roadWidthMeters(roadClass);
-      for (const line of road.paths) {
-        const points = line.map(([lon, lat]) => lonLatToScene(
-          lon, lat, terrain.bounds, options.meshWidth, options.meshDepth,
-        ));
-        addProceduralLamps(placements, mappedPositions, points, road.id, roadWidth, options);
-      }
+    // The plan is prepared before the authoritative nodes arrive, so its
+    // mapped entries are dropped here in favor of the live fetch and its
+    // procedural entries yield to any fetched lamp standing nearby.
+    const clearanceSquared = (MAPPED_CLEARANCE_METERS / options.metersPerUnit) ** 2;
+    for (const lamp of planned) {
+      if (lamp.source === "mapped") continue;
+      const point = lamp.position;
+      if (!inside(point, options)) continue;
+      if (mappedPositions.some((existing) =>
+        (existing.x - point.x) ** 2 + (existing.z - point.z) ** 2 < clearanceSquared,
+      )) continue;
+      placements.push({ x: point.x, z: point.z, angle: lamp.orientationRadians });
     }
 
     if (placements.length > 0) createLampMeshes(scene, root, placements, terrain, options);
@@ -117,41 +119,6 @@ export class StreetLamps {
       return typeof value.id === "number" && typeof value.lat === "number" && typeof value.lon === "number"
         ? [{ id: value.id, lat: value.lat, lon: value.lon }] : [];
     });
-  }
-}
-
-function addProceduralLamps(
-  output: Array<{ x: number; z: number; angle: number }>,
-  mapped: readonly { x: number; z: number }[],
-  points: readonly { x: number; z: number }[],
-  roadId: string,
-  roadWidth: number,
-  options: StreetLampOptions,
-): void {
-  if (points.length < 2) return;
-  const spacing = PROCEDURAL_SPACING_METERS / options.metersPerUnit;
-  let distance = (hash(roadId) % 1000) / 1000 * spacing;
-  const offset = (roadWidth / 2 + 1.15) / options.metersPerUnit;
-  for (let index = 1; index < points.length; index++) {
-    const start = points[index - 1];
-    const end = points[index];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const length = Math.hypot(dx, dz);
-    if (length < 0.001) continue;
-    while (distance <= length) {
-      const t = distance / length;
-      // Alternate sides along each centerline; this avoids a rigid boulevard
-      // pattern while keeping lamps consistently beyond the carriageway.
-      const side = ((Math.floor((distance + index * spacing) / spacing) + hash(roadId)) & 1) ? 1 : -1;
-      const x = start.x + dx * t - dz / length * offset * side;
-      const z = start.z + dz * t + dx / length * offset * side;
-      if (inside({ x, z }, options) && !mapped.some((lamp) =>
-        (lamp.x - x) ** 2 + (lamp.z - z) ** 2 < (MAPPED_CLEARANCE_METERS / options.metersPerUnit) ** 2,
-      )) output.push({ x, z, angle: Math.atan2(dx, dz) });
-      distance += spacing;
-    }
-    distance -= length;
   }
 }
 
@@ -208,22 +175,6 @@ function createLampMeshes(
   shade.thinInstanceAdd(shadeMatrices);
 }
 
-function eligibleRoad(roadClass: string, properties: Readonly<Record<string, unknown>>): boolean {
-  if (["motorway", "trunk", "track", "path"].includes(roadClass)) return false;
-  if (String(properties.brunnel ?? "").toLowerCase() !== "") return false;
-  return ["primary", "secondary", "tertiary", "minor", "service"].includes(roadClass);
-}
-
-function roadWidthMeters(roadClass: string): number {
-  return ({ primary: 8, secondary: 7, tertiary: 6, minor: 4, service: 3 } as Record<string, number>)[roadClass] ?? 4;
-}
-
 function inside(point: { x: number; z: number }, options: StreetLampOptions): boolean {
   return Math.abs(point.x) <= options.meshWidth / 2 && Math.abs(point.z) <= options.meshDepth / 2;
-}
-
-function hash(value: string): number {
-  let result = 2166136261;
-  for (let index = 0; index < value.length; index++) result = Math.imul(result ^ value.charCodeAt(index), 16777619);
-  return result >>> 0;
 }

@@ -1,5 +1,14 @@
 import { sampleElevation } from "./Geo";
 import { smoothstep } from "./MathUtils";
+import {
+  averagePoint,
+  distanceToRing,
+  PlanarCellIndex,
+  pointBounds,
+  pointInRing,
+  type PlanarPoint,
+} from "./PlanarGeometry";
+import { roadGradeAmount } from "./RoadAndBuildingPlanner";
 import type {
   PlannedBuildingSite,
   PlannedRoadPolygon,
@@ -12,26 +21,19 @@ export interface PlannedFeatureTerrainOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
+  /** Stable pad height shared by every tile touched by one building. */
+  sharedBuildingElevations?: Map<string, number>;
 }
 
 interface RoadGrade {
   road: PlannedRoadPolygon;
   startElevation: number;
   endElevation: number;
-  bounds: Bounds;
 }
 
 interface BuildingGrade {
   site: PlannedBuildingSite;
   elevation: number;
-  bounds: Bounds;
-}
-
-interface Bounds {
-  minimumX: number;
-  maximumX: number;
-  minimumZ: number;
-  maximumZ: number;
 }
 
 /** Applies one coordinated terrain pass from the shared construction plan. */
@@ -58,49 +60,53 @@ export async function conformTerrainToPlannedFeatures(
       road,
       startElevation: elevationAt(terrain, road.centerline[0], options, original),
       endElevation: elevationAt(terrain, road.centerline[1], options, original),
-      bounds: polygonBounds(road.outline),
     }));
   const buildings: BuildingGrade[] = [];
   for (const site of plan.buildingSites) {
-    const points = [polygonCentroid(site.outline), ...site.outline]
+    const points = [averagePoint(site.outline), ...site.outline]
       .filter((point) => withinTerrain(point, options));
     const elevations = points
       .map((point) => elevationAt(terrain, point, options, original))
       .sort((a, b) => a - b);
-    if (elevations.length > 0 && elevations[Math.floor(elevations.length / 2)] > 0) {
+    const sampledElevation = elevations[Math.floor(elevations.length / 2)];
+    if (elevations.length > 0 && sampledElevation > 0) {
+      let elevation = options.sharedBuildingElevations?.get(site.sourceId);
+      if (elevation === undefined) {
+        elevation = sampledElevation;
+        options.sharedBuildingElevations?.set(site.sourceId, elevation);
+      }
       buildings.push({
         site,
-        elevation: elevations[Math.floor(elevations.length / 2)],
-        bounds: polygonBounds(site.outline),
+        elevation,
       });
     }
     await yieldControl?.();
   }
 
   const cellSize = Math.max(sampleSpacing * 4, 12 / options.metersPerUnit);
-  const roadCells = indexGrades(roads, cellSize, rasterMargin + roadBlendWidth);
-  const buildingCells = indexGrades(
-    buildings,
-    cellSize,
-    buildingFlatMargin + buildingBlendWidth,
-  );
+  const roadCells = new PlanarCellIndex<RoadGrade>(cellSize);
+  for (const grade of roads) {
+    roadCells.add(grade, pointBounds(grade.road.outline), rasterMargin + roadBlendWidth);
+  }
+  const buildingCells = new PlanarCellIndex<BuildingGrade>(cellSize);
+  for (const grade of buildings) {
+    buildingCells.add(grade, pointBounds(grade.site.outline), buildingFlatMargin + buildingBlendWidth);
+  }
   let modified = 0;
   for (let row = 0; row < terrain.height; row++) {
     const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
     for (let column = 0; column < terrain.width; column++) {
       const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
-      const key = cellKey(x, z, cellSize);
+      const sample = { x, z };
       const roadTarget = strongestRoadTarget(
-        x,
-        z,
-        roadCells.get(key) ?? [],
+        sample,
+        roadCells.queryPoint(sample),
         rasterMargin,
         roadBlendWidth,
       );
       const buildingTarget = strongestBuildingTarget(
-        x,
-        z,
-        buildingCells.get(key) ?? [],
+        sample,
+        buildingCells.queryPoint(sample),
         buildingFlatMargin,
         buildingBlendWidth,
       );
@@ -130,25 +136,24 @@ export async function conformTerrainToPlannedFeatures(
 }
 
 function strongestRoadTarget(
-  x: number,
-  z: number,
+  sample: PlanarPoint,
   roads: readonly RoadGrade[],
   flatMargin: number,
   blendWidth: number,
 ): { elevation: number; weight: number; inside: boolean } | undefined {
   let result: { elevation: number; weight: number; distance: number; inside: boolean } | undefined;
   for (const grade of roads) {
-    const inside = pointInPolygon(x, z, grade.road.outline);
+    const inside = pointInRing(sample, grade.road.outline);
     const distance = inside
       ? 0
-      : distanceToPolygon(x, z, grade.road.outline);
+      : distanceToRing(sample, grade.road.outline);
     const outer = flatMargin + blendWidth;
     if (distance >= outer) continue;
     const weight = distance <= flatMargin ? 1 : 1 - smoothstep(flatMargin, outer, distance);
     if (result && (weight < result.weight || (weight === result.weight && distance >= result.distance))) continue;
-    const closest = closestPointOnSegment(x, z, grade.road.centerline[0], grade.road.centerline[1]);
+    const amount = roadGradeAmount(grade.road, sample);
     result = {
-      elevation: grade.startElevation + (grade.endElevation - grade.startElevation) * closest.amount,
+      elevation: grade.startElevation + (grade.endElevation - grade.startElevation) * amount,
       weight,
       distance,
       inside,
@@ -158,8 +163,7 @@ function strongestRoadTarget(
 }
 
 function strongestBuildingTarget(
-  x: number,
-  z: number,
+  sample: PlanarPoint,
   buildings: readonly BuildingGrade[],
   flatMargin: number,
   blendWidth: number,
@@ -170,10 +174,10 @@ function strongestBuildingTarget(
   let insideAny = false;
   const outer = flatMargin + blendWidth;
   for (const grade of buildings) {
-    const inside = pointInPolygon(x, z, grade.site.outline);
+    const inside = pointInRing(sample, grade.site.outline);
     const distance = inside
       ? 0
-      : distanceToPolygon(x, z, grade.site.outline);
+      : distanceToRing(sample, grade.site.outline);
     if (distance >= outer) continue;
     const weight = distance <= flatMargin ? 1 : 1 - smoothstep(flatMargin, outer, distance);
     weightedElevation += grade.elevation * weight;
@@ -200,91 +204,6 @@ function elevationAt(
     options.meshDepth,
     elevations,
   );
-}
-
-function closestPointOnSegment(
-  x: number,
-  z: number,
-  start: PlanningPoint,
-  end: PlanningPoint,
-): { amount: number } {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const lengthSquared = dx * dx + dz * dz;
-  return {
-    amount: lengthSquared <= 1e-12
-      ? 0
-      : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared)),
-  };
-}
-
-function pointInPolygon(x: number, z: number, points: readonly PlanningPoint[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
-    const a = points[index];
-    const b = points[previous];
-    if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-function distanceToPolygon(x: number, z: number, points: readonly PlanningPoint[]): number {
-  let distance = Infinity;
-  for (let index = 0; index < points.length; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0
-      ? 0
-      : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
-    distance = Math.min(distance, Math.hypot(x - start.x - dx * amount, z - start.z - dz * amount));
-  }
-  return distance;
-}
-
-function polygonCentroid(points: readonly PlanningPoint[]): PlanningPoint {
-  const sum = points.reduce((value, point) => ({ x: value.x + point.x, z: value.z + point.z }), { x: 0, z: 0 });
-  return { x: sum.x / Math.max(1, points.length), z: sum.z / Math.max(1, points.length) };
-}
-
-function polygonBounds(points: readonly PlanningPoint[]): Bounds {
-  return points.reduce((bounds, point) => ({
-    minimumX: Math.min(bounds.minimumX, point.x),
-    maximumX: Math.max(bounds.maximumX, point.x),
-    minimumZ: Math.min(bounds.minimumZ, point.z),
-    maximumZ: Math.max(bounds.maximumZ, point.z),
-  }), { minimumX: Infinity, maximumX: -Infinity, minimumZ: Infinity, maximumZ: -Infinity });
-}
-
-function indexGrades<T extends { bounds: Bounds }>(
-  grades: readonly T[],
-  cellSize: number,
-  margin: number,
-): Map<string, T[]> {
-  const cells = new Map<string, T[]>();
-  for (const grade of grades) {
-    const minimumX = Math.floor((grade.bounds.minimumX - margin) / cellSize);
-    const maximumX = Math.floor((grade.bounds.maximumX + margin) / cellSize);
-    const minimumZ = Math.floor((grade.bounds.minimumZ - margin) / cellSize);
-    const maximumZ = Math.floor((grade.bounds.maximumZ + margin) / cellSize);
-    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-        const key = `${cellX},${cellZ}`;
-        const cell = cells.get(key);
-        if (cell) cell.push(grade);
-        else cells.set(key, [grade]);
-      }
-    }
-  }
-  return cells;
-}
-
-function cellKey(x: number, z: number, cellSize: number): string {
-  return `${Math.floor(x / cellSize)},${Math.floor(z / cellSize)}`;
 }
 
 function withinTerrain(point: PlanningPoint, options: PlannedFeatureTerrainOptions): boolean {

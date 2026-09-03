@@ -1,6 +1,6 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "./PlanningFrame.mjs";
-import { isConvexPolygon } from "./PolygonDecomposition.mjs";
+import { decomposeToConvexPolygons, isConvexPolygon } from "./PolygonDecomposition.mjs";
 import {
   clipPolygonAtAxis,
   cutSegment,
@@ -28,7 +28,8 @@ interface BuildingEntrance extends Interval {
 }
 
 export const MAXIMUM_APARTMENT_AREA_SQUARE_METERS = 120;
-const MINIMUM_APARTMENT_AREA_SQUARE_METERS = 12;
+const MINIMUM_APARTMENT_AREA_SQUARE_METERS = 24;
+const MAXIMUM_APARTMENT_BOUNDING_ASPECT = 3;
 
 export type BuildingLayoutType = "house" | "apartment-building";
 export type BuildingRoomType = "apartment" | "hallway" | "stairs";
@@ -119,53 +120,65 @@ function concaveBuildingPlan(
 ): { rooms: LayoutRoom<BuildingRoomType>[]; openings: readonly Opening2D[] } {
   const bounds = polygonBounds(boundary.outer);
   const horizontal = bounds.maxX - bounds.minX >= bounds.maxY - bounds.minY;
+  const longMin = horizontal ? bounds.minX : bounds.minY;
+  const longMax = horizontal ? bounds.maxX : bounds.maxY;
   const shortMin = horizontal ? bounds.minY : bounds.minX;
   const shortMax = horizontal ? bounds.maxY : bounds.maxX;
   const hallwayWidth = Math.min(2.4, Math.max(1.5, (shortMax - shortMin) * 0.18));
-  // The band must include the exterior entry.  A centred corridor can look
-  // plausible while leaving the front door directly in an apartment.
-  const entrance = openings.find((opening) => opening.type === "door");
-  const entranceShortCoordinate = entrance
-    ? (entrance.start[horizontal ? "y" : "x"] + entrance.end[horizontal ? "y" : "x"]) / 2
-    : (shortMin + shortMax) / 2;
-  const hallwayMin = Math.max(
-    shortMin,
-    Math.min(shortMax - hallwayWidth, entranceShortCoordinate - hallwayWidth / 2),
-  );
+  const hallwayMin = (shortMin + shortMax - hallwayWidth) / 2;
   const hallwayMax = hallwayMin + hallwayWidth;
+  const entrance = exteriorEntrance(
+    horizontal,
+    longMin,
+    longMax,
+    shortMin,
+    shortMax,
+    openings,
+  );
+  const serviceSide = entrance?.side ?? "lower";
+  const stairLength = Math.min(4, (longMax - longMin) * 0.3);
+  const stairMin = safeStairMinimum(
+    horizontal,
+    longMin,
+    longMax,
+    serviceSide === "upper" ? hallwayMax : shortMin,
+    serviceSide === "upper" ? shortMax : hallwayMin,
+    stairLength,
+    entrance,
+    openings,
+  );
+  const stairMax = stairMin + stairLength;
   let hallwayOuter = clippedToOrientedRectangle(boundary.outer, orientedRect(
     horizontal,
-    horizontal ? bounds.minX : bounds.minY,
+    longMin,
     hallwayMin,
-    horizontal ? bounds.maxX : bounds.maxY,
+    longMax,
     hallwayMax,
   ));
   let apartmentPolygons: Point2D[][];
   try {
-    // Most concave footprints retain one continuous cross-section along their
-    // long axis. Splitting that complete outline makes broad apartments rather
-    // than promoting every convex decomposition cell to an apartment.
     if (polygonArea(hallwayOuter) < 2) throw new Error("No continuous hallway band.");
-    const lower = clippedToOrientedRectangle(boundary.outer, orientedRect(
-      horizontal,
-      horizontal ? bounds.minX : bounds.minY,
-      shortMin,
-      horizontal ? bounds.maxX : bounds.maxY,
-      hallwayMin,
-    ));
-    const upper = clippedToOrientedRectangle(boundary.outer, orientedRect(
-      horizontal,
-      horizontal ? bounds.minX : bounds.minY,
-      hallwayMax,
-      horizontal ? bounds.maxX : bounds.maxY,
-      shortMax,
-    ));
-    const apartmentRegions = [lower, upper].filter((polygon) => polygonArea(polygon) > 0.01);
-    // Keep each side of the corridor as one broad shell. Subdividing a concave
-    // side can strand a later slice behind the first apartment; a subsequent
-    // hallway-branch strategy can split these shells without sacrificing
-    // direct common-space access.
-    apartmentPolygons = apartmentRegions;
+    const apartmentRegions = (["lower", "upper"] as const).flatMap((side) => {
+      const excluded = side === serviceSide
+        ? [{ minimum: stairMin, maximum: stairMax }, ...(entrance ? [entrance] : [])]
+        : [];
+      return remainingIntervals(longMin, longMax, excluded).map((interval) =>
+        clippedToOrientedRectangle(boundary.outer, orientedRect(
+          horizontal,
+          interval.minimum,
+          side === "lower" ? shortMin : hallwayMax,
+          interval.maximum,
+          side === "lower" ? hallwayMin : shortMax,
+        )),
+      );
+    }).filter((polygon) => polygonArea(polygon) > 0.01)
+      .flatMap((polygon) => decomposeToConvexPolygons(polygon));
+    const corridorAxis: CartesianAxis = horizontal ? "x" : "y";
+    // Cut along the corridor so every resulting apartment retains a direct
+    // common-space edge. Restricting the axis also prevents concave outline
+    // details from rotating otherwise regular apartment bands.
+    apartmentPolygons = apartmentRegions.flatMap((polygon) =>
+      partitionToMaximumArea(polygon, corridorAxis, openings, true));
   } catch {
     apartmentPolygons = [];
   }
@@ -186,18 +199,53 @@ function concaveBuildingPlan(
     polygon: { outer: hallwayOuter },
     label: "Hallway",
   });
+  if (entrance) {
+    addClippedRoom(
+      rooms,
+      "entrance-lobby",
+      "hallway",
+      boundary.outer,
+      orientedRect(
+        horizontal,
+        entrance.minimum,
+        entrance.side === "lower" ? shortMin : hallwayMax,
+        entrance.maximum,
+        entrance.side === "lower" ? hallwayMin : shortMax,
+      ),
+      "Entrance lobby",
+    );
+  }
+  addClippedRoom(
+    rooms,
+    "stairs-1",
+    "stairs",
+    boundary.outer,
+    orientedRect(
+      horizontal,
+      stairMin,
+      serviceSide === "upper" ? hallwayMax : shortMin,
+      stairMax,
+      serviceSide === "upper" ? shortMax : hallwayMin,
+    ),
+    "Stairs",
+  );
   rooms.push(...apartmentPolygons.map((outer, index) => ({
     id: `apartment-${index + 1}`,
     type: "apartment" as const,
     polygon: { outer },
     label: `Apartment ${index + 1}`,
   })));
-  return {
-    rooms,
-    openings: [...openings, ...(rooms.some((room) => room.type === "hallway")
-      ? sharedRoomEntranceDoors(rooms)
-      : connectedApartmentDoors(rooms))],
-  };
+  const roomDoors = rooms.some((room) => room.type === "hallway")
+    ? sharedRoomEntranceDoors(rooms)
+    : connectedApartmentDoors(rooms);
+  for (const room of rooms) {
+    if (room.type === "apartment" && !roomDoors.some((door) =>
+      openingTouchesPolygon(door, room.polygon.outer))) {
+      room.type = "hallway";
+      room.label = "Common area";
+    }
+  }
+  return { rooms, openings: [...openings, ...roomDoors] };
 }
 
 /**
@@ -223,7 +271,12 @@ function mergeApartmentsWithoutHallway(
       const shared = longestSharedSegment(pieces[target], pieces[index]);
       if (!shared) continue;
       const merged = mergeNeighbouringPolygons(pieces[target], pieces[index]);
-      if (!merged) continue;
+      if (!merged || !isConvexPolygon(merged)) continue;
+      // Restoring hallway access must never undo the apartment-area cap. A
+      // deep concave wing can require several hops to reach the corridor; keep
+      // those hops as separate shells when combining them would create an
+      // implausibly large apartment.
+      if (polygonArea(merged) > MAXIMUM_APARTMENT_AREA_SQUARE_METERS + 1e-7) continue;
       const length = Math.hypot(shared[1].x - shared[0].x, shared[1].y - shared[0].y);
       const servesHallway = touchesHallway(pieces[index]);
       if (!best || (servesHallway && !best.servesHallway) ||
@@ -365,7 +418,7 @@ function apartmentBuildingPlan(
     { minimum: stairMin, maximum: stairMax },
     ...(entrance ? [{ minimum: entrance.minimum, maximum: entrance.maximum }] : []),
   ];
-  const serviceApartments = remainingIntervals(longMin, longMax, excludedRanges).map((interval) =>
+  const serviceRegions = remainingIntervals(longMin, longMax, excludedRanges).map((interval) =>
     clippedToOrientedRectangle(
       boundary.outer,
       orientedRect(
@@ -376,8 +429,18 @@ function apartmentBuildingPlan(
         serviceSide === "lower" ? hallwayMin : shortMax,
       ),
     ));
-  const apartmentPolygons = [...serviceApartments, oppositeSide]
-    .filter((polygon) => polygonArea(polygon) > 0.01)
+  const candidateRegions = [...serviceRegions, oppositeSide]
+    .filter((polygon) => polygonArea(polygon) > 0.01);
+  const commonFragments = candidateRegions.filter((polygon) =>
+    polygonArea(polygon) < MINIMUM_APARTMENT_AREA_SQUARE_METERS - 1e-7);
+  commonFragments.forEach((outer, index) => rooms.push({
+    id: `common-area-${index + 1}`,
+    type: "hallway",
+    polygon: { outer },
+    label: "Common area",
+  }));
+  const apartmentPolygons = candidateRegions
+    .filter((polygon) => polygonArea(polygon) >= MINIMUM_APARTMENT_AREA_SQUARE_METERS - 1e-7)
     .flatMap((polygon) => partitionToMaximumArea(polygon, longAxis, openings));
   apartmentPolygons.forEach((outer, index) => rooms.push({
     id: `apartment-${index + 1}`,
@@ -397,8 +460,15 @@ function partitionToMaximumArea(
   openings: readonly Opening2D[],
   restrictToPreferredAxis = false,
 ): Point2D[][] {
-  if (polygonArea(polygon) <= MAXIMUM_APARTMENT_AREA_SQUARE_METERS) return [[...polygon]];
+  const area = polygonArea(polygon);
   const bounds = polygonBounds(polygon);
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  const aspect = Math.max(width, height) / Math.max(1e-7, Math.min(width, height));
+  const oversized = area > MAXIMUM_APARTMENT_AREA_SQUARE_METERS;
+  const badlyProportioned = aspect > MAXIMUM_APARTMENT_BOUNDING_ASPECT &&
+    area >= MINIMUM_APARTMENT_AREA_SQUARE_METERS * 2;
+  if (!oversized && !badlyProportioned) return [[...polygon]];
   const longestAxis: CartesianAxis = bounds.maxX - bounds.minX >= bounds.maxY - bounds.minY
     ? "x"
     : "y";
@@ -408,7 +478,10 @@ function partitionToMaximumArea(
     restrictToPreferredAxis ? preferredAxis : preferredAxis,
     openings,
   );
-  if (!split) throw new Error("The apartment area could not be divided safely.");
+  if (!split) {
+    if (!oversized) return [[...polygon]];
+    throw new Error("The apartment area could not be divided safely.");
+  }
   return [
     ...partitionToMaximumArea(split.first, preferredAxis, openings, restrictToPreferredAxis),
     ...partitionToMaximumArea(split.second, preferredAxis, openings, restrictToPreferredAxis),
@@ -547,7 +620,7 @@ function sharedRoomEntranceDoors(
 ): Opening2D[] {
   const hallway = rooms.find((room) => room.id === "hallway-1");
   if (!hallway) return [];
-  return rooms
+  const doors = rooms
     // The entrance lobby is a secondary hallway room. It needs its own
     // opening into the main hallway or the exterior door can lead into a
     // sealed pocket of the plan.
@@ -577,6 +650,43 @@ function sharedRoomEntranceDoors(
         end: { x: center.x + direction.x * doorLength / 2, y: center.y + direction.y * doorLength / 2 },
       }];
     });
+  const connected = new Set<string>([
+    hallway.id,
+    ...doors.map((door) => door.id.slice(0, -"-door".length)),
+  ]);
+  while (connected.size < rooms.length) {
+    let best: {
+      room: LayoutRoom<BuildingRoomType>;
+      segment: readonly [Point2D, Point2D];
+      length: number;
+    } | undefined;
+    for (const source of rooms.filter((room) => connected.has(room.id))) {
+      for (const room of rooms.filter((candidate) => !connected.has(candidate.id))) {
+        const segment = longestSharedSegment(source.polygon.outer, room.polygon.outer);
+        if (!segment) continue;
+        const length = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y);
+        if (length >= 0.8 && (!best || length > best.length)) best = { room, segment, length };
+      }
+    }
+    if (!best) break;
+    connected.add(best.room.id);
+    const doorLength = Math.min(1.15, best.length * 0.58);
+    const center = {
+      x: (best.segment[0].x + best.segment[1].x) / 2,
+      y: (best.segment[0].y + best.segment[1].y) / 2,
+    };
+    const direction = {
+      x: (best.segment[1].x - best.segment[0].x) / best.length,
+      y: (best.segment[1].y - best.segment[0].y) / best.length,
+    };
+    doors.push({
+      id: `${best.room.id}-connection-door`,
+      type: "door",
+      start: { x: center.x - direction.x * doorLength / 2, y: center.y - direction.y * doorLength / 2 },
+      end: { x: center.x + direction.x * doorLength / 2, y: center.y + direction.y * doorLength / 2 },
+    });
+  }
+  return doors;
 }
 
 /** Keeps every convex piece of a concave footprint reachable from its entrance. */
@@ -639,6 +749,11 @@ function longestSharedSegment(
     }
   }
   return longest;
+}
+
+function openingTouchesPolygon(opening: Opening2D, polygon: readonly Point2D[]): boolean {
+  return polygon.some((start, index) =>
+    !!overlappingSegment(start, polygon[(index + 1) % polygon.length], opening.start, opening.end));
 }
 
 function safePolygonSplit(

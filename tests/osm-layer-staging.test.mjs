@@ -115,7 +115,7 @@ test("retains authoritative mapped lake rings for the terrain-water pipeline", (
   assert.match(openStreetMap, /static collectLakePolygons\(/);
   assert.match(openStreetMap, /const sourceId = waterFeatureSourceId/);
   assert.match(openStreetMap, /lakePolygons: TerrainLakeSource\[\]/);
-  assert.match(openStreetMap, /outline = clipPolygon/);
+  assert.match(openStreetMap, /outline = clipToBounds/);
   assert.doesNotMatch(
     openStreetMap,
     /createWaterPolygon|expandLakeShoreline|prepareLakeSurfacePiece|styleLakeSurfaces|inlandWater/,

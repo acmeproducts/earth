@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  MeshBuilder,
+  NullEngine,
+  Scene,
+  UniversalCamera,
+  Vector3,
+} from "@babylonjs/core";
 
 import {
   advanceWalkerVerticalMotion,
@@ -7,6 +14,7 @@ import {
   WALK_CAMERA_INERTIA,
   WALKER_JUMP_SPEED_METERS_PER_SECOND,
 } from "../src/WalkerMotion.ts";
+import { moveWalkerWithCollisions } from "../src/WalkerCollision.ts";
 
 test("a grounded walker follows ordinary downhill terrain without falling", () => {
   const result = advanceWalkerVerticalMotion({
@@ -73,4 +81,30 @@ test("an airborne walker cannot jump again", () => {
 test("camera input is immediate in both movement modes", () => {
   assert.equal(WALK_CAMERA_INERTIA, 0);
   assert.equal(FLY_CAMERA_INERTIA, 0);
+});
+
+test("walker movement stops at a collidable house wall", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  scene.collisionsEnabled = true;
+  const wall = MeshBuilder.CreateBox("house wall", {
+    width: 8,
+    height: 3,
+    depth: 0.2,
+  }, scene);
+  wall.position.set(0, 1.5, 2);
+  wall.checkCollisions = true;
+  wall.computeWorldMatrix(true);
+
+  const camera = new UniversalCamera("walker", new Vector3(0, 1.8, 0), scene);
+  camera.checkCollisions = true;
+  camera.ellipsoid.set(0.3, 0.9, 0.3);
+  camera.ellipsoidOffset.setAll(0);
+
+  moveWalkerWithCollisions(camera, 0, 4);
+
+  assert.ok(camera.position.z < 1.7, `walker crossed the wall at z=${camera.position.z}`);
+  assert.equal(camera.position.x, 0);
+  scene.dispose();
+  engine.dispose();
 });

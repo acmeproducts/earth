@@ -155,6 +155,7 @@ attribute float instanceLodBlend;
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform float captureCenterY;
+uniform float impostorDepthPull;
 uniform vec3 sunDirection;
 ${vegetationShadowVertexDeclaration}
 ${cloudShadowVertexDeclaration}
@@ -168,6 +169,7 @@ varying vec3 vLocalWorldUp;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
+varying vec3 vCenterWorld;
 
 void main(void) {
   #include<instancesVertex>
@@ -192,6 +194,7 @@ void main(void) {
   );
   vec3 worldViewDirection = cameraPosition - center;
 
+  vCenterWorld = center;
   vLocalPosition = position - vec3(0.0, captureCenterY, 0.0);
   vViewDirection = vec3(
     dot(worldViewDirection, axisX),
@@ -212,7 +215,16 @@ void main(void) {
   vInstanceLodBlend = 0.0;
   #endif
   vec4 clipPosition = viewProjection * worldPosition;
-  vec4 centerClipPosition = viewProjection * vec4(center, 1.0);
+  // Low ground cover is a wide, flat disc, so its near edge stands well in
+  // front of the center. Depth from the center plane then lets the terrain
+  // under that edge win the depth test and bury the clump to half its height.
+  // Pulling the depth plane out to the near edge costs coverage of real
+  // geometry within one clump radius, which is imperceptible on a source this
+  // short; tall sources leave the pull at zero and keep the center plane.
+  float viewDistance = length(worldViewDirection);
+  vec3 depthCenter = center + worldViewDirection *
+    (min(impostorDepthPull, viewDistance * 0.5) / max(viewDistance, 0.0001));
+  vec4 centerClipPosition = viewProjection * vec4(depthCenter, 1.0);
   // The box is only conservative raster coverage for the camera-facing image.
   // Using its nearest wall as depth makes the impostor incorrectly cover real
   // geometry between that wall and the captured object's center. Flatten the
@@ -222,6 +234,7 @@ void main(void) {
 }`;
 
 export const impostorFragmentShader = `
+#extension GL_EXT_frag_depth : enable
 precision highp float;
 varying vec3 vLocalPosition;
 varying vec3 vViewDirection;
@@ -230,6 +243,9 @@ varying vec3 vLocalWorldUp;
 varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
+varying vec3 vCenterWorld;
+uniform mat4 viewProjection;
+uniform vec3 cameraPosition;
 uniform sampler2D atlas0;
 uniform sampler2D atlas1;
 uniform sampler2D atlas2;
@@ -265,6 +281,7 @@ uniform float groundColorBlend;
 uniform float distanceGroundBlend;
 uniform vec3 distanceGroundColor;
 uniform float impostorAmbientUpward;
+uniform float impostorColorContrast;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -288,15 +305,6 @@ vec4 lowAtlasSample(float face, vec2 uv) {
 }
 
 vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
-  if (forceLowestLod > 0.5) {
-    vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
-    vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts);
-    // Keep the low atlas's straight RGB and make its edge binary. In
-    // particular, do not divide filtered foliage RGB by its small alpha:
-    // that amplifies pale leaf-edge texels into a bright fringe.
-    lowColor.a = step(0.5, lowColor.a);
-    return lowColor;
-  }
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
   vec2 atlasUV = (tile + localUV) / atlasTileCounts;
   if (lodBlend <= 0.0) return atlasSample(face, atlasUV);
@@ -477,7 +485,13 @@ void main(void) {
   // instance covers every detail tier. No per-instance blend attribute and no
   // CPU transition ring are needed to reach the reduced source.
   float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
-  float lodBlend = smoothstep(impostorLodNear, impostorLodFar, distanceRatio);
+  // Far-tile fields still use the low atlas for color, but retain the detailed
+  // atlas's fractional alpha so their silhouettes receive the same ordered
+  // coverage dither as ordinary distant impostors.
+  float lodBlend = max(
+    forceLowestLod,
+    smoothstep(impostorLodNear, impostorLodFar, distanceRatio)
+  );
   vec2 selectedTile;
   if (choice < weights.x) {
     selectedTile = low;
@@ -515,6 +529,55 @@ void main(void) {
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
   #endif
   if (color.a <= alphaChoice) discard;
+
+#ifdef IMPOSTOR_DEPTH_PROXY
+  // The shadow generator always defines SM_DIRECTIONINLIGHTDATA, so its absence
+  // is the camera pass. Only there does viewProjection hold the camera's
+  // matrix; writing this depth into a shadow map would corrupt it.
+  #ifndef SM_DIRECTIONINLIGHTDATA
+  // One flattened plane gives every fragment the depth of the capture center,
+  // so a tall source can neither ground its trunk nor interleave its canopy
+  // with the terrain or with a neighbor. A tree fills its capture volume like
+  // an ellipsoid, so intersecting each view ray with the inscribed ellipsoid
+  // recovers a per-fragment depth: pinched to the axis at the base, bulging
+  // toward the camera across the canopy.
+  vec3 proxyRadii = 0.5 * vec3(captureDimensions.x, captureDimensions.y, captureDimensions.x);
+  vec3 towardFragment = vLocalPosition - vViewDirection;
+  // An orthographic view has no per-fragment ray to intersect, and the capture
+  // and validation cameras are the only ones that use it.
+  if (cameraOrthographic < 0.5 && length(towardFragment) > 0.0001) {
+    vec3 rayStep = normalize(towardFragment);
+    vec3 scaledOrigin = vViewDirection / proxyRadii;
+    vec3 scaledStep = rayStep / proxyRadii;
+    float a = dot(scaledStep, scaledStep);
+    float b = 2.0 * dot(scaledOrigin, scaledStep);
+    float c = dot(scaledOrigin, scaledOrigin) - 1.0;
+    float discriminant = b * b - 4.0 * a * c;
+    // Rays past the silhouette take their closest approach to the center,
+    // which is where the near hit converges as the ellipsoid turns away. Depth
+    // stays continuous over the edge of the proxy rather than snapping back to
+    // the plane, which would leave a seam around every canopy.
+    float hitDistance = discriminant > 0.0
+      ? (-b - sqrt(discriminant)) / (2.0 * a)
+      : -b / (2.0 * a);
+    // Only movement along the view axis changes depth, and the axis through
+    // the center is the one the flattened plane already agrees with.
+    float depthOffset = dot(vViewDirection + rayStep * hitDistance, direction);
+    vec3 towardCamera = cameraPosition - vCenterWorld;
+    vec3 depthPoint = vCenterWorld +
+      towardCamera * (depthOffset / max(length(towardCamera), 0.0001));
+    vec4 depthClip = viewProjection * vec4(depthPoint, 1.0);
+    // Behind the eye there is no meaningful depth to write, so those fragments
+    // keep the flattened plane the rasterizer already interpolated.
+    gl_FragDepthEXT = depthClip.w > 0.0
+      ? 0.5 + 0.5 * depthClip.z / depthClip.w
+      : gl_FragCoord.z;
+  } else {
+    gl_FragDepthEXT = gl_FragCoord.z;
+  }
+  #endif
+#endif
+
   vec3 straightColor = color.rgb;
   float sceneBrightness = max(
     max(skyColor.r, max(skyColor.g, skyColor.b)),
@@ -531,6 +594,11 @@ void main(void) {
     straightColor,
     distanceGroundColor * vInstanceColor,
     mix(groundColorBlend, distanceGroundBlend, 1.0 - distanceFade)
+  );
+  straightColor = clamp(
+    (straightColor - vec3(0.42)) * impostorColorContrast + vec3(0.42),
+    vec3(0.0),
+    vec3(1.25)
   );
 
   // The atlas contains the whole canopy rather than one physical surface.
@@ -710,16 +778,14 @@ export async function createTreeField(
         );
         // Trees are the skyline, so repetition is much more obvious here than
         // in low vegetation. Pick one of a small reusable model palette per
-        // application tile: every tree in a tile stays coherent, neighboring
-        // tiles usually change silhouette, and the atlas count remains bounded.
+        // broad locality. Adjacent streamed tiles then reuse the same atlas
+        // instead of extending the capture queue as the terrain ring fills.
         const localVariant = proceduralLocalVariantAtLocation(
           "trees",
           location.lon,
           location.lat,
           modelVariantSeed,
           TREE_SISTER_MODELS,
-          1,
-          0,
         );
         const season = treeSeasonAt(seasonalDate, location.lat, species);
         const variant: TreeImpostorVariant = {
@@ -999,7 +1065,14 @@ export async function createTreeImpostorPrototype(
       undefined,
       species,
     );
-    const prototype = createImpostorPrototypeFromAssets(scene, assets, treeHeight, root, rootName);
+    const prototype = createImpostorPrototypeFromAssets(
+      scene,
+      assets,
+      treeHeight,
+      root,
+      rootName,
+      { depthProxy: true },
+    );
     if (prototype.mesh.material instanceof ShaderMaterial) {
       prototype.mesh.material.setFloat(
         "lowLightAlbedoScale",
@@ -1042,6 +1115,17 @@ function sampleTreeSpecies(
     : undefined;
 }
 
+/**
+ * Resolves a captured source's depth per fragment against an ellipsoid fitted
+ * to its capture volume instead of one plane through its center. Worth its
+ * dependent texture-free but early-depth-defeating cost on sources tall enough
+ * for the flattened plane to read as a card; low ground cover uses the cheaper
+ * `impostorDepthPull` instead.
+ */
+export interface ImpostorDepthOptions {
+  depthProxy?: boolean;
+}
+
 /** Creates the render mesh and shader material for any captured source. */
 export function createImpostorPrototypeFromAssets(
   scene: Scene,
@@ -1049,6 +1133,7 @@ export function createImpostorPrototypeFromAssets(
   renderHeight: number,
   root: TransformNode,
   name: string,
+  depth: ImpostorDepthOptions = {},
 ): ImpostorPrototype {
   const scale = renderHeight / assets.sourceHeight;
   const captureWidth = assets.captureWidth * scale;
@@ -1065,6 +1150,7 @@ export function createImpostorPrototypeFromAssets(
     captureWidth,
     captureHeight,
     `${name}Material`,
+    depth,
   );
   root.onDisposeObservable.add(() => material.dispose(false, false));
   mesh.material = material;
@@ -1078,6 +1164,7 @@ export function createImpostorMaterial(
   captureWidth: number,
   captureHeight: number,
   name: string,
+  depth: ImpostorDepthOptions = {},
 ): ShaderMaterial {
   const material = new ShaderMaterial(
     name,
@@ -1085,8 +1172,11 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "impostorDepthPull", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "impostorColorContrast", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler", "cloudShadowAtlas"],
+      // Writing depth costs the early depth test, so the dense low vegetation
+      // that never needed it compiles without the proxy at all.
+      defines: depth.depthProxy ? ["#define IMPOSTOR_DEPTH_PROXY"] : [],
       needAlphaBlending: false,
     },
   );
@@ -1101,6 +1191,7 @@ export function createImpostorMaterial(
   bindVegetationShadowReceiver(material, scene);
   bindCloudShadowReceiver(material, scene);
   material.setFloat("captureCenterY", renderHeight / 2);
+  material.setFloat("impostorDepthPull", 0);
   material.setVector2("captureDimensions", new Vector2(captureWidth, captureHeight));
   material.setVector2("gridDimensions", new Vector2(assets.gridWidth, assets.gridHeight));
   material.setVector2("atlasTileCounts", new Vector2(assets.gridWidth, assets.gridHeight));
@@ -1132,6 +1223,7 @@ export function createImpostorMaterial(
   material.setFloat("distanceGroundBlend", 0);
   material.setColor3("distanceGroundColor", Color3.White());
   material.setFloat("impostorAmbientUpward", 1);
+  material.setFloat("impostorColorContrast", 1);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(

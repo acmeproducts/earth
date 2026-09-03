@@ -5,7 +5,6 @@ import {
   Material,
   MultiMaterial,
   NullEngine,
-  PBRMaterial,
   Scene,
   TransformNode,
   Vector3,
@@ -308,6 +307,60 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   engine.dispose();
 });
 
+test("near windows become transparent while other tile interiors remain pending", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const nearby = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(124, { render_height: 9.3, levels: 3 }),
+    terrain,
+    options,
+  );
+  const distantFootprint = {
+    outer: footprint.outer.map(([x, y]) => [x + 0.35, y]),
+    holes: [],
+  };
+  const distant = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    planBuilding({
+      id: "building/14/125/0",
+      polygon: distantFootprint,
+      properties: { render_height: 9.3, levels: 3 },
+    }),
+    terrain,
+    options,
+  );
+  assert.ok(nearby && distant);
+  const merged = ProceduralBuildingRenderer.merge(
+    [nearby, distant],
+    "buildings",
+    new TransformNode("root", scene),
+  );
+  assert.ok(merged);
+  scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+
+  scene.onAfterRenderObservable.notifyObservers(scene);
+  merged.onBeforeRenderObservable.notifyObservers(merged);
+
+  assert.equal(merged.metadata.loadedInteriorCount, 1);
+  assert.equal(merged.metadata.pendingInteriorCount, 1);
+  const positions = merged.getVerticesData(VertexBuffer.PositionKind);
+  const colors = merged.getVerticesData(VertexBuffer.ColorKind);
+  const nearbyWindowAlpha = [];
+  const distantWindowAlpha = [];
+  for (let vertex = 0; vertex < colors.length / 4; vertex++) {
+    const alpha = colors[vertex * 4 + 3];
+    if (alpha >= 0.999) continue;
+    const x = positions[vertex * 3];
+    (x < 17.5 ? nearbyWindowAlpha : distantWindowAlpha).push(alpha);
+  }
+  assert.ok(nearbyWindowAlpha.length > 0);
+  assert.equal(distantWindowAlpha.length, 0);
+
+  scene.dispose();
+  engine.dispose();
+});
+
 test("one-story buildings keep a single floor and no stairs", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
@@ -467,7 +520,7 @@ test("stable building seeds produce varied facade rhythms", () => {
   engine.dispose();
 });
 
-test("tall buildings use deterministic reflective high-rise massing", () => {
+test("tall buildings remain enterable and include stairs", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
   const tower = ProceduralBuildingRenderer.createDetailed(
@@ -483,9 +536,10 @@ test("tall buildings use deterministic reflective high-rise massing", () => {
     options,
   );
   assert.ok(tower && far);
-  assert.equal(tower.metadata.highRise, true);
-  assert.equal(tower.metadata.enterable, false);
-  assert.equal(tower.getTotalVertices(), far.getTotalVertices());
+  assert.equal(tower.metadata.enterable, true);
+  assert.equal(tower.metadata.interiorFloorCount, 20);
+  assert.equal(tower.metadata.stairFlightCount, 19);
+  assert.ok(tower.getTotalVertices() > far.getTotalVertices());
 
   const merged = ProceduralBuildingRenderer.merge(
     [tower],
@@ -493,16 +547,33 @@ test("tall buildings use deterministic reflective high-rise massing", () => {
     new TransformNode("root", scene),
   );
   assert.ok(merged.material instanceof MultiMaterial);
-  const reflective = merged.material.subMaterials.find(
-    (material) => material instanceof PBRMaterial,
-  );
-  assert.ok(reflective);
-  assert.equal(reflective.transparencyMode, Material.MATERIAL_OPAQUE);
-  assert.equal(reflective.alpha, 1);
-  const colors = merged.getVerticesData(VertexBuffer.ColorKind);
-  assert.ok(colors.every((value, index) => index % 4 !== 3 || value === 1));
-  assert.equal(merged.metadata.pendingInteriorCount, undefined);
+  assert.ok(merged.metadata.pendingInteriorCount > 0);
 
+  scene.dispose();
+  engine.dispose();
+});
+
+test("small-footprint high-rises keep fallback stairs on every floor", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const narrowTower = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    planBuilding({
+      id: "building/14/457/0",
+      polygon: {
+        outer: [[0.46, 0.46], [0.54, 0.46], [0.54, 0.54], [0.46, 0.54], [0.46, 0.46]],
+        holes: [],
+      },
+      properties: { render_height: 60, levels: 20 },
+    }),
+    terrain,
+    options,
+  );
+  assert.ok(narrowTower);
+  assert.equal(narrowTower.metadata.interiorFloorCount, 20);
+  assert.equal(narrowTower.metadata.stairFlightCount, 19);
+
+  narrowTower.dispose(false, true);
   scene.dispose();
   engine.dispose();
 });

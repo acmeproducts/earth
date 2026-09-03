@@ -14,6 +14,7 @@ import {
   FLY_CAMERA_INERTIA,
   WALK_CAMERA_INERTIA,
 } from "./WalkerMotion";
+import { moveWalkerWithCollisions } from "./WalkerCollision";
 import type { PlayerPose } from "./integration/GameProtocol";
 
 const MIN_FLY_SPEED = 0.05;
@@ -304,15 +305,16 @@ export class PlayerControls {
       const inputLength = Math.hypot(forward, right);
       const yaw = camera.rotation.y;
       const distance = WALK_SPEED_METERS_PER_SECOND * deltaSeconds / metersPerUnit;
-      const nextX = camera.position.x +
+      const deltaX =
         (Math.sin(yaw) * forward + Math.cos(yaw) * right) * distance / inputLength;
-      const nextZ = camera.position.z +
+      const deltaZ =
         (Math.cos(yaw) * forward - Math.sin(yaw) * right) * distance / inputLength;
+      const nextX = camera.position.x + deltaX;
+      const nextZ = camera.position.z + deltaZ;
       // Streaming is asynchronous. Stop at the edge until the destination
       // tile has finished building instead of walking over an empty gap.
       if (this.options.isScenePositionLoaded(nextX, nextZ)) {
-        camera.position.x = nextX;
-        camera.position.z = nextZ;
+        moveWalkerWithCollisions(camera, deltaX, deltaZ);
         this.rememberLoadedPosition();
       }
     }

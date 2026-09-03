@@ -434,8 +434,15 @@ example plans in `data/layout-examples`.
 `planRoadsAndBuildings` into a standalone, north-up SVG. The image uses the
 plan's complete tile bounds, so sparse and empty plans retain the same scale.
 It draws the exact partitioned road surfaces and shoulders, building footprints
-and holes, road markings, layers, and structures with machine-readable SVG data
-attributes for future planning diagnostics.
+and holes, building plots, street lamps, road markings, layers, and structures
+with machine-readable SVG data attributes for future planning diagnostics.
+
+The plan also places street lamps (mapped lamp nodes plus deterministic
+road-side infill just beyond the planned road bed) and designates one convex
+plot per building. Plots grow outward from the building, then are cut flush
+against nearby road beds, the tile bounds, and the bisector toward each
+neighboring plot, so adjacent plots share their dividing boundary exactly —
+the attachment line for future hedgerows and fences.
 
 ```typescript
 import { renderRoadAndBuildingPlanSvg } from "./RoadAndBuildingPlanImage";

@@ -33,3 +33,8 @@ test("streams rocky-beach impostors as a normal detailed field", () => {
   assert.match(game, /record,\s+"rockyBeachField",\s+rockyBeachField/);
   assert.match(game, /rockyBeachField\.count} rocky beach patches/);
 });
+
+test("restores contrast lost when stone normals are flattened into an impostor", () => {
+  assert.match(field, /impostorColorContrast", 1\.2/);
+  assert.doesNotMatch(field, /model\.material\.setFloat\("impostorColorContrast"/);
+});

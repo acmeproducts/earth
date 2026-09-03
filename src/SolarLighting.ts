@@ -215,13 +215,15 @@ export class SolarLighting {
 
     // Reflective surfaces need the sky as an environment, and the sky here is
     // a procedural dome rather than a loaded cube map. Capturing it into a
-    // probe costs six small renders of three meshes, and only when the sun has
-    // actually moved.
+    // probe costs six small renders, and only when the sun has actually moved.
+    // Keep the screen-space star quads out of the cube pass: binding their
+    // shared material against a 128 px face can leave that viewport size on
+    // the visible pass for one frame, making the whole star field flash large
+    // and blurry. Stars are sub-pixel detail in the water reflection anyway.
     if (!scene.getEngine().isWebGPU) {
       this.skyProbe = new ReflectionProbe("skyProbe", SKY_PROBE_SIZE, scene);
       this.skyProbe.renderList?.push(
         this.skyMesh,
-        this.starField.mesh,
         horizonMesh,
         this.sunMesh,
       );

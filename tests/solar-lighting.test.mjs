@@ -25,6 +25,15 @@ test("updates the visible atmosphere more often than shadows and reflections", (
   );
 });
 
+test("keeps viewport-sized stars out of the low-resolution reflection probe", () => {
+  const probeRenderList = source.match(
+    /this\.skyProbe\.renderList\?\.push\(([\s\S]*?)\);/,
+  )?.[1] ?? "";
+  assert.doesNotMatch(probeRenderList, /this\.starField\.mesh/);
+  assert.match(probeRenderList, /this\.skyMesh/);
+  assert.match(probeRenderList, /horizonMesh/);
+});
+
 test("spends more of the cached shadow map on streamed caster detail", () => {
   assert.match(source, /const PREFERRED_SHADOW_MAP_SIZE = 4096/);
   assert.match(source, /const SHADOW_ORTHO_SCALE = 0\.02/);

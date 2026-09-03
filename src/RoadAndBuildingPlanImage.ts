@@ -1,5 +1,7 @@
+import { polygonArea } from "./PlanarGeometry";
 import type {
   PlannedRoadPolygon,
+  PlannedStreetLamp,
   PlanningPoint,
   RoadAndBuildingPlan,
   RoadAndBuildingPlanBounds,
@@ -43,6 +45,9 @@ export function renderRoadAndBuildingPlanSvg(
   const title = options.title
     ? `<text x="${number(width / 2)}" y="18" text-anchor="middle" fill="#172033" font-family="sans-serif" font-size="16" font-weight="600">${escapeXml(options.title)}</text>`
     : "";
+  const plots = plan.plots.map((plot) =>
+    `<path data-kind="plot" data-source-id="${escapeXml(plot.sourceId)}" d="${polygonPath(plot.outline, [], project)}" fill="#dde8c8" stroke="#75894c" stroke-width="1" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`
+  ).join("");
   const shoulders = plan.shoulders.map((road) => roadPath(road, "shoulder", project)).join("");
   const roads = plan.roads.map((road) => roadPath(road, "road", project)).join("");
   const centerlines = options.showCenterlines === false
@@ -52,6 +57,7 @@ export function renderRoadAndBuildingPlanSvg(
     const path = polygonPath(building.outline, building.holes, project);
     return `<path data-kind="building-site" data-source-id="${escapeXml(building.sourceId)}" d="${path}" fill="url(#building-fill)" stroke="#713f12" stroke-width="1.2" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>`;
   }).join("");
+  const lamps = plan.streetLamps.map((lamp) => streetLampMark(lamp, project)).join("");
   const labels = options.showLabels === true
     ? featureLabels([...plan.roads, ...plan.buildingSites], project)
     : "";
@@ -63,7 +69,7 @@ export function renderRoadAndBuildingPlanSvg(
   ], [], project);
   const defs = `<defs><linearGradient id="building-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde7c2"/><stop offset="1" stop-color="#d6a85f"/></linearGradient><pattern id="unpaved-fill" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#b99a6b"/><circle cx="2" cy="3" r="0.7" fill="#806342"/><circle cx="7" cy="6" r="0.55" fill="#d8c29e"/></pattern><pattern id="ford-fill" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#6094ad"/><path d="M -2 3 Q 1 1 4 3 T 10 3 T 16 3" fill="none" stroke="#b9dcea" stroke-width="1"/></pattern></defs>`;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Road and building plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#edf1e8")}"/>${title}<path d="${extent}" fill="none" stroke="#94a3b8" stroke-width="1" vector-effect="non-scaling-stroke"/>${shoulders}${roads}${centerlines}${buildings}${labels}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Road and building plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#edf1e8")}"/>${title}<path d="${extent}" fill="none" stroke="#94a3b8" stroke-width="1" vector-effect="non-scaling-stroke"/>${plots}${shoulders}${roads}${centerlines}${buildings}${lamps}${labels}</svg>`;
 }
 
 function roadPath(
@@ -85,6 +91,15 @@ function centerlinePath(
   const end = project(road.centerline[1]);
   if (Math.hypot(end.x - start.x, end.z - start.z) < 0.01) return "";
   return `<line data-kind="road-marking" data-source-id="${escapeXml(road.sourceId)}" x1="${number(start.x)}" y1="${number(start.z)}" x2="${number(end.x)}" y2="${number(end.z)}" stroke="#f8fafc" stroke-width="1.2" stroke-dasharray="7 6" vector-effect="non-scaling-stroke"/>`;
+}
+
+function streetLampMark(
+  lamp: PlannedStreetLamp,
+  project: (point: PlanningPoint) => PlanningPoint,
+): string {
+  const center = project(lamp.position);
+  const fill = lamp.source === "mapped" ? "#f59e0b" : "#fbd77e";
+  return `<circle data-kind="street-lamp" data-source-id="${escapeXml(lamp.sourceId)}" data-lamp-source="${lamp.source}" cx="${number(center.x)}" cy="${number(center.z)}" r="2.4" fill="${fill}" stroke="#44403c" stroke-width="1"/>`;
 }
 
 function uniqueMarkedSegments(roads: readonly PlannedRoadPolygon[]): PlannedRoadPolygon[] {
@@ -121,15 +136,6 @@ function featureLabels(
     }), { x: 0, z: 0 }));
     return `<text x="${number(center.x)}" y="${number(center.z)}" text-anchor="middle" dominant-baseline="central" fill="#172033" font-family="sans-serif" font-size="10" paint-order="stroke" stroke="#ffffff" stroke-width="3">${escapeXml(sourceId)}</text>`;
   }).join("");
-}
-
-function polygonArea(points: readonly PlanningPoint[]): number {
-  let twiceArea = 0;
-  for (let index = 0; index < points.length; index++) {
-    const next = points[(index + 1) % points.length];
-    twiceArea += points[index].x * next.z - next.x * points[index].z;
-  }
-  return Math.abs(twiceArea / 2);
 }
 
 function roadFill(road: PlannedRoadPolygon): string {

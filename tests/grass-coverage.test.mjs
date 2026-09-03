@@ -13,5 +13,10 @@ test("mature grass covers every placement cell", () => {
 test("grass clumps overlap without strongly jittered bare gaps", () => {
   assert.match(fieldSource, /column \+ 0\.35 \+ random\(\) \* 0\.3/);
   assert.match(fieldSource, /row \+ 0\.35 \+ random\(\) \* 0\.3/);
-  assert.match(fieldSource, /widthScale = 1\.1 \+ random\(\) \* 0\.42/);
+  assert.match(fieldSource, /GRASS_WIDTH_SCALE_MINIMUM = 1\.1/);
+  assert.match(fieldSource, /GRASS_WIDTH_SCALE_SPAN = 0\.42/);
+  assert.match(
+    fieldSource,
+    /widthScale = GRASS_WIDTH_SCALE_MINIMUM \+ random\(\) \* GRASS_WIDTH_SCALE_SPAN/,
+  );
 });
