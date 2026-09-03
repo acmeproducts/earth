@@ -40,7 +40,16 @@ export interface PlannedBuildingSite {
   holes: PlanningPoint[][];
 }
 
+export interface RoadAndBuildingPlanBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
 export interface RoadAndBuildingPlan {
+  /** Full scene-space planning extent, including portions without features. */
+  bounds: RoadAndBuildingPlanBounds;
   /** Mutually exclusive carriageway polygons within each physical road layer. */
   roads: PlannedRoadPolygon[];
   /** Mutually exclusive outer road beds; carriageways render above them. */
@@ -107,16 +116,16 @@ export function planRoadsAndBuildings(
   );
 
   const planningCellSize = Math.max(0.25, 20 / options.metersPerUnit);
-  const roads = partitionCandidates(
+  const roads = mergeCompatiblePolygons(partitionCandidates(
     triangulateCandidates(surfaceCandidates),
     bounds,
     planningCellSize,
-  );
-  const shoulders = partitionCandidates(
+  ));
+  const shoulders = mergeCompatiblePolygons(partitionCandidates(
     triangulateCandidates(outerCandidates),
     bounds,
     planningCellSize,
-  );
+  ));
   const buildingSites = buildingInputs.flatMap((building) => {
     const outline = clipToBounds(withoutClosingPoint(building.outline), bounds);
     if (outline.length < 3) return [];
@@ -129,7 +138,7 @@ export function planRoadsAndBuildings(
     }];
   });
 
-  return { roads, shoulders, buildingSites };
+  return { bounds, roads, shoulders, buildingSites };
 }
 
 function triangulateCandidates(candidates: readonly Candidate[]): Candidate[] {
@@ -149,6 +158,109 @@ function triangulateCandidates(candidates: readonly Candidate[]): Candidate[] {
     }
     return triangles;
   });
+}
+
+/** Reassembles triangulation fragments after all overlap subtraction is done. */
+function mergeCompatiblePolygons(roads: readonly PlannedRoadPolygon[]): PlannedRoadPolygon[] {
+  const groups = new Map<string, PlannedRoadPolygon[]>();
+  for (const road of roads) {
+    const key = roadGeometryKey(road);
+    const group = groups.get(key);
+    if (group) group.push({ ...road, outline: [...road.outline] });
+    else groups.set(key, [{ ...road, outline: [...road.outline] }]);
+  }
+
+  const result: PlannedRoadPolygon[] = [];
+  for (const group of groups.values()) {
+    let merged = true;
+    while (merged) {
+      merged = false;
+      outer: for (let left = 0; left < group.length; left++) {
+        for (let right = left + 1; right < group.length; right++) {
+          const outline = mergeAlongSharedEdge(group[left].outline, group[right].outline);
+          if (!outline) continue;
+          group[left] = { ...group[left], outline };
+          group.splice(right, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+    result.push(...group);
+  }
+  return result;
+}
+
+function roadGeometryKey(road: PlannedRoadPolygon): string {
+  const point = ({ x, z }: PlanningPoint) => `${x},${z}`;
+  return [
+    road.sourceId,
+    road.centerline.map(point).join("/"),
+    road.textureAxis?.map(point).join("/") ?? "",
+    road.startDistance,
+    road.widthMeters,
+    road.shoulderWidthMeters,
+    road.visualStyle,
+    road.surface,
+    road.structure,
+    road.layer,
+  ].join("|");
+}
+
+function mergeAlongSharedEdge(
+  first: readonly PlanningPoint[],
+  second: readonly PlanningPoint[],
+): PlanningPoint[] | undefined {
+  for (let firstIndex = 0; firstIndex < first.length; firstIndex++) {
+    const firstNext = (firstIndex + 1) % first.length;
+    for (let secondIndex = 0; secondIndex < second.length; secondIndex++) {
+      const secondNext = (secondIndex + 1) % second.length;
+      if (!samePoint(first[firstIndex], second[secondNext]) ||
+          !samePoint(first[firstNext], second[secondIndex])) continue;
+      const firstBoundary = ringPath(first, firstNext, firstIndex);
+      const secondBoundary = ringPath(second, secondNext, secondIndex);
+      const outline = removeCollinearPoints([
+        ...firstBoundary,
+        ...secondBoundary.slice(1, -1),
+      ]);
+      return outline.length >= 3 ? outline : undefined;
+    }
+  }
+  return undefined;
+}
+
+function ringPath(
+  ring: readonly PlanningPoint[],
+  start: number,
+  end: number,
+): PlanningPoint[] {
+  const result: PlanningPoint[] = [];
+  for (let index = start;; index = (index + 1) % ring.length) {
+    result.push(ring[index]);
+    if (index === end) return result;
+  }
+}
+
+function removeCollinearPoints(points: readonly PlanningPoint[]): PlanningPoint[] {
+  let result = deduplicate(points);
+  let changed = true;
+  while (changed && result.length > 3) {
+    changed = false;
+    for (let index = 0; index < result.length; index++) {
+      const previous = result[(index + result.length - 1) % result.length];
+      const current = result[index];
+      const next = result[(index + 1) % result.length];
+      if (Math.abs(cross(previous, current, next)) > 1e-9) continue;
+      result = [...result.slice(0, index), ...result.slice(index + 1)];
+      changed = true;
+      break;
+    }
+  }
+  return result;
+}
+
+function samePoint(first: PlanningPoint, second: PlanningPoint): boolean {
+  return Math.hypot(first.x - second.x, first.z - second.z) <= 1e-8;
 }
 
 /** Splits centerlines at crossings so every approach ends on one shared, level junction. */

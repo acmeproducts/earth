@@ -428,6 +428,29 @@ included in planner output and drawn over the plan outline.
 Run `yarn layouts:examples` to regenerate rectangular, tapered, and angled
 example plans in `data/layout-examples`.
 
+### Road and building plans
+
+`RoadAndBuildingPlanImage.ts` turns the renderer-independent output of
+`planRoadsAndBuildings` into a standalone, north-up SVG. The image uses the
+plan's complete tile bounds, so sparse and empty plans retain the same scale.
+It draws the exact partitioned road surfaces and shoulders, building footprints
+and holes, road markings, layers, and structures with machine-readable SVG data
+attributes for future planning diagnostics.
+
+```typescript
+import { renderRoadAndBuildingPlanSvg } from "./RoadAndBuildingPlanImage";
+
+const svgImage = renderRoadAndBuildingPlanSvg(plan, {
+  width: 1000,
+  height: 700,
+  title: "Road and building planning",
+  showLabels: true,
+});
+```
+
+Run `yarn site-plan:example` to write an example to
+`data/road-building-plan-examples/site-plan.svg`.
+
 ### Modifying the Scene
 
 Edit `src/Game.ts` to customize:

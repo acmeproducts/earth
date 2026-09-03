@@ -1,7 +1,7 @@
 const DEFAULT_BUDGET_MILLISECONDS = 2;
-// Nothing is painted while the document is hidden, so slices only need to be
+// Nothing is painted while the page is backgrounded, so slices only need to be
 // short enough to keep network callbacks and input handlers responsive.
-const HIDDEN_BUDGET_MILLISECONDS = 50;
+const BACKGROUND_BUDGET_MILLISECONDS = 50;
 // A visible document that stops delivering frames (occluded window, power
 // saving) would otherwise park streamed work indefinitely.
 const FRAME_STALL_TIMEOUT_MILLISECONDS = 1000;
@@ -12,9 +12,12 @@ export interface FrameBudgetYielder {
   nextFrame(): Promise<void>;
 }
 
-/** True while the browser has no reason to paint, so frames stop arriving. */
-export function documentIsHidden(): boolean {
-  return typeof document !== "undefined" && document.hidden === true;
+/** True while the page is hidden or its window does not have focus. */
+export function documentIsBackgrounded(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.hidden === true || (
+    typeof document.hasFocus === "function" && !document.hasFocus()
+  );
 }
 
 let framesStalled = false;
@@ -62,13 +65,13 @@ function probeFrameDelivery(): void {
 }
 
 /**
- * Resolves at the next render opportunity, or on a plain task when the document
- * is hidden and animation frames have stopped. Initialization streams itself
+ * Resolves at the next render opportunity, or on a plain task when the page is
+ * backgrounded and animation frames have stopped. Initialization streams itself
  * across frames, so a frame-only wait would suspend loading for as long as the
  * user looks at another tab.
  */
 export function waitForNextFrame(): Promise<void> {
-  if (documentIsHidden() || framesStalled) {
+  if (documentIsBackgrounded() || framesStalled) {
     probeFrameDelivery();
     return new Promise<void>((resolve) => { postBackgroundTask(resolve); });
   }
@@ -83,16 +86,23 @@ export function waitForNextFrame(): Promise<void> {
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
       }
+      if (typeof window !== "undefined") window.removeEventListener("blur", onWindowBlur);
       resolve();
     };
     const onVisibilityChange = (): void => {
       // The pending frame will not fire again until the tab comes back.
       if (document.hidden) postBackgroundTask(() => finish(true));
     };
+    const onWindowBlur = (): void => {
+      // Some browsers leave document.hidden false for an occluded or unfocused
+      // window even though its animation frames have been suspended.
+      postBackgroundTask(() => finish(true));
+    };
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", onVisibilityChange);
       stallTimer = setTimeout(() => finish(true), FRAME_STALL_TIMEOUT_MILLISECONDS);
     }
+    if (typeof window !== "undefined") window.addEventListener("blur", onWindowBlur);
     requestAnimationFrame(() => {
       // rAF callbacks run before painting. A timer lets all render callbacks
       // finish before streamed work starts consuming the following frame.
@@ -112,8 +122,8 @@ export function createFrameBudgetYielder(
     frameStart = performance.now();
   };
   const yieldIfNeeded = async (): Promise<void> => {
-    const budget = documentIsHidden()
-      ? Math.max(budgetMilliseconds, HIDDEN_BUDGET_MILLISECONDS)
+    const budget = documentIsBackgrounded()
+      ? Math.max(budgetMilliseconds, BACKGROUND_BUDGET_MILLISECONDS)
       : budgetMilliseconds;
     if (performance.now() - frameStart < budget) return;
     await nextFrame();

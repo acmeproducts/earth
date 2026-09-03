@@ -3,10 +3,11 @@ import test from "node:test";
 
 const { createFrameBudgetYielder, waitForNextFrame } = await import("../src/FrameBudget.ts");
 
-function stubDocument(hidden) {
+function stubDocument(hidden, focused = true) {
   const listeners = new Set();
   globalThis.document = {
     hidden,
+    hasFocus: () => focused,
     addEventListener: (type, listener) => { if (type === "visibilitychange") listeners.add(listener); },
     removeEventListener: (type, listener) => { listeners.delete(listener); },
   };
@@ -15,6 +16,7 @@ function stubDocument(hidden) {
       globalThis.document.hidden = true;
       listeners.forEach((listener) => listener());
     },
+    setFocused(value) { focused = value; },
     restore() { delete globalThis.document; },
   };
 }
@@ -54,6 +56,29 @@ test("frame budget yields after animation callbacks before resuming work", async
 test("frame budget exposes an explicit boundary for large indivisible work", () => {
   const yielder = createFrameBudgetYielder();
   assert.equal(typeof yielder.nextFrame, "function");
+});
+
+test("unfocused documents keep streaming without waiting for animation frames", async () => {
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  let animationCallback;
+  let animationRequests = 0;
+  globalThis.requestAnimationFrame = (callback) => {
+    animationRequests++;
+    animationCallback = callback;
+    return 1;
+  };
+  const documentStub = stubDocument(false, false);
+
+  try {
+    const yielder = createFrameBudgetYielder(0);
+    await yielder.nextFrame();
+    assert.equal(animationRequests, 1, "only the probe that notices focus returning");
+    documentStub.setFocused(true);
+    animationCallback(0);
+  } finally {
+    documentStub.restore();
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
 });
 
 test("hidden documents keep streaming without waiting for animation frames", async () => {

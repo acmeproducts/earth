@@ -10,6 +10,7 @@
     "build:stars": "node scripts/build-star-catalog.mjs",
     "layouts:examples": "node scripts/render-layout-examples.mjs",
     "layouts:captured": "node scripts/render-captured-building-layouts.mjs",
+    "site-plan:example": "node scripts/render-road-building-plan-example.mjs",
     "test": "node --import ./tests/register-typescript.mjs --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "clean": "rimraf dist"

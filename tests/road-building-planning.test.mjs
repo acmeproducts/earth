@@ -23,6 +23,7 @@ test("plans crossing roads as connected polygons without overlapping area", () =
   ], [], options);
 
   assert.ok(plan.roads.length > 2);
+  assert.ok(plan.roads.length <= 9, `expected a junction and approaches, got ${plan.roads.length} polygons`);
   for (let left = 0; left < plan.roads.length; left++) {
     for (let right = left + 1; right < plan.roads.length; right++) {
       assert.equal(hasPositiveAreaIntersection(
