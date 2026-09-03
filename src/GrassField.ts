@@ -149,10 +149,11 @@ export async function createGrassField(
   if (landCover) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
-        // Restrained jitter keeps the carpet gap-free while rotations, scale,
-        // and the clump silhouettes keep the underlying grid imperceptible.
-        const x = -meshWidth / 2 + (column + 0.35 + random() * 0.3) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.35 + random() * 0.3) * cellDepth;
+        // Let neighbouring clumps overlap irregularly. Their generous width
+        // still closes gaps, while the wider jitter prevents the first and
+        // last occupied rows from reading as a straight strip.
+        const x = -meshWidth / 2 + (column + 0.18 + random() * 0.64) * cellWidth;
+        const z = meshDepth / 2 - (row + 0.18 + random() * 0.64) * cellDepth;
         const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const coverClass = landCover.sample(lon, lat);
         const occupancy = Math.min(

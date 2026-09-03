@@ -35,3 +35,24 @@ test("bush impostors preserve their asymmetric regional silhouettes at runtime",
   assert.match(bushSource, /const radiusAtAngle/);
   assert.doesNotMatch(bushSource, /ROTATIONAL_SYMMETRY_ORDER|for \(let copy/);
 });
+
+test("impostor sampling defaults do not exceed five views per axis", () => {
+  for (const name of [
+    "BushImpostor.ts",
+    "FernImpostor.ts",
+    "GrassImpostor.ts",
+    "RockyBeachImpostor.ts",
+    "TallPlantImpostor.ts",
+    "TreeImpostor.ts",
+    "WheatImpostor.ts",
+  ]) {
+    const impostorSource = source(name);
+    const horizontalDefault = impostorSource.match(/horizontalSamples: \{ default: (\d+),/)?.[1];
+    const verticalDefault = impostorSource.match(/verticalSamples: \{ default: (\d+),/)?.[1];
+
+    assert.ok(horizontalDefault, `${name} declares a horizontal sampling default`);
+    assert.ok(verticalDefault, `${name} declares a vertical sampling default`);
+    assert.ok(Number(horizontalDefault) <= 5, `${name} horizontal sampling is capped at 5`);
+    assert.ok(Number(verticalDefault) <= 5, `${name} vertical sampling is capped at 5`);
+  }
+});

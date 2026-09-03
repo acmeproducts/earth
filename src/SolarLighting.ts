@@ -19,7 +19,11 @@ import { getGameDate } from "./GameTime";
 import { Moon } from "./Moon";
 import { shouldUpdateSolarLocation } from "./SolarLocation";
 import { StarField } from "./StarField";
-import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
+import {
+  resumeVegetationShadowReceivers,
+  SHADOW_DARKNESS,
+  suspendVegetationShadowReceivers,
+} from "./VegetationShadowReceiver";
 
 const SUN_DISTANCE = 2000;
 const SUN_ANGULAR_RADIUS = (0.2666 * Math.PI) / 180;
@@ -125,6 +129,9 @@ export class SolarLighting {
     this.shadows.bias = 0.0005;
     this.shadows.normalBias = 0.02;
     const shadowMap = this.shadows.getShadowMap();
+    shadowMap?.onBeforeBindObservable.add(() => {
+      suspendVegetationShadowReceivers(scene, shadowMap);
+    });
     shadowMap?.onBeforeRenderObservable.add(() => {
       for (const mesh of this.shadowOnlyCasters) {
         if (!mesh.isDisposed()) mesh.isVisible = true;
@@ -134,6 +141,9 @@ export class SolarLighting {
       for (const mesh of this.shadowOnlyCasters) {
         if (!mesh.isDisposed()) mesh.isVisible = false;
       }
+    });
+    shadowMap?.onAfterUnbindObservable.add(() => {
+      resumeVegetationShadowReceivers(scene);
     });
     this.skyMesh = MeshBuilder.CreateSphere(
       "sky",

@@ -21,6 +21,10 @@ const SOURCE_HEIGHT = 0.85;
 const CAPTURE_DIAMETER = 3.8;
 /** Nominal blade radius of the clump, in source units. */
 const CLUMP_RADIUS = 1.3;
+const CLUMP_EDGE_RADIUS_SCALE_MINIMUM = 0.78;
+const CLUMP_EDGE_RADIUS_SCALE_SPAN = 0.44;
+const CLUMP_EDGE_RADIUS_SCALE_MAXIMUM =
+  CLUMP_EDGE_RADIUS_SCALE_MINIMUM + CLUMP_EDGE_RADIUS_SCALE_SPAN;
 
 export function grassRenderedCaptureSize(renderHeight: number): number {
   return CAPTURE_DIAMETER * renderHeight / SOURCE_HEIGHT;
@@ -28,7 +32,7 @@ export function grassRenderedCaptureSize(renderHeight: number): number {
 
 /** How far the clump's near edge stands in front of its center once rendered. */
 export function grassRenderedClumpRadius(renderHeight: number): number {
-  return CLUMP_RADIUS * renderHeight / SOURCE_HEIGHT;
+  return CLUMP_RADIUS * CLUMP_EDGE_RADIUS_SCALE_MAXIMUM * renderHeight / SOURCE_HEIGHT;
 }
 // Keep grass in the same cool-green family as the tree canopy, but bias the
 // blades toward muted olive tones. Highly green tips become neon once direct
@@ -77,11 +81,16 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
 
   for (let blade = 0; blade < bladeCount / symmetryOrder; blade++) {
     const baseAngle = random() * sectorAngle;
-    const edgeRadius = CLUMP_RADIUS + (random() - 0.5) * 0.22;
+    // A broad per-blade boundary makes density taper naturally instead of
+    // ending at the same circular outline on every captured clump.
+    const edgeRadius = CLUMP_RADIUS * (
+      CLUMP_EDGE_RADIUS_SCALE_MINIMUM + random() * CLUMP_EDGE_RADIUS_SCALE_SPAN
+    );
     const radius = Math.sqrt(random()) * edgeRadius;
     const bladeAngle = random() * Math.PI * 2;
     const bendAngle = baseAngle + (random() - 0.5) * 1.8;
-    const edgeScale = 1 - 0.24 * Math.pow(radius / edgeRadius, 2);
+    // Shorter outer blades form a low fringe that merges into the terrain.
+    const edgeScale = 1 - 0.46 * Math.pow(radius / edgeRadius, 1.6);
     const height = (0.28 + Math.pow(random(), 0.7) * 0.57) * edgeScale;
     const bend = (0.035 + random() * 0.3) * height;
     const width = 0.012 + Math.pow(random(), 1.7) * 0.052;

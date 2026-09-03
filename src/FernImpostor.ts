@@ -34,7 +34,7 @@ const fernImpostors = createImpostorAssetProvider({
   upperHemisphereOnly: true,
   sampling: {
     horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
-    verticalSamples: { default: 6, minimum: 1, maximum: 12 },
+    verticalSamples: { default: 5, minimum: 1, maximum: 12 },
     resolution: { default: 112, minimum: 48, maximum: 512 },
   },
 });

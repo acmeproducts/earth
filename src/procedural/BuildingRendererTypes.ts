@@ -3,6 +3,7 @@ import type { BuildingPlan, BuildingPolygon } from "../BuildingPlanner";
 import type { BuildingLayout } from "../BuildingLayoutPlanner";
 import type { ApartmentLayout } from "../ApartmentLayoutPlanner";
 import type { Opening2D, Point2D } from "../FloorPlan";
+import type { BuildingSurface } from "./BuildingMaterial";
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -22,6 +23,8 @@ export interface BuildingAppearance {
   wall: Color3;
   roof: Color3;
   trim: Color3;
+  wallSurface: BuildingSurface;
+  roofSurface: BuildingSurface;
 }
 
 export interface PreparedBuildingFootprint {

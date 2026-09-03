@@ -74,6 +74,15 @@ import {
   BUILDING_WINDOW_CLEAR_DISTANCE_METERS,
   BUILDING_WINDOW_OPAQUE_DISTANCE_METERS,
 } from "./BuildingRendererConstants";
+import {
+  BUILDING_MATERIAL_VERTEX_KIND,
+  createBuildingSolidMaterial,
+  roofSurfaceFor,
+  setBuildingSurface,
+  setBuildingSurfaces,
+  wallSurfaceFor,
+  type BuildingSurface,
+} from "./BuildingMaterial";
 
 export type { BuildingRenderOptions } from "./BuildingRendererTypes";
 
@@ -134,6 +143,7 @@ export class ProceduralBuildingRenderer {
       wallTopElevation,
       options,
       appearance.trim,
+      appearance.roofSurface,
       plan.detailSeed,
     );
     if (trim) parts.push(trim);
@@ -147,6 +157,7 @@ export class ProceduralBuildingRenderer {
         roofShape,
         options,
         appearance.roof,
+        appearance.roofSurface,
         plan.detailSeed,
       );
       if (roof) parts.push(roof);
@@ -249,11 +260,9 @@ export class ProceduralBuildingRenderer {
       .filter((pending): pending is PendingBuildingInterior => pending !== undefined);
     const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
     if (!result) return undefined;
-    const material = new StandardMaterial(`${name}Material`, result.getScene());
-    material.diffuseColor = Color3.White();
-    material.specularColor = new Color3(0.025, 0.025, 0.025);
-    material.specularPower = 16;
-    material.backFaceCulling = false;
+    const material = createBuildingSolidMaterial(
+      `${name}Material`, result.getScene(), Number.isFinite(metersPerUnit) ? metersPerUnit : 1,
+    );
     material.transparencyMode = Material.MATERIAL_OPAQUE;
     result.useVertexColors = true;
     result.hasVertexAlpha = true;
@@ -620,6 +629,11 @@ function createEnterableBuilding(
 
   const windowMesh = createWindowMesh(scene, windows);
   if (windowMesh) parts.push(windowMesh);
+  for (const mesh of parts) {
+    if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) {
+      setBuildingSurface(mesh, part === "exterior" ? appearance.wallSurface : "plaster");
+    }
+  }
 
   return {
     parts,
@@ -1890,6 +1904,7 @@ function createRoofTrim(
   elevation: number,
   options: BuildingRenderOptions,
   color: Color3,
+  surface: BuildingSurface,
   detailSeed: number,
 ): Mesh | undefined {
   if (outline.length > 12) return undefined;
@@ -1912,7 +1927,7 @@ function createRoofTrim(
     }
     trim.updateVerticesData(VertexBuffer.PositionKind, positions);
   }
-  setSolidVertexColor(trim, color);
+  setSolidVertexColor(trim, color, surface);
   return trim;
 }
 
@@ -1924,6 +1939,7 @@ function createPitchedRoof(
   roofShape: BuildingPlan["roofShape"],
   options: BuildingRenderOptions,
   color: Color3,
+  surface: BuildingSurface,
   detailSeed: number,
 ): Mesh | undefined {
   if (!isConvex(outline) || outline.length > 12) return undefined;
@@ -1987,7 +2003,7 @@ function createPitchedRoof(
   const roof = stageBuildingMesh(new Mesh("buildingRoof", scene));
   data.applyToMesh(roof);
   roof.convertToFlatShadedMesh();
-  colorRoofMesh(roof, color);
+  colorRoofMesh(roof, color, surface);
   return roof;
 }
 
@@ -2009,7 +2025,7 @@ function createRooftopVolume(
     roofElevation - thicknessMeters / 2,
     options,
   );
-  setSolidVertexColor(rooftop, appearance.roof);
+  setSolidVertexColor(rooftop, appearance.roof, appearance.roofSurface);
   return rooftop;
 }
 
@@ -2095,7 +2111,13 @@ function buildingAppearance(plan: BuildingPlan): BuildingAppearance {
     unitFromSeed(plan.detailSeed ^ 0x5e219b) - 0.5,
     unitFromSeed(plan.detailSeed ^ 0x2794df) - 0.5,
   );
-  return { wall, roof, trim: mixColor(wall, roof, 0.72) };
+  return {
+    wall,
+    roof,
+    trim: mixColor(wall, roof, 0.72),
+    wallSurface: wallSurfaceFor(plan.wallMaterial, plan.buildingClass, plan.detailSeed),
+    roofSurface: roofSurfaceFor(plan.roofMaterial, plan.roofShape, plan.buildingClass),
+  };
 }
 
 function parseBuildingColor(value: string | undefined): Color3 | undefined {
@@ -2147,9 +2169,12 @@ function colorBuildingMass(mesh: Mesh, appearance: BuildingAppearance): void {
   }
   mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   mesh.useVertexColors = true;
+  setBuildingSurfaces(mesh, (normalY) => normalY > 0.55
+    ? appearance.roofSurface
+    : appearance.wallSurface);
 }
 
-function colorRoofMesh(mesh: Mesh, color: Color3): void {
+function colorRoofMesh(mesh: Mesh, color: Color3, surface: BuildingSurface): void {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
   if (!positions) return;
@@ -2162,9 +2187,14 @@ function colorRoofMesh(mesh: Mesh, color: Color3): void {
   }
   mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   mesh.useVertexColors = true;
+  setBuildingSurface(mesh, surface);
 }
 
-function setSolidVertexColor(mesh: Mesh, color: Color3): void {
+function setSolidVertexColor(
+  mesh: Mesh,
+  color: Color3,
+  surface: BuildingSurface = "plaster",
+): void {
   const count = mesh.getTotalVertices();
   const colors = new Array<number>(count * 4);
   for (let vertex = 0; vertex < count; vertex++) {
@@ -2175,6 +2205,7 @@ function setSolidVertexColor(mesh: Mesh, color: Color3): void {
   }
   mesh.setVerticesData(VertexBuffer.ColorKind, colors);
   mesh.useVertexColors = true;
+  setBuildingSurface(mesh, surface);
 }
 
 function pointDistance(a: ScenePoint, b: ScenePoint): number {

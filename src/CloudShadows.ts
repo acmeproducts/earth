@@ -56,6 +56,12 @@ varying vec2 vCloudShadowWorldXZ;
 
 export const cloudShadowFragmentDeclaration = `
 varying vec2 vCloudShadowWorldXZ;
+
+#if SM_DIRECTIONINLIGHTDATA == 1
+float vegetationCloudShadowVisibility(void) {
+  return 1.0;
+}
+#else
 uniform sampler2D cloudShadowAtlas;
 uniform vec4 cloudShadowLighting;
 uniform vec2 cloudShadowAtlasDimensions;
@@ -93,9 +99,6 @@ float sampleVegetationCloudShadow(vec4 placement, vec2 metadata) {
 }
 
 float vegetationCloudShadowVisibility(void) {
-  #if SM_DIRECTIONINLIGHTDATA == 1
-  return 1.0;
-  #else
   float coverage = 1.0;
   coverage *= 1.0 - sampleVegetationCloudShadow(
     cloudShadowPlacement0,
@@ -115,8 +118,8 @@ float vegetationCloudShadowVisibility(void) {
   );
   coverage = 1.0 - coverage;
   return 1.0 - coverage * cloudShadowLighting.x * ${CLOUD_SHADOW_DARKNESS};
-  #endif
 }
+#endif
 `;
 
 export const CLOUD_SHADOW_UNIFORMS = [

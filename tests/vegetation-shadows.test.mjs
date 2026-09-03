@@ -166,8 +166,32 @@ test("shadows custom vegetation direct light while preserving ambient light", ()
   assert.doesNotMatch(receivers, /sampler2DShadow/);
   assert.match(receivers, /visibility \/= 9\.0/);
   assert.match(receivers, /SM_DIRECTIONINLIGHTDATA == 1/);
+  assert.match(
+    receivers,
+    /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?#else[\s\S]*?uniform sampler2D vegetationShadowSampler/,
+  );
   assert.match(receivers, /scene\.onBeforeRenderObservable\.add\(updateShadowUniforms\)/);
   assert.doesNotMatch(receivers, /material\.onBindObservable\.add/);
+});
+
+test("detaches vegetation shadow samplers while rendering their framebuffer", () => {
+  assert.match(receivers, /export function suspendVegetationShadowReceivers/);
+  assert.match(
+    receivers,
+    /setTexture\("vegetationShadowSampler", fallback\)/,
+  );
+  assert.match(receivers, /engine\.unbindAllTextures\(\)/);
+  assert.doesNotMatch(receivers, /_boundTexturesCache/);
+  assert.match(receivers, /scene\.resetCachedMaterial\(\)/);
+  assert.match(receivers, /export function resumeVegetationShadowReceivers/);
+  assert.match(
+    solarLighting,
+    /shadowMap\?\.onBeforeBindObservable\.add\([\s\S]*?suspendVegetationShadowReceivers\(scene, shadowMap\)/,
+  );
+  assert.match(
+    solarLighting,
+    /shadowMap\?\.onAfterUnbindObservable\.add\([\s\S]*?resumeVegetationShadowReceivers\(scene\)/,
+  );
 });
 
 test("cloud footprints shadow both vegetation models and impostors", () => {
@@ -183,6 +207,10 @@ test("cloud footprints shadow both vegetation models and impostors", () => {
     /lighting \*= mix\(1\.0, vegetationCloudShadowVisibility\(\), lightingEnabled\)/,
   );
   assert.match(cloudReceivers, /uniform sampler2D cloudShadowAtlas/);
+  assert.match(
+    cloudReceivers,
+    /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?#else[\s\S]*?uniform sampler2D cloudShadowAtlas/,
+  );
   assert.match(cloudReceivers, /CLOUD_SHADOW_DARKNESS = 0\.22/);
   assert.match(
     cloudReceivers,

@@ -128,18 +128,19 @@ type VegetationCategory = "trees" | "grass" | "bushes";
 type VegetationModes = Record<VegetationCategory, VegetationRenderMode>;
 interface VegetationFieldConfig {
   category: VegetationCategory;
-  lodDistanceCapMeters: number;
 }
 const VEGETATION_FIELD_CONFIG: Readonly<Record<VegetationFieldKind, VegetationFieldConfig>> = {
-  treeField: { category: "trees", lodDistanceCapMeters: Number.POSITIVE_INFINITY },
-  saplingField: { category: "trees", lodDistanceCapMeters: 14 },
-  grassField: { category: "grass", lodDistanceCapMeters: 8 },
-  tallPlantField: { category: "grass", lodDistanceCapMeters: 11 },
-  wheatField: { category: "grass", lodDistanceCapMeters: 10 },
-  rockyBeachField: { category: "grass", lodDistanceCapMeters: 10 },
-  bushField: { category: "bushes", lodDistanceCapMeters: 16 },
-  fernField: { category: "grass", lodDistanceCapMeters: 7 },
+  treeField: { category: "trees" },
+  saplingField: { category: "trees" },
+  grassField: { category: "grass" },
+  tallPlantField: { category: "grass" },
+  wheatField: { category: "grass" },
+  rockyBeachField: { category: "grass" },
+  bushField: { category: "bushes" },
+  fernField: { category: "grass" },
 };
+/** Dense mature grass is costly as geometry and only needs close-up detail. */
+const GRASS_MODEL_RANGE_CAP_METERS = 8;
 /** One world tile spans this many scene units in the stable frame. */
 const TILE_MESH_WIDTH_UNITS = 25;
 /** Share of that horizon the view stays clear before fog takes over. */
@@ -772,7 +773,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       treeField,
-      this.fieldLodDistance("treeField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(record, "treeField", treeField, generation)) return;
@@ -788,7 +789,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       saplingField,
-      this.fieldLodDistance("saplingField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(record, "saplingField", saplingField, generation)) return;
@@ -818,7 +819,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       tallPlantField,
-      this.fieldLodDistance("tallPlantField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(record, "tallPlantField", tallPlantField, generation)) return;
@@ -830,7 +831,12 @@ export class Game {
       densityScale: () => actorMix.tallPlants.densityScale,
       renderMode: this.vegetationModes.grass,
     });
-    await this.prepareTileFieldLod(record, wheatField, this.fieldLodDistance("wheatField"), yieldControl);
+    await this.prepareTileFieldLod(
+      record,
+      wheatField,
+      this.vegetationLodDistanceMeters,
+      yieldControl,
+    );
     if (!this.stageTileField(record, "wheatField", wheatField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding bushes", 79);
@@ -843,7 +849,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       bushField,
-      this.fieldLodDistance("bushField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(record, "bushField", bushField, generation)) return;
@@ -858,7 +864,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       fernField,
-      this.fieldLodDistance("fernField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(record, "fernField", fernField, generation)) return;
@@ -873,7 +879,7 @@ export class Game {
     await this.prepareTileFieldLod(
       record,
       rockyBeachField,
-      this.fieldLodDistance("rockyBeachField"),
+      this.vegetationLodDistanceMeters,
       yieldControl,
     );
     if (!this.stageTileField(
@@ -1590,10 +1596,9 @@ export class Game {
   }
 
   private fieldLodDistance(kind: VegetationFieldKind): number {
-    return Math.min(
-      this.vegetationLodDistanceMeters,
-      VEGETATION_FIELD_CONFIG[kind].lodDistanceCapMeters,
-    );
+    return kind === "grassField"
+      ? Math.min(this.vegetationLodDistanceMeters, GRASS_MODEL_RANGE_CAP_METERS)
+      : this.vegetationLodDistanceMeters;
   }
 
   private updateVegetationLod(): void {
@@ -1636,7 +1641,7 @@ export class Game {
       if (record.barrierField && record.mapFeatures) {
         updateField(
           record.barrierField,
-          Math.min(this.vegetationLodDistanceMeters, 16),
+          this.vegetationLodDistanceMeters,
           record.mapFeatures.position.x,
           record.mapFeatures.position.z,
         );

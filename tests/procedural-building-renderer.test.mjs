@@ -15,6 +15,9 @@ const { planBuilding } = await import("../src/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
 );
+const { BUILDING_MATERIAL_VERTEX_KIND } = await import(
+  "../src/procedural/BuildingMaterial.ts"
+);
 
 const footprint = {
   outer: [[0.35, 0.42], [0.65, 0.42], [0.65, 0.58], [0.35, 0.58], [0.35, 0.42]],
@@ -184,6 +187,42 @@ test("stable seeds vary roof construction, overhang, and color", () => {
   assert.ok(vertexCounts.size >= 2);
   assert.ok(widths.size >= 3);
   assert.ok(colors.size >= 6);
+  scene.dispose();
+  engine.dispose();
+});
+
+test("mapped building materials survive batching as procedural surface attributes", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const brick = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(81, { render_height: 12, material: "brick", roof_material: "slate" }),
+    terrain,
+    options,
+  );
+  const timber = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(82, { render_height: 12, material: "wood", roof_material: "metal" }),
+    terrain,
+    options,
+  );
+  assert.ok(brick && timber);
+  const brickMaterials = new Set(brick.getVerticesData(BUILDING_MATERIAL_VERTEX_KIND));
+  const timberMaterials = new Set(timber.getVerticesData(BUILDING_MATERIAL_VERTEX_KIND));
+  assert.ok(brickMaterials.has(1));
+  assert.ok(brickMaterials.has(7));
+  assert.ok(timberMaterials.has(4));
+  assert.ok(timberMaterials.has(8));
+
+  const merged = ProceduralBuildingRenderer.merge(
+    [brick, timber],
+    "materialBuildings",
+    new TransformNode("root", scene),
+  );
+  assert.ok(merged);
+  assert.ok(merged.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND));
+  assert.ok(merged.material.subMaterials[0].CustomParts);
+
   scene.dispose();
   engine.dispose();
 });

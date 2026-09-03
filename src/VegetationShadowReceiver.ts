@@ -1,6 +1,8 @@
 import {
   DirectionalLight,
+  Engine,
   RawTexture,
+  RenderTargetTexture,
   Scene,
   ShaderMaterial,
   ShadowGenerator,
@@ -17,6 +19,11 @@ export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
  */
 export const SHADOW_DARKNESS = 0.3;
 const fallbackShadowTextures = new WeakMap<Scene, RawTexture>();
+interface VegetationShadowReceiverBinding {
+  material: ShaderMaterial;
+  update: () => void;
+}
+const receiverBindings = new WeakMap<Scene, Set<VegetationShadowReceiverBinding>>();
 
 function fallbackShadowTexture(scene: Scene): RawTexture {
   const cached = fallbackShadowTextures.get(scene);
@@ -44,6 +51,12 @@ varying vec4 vVegetationShadowPosition;
 export const vegetationShadowFragmentDeclaration = `
 #define DISABLE_UNIFORMITY_ANALYSIS
 varying vec4 vVegetationShadowPosition;
+
+#if SM_DIRECTIONINLIGHTDATA == 1
+float vegetationShadowVisibility(void) {
+  return 1.0;
+}
+#else
 uniform sampler2D vegetationShadowSampler;
 uniform vec2 vegetationShadowTexelSize;
 uniform vec2 vegetationShadowDepthValues;
@@ -63,11 +76,6 @@ float unpackVegetationShadowDepth(vec4 packedDepth) {
 }
 
 float vegetationShadowVisibility(void) {
-  // The wrapped depth pass uses the same source fragment shader. Do not sample
-  // the texture while that pass is writing it.
-  #if SM_DIRECTIONINLIGHTDATA == 1
-  return 1.0;
-  #else
   if (vegetationShadowEnabled < 0.5) return 1.0;
   vec3 clip = vVegetationShadowPosition.xyz
     / max(vVegetationShadowPosition.w, 0.00001);
@@ -95,8 +103,8 @@ float vegetationShadowVisibility(void) {
   }
   visibility /= 9.0;
   return mix(vegetationShadowDarkness, 1.0, visibility);
-  #endif
 }
+#endif
 `;
 
 /** Supplies Babylon's regular depth shadow texture to custom vegetation shaders. */
@@ -146,10 +154,48 @@ export function bindVegetationShadowReceiver(material: ShaderMaterial, scene: Sc
   // already been uploaded. Update before rendering so the current frame—not a
   // later material rebind—receives the shadow texture and transform.
   updateShadowUniforms();
+  const binding = { material, update: updateShadowUniforms };
+  let bindings = receiverBindings.get(scene);
+  if (!bindings) {
+    bindings = new Set();
+    receiverBindings.set(scene, bindings);
+  }
+  bindings.add(binding);
   const observer = scene.onBeforeRenderObservable.add(updateShadowUniforms);
   material.onDisposeObservable.addOnce(() => {
     scene.onBeforeRenderObservable.remove(observer);
+    bindings?.delete(binding);
   });
+}
+
+/** Detaches the shadow target from every custom sampler before it is rendered. */
+export function suspendVegetationShadowReceivers(
+  scene: Scene,
+  shadowMap: RenderTargetTexture,
+): void {
+  const fallback = fallbackShadowTexture(scene);
+  for (const binding of receiverBindings.get(scene) ?? []) {
+    binding.material.setFloat("vegetationShadowEnabled", 0);
+    binding.material.setTexture("vegetationShadowSampler", fallback);
+  }
+
+  // ShaderMaterial setters only change the next effect bind. WebGL forbids a
+  // render target from remaining on any sampler while its framebuffer is
+  // active, and Babylon's private texture cache is not authoritative for all
+  // direct bindings. Clear every unit here; shadow-depth effects rebind the
+  // textures they need on their next effect bind.
+  const engine = scene.getEngine();
+  if (engine instanceof Engine && shadowMap.getInternalTexture()) {
+    engine.unbindAllTextures();
+  }
+  scene.resetCachedMaterial();
+}
+
+/** Restores the live shadow target after its framebuffer has been detached. */
+export function resumeVegetationShadowReceivers(scene: Scene): void {
+  for (const binding of receiverBindings.get(scene) ?? []) {
+    binding.update();
+  }
 }
 
 /** Babylon packs depth into RGBA only for the unsigned-byte fallback. */
