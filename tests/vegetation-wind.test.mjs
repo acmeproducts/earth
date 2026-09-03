@@ -10,6 +10,8 @@ test("wind affects grass, bushes, fern undergrowth, and tall plants", () => {
   assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+, tree: [\d.]+ \}/);
   assert.match(source("GrassField.ts"), /windShearFraction\("grass"\)/);
   assert.match(source("BushField.ts"), /windShearFraction\("bush"\)/);
+  assert.match(source("OpenStreetMapBarriers.ts"), /windShearFraction\("bush"\)/);
+  assert.match(source("OpenStreetMapBarriers.ts"), /setVegetationWindShear\(/);
   assert.match(source("FernField.ts"), /windShearFraction\("grass"\)/);
   assert.match(source("FernField.ts"), /setVegetationWindShear\(\[fern, fernModel\]/);
   assert.match(source("TallPlantField.ts"), /windShearFraction\("grass"\)/);

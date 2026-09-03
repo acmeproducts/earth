@@ -1,5 +1,5 @@
 export type RoadSurface = "paved" | "unpaved";
-export type RoadVisualStyle = RoadSurface | "marked" | "pedestrian" | "ford";
+export type RoadVisualStyle = RoadSurface | "dirt" | "marked" | "pedestrian" | "ford";
 export type RoadStructure = "surface" | "bridge" | "tunnel" | "ford";
 
 export interface RoadPlan {
@@ -94,6 +94,8 @@ export function planRoad(properties: Readonly<Record<string, unknown>>): RoadPla
         : "surface";
   const visualStyle: RoadVisualStyle = structure === "ford"
     ? "ford"
+    : surface === "unpaved" && !isConstruction && (roadClass === "track" || roadClass === "path")
+      ? "dirt"
     : surface === "unpaved"
     ? "unpaved"
     : roadClass === "path" || subclass === "pedestrian"
@@ -112,6 +114,13 @@ export function planRoad(properties: Readonly<Record<string, unknown>>): RoadPla
     layer: numeric(properties.layer) ?? 0,
     isTunnel: structure === "tunnel",
   };
+}
+
+/** Natural tracks allow plants into most of their soft, irregular shoulder. */
+export function roadVegetationShoulderMeters(road: RoadPlan): number {
+  return road.visualStyle === "dirt"
+    ? road.shoulderWidthMeters * 0.2
+    : road.shoulderWidthMeters;
 }
 
 function text(value: unknown): string | undefined {

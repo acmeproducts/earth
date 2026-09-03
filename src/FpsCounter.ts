@@ -10,7 +10,8 @@ import {
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 1;
+const REPORT_VERSION = 2;
+const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
 
 export interface CpuFrameSample {
   gameMilliseconds: number;
@@ -41,6 +42,11 @@ interface MemoryPerformance extends Performance {
 
 interface FrameHistorySample extends CpuFrameSample {
   recordedAtMilliseconds: number;
+  frameIntervalMilliseconds: number;
+  callbackMilliseconds: number;
+  unattributedMilliseconds: number;
+  frameBudgetMilliseconds: number;
+  stutter: boolean;
 }
 
 interface StallSample {
@@ -68,6 +74,12 @@ export class FpsCounter {
   private vegetationPeakMilliseconds = 0;
   private renderMilliseconds = 0;
   private renderPeakMilliseconds = 0;
+  private frameIntervalMilliseconds = 0;
+  private frameIntervalPeakMilliseconds = 0;
+  private unattributedPeakMilliseconds = 0;
+  private stutterCount = 0;
+  private lastFrameRecordedAt?: number;
+  private cadenceMilliseconds?: number;
   private latestStreaming?: Pick<
     CpuFrameSample,
     "activeTileBuilds" | "terrainTiles" | "detailTiles"
@@ -94,6 +106,8 @@ export class FpsCounter {
     this.element.setAttribute("aria-label", "Frames per second");
     this.element.textContent = "-- FPS";
     document.body.appendChild(this.element);
+    window.addEventListener("blur", this.resetFrameCadence);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.updateAppearance();
   }
 
@@ -133,6 +147,9 @@ export class FpsCounter {
     const vegetationAverage = this.sampleCount > 0
       ? this.vegetationMilliseconds / this.sampleCount
       : 0;
+    const intervalAverage = this.sampleCount > 0
+      ? this.frameIntervalMilliseconds / this.sampleCount
+      : 0;
     const streaming = this.latestStreaming;
     const memory = (performance as MemoryPerformance).memory;
     const config = this.configuration
@@ -140,6 +157,12 @@ export class FpsCounter {
       : "";
     this.element.textContent = [
       `${fps}  ${frameMs.toFixed(1)} ms frame`,
+      `pacing ${intervalAverage.toFixed(1)} avg / ` +
+        `${this.frameIntervalPeakMilliseconds.toFixed(1)} worst ms  ` +
+        `${this.stutterCount} hitch${this.stutterCount === 1 ? "" : "es"}`,
+      this.unattributedPeakMilliseconds > 0.5
+        ? `outside callback ${this.unattributedPeakMilliseconds.toFixed(1)} peak ms`
+        : "",
       `CPU game ${gameAverage.toFixed(1)} avg / ${this.gamePeakMilliseconds.toFixed(1)} peak ms`,
       `move LOD ${vegetationAverage.toFixed(1)} avg / ` +
         `${this.vegetationPeakMilliseconds.toFixed(1)} peak ms`,
@@ -183,6 +206,8 @@ export class FpsCounter {
   }
 
   dispose(): void {
+    window.removeEventListener("blur", this.resetFrameCadence);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.performanceObserver?.disconnect();
     this.engineInstrumentation.dispose();
     this.instrumentation.dispose();
@@ -243,6 +268,25 @@ export class FpsCounter {
   }
 
   private recordCpuSample(sample: CpuFrameSample): void {
+    const recordedAtMilliseconds = performance.now();
+    const frameIntervalMilliseconds = this.lastFrameRecordedAt === undefined
+      ? 0
+      : recordedAtMilliseconds - this.lastFrameRecordedAt;
+    this.lastFrameRecordedAt = recordedAtMilliseconds;
+    if (this.cadenceMilliseconds === undefined && frameIntervalMilliseconds > 0) {
+      // Bootstrap from the display cadence without letting a slow startup frame
+      // permanently teach the detector that hitches are normal.
+      this.cadenceMilliseconds = Math.min(frameIntervalMilliseconds, 1000 / 30);
+    }
+    const expectedCadenceMilliseconds = this.cadenceMilliseconds ?? 1000 / 60;
+    const callbackMilliseconds = sample.gameMilliseconds + sample.renderMilliseconds;
+    const unattributedMilliseconds = Math.max(
+      0,
+      frameIntervalMilliseconds - expectedCadenceMilliseconds - callbackMilliseconds,
+    );
+    const frameBudgetMilliseconds = this.frameBudgetMilliseconds();
+    const stutter = frameIntervalMilliseconds > frameBudgetMilliseconds;
+
     this.sampleCount++;
     this.gameMilliseconds += sample.gameMilliseconds;
     this.gamePeakMilliseconds = Math.max(this.gamePeakMilliseconds, sample.gameMilliseconds);
@@ -253,8 +297,29 @@ export class FpsCounter {
     );
     this.renderMilliseconds += sample.renderMilliseconds;
     this.renderPeakMilliseconds = Math.max(this.renderPeakMilliseconds, sample.renderMilliseconds);
+    if (frameIntervalMilliseconds > 0) {
+      this.frameIntervalMilliseconds += frameIntervalMilliseconds;
+      this.frameIntervalPeakMilliseconds = Math.max(
+        this.frameIntervalPeakMilliseconds,
+        frameIntervalMilliseconds,
+      );
+      this.unattributedPeakMilliseconds = Math.max(
+        this.unattributedPeakMilliseconds,
+        unattributedMilliseconds,
+      );
+      if (stutter) this.stutterCount++;
+      this.updateCadence(frameIntervalMilliseconds, stutter);
+    }
     this.latestStreaming = sample;
-    const historySample = { ...sample, recordedAtMilliseconds: performance.now() };
+    const historySample = {
+      ...sample,
+      recordedAtMilliseconds,
+      frameIntervalMilliseconds,
+      callbackMilliseconds,
+      unattributedMilliseconds,
+      frameBudgetMilliseconds,
+      stutter,
+    };
     if (this.frameHistory.length < FRAME_HISTORY_SIZE) {
       this.frameHistory.push(historySample);
     } else {
@@ -262,6 +327,29 @@ export class FpsCounter {
     }
     this.frameHistoryCursor = (this.frameHistoryCursor + 1) % FRAME_HISTORY_SIZE;
   }
+
+  private frameBudgetMilliseconds(): number {
+    const cadence = this.cadenceMilliseconds ?? 1000 / 60;
+    return Math.max(cadence * 1.5, cadence + 4);
+  }
+
+  private updateCadence(intervalMilliseconds: number, stutter: boolean): void {
+    if (stutter || intervalMilliseconds > MAX_CADENCE_SAMPLE_MILLISECONDS) return;
+    if (this.cadenceMilliseconds === undefined) {
+      this.cadenceMilliseconds = intervalMilliseconds;
+      return;
+    }
+    this.cadenceMilliseconds = this.cadenceMilliseconds * 0.95 + intervalMilliseconds * 0.05;
+  }
+
+  private readonly resetFrameCadence = (): void => {
+    this.lastFrameRecordedAt = undefined;
+    this.cadenceMilliseconds = undefined;
+  };
+
+  private readonly handleVisibilityChange = (): void => {
+    if (document.hidden) this.resetFrameCadence();
+  };
 
   private startPerformanceObserver(): void {
     if (this.performanceObserver || typeof PerformanceObserver === "undefined") return;
@@ -309,6 +397,10 @@ export class FpsCounter {
     this.vegetationPeakMilliseconds = 0;
     this.renderMilliseconds = 0;
     this.renderPeakMilliseconds = 0;
+    this.frameIntervalMilliseconds = 0;
+    this.frameIntervalPeakMilliseconds = 0;
+    this.unattributedPeakMilliseconds = 0;
+    this.stutterCount = 0;
     this.stallCount = 0;
     this.stallMaximumMilliseconds = 0;
     this.blockingMilliseconds = 0;
@@ -426,6 +518,17 @@ export class FpsCounter {
           frameHistory.map((sample) => sample.vegetationMilliseconds),
         ),
         renderCall: summarizeSamples(frameHistory.map((sample) => sample.renderMilliseconds)),
+        pacing: summarizeSamples(
+          frameHistory
+            .map((sample) => sample.frameIntervalMilliseconds)
+            .filter((milliseconds) => milliseconds > 0),
+        ),
+        callback: summarizeSamples(frameHistory.map((sample) => sample.callbackMilliseconds)),
+        unattributed: summarizeSamples(
+          frameHistory.map((sample) => sample.unattributedMilliseconds),
+        ),
+        stutterCount: frameHistory.filter((sample) => sample.stutter).length,
+        stutterSamples: frameHistory.filter((sample) => sample.stutter),
         samples: frameHistory,
       },
       stalls: {

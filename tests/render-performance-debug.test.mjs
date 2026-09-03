@@ -31,3 +31,11 @@ test("render stats can be dumped from the debug keyboard controls", () => {
   assert.match(fpsCounter, /activeMeshes: meshDetails/);
   assert.match(fpsCounter, /capabilities: primitiveProperties\(caps\)/);
 });
+
+test("frame pacing catches stutters outside the measured render callback", () => {
+  assert.match(fpsCounter, /frameIntervalMilliseconds/);
+  assert.match(fpsCounter, /unattributedMilliseconds/);
+  assert.match(fpsCounter, /frameBudgetMilliseconds/);
+  assert.match(fpsCounter, /stutterSamples:/);
+  assert.match(fpsCounter, /window\.addEventListener\("blur", this\.resetFrameCadence\)/);
+});

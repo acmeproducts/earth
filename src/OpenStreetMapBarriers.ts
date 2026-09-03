@@ -22,7 +22,9 @@ import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { createVegetationFieldResult } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
 import type { TerrainData } from "./TerrainData";
-import { worldTileAtLocation, worldTileBounds, type TileBounds } from "./WorldGrid";
+import type { PlannedPlotBoundary } from "./RoadAndBuildingPlanner";
+import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
+import { windShearFraction } from "./Wind";
 
 export type BarrierType =
   | "hedge"
@@ -53,10 +55,6 @@ export interface BarrierFeatureLayer {
   hedgeField?: VegetationFieldResult;
 }
 
-interface OverpassResponse {
-  elements?: unknown[];
-}
-
 interface BarrierAppearance {
   style: "hedge" | "woodFence" | "chainlink" | "guardRail" | "wall" | "noiseBarrier" | "jerseyBarrier";
   heightMeters: number;
@@ -68,34 +66,8 @@ interface HorizontalSegment {
   halfWidth: number;
 }
 
-/** OSM line-detail omitted by the general-purpose OpenMapTiles schema. */
+/** Renders linear barrier features supplied by a map-data source. */
 export class OpenStreetMapBarriers {
-  private static readonly QUERY_ZOOM = 14;
-  private static readonly DEFAULT_ENDPOINT = "https://overpass-api.de/api/interpreter";
-  private static readonly cache = new Map<string, Promise<BarrierFeature[]>>();
-
-  /**
-   * Loads the zoom-14 parent of an application tile. Four level-16 terrain
-   * tiles therefore share one compact request and one cached response.
-   */
-  static fetch(bounds: TileBounds): Promise<BarrierFeature[]> {
-    const tile = worldTileAtLocation(bounds.latNorth - 1e-10, bounds.lonWest + 1e-10, this.QUERY_ZOOM);
-    const key = `${this.QUERY_ZOOM}/${tile.x}/${tile.y}`;
-    let request = this.cache.get(key);
-    if (!request) {
-      const queryBounds = worldTileBounds(tile);
-      request = this.fetchRegion(queryBounds).catch((error: unknown) => {
-        // Barriers are optional scene detail. Retain an empty cached result so
-        // one unavailable public endpoint cannot trigger a retry storm as the
-        // four child terrain tiles finish loading.
-        console.warn(`OpenStreetMap barriers unavailable for ${key}; the layer was skipped.`, error);
-        return [];
-      });
-      this.cache.set(key, request);
-    }
-    return request;
-  }
-
   static async createLayer(
     scene: Scene,
     features: readonly BarrierFeature[],
@@ -103,6 +75,84 @@ export class OpenStreetMapBarriers {
     options: BarrierLayerOptions,
     yieldControl?: () => Promise<void>,
   ): Promise<BarrierFeatureLayer> {
+    return createBarrierLayer(scene, features.map((feature) => ({
+      appearance: barrierAppearance(feature),
+      paths: clipPolyline(
+        feature.coordinates.map(([lon, lat]) =>
+          lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
+        ),
+        options.meshWidth / 2,
+        options.meshDepth / 2,
+      ),
+    })), terrain, options, yieldControl);
+  }
+
+  static async createPlannedLayer(
+    scene: Scene,
+    boundaries: readonly PlannedPlotBoundary[],
+    terrain: TerrainData,
+    options: BarrierLayerOptions,
+    yieldControl?: () => Promise<void>,
+  ): Promise<BarrierFeatureLayer> {
+    return createBarrierLayer(scene, boundaries.map((boundary) => ({
+      appearance: {
+        style: boundary.style,
+        heightMeters: boundary.style === "hedge" ? 1.45 : 1.15,
+      },
+      paths: [[...boundary.path]],
+    })), terrain, options, yieldControl);
+  }
+
+  static createPlannedExclusionMask(
+    boundaries: readonly PlannedPlotBoundary[],
+    options: Pick<BarrierLayerOptions, "metersPerUnit">,
+  ): HorizontalExclusionMask {
+    return segmentExclusionMask(boundaries.map((boundary) => ({
+      start: boundary.path[0],
+      end: boundary.path[1],
+      halfWidth: (boundary.style === "hedge" ? 0.9 : 0.35) / options.metersPerUnit,
+    })), options.metersPerUnit);
+  }
+
+  /** Prevents procedurally placed trees and shrubs from crossing solid mapped barriers. */
+  static createExclusionMask(
+    features: readonly BarrierFeature[],
+    terrain: TerrainData,
+    options: Pick<BarrierLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+  ): HorizontalExclusionMask {
+    const segments: HorizontalSegment[] = [];
+    for (const feature of features) {
+      const projected = feature.coordinates.map(([lon, lat]) =>
+        lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
+      );
+      const clearanceMeters = feature.type === "hedge" ? 0.9 : 0.35;
+      for (const path of clipPolyline(projected, options.meshWidth / 2, options.meshDepth / 2)) {
+        for (let index = 1; index < path.length; index++) {
+          segments.push({
+            start: path[index - 1],
+            end: path[index],
+            halfWidth: clearanceMeters / options.metersPerUnit,
+          });
+        }
+      }
+    }
+    return segmentExclusionMask(segments, options.metersPerUnit);
+  }
+
+}
+
+interface RenderableBarrier {
+  appearance: BarrierAppearance;
+  paths: Array<Array<{ x: number; z: number }>>;
+}
+
+async function createBarrierLayer(
+  scene: Scene,
+  features: readonly RenderableBarrier[],
+  terrain: TerrainData,
+  options: BarrierLayerOptions,
+  yieldControl?: () => Promise<void>,
+): Promise<BarrierFeatureLayer> {
     const root = new TransformNode("barriers", scene);
     if (options.startDisabled) root.setEnabled(false);
     const byStyle = new Map<BarrierAppearance["style"], Mesh[]>();
@@ -111,13 +161,9 @@ export class OpenStreetMapBarriers {
 
     for (let featureIndex = 0; featureIndex < features.length; featureIndex++) {
       const feature = features[featureIndex];
-      const appearance = barrierAppearance(feature);
-      const projected = feature.coordinates.map(([lon, lat]) =>
-        lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
-      );
-      const clipped = clipPolyline(projected, options.meshWidth / 2, options.meshDepth / 2);
+      const appearance = feature.appearance;
       let rendered = false;
-      for (const path of clipped) {
+      for (const path of feature.paths) {
         const sampled = resamplePath(path, 2 / options.metersPerUnit);
         const mesh = appearance.style === "hedge"
           ? undefined
@@ -154,6 +200,10 @@ export class OpenStreetMapBarriers {
         createModel: () => createBushModel(scene, 1.6 / options.metersPerUnit),
       });
       renderers.root.parent = hedgeRoot;
+      setVegetationWindShear(
+        [renderers.impostor, renderers.model],
+        windShearFraction("bush"),
+      );
       hedgeField = await createVegetationFieldResult(
         renderers.root,
         [renderers.impostor],
@@ -184,88 +234,13 @@ export class OpenStreetMapBarriers {
       meshes.push(merged);
     }
     return { root, meshes, count, hedgeField: hedgeFieldResult };
-  }
-
-  /** Prevents procedurally placed trees and shrubs from crossing solid mapped barriers. */
-  static createExclusionMask(
-    features: readonly BarrierFeature[],
-    terrain: TerrainData,
-    options: Pick<BarrierLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
-  ): HorizontalExclusionMask {
-    const segments: HorizontalSegment[] = [];
-    for (const feature of features) {
-      const projected = feature.coordinates.map(([lon, lat]) =>
-        lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
-      );
-      const clearanceMeters = feature.type === "hedge" ? 0.9 : 0.35;
-      for (const path of clipPolyline(projected, options.meshWidth / 2, options.meshDepth / 2)) {
-        for (let index = 1; index < path.length; index++) {
-          segments.push({
-            start: path[index - 1],
-            end: path[index],
-            halfWidth: clearanceMeters / options.metersPerUnit,
-          });
-        }
-      }
-    }
-    return new SegmentExclusionMask(segments, 12 / options.metersPerUnit);
-  }
-
-  private static async fetchRegion(bounds: TileBounds): Promise<BarrierFeature[]> {
-    const endpoint = typeof document === "undefined"
-      ? this.DEFAULT_ENDPOINT
-      : document.querySelector<HTMLMetaElement>('meta[name="overpass-url"]')?.content ||
-        this.DEFAULT_ENDPOINT;
-    const bbox = [bounds.latSouth, bounds.lonWest, bounds.latNorth, bounds.lonEast].join(",");
-    const query = `[out:json][timeout:15];way["barrier"~"^(hedge|fence|wall|guard_rail|jersey_barrier|cable_barrier|retaining_wall)$"](${bbox});out tags geom qt;`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      },
-      body: new URLSearchParams({ data: query }),
-    });
-    if (!response.ok) throw new Error(`Overpass request failed (${response.status}).`);
-    const payload = await response.json() as OverpassResponse;
-    return parseBarrierFeatures(payload.elements);
-  }
 }
 
-function parseBarrierFeatures(elements: unknown): BarrierFeature[] {
-  if (!Array.isArray(elements)) return [];
-  const features: BarrierFeature[] = [];
-  for (const value of elements) {
-    if (!value || typeof value !== "object") continue;
-    const element = value as Record<string, unknown>;
-    if (element.type !== "way" || !Number.isFinite(element.id)) continue;
-    if (!element.tags || typeof element.tags !== "object") continue;
-    const rawTags = element.tags as Record<string, unknown>;
-    const type = rawTags.barrier;
-    if (!isBarrierType(type) || !Array.isArray(element.geometry)) continue;
-    const coordinates: Array<readonly [number, number]> = [];
-    for (const point of element.geometry) {
-      if (!point || typeof point !== "object") continue;
-      const { lon, lat } = point as { lon?: unknown; lat?: unknown };
-      if (typeof lon === "number" && Number.isFinite(lon) &&
-          typeof lat === "number" && Number.isFinite(lat)) {
-        coordinates.push([lon, lat]);
-      }
-    }
-    if (coordinates.length < 2) continue;
-    const tags: Record<string, string> = {};
-    for (const [key, tagValue] of Object.entries(rawTags)) {
-      if (typeof tagValue === "string") tags[key] = tagValue;
-    }
-    features.push({ id: element.id as number, type, coordinates, tags });
-  }
-  return features;
-}
-
-function isBarrierType(value: unknown): value is BarrierType {
-  return value === "hedge" || value === "fence" || value === "wall" ||
-    value === "guard_rail" || value === "jersey_barrier" ||
-    value === "cable_barrier" || value === "retaining_wall";
+function segmentExclusionMask(
+  segments: HorizontalSegment[],
+  metersPerUnit: number,
+): HorizontalExclusionMask {
+  return new SegmentExclusionMask(segments, 12 / metersPerUnit);
 }
 
 function barrierAppearance(feature: BarrierFeature): BarrierAppearance {

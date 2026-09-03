@@ -88,6 +88,12 @@ export interface PlannedPlot {
   outline: PlanningPoint[];
 }
 
+export interface PlannedPlotBoundary {
+  sourceId: string;
+  style: "hedge" | "woodFence";
+  path: readonly [PlanningPoint, PlanningPoint];
+}
+
 export type RoadAndBuildingPlanBounds = PlanarBounds;
 
 export interface RoadAndBuildingPlan {
@@ -101,6 +107,8 @@ export interface RoadAndBuildingPlan {
   streetLamps: PlannedStreetLamp[];
   /** One plot per building site; plots attach to each other and to road beds. */
   plots: PlannedPlot[];
+  /** Selective plot-edge treatments, with openings left toward adjacent roads. */
+  plotBoundaries: PlannedPlotBoundary[];
 }
 
 export interface RoadAndBuildingPlanningOptions {
@@ -191,7 +199,14 @@ export function planRoadsAndBuildings(
 
   const streetLamps = planStreetLamps(roadInputs, lampInputs, shoulders, bounds, options);
   const plots = planBuildingPlots(buildingSites, outerCandidates, bounds, options);
-  return { bounds, roads, shoulders, buildingSites, streetLamps, plots };
+  const plotBoundaries = planPlotBoundaries(
+    plots,
+    buildingSites,
+    outerCandidates,
+    bounds,
+    options,
+  );
+  return { bounds, roads, shoulders, buildingSites, streetLamps, plots, plotBoundaries };
 }
 
 const LAMP_SPACING_METERS = 34;
@@ -199,6 +214,126 @@ const MAPPED_LAMP_CLEARANCE_METERS = 25;
 const LAMP_EDGE_MARGIN_METERS = 0.7;
 const LAMP_ROAD_CLASSES = new Set(["primary", "secondary", "tertiary", "minor", "service"]);
 const PLOT_DEPTH_METERS = 12;
+const PLOT_BOUNDARY_SHARE = 0.62;
+const PLOT_EDGE_SHARE = 0.72;
+const PLOT_ENTRANCE_METERS = 3.2;
+const MINIMUM_BOUNDARY_RUN_METERS = 2.2;
+const PLOT_BUILDING_CLEARANCE_METERS = 2.5;
+
+/**
+ * Selects a restrained, repeatable subset of plot edges. Road-facing edges
+ * receive an entrance gap; clipping edges at the tile bounds are never made
+ * visible because they are data boundaries rather than real parcel lines.
+ */
+function planPlotBoundaries(
+  plots: readonly PlannedPlot[],
+  buildingSites: readonly PlannedBuildingSite[],
+  roadCandidates: readonly Candidate[],
+  bounds: RoadAndBuildingPlanBounds,
+  options: RoadAndBuildingPlanningOptions,
+): PlannedPlotBoundary[] {
+  const minimumRun = MINIMUM_BOUNDARY_RUN_METERS / options.metersPerUnit;
+  const entrance = PLOT_ENTRANCE_METERS / options.metersPerUnit;
+  const roadTolerance = 0.12 / options.metersPerUnit;
+  const buildingClearance = PLOT_BUILDING_CLEARANCE_METERS / options.metersPerUnit;
+  const buildingIndex = new PlanarCellIndex<PlannedBuildingSite>(planningCellSize(options));
+  for (const site of buildingSites) {
+    buildingIndex.add(site, pointBounds(site.outline), buildingClearance);
+  }
+  const usedEdges = new Set<string>();
+  const boundaries: PlannedPlotBoundary[] = [];
+
+  for (const plot of plots) {
+    if (hashUnit(`${plot.sourceId}/plot-boundary`) >= PLOT_BOUNDARY_SHARE) continue;
+    const style = hashUnit(`${plot.sourceId}/plot-boundary-style`) < 0.72
+      ? "hedge" as const
+      : "woodFence" as const;
+    const candidates: Array<{ start: PlanningPoint; end: PlanningPoint; key: string; score: number }> = [];
+    for (let index = 0; index < plot.outline.length; index++) {
+      const start = plot.outline[index];
+      const end = plot.outline[(index + 1) % plot.outline.length];
+      const length = Math.hypot(end.x - start.x, end.z - start.z);
+      if (length < minimumRun || liesOnPlanningBounds(start, end, bounds) ||
+          !edgeClearsBuildings(start, end, buildingIndex, buildingClearance)) continue;
+      const key = undirectedEdgeKey(start, end);
+      if (usedEdges.has(key)) continue;
+      candidates.push({
+        start,
+        end,
+        key,
+        score: hashUnit(`${plot.sourceId}/plot-edge/${key}`),
+      });
+    }
+
+    // Even selected parcels remain visually porous: cap ordinary plots at
+    // three treated sides and let the per-edge draw leave some plots sparser.
+    const selected = candidates
+      .filter((edge) => edge.score < PLOT_EDGE_SHARE)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 3);
+    for (const edge of selected) {
+      usedEdges.add(edge.key);
+      const midpoint = interpolate(edge.start, edge.end, 0.5);
+      const facesRoad = roadCandidates.some((road) =>
+        road.structure !== "bridge" && distanceToRing(midpoint, road.outline) <= roadTolerance
+      );
+      const length = Math.hypot(edge.end.x - edge.start.x, edge.end.z - edge.start.z);
+      if (facesRoad && length >= entrance + minimumRun * 2) {
+        const halfGap = entrance / length / 2;
+        boundaries.push(
+          { sourceId: plot.sourceId, style, path: [edge.start, interpolate(edge.start, edge.end, 0.5 - halfGap)] },
+          { sourceId: plot.sourceId, style, path: [interpolate(edge.start, edge.end, 0.5 + halfGap), edge.end] },
+        );
+      } else {
+        boundaries.push({ sourceId: plot.sourceId, style, path: [edge.start, edge.end] });
+      }
+    }
+  }
+  return boundaries;
+}
+
+function edgeClearsBuildings(
+  start: PlanningPoint,
+  end: PlanningPoint,
+  buildingIndex: PlanarCellIndex<PlannedBuildingSite>,
+  clearance: number,
+): boolean {
+  const nearby = buildingIndex.query(pointBounds([start, end]));
+  if (nearby.length === 0) return true;
+  const length = Math.hypot(end.x - start.x, end.z - start.z);
+  const steps = Math.max(1, Math.ceil(length / Math.max(clearance / 3, 1e-6)));
+  for (let step = 0; step <= steps; step++) {
+    const point = interpolate(start, end, step / steps);
+    if (nearby.some((site) =>
+      pointInRing(point, site.outline) || distanceToRing(point, site.outline) < clearance
+    )) return false;
+  }
+  return true;
+}
+
+function hashUnit(value: string): number {
+  return (hashString(value) >>> 0) / 4_294_967_296;
+}
+
+function liesOnPlanningBounds(
+  start: PlanningPoint,
+  end: PlanningPoint,
+  bounds: RoadAndBuildingPlanBounds,
+): boolean {
+  const epsilon = 1e-8;
+  return (Math.abs(start.x - bounds.minX) <= epsilon && Math.abs(end.x - bounds.minX) <= epsilon) ||
+    (Math.abs(start.x - bounds.maxX) <= epsilon && Math.abs(end.x - bounds.maxX) <= epsilon) ||
+    (Math.abs(start.z - bounds.minZ) <= epsilon && Math.abs(end.z - bounds.minZ) <= epsilon) ||
+    (Math.abs(start.z - bounds.maxZ) <= epsilon && Math.abs(end.z - bounds.maxZ) <= epsilon);
+}
+
+function undirectedEdgeKey(start: PlanningPoint, end: PlanningPoint): string {
+  const pointKey = (point: PlanningPoint) =>
+    `${Math.round(point.x * 1e6)},${Math.round(point.z * 1e6)}`;
+  const first = pointKey(start);
+  const second = pointKey(end);
+  return first < second ? `${first}/${second}` : `${second}/${first}`;
+}
 
 /**
  * Street-lamp nodes are sparse in mapped data, so the plan keeps every mapped
@@ -1080,6 +1215,7 @@ function roadPriority(appearance: RoadPlan): number {
 
 function junctionStyle(appearances: readonly RoadPlan[]): RoadVisualStyle {
   if (appearances.some((appearance) => appearance.visualStyle === "ford")) return "ford";
+  if (appearances.every((appearance) => appearance.visualStyle === "dirt")) return "dirt";
   if (appearances.every((appearance) => appearance.visualStyle === "unpaved")) return "unpaved";
   if (appearances.every((appearance) => appearance.visualStyle === "pedestrian")) return "pedestrian";
   return "paved";

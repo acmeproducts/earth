@@ -53,7 +53,6 @@ import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
 import { OpenStreetMapBarriers } from "./OpenStreetMapBarriers";
-import type { BarrierFeature } from "./OpenStreetMapBarriers";
 import { StreetLamps } from "./StreetLamps";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
@@ -698,11 +697,7 @@ export class Game {
     const yieldControl = onProgress ? undefined : this.streamingYielder;
     const startDisabled = !onProgress;
     await reportInitializationProgress(onProgress, "Loading map features", 50);
-    const barrierRequest = this.loadBarrierFeatures(record);
-    const streetLampRequest = StreetLamps.fetch(terrainData.bounds);
     const mapWays = await this.loadMapTiles(record);
-    const barrierFeatures = await barrierRequest;
-    const streetLamps = await streetLampRequest;
     if (generation !== this.streamingGeneration) return;
     const placementLandCover = OpenStreetMap.createLandCoverSampler(
       mapWays,
@@ -740,14 +735,12 @@ export class Game {
       mappedExclusionMask = { intersects: () => false };
     }
     if (generation !== this.streamingGeneration) return;
-    const barrierExclusionMask = OpenStreetMapBarriers.createExclusionMask(
-      barrierFeatures,
-      terrainData,
-      mapOptions,
-    );
     const exclusionMask = combineHorizontalExclusionMasks([
       mappedExclusionMask,
-      barrierExclusionMask,
+      OpenStreetMapBarriers.createPlannedExclusionMask(
+        record.roadAndBuildingPlan.plotBoundaries,
+        mapOptions,
+      ),
     ]);
     const fieldOptions = {
       meshWidth: record.meshWidth,
@@ -912,37 +905,35 @@ export class Game {
       mapOptions,
       yieldControl,
     );
-    const barrierLayer = await OpenStreetMapBarriers.createLayer(
+    const plotBoundaryLayer = await OpenStreetMapBarriers.createPlannedLayer(
       this.scene,
-      barrierFeatures,
+      record.roadAndBuildingPlan.plotBoundaries,
       terrainData,
       mapOptions,
       yieldControl,
     );
     const streetLampLayer = StreetLamps.createLayer(
       this.scene,
-      streetLamps,
       record.roadAndBuildingPlan.streetLamps,
       terrainData,
       mapOptions,
     );
     if (generation !== this.streamingGeneration) {
       OpenStreetMap.disposeLayer(mapFeatures.root);
-      barrierLayer.root.dispose(false, true);
+      plotBoundaryLayer.root.dispose(false, true);
       streetLampLayer.root.dispose(false, true);
       return;
     }
-    barrierLayer.root.parent = mapFeatures.root;
+    plotBoundaryLayer.root.parent = mapFeatures.root;
     streetLampLayer.root.parent = mapFeatures.root;
     await this.streamingYielder.nextFrame();
-    barrierLayer.root.setEnabled(true);
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
     await this.streamingYielder.nextFrame();
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
-    record.barrierField = barrierLayer.hedgeField;
+    record.barrierField = plotBoundaryLayer.hedgeField;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
       record.farBuildings = undefined;
@@ -965,7 +956,7 @@ export class Game {
       `${fernField.count} ferns, ${rockyBeachField.count} rocky beach patches, ` +
       `${rockField.count} rocks, ` +
       `${mapFeatures.counts.buildings} buildings, ` +
-      `${mapFeatures.counts.roads} roads, ${barrierLayer.count} barriers`,
+      `${mapFeatures.counts.roads} roads, ${plotBoundaryLayer.count} plot boundaries, ` +
       `${streetLampLayer.count} street lamps (${streetLampLayer.mappedCount} mapped)`,
     );
   }
@@ -1113,18 +1104,6 @@ export class Game {
   private loadMapTiles(record: StreamedTile): Promise<MapTile[]> {
     record.mapTiles ??= this.requestMapTiles(record.terrainData.bounds);
     return record.mapTiles;
-  }
-
-  private loadBarrierFeatures(record: StreamedTile): Promise<BarrierFeature[]> {
-    record.barrierFeatures ??= OpenStreetMapBarriers.fetch(record.terrainData.bounds)
-      .catch((error: unknown) => {
-        // Barriers are an optional detail layer. An Overpass request can fail
-        // or time out for a newly selected address; that must not prevent the
-        // rest of the tile (vegetation, buildings, and roads) from committing.
-        console.warn("Overpass unavailable; barrier layers were skipped.", error);
-        return [];
-      });
-    return record.barrierFeatures;
   }
 
   private requestMapTiles(bounds: TerrainData["bounds"]): Promise<MapTile[]> {

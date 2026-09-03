@@ -57,6 +57,12 @@ export function renderRoadAndBuildingPlanSvg(
     const path = polygonPath(building.outline, building.holes, project);
     return `<path data-kind="building-site" data-source-id="${escapeXml(building.sourceId)}" d="${path}" fill="url(#building-fill)" stroke="#713f12" stroke-width="1.2" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>`;
   }).join("");
+  const plotBoundaries = plan.plotBoundaries.map((boundary) => {
+    const start = project(boundary.path[0]);
+    const end = project(boundary.path[1]);
+    const stroke = boundary.style === "hedge" ? "#315b2c" : "#765035";
+    return `<line data-kind="plot-boundary" data-source-id="${escapeXml(boundary.sourceId)}" data-boundary-style="${boundary.style}" x1="${number(start.x)}" y1="${number(start.z)}" x2="${number(end.x)}" y2="${number(end.z)}" stroke="${stroke}" stroke-width="2.4" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
   const lamps = plan.streetLamps.map((lamp) => streetLampMark(lamp, project)).join("");
   const labels = options.showLabels === true
     ? featureLabels([...plan.roads, ...plan.buildingSites], project)
@@ -67,9 +73,9 @@ export function renderRoadAndBuildingPlanSvg(
     { x: plan.bounds.maxX, z: plan.bounds.maxZ },
     { x: plan.bounds.minX, z: plan.bounds.maxZ },
   ], [], project);
-  const defs = `<defs><linearGradient id="building-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde7c2"/><stop offset="1" stop-color="#d6a85f"/></linearGradient><pattern id="unpaved-fill" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#b99a6b"/><circle cx="2" cy="3" r="0.7" fill="#806342"/><circle cx="7" cy="6" r="0.55" fill="#d8c29e"/></pattern><pattern id="ford-fill" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#6094ad"/><path d="M -2 3 Q 1 1 4 3 T 10 3 T 16 3" fill="none" stroke="#b9dcea" stroke-width="1"/></pattern></defs>`;
+  const defs = `<defs><linearGradient id="building-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde7c2"/><stop offset="1" stop-color="#d6a85f"/></linearGradient><pattern id="dirt-fill" width="9" height="9" patternUnits="userSpaceOnUse"><rect width="9" height="9" fill="#9b7048"/><circle cx="2" cy="3" r="0.45" fill="#7c5738"/><circle cx="7" cy="7" r="0.35" fill="#bc9164"/></pattern><pattern id="unpaved-fill" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#b99a6b"/><circle cx="2" cy="3" r="0.7" fill="#806342"/><circle cx="7" cy="6" r="0.55" fill="#d8c29e"/></pattern><pattern id="ford-fill" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#6094ad"/><path d="M -2 3 Q 1 1 4 3 T 10 3 T 16 3" fill="none" stroke="#b9dcea" stroke-width="1"/></pattern></defs>`;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Road and building plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#edf1e8")}"/>${title}<path d="${extent}" fill="none" stroke="#94a3b8" stroke-width="1" vector-effect="non-scaling-stroke"/>${plots}${shoulders}${roads}${centerlines}${buildings}${lamps}${labels}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Road and building plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#edf1e8")}"/>${title}<path d="${extent}" fill="none" stroke="#94a3b8" stroke-width="1" vector-effect="non-scaling-stroke"/>${plots}${shoulders}${roads}${centerlines}${buildings}${plotBoundaries}${lamps}${labels}</svg>`;
 }
 
 function roadPath(
@@ -139,6 +145,7 @@ function featureLabels(
 }
 
 function roadFill(road: PlannedRoadPolygon): string {
+  if (road.visualStyle === "dirt") return "url(#dirt-fill)";
   if (road.visualStyle === "unpaved") return "url(#unpaved-fill)";
   if (road.visualStyle === "ford") return "url(#ford-fill)";
   if (road.visualStyle === "pedestrian") return "#c9b8a6";
@@ -147,6 +154,7 @@ function roadFill(road: PlannedRoadPolygon): string {
 
 function roadStroke(road: PlannedRoadPolygon): string {
   if (road.visualStyle === "ford") return "#34677d";
+  if (road.visualStyle === "dirt") return "#6f4b2f";
   if (road.visualStyle === "unpaved") return "#806342";
   return road.structure === "bridge" ? "#283544" : "#4b5563";
 }

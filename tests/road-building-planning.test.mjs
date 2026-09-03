@@ -220,6 +220,70 @@ test("grades roads across their width and building sites to one elevation in one
   assert.equal(new Set(buildingValues).size, 1);
 });
 
+test("selectively plans plot hedges and fences with road entrance gaps", () => {
+  const wideOptions = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
+  const buildings = Array.from({ length: 12 }, (_, index) => ({
+    id: `house-${index}`,
+    outline: [
+      { x: -44 + index * 8, z: 7 },
+      { x: -39 + index * 8, z: 7 },
+      { x: -39 + index * 8, z: 13 },
+      { x: -44 + index * 8, z: 13 },
+    ],
+  }));
+  const inputs = [
+    { id: "street", paths: [[{ x: -49, z: 0 }, { x: 49, z: 0 }]], appearance },
+  ];
+  const plan = planRoadsAndBuildings(inputs, buildings, wideOptions);
+  const repeated = planRoadsAndBuildings(inputs, buildings, wideOptions);
+
+  assert.deepEqual(plan.plotBoundaries, repeated.plotBoundaries,
+    "plot boundary selection must be reproducible");
+  const treatedPlots = new Set(plan.plotBoundaries.map((boundary) => boundary.sourceId));
+  assert.ok(treatedPlots.size > 0 && treatedPlots.size < buildings.length,
+    "only a subset of plots should receive boundaries");
+  assert.ok(plan.plotBoundaries.some((boundary) => boundary.style === "hedge"));
+  assert.ok(plan.plotBoundaries.some((boundary) => boundary.style === "woodFence"));
+
+  for (const boundary of plan.plotBoundaries) {
+    const [start, end] = boundary.path;
+    const onTileEdge = (start.x === -50 && end.x === -50) ||
+      (start.x === 50 && end.x === 50) ||
+      (start.z === -50 && end.z === -50) ||
+      (start.z === 50 && end.z === 50);
+    assert.equal(onTileEdge, false, "tile clipping edges are not parcel boundaries");
+    for (let step = 0; step <= 8; step++) {
+      const amount = step / 8;
+      const point = {
+        x: start.x + (end.x - start.x) * amount,
+        z: start.z + (end.z - start.z) * amount,
+      };
+      for (const building of buildings) {
+        assert.ok(distanceToPolygonEdge(point, building.outline) >= 2.5 - 1e-6,
+          `boundary for ${boundary.sourceId} must stand clear of ${building.id}`);
+      }
+    }
+  }
+
+  const roadBedEdge = appearance.widthMeters / 2 + appearance.shoulderWidthMeters;
+  const frontages = plan.plotBoundaries.filter((boundary) =>
+    Math.abs(boundary.path[0].z - roadBedEdge) < 1e-6 &&
+    Math.abs(boundary.path[1].z - roadBedEdge) < 1e-6
+  );
+  const entranceFound = frontages.some((left, index) => frontages.slice(index + 1).some((right) => {
+    if (left.sourceId !== right.sourceId) return false;
+    const leftEnds = left.path.map((point) => point.x).sort((a, b) => a - b);
+    const rightEnds = right.path.map((point) => point.x).sort((a, b) => a - b);
+    const gap = leftEnds[1] <= rightEnds[0]
+      ? rightEnds[0] - leftEnds[1]
+      : rightEnds[1] <= leftEnds[0]
+        ? leftEnds[0] - rightEnds[1]
+        : 0;
+    return Math.abs(gap - 3.2) < 1e-6;
+  }));
+  assert.ok(entranceFound, "a treated road frontage should retain a driveway-sized gap");
+});
+
 test("reuses one building pad elevation across independently processed tiles", async () => {
   const sharedBuildingElevations = new Map();
   const makeTerrain = (fill, x) => ({
@@ -265,6 +329,25 @@ function pointInPolygon(x, z, points) {
     if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) inside = !inside;
   }
   return inside;
+}
+
+function distanceToPolygonEdge(point, polygon) {
+  let distance = Infinity;
+  for (let index = 0; index < polygon.length; index++) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const lengthSquared = dx * dx + dz * dz;
+    const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+      ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared
+    ));
+    distance = Math.min(distance, Math.hypot(
+      point.x - start.x - dx * amount,
+      point.z - start.z - dz * amount,
+    ));
+  }
+  return distance;
 }
 
 function hasPositiveAreaIntersection(a, b) {

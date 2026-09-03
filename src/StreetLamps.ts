@@ -8,16 +8,9 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { lonLatToScene, sampleElevation } from "./Geo";
+import { sampleElevation } from "./Geo";
 import type { PlannedStreetLamp } from "./RoadAndBuildingPlanner";
 import type { TerrainData } from "./TerrainData";
-import { worldTileAtLocation, worldTileBounds, type TileBounds } from "./WorldGrid";
-
-export interface StreetLampFeature {
-  id: number;
-  lon: number;
-  lat: number;
-}
 
 interface StreetLampOptions {
   meshWidth: number;
@@ -33,36 +26,14 @@ export interface StreetLampLayer {
   proceduralCount: number;
 }
 
-const QUERY_ZOOM = 14;
-const ENDPOINT = "https://overpass-api.de/api/interpreter";
-const cache = new Map<string, Promise<StreetLampFeature[]>>();
-const MAPPED_CLEARANCE_METERS = 25;
-
 /**
- * Street-lamp nodes are sparse in the vector-tile schema, so this layer uses
- * the authoritative OSM nodes where available and the placements from the
- * road/building plan elsewhere. Lamps are emissive geometry rather than
- * PointLights: hundreds of dynamic lights would make streamed tiles
- * prohibitively costly.
+ * Builds the street-lamp placements prepared by the road/building planner.
+ * Lamps are emissive geometry rather than PointLights: hundreds of dynamic
+ * lights would make streamed tiles prohibitively costly.
  */
 export class StreetLamps {
-  static fetch(bounds: TileBounds): Promise<StreetLampFeature[]> {
-    const tile = worldTileAtLocation(bounds.latNorth - 1e-10, bounds.lonWest + 1e-10, QUERY_ZOOM);
-    const key = `${QUERY_ZOOM}/${tile.x}/${tile.y}`;
-    let request = cache.get(key);
-    if (!request) {
-      request = this.fetchRegion(worldTileBounds(tile)).catch((error: unknown) => {
-        console.warn(`OSM street lamps unavailable for ${key}; using procedural coverage.`, error);
-        return [];
-      });
-      cache.set(key, request);
-    }
-    return request;
-  }
-
   static createLayer(
     scene: Scene,
-    mapped: readonly StreetLampFeature[],
     planned: readonly PlannedStreetLamp[],
     terrain: TerrainData,
     options: StreetLampOptions,
@@ -70,25 +41,11 @@ export class StreetLamps {
     const root = new TransformNode("streetLamps", scene);
     if (options.startDisabled) root.setEnabled(false);
     const placements: Array<{ x: number; z: number; angle: number }> = [];
-    const mappedPositions: Array<{ x: number; z: number }> = [];
-    for (const lamp of mapped) {
-      const point = lonLatToScene(lamp.lon, lamp.lat, terrain.bounds, options.meshWidth, options.meshDepth);
-      if (!inside(point, options)) continue;
-      mappedPositions.push(point);
-      placements.push({ x: point.x, z: point.z, angle: 0 });
-    }
-
-    // The plan is prepared before the authoritative nodes arrive, so its
-    // mapped entries are dropped here in favor of the live fetch and its
-    // procedural entries yield to any fetched lamp standing nearby.
-    const clearanceSquared = (MAPPED_CLEARANCE_METERS / options.metersPerUnit) ** 2;
+    let mappedCount = 0;
     for (const lamp of planned) {
-      if (lamp.source === "mapped") continue;
       const point = lamp.position;
       if (!inside(point, options)) continue;
-      if (mappedPositions.some((existing) =>
-        (existing.x - point.x) ** 2 + (existing.z - point.z) ** 2 < clearanceSquared,
-      )) continue;
+      if (lamp.source === "mapped") mappedCount++;
       placements.push({ x: point.x, z: point.z, angle: lamp.orientationRadians });
     }
 
@@ -96,29 +53,9 @@ export class StreetLamps {
     return {
       root,
       count: placements.length,
-      mappedCount: mappedPositions.length,
-      proceduralCount: placements.length - mappedPositions.length,
+      mappedCount,
+      proceduralCount: placements.length - mappedCount,
     };
-  }
-
-  private static async fetchRegion(bounds: TileBounds): Promise<StreetLampFeature[]> {
-    const bbox = [bounds.latSouth, bounds.lonWest, bounds.latNorth, bounds.lonEast].join(",");
-    const query = `[out:json][timeout:15];node["highway"="street_lamp"](${bbox});out body qt;`;
-    const response = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-    if (!response.ok) throw new Error(`Street-lamp request failed (${response.status}).`);
-    const body: unknown = await response.json();
-    const elements = body && typeof body === "object" && Array.isArray((body as { elements?: unknown[] }).elements)
-      ? (body as { elements: unknown[] }).elements : [];
-    return elements.flatMap((element): StreetLampFeature[] => {
-      if (!element || typeof element !== "object") return [];
-      const value = element as { id?: unknown; lat?: unknown; lon?: unknown };
-      return typeof value.id === "number" && typeof value.lat === "number" && typeof value.lon === "number"
-        ? [{ id: value.id, lat: value.lat, lon: value.lon }] : [];
-    });
   }
 }
 

@@ -77,13 +77,22 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(roadPlanner, /driveway: 2\.8/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.marked, "markedRoads", "marked"/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.pedestrian, "pedestrianRoads", "pedestrian"/);
+  assert.match(openStreetMap, /mergeRoads\(roadMeshes\.dirt, "dirtRoads", "dirt"/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.unpaved, "unpavedRoads", "unpaved"/);
   assert.match(openStreetMap, /mergeRoads\(roadMeshes\.ford, "fordRoads", "ford"/);
   assert.match(openStreetMap, /mergeRoads\(roadShoulders\.paved, "pavedRoadShoulders", "pavedShoulder"/);
+  assert.match(openStreetMap, /appearance\.visualStyle !== "dirt"/);
+  assert.match(openStreetMap, /road\.visualStyle !== "dirt"/);
+  assert.match(openStreetMap, /Material\.MATERIAL_ALPHABLEND/);
+  assert.match(openStreetMap, /texture\.hasAlpha = visualStyle === "dirt"/);
+  assert.match(openStreetMap, /visualStyle === "marked" \|\| visualStyle === "dirt"/);
+  assert.match(openStreetMap, /const dirtEdgeStart = 0\.03 \+ gravelBroad \* 0\.05/);
+  assert.match(openStreetMap, /dirtEdgeAmount \* dirtEdgeAmount \* \(3 - 2 \* dirtEdgeAmount\)/);
+  assert.match(openStreetMap, /\* dirtEdge\)/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
   assert.match(openStreetMap, /LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6\.7/);
   assert.match(openStreetMap, /tiledValueNoise\(x, y, ROAD_TEXTURE_SIZE/);
-  assert.match(openStreetMap, /relief\.level = 0\.24/);
+  assert.match(openStreetMap, /relief\.level = visualStyle === "dirt" \? 0\.12 : 0\.24/);
 });
 
 test("builds a coarse road-only layer for the far render", () => {

@@ -1,5 +1,6 @@
 import {
   Color3,
+  Material,
   Mesh,
   MeshBuilder,
   MultiMaterial,
@@ -51,6 +52,7 @@ import {
   RoadPlan,
   RoadSurface,
   RoadVisualStyle,
+  roadVegetationShoulderMeters,
 } from "./RoadPlanner";
 import {
   planRoadsAndBuildings,
@@ -236,6 +238,7 @@ export class OpenStreetMap {
       marked: [],
       paved: [],
       pedestrian: [],
+      dirt: [],
       unpaved: [],
       ford: [],
     };
@@ -293,7 +296,9 @@ export class OpenStreetMap {
         for (const line of source.paths) {
           const created = createRoad(scene, line, terrain, options, appearance);
           target.push(...created.surfaces);
-          roadShoulders[appearance.surface].push(...created.shoulders);
+          if (appearance.visualStyle !== "dirt") {
+            roadShoulders[appearance.surface].push(...created.shoulders);
+          }
           bridgeDecks.push(...created.bridgeDecks);
           if (!options.planning &&
               (appearance.structure === "surface" || appearance.structure === "ford")) {
@@ -341,6 +346,7 @@ export class OpenStreetMap {
       mergeRoads(roadMeshes.marked, "markedRoads", "marked", root),
       mergeRoads(roadMeshes.paved, "pavedRoads", "paved", root),
       mergeRoads(roadMeshes.pedestrian, "pedestrianRoads", "pedestrian", root),
+      mergeRoads(roadMeshes.dirt, "dirtRoads", "dirt", root),
       mergeRoads(roadMeshes.unpaved, "unpavedRoads", "unpaved", root),
       mergeRoads(roadMeshes.ford, "fordRoads", "ford", root),
       mergeWaterways(waterways, root, options),
@@ -495,6 +501,7 @@ export class OpenStreetMap {
       marked: [],
       paved: [],
       pedestrian: [],
+      dirt: [],
       unpaved: [],
       ford: [],
     };
@@ -524,6 +531,7 @@ export class OpenStreetMap {
       mergeRoads(roadMeshes.marked, "farMarkedRoads", "marked", root),
       mergeRoads(roadMeshes.paved, "farPavedRoads", "paved", root),
       mergeRoads(roadMeshes.pedestrian, "farPedestrianRoads", "pedestrian", root),
+      mergeRoads(roadMeshes.dirt, "farDirtRoads", "dirt", root),
       mergeRoads(roadMeshes.unpaved, "farUnpavedRoads", "unpaved", root),
       mergeRoads(roadMeshes.ford, "farFordRoads", "ford", root),
     ].filter((mesh): mesh is Mesh => mesh !== undefined);
@@ -543,7 +551,7 @@ export class OpenStreetMap {
         const appearance = planRoad(source.properties);
         if (!appearance || appearance.isTunnel) continue;
         const halfWidth = (
-          appearance.widthMeters / 2 + appearance.shoulderWidthMeters
+          appearance.widthMeters / 2 + roadVegetationShoulderMeters(appearance)
         ) / options.metersPerUnit;
         for (const coordinates of source.paths) {
           const points = coordinates.map(([lon, lat]) =>
@@ -752,6 +760,7 @@ function createPlannedRoadMeshes(
     marked: [],
     paved: [],
     pedestrian: [],
+    dirt: [],
     unpaved: [],
     ford: [],
   };
@@ -775,7 +784,9 @@ function createPlannedShoulderMeshes(
 ): Partial<Record<RoadSurface, Mesh>> {
   const bySurface: Record<RoadSurface, PlannedRoadPolygon[]> = { paved: [], unpaved: [] };
   for (const road of roads) {
-    if (road.structure !== "bridge") bySurface[road.surface].push(road);
+    if (road.structure !== "bridge" && road.visualStyle !== "dirt") {
+      bySurface[road.surface].push(road);
+    }
   }
   const result: Partial<Record<RoadSurface, Mesh>> = {};
   for (const surface of Object.keys(bySurface) as RoadSurface[]) {
@@ -882,10 +893,10 @@ function plannedRoadUv(
   metersPerUnit: number,
   forceWorldUvs = false,
 ): { x: number; y: number } {
-  const repeatMeters = road.visualStyle === "unpaved" || road.visualStyle === "ford"
+  const repeatMeters = road.visualStyle === "dirt" || road.visualStyle === "unpaved" || road.visualStyle === "ford"
     ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
     : 4;
-  if (forceWorldUvs || road.visualStyle !== "marked") {
+  if (forceWorldUvs || (road.visualStyle !== "marked" && road.visualStyle !== "dirt")) {
     const scale = metersPerUnit / repeatMeters;
     return { x: point.x * scale, y: point.z * scale };
   }
@@ -901,7 +912,10 @@ function plannedRoadUv(
   const across = ((point.x - axis[0].x) * -dz + (point.z - axis[0].z) * dx) / length;
   return {
     x: (road.startDistance + amount * length) * metersPerUnit / repeatMeters,
-    y: 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters),
+    y: Math.max(0, Math.min(
+      1,
+      0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters),
+    )),
   };
 }
 
@@ -993,11 +1007,9 @@ function createRoadMeshes(
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
-      // Asphalt/gravel grain is projected from the tile's scene coordinates so
-      // two ribbons that cross sample the same texture phase at the crossing.
-      // Marked roads keep their strip UVs because the dashed centre marking is
-      // encoded in the texture's across-road axis.
-      const uvs = visualStyle === "marked"
+      // Dirt and marked roads need an across-road coordinate for their soft
+      // edge and centre marking. Other surfaces retain world-projected grain.
+      const uvs = visualStyle === "marked" || visualStyle === "dirt"
         ? roadUvs(left, right, options.metersPerUnit, visualStyle)
         : worldPositionRoadUvs(left, right, options.metersPerUnit, visualStyle);
       meshes.push(stageMapMesh(
@@ -1178,6 +1190,7 @@ function createRoadJunctions(
 
 function junctionVisualStyle(candidates: readonly RoadJunctionCandidate[]): RoadVisualStyle {
   if (candidates.some((candidate) => candidate.visualStyle === "ford")) return "ford";
+  if (candidates.every((candidate) => candidate.visualStyle === "dirt")) return "dirt";
   if (candidates.every((candidate) => candidate.visualStyle === "unpaved")) return "unpaved";
   if (candidates.every((candidate) => candidate.visualStyle === "pedestrian")) return "pedestrian";
   return "paved";
@@ -1258,7 +1271,7 @@ function roadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford"
+  const repeatMeters = visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "ford"
     ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
     : 4;
   const leftUvs = [new Vector2(0, 0)];
@@ -1284,7 +1297,7 @@ function worldPositionRoadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "unpaved" || visualStyle === "ford"
+  const repeatMeters = visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "ford"
     ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
     : 4;
   const scale = metersPerUnit / repeatMeters;
@@ -1339,6 +1352,7 @@ function mergeWaterways(
 function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMaterialStyle): StandardMaterial {
   const material = new StandardMaterial(`${name}Material`, scene);
   switch (visualStyle) {
+    case "dirt": material.diffuseColor = new Color3(0.42, 0.39, 0.33); break;
     case "unpaved": material.diffuseColor = new Color3(0.43, 0.42, 0.38); break;
     case "marked": material.diffuseColor = new Color3(0.72, 0.72, 0.68); break;
     case "pedestrian": material.diffuseColor = new Color3(0.38, 0.36, 0.33); break;
@@ -1348,7 +1362,7 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
     case "bridgeDeck": material.diffuseColor = new Color3(0.16, 0.17, 0.17); break;
     default: material.diffuseColor = new Color3(0.2, 0.21, 0.2); break;
   }
-  const looseSurface = visualStyle === "unpaved" || visualStyle === "unpavedShoulder";
+  const looseSurface = visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "unpavedShoulder";
   material.specularColor = looseSurface
     ? new Color3(0.008, 0.008, 0.006)
     : visualStyle === "ford"
@@ -1364,9 +1378,13 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
   }
   const texture = createRoadTexture(scene, `${name}Texture`, visualStyle, true);
   material.diffuseTexture = texture;
+  if (visualStyle === "dirt") {
+    material.useAlphaFromDiffuseTexture = true;
+    material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+  }
   if (looseSurface) {
     const relief = createRoadTexture(scene, `${name}Relief`, visualStyle, false);
-    relief.level = 0.24;
+    relief.level = visualStyle === "dirt" ? 0.12 : 0.24;
     material.bumpTexture = relief;
   }
   return material;
@@ -1398,6 +1416,12 @@ function createRoadTexture(
         ? 235
         : visualStyle === "marked"
           ? 55 + Math.round((fine - 0.5) * 10)
+          : visualStyle === "dirt"
+            ? 174 + Math.round(
+              (gravelBroad - 0.5) * 22 +
+              (gravelCluster - 0.5) * 10 +
+              (fine - 0.5) * 6
+            )
           : visualStyle === "unpaved" || visualStyle === "unpavedShoulder"
             ? 164 + Math.round(
               (gravelBroad - 0.5) * 14 +
@@ -1416,7 +1440,17 @@ function createRoadTexture(
       pixels[offset] = value;
       pixels[offset + 1] = value;
       pixels[offset + 2] = value;
-      pixels[offset + 3] = 255;
+      const acrossFraction = Math.min(y, ROAD_TEXTURE_SIZE - 1 - y) /
+        ((ROAD_TEXTURE_SIZE - 1) * 0.5);
+      const dirtEdgeStart = 0.03 + gravelBroad * 0.05;
+      const dirtEdgeAmount = Math.max(0, Math.min(
+        1,
+        (acrossFraction - dirtEdgeStart) / 0.3,
+      ));
+      const dirtEdge = dirtEdgeAmount * dirtEdgeAmount * (3 - 2 * dirtEdgeAmount);
+      pixels[offset + 3] = visualStyle === "dirt"
+        ? Math.round((218 + gravelBroad * 18 + gravelCluster * 10) * dirtEdge)
+        : 255;
     }
   }
   const texture = RawTexture.CreateRGBATexture(
@@ -1430,6 +1464,7 @@ function createRoadTexture(
   );
   texture.name = name;
   texture.gammaSpace = gammaSpace;
+  texture.hasAlpha = visualStyle === "dirt";
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   texture.anisotropicFilteringLevel = 12;

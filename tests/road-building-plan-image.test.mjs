@@ -46,6 +46,7 @@ test("renders the road/building planning result as a standalone SVG", () => {
   assert.match(svg, /data-kind="road-marking" data-source-id="road&amp;1"/);
   assert.match(svg, /data-kind="building-site" data-source-id="building&lt;1&gt;"/);
   assert.match(svg, /data-kind="plot" data-source-id="building&lt;1&gt;"/);
+  assert.match(svg, /data-kind="plot-boundary" data-source-id="building&lt;1&gt;"/);
   assert.match(svg, /data-kind="street-lamp" data-source-id="lamp:1" data-lamp-source="mapped"/);
   const plotIndex = svg.indexOf('data-kind="plot"');
   assert.ok(plotIndex >= 0 && plotIndex < svg.indexOf('data-kind="shoulder"'),

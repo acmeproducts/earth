@@ -280,7 +280,8 @@ reflections. Use `?renderer=webgpu&reverse-depth=force` or
 the base renderer.
 
 Add `performance-debug` (or `perf`) to expand the top-right counter with frame
-time, measured game-loop, movement-LOD, and render-call CPU averages/peaks, long
+time, measured frame pacing, hitch counts, game-loop, movement-LOD, and
+render-call CPU averages/peaks, long
 animation frames (or long tasks as a fallback), the hottest attributed script,
 and a render breakdown for active-mesh evaluation, render targets, draw
 submission, GPU frame time, and shader compilation. It also shows streaming
@@ -289,7 +290,10 @@ Press `F` to toggle the expanded counter at runtime.
 
 Press `R` to download a timestamped JSON render report and mirror it to the
 browser console. Reports retain the latest 300 frame samples with percentile
-summaries, detailed Babylon CPU/GPU counters, recent long-frame attribution,
+summaries and mark individual stutters with their render-callback cost,
+unexplained time outside the callback, frame budget, and concurrent streaming
+state. They also include detailed Babylon CPU/GPU counters, recent long-frame
+attribution,
 browser and GPU capabilities, memory use, camera state, streaming and LOD
 configuration, scene resource totals, and every active mesh's geometry and
 instance counts. Enable the expanded counter with `F` at least one second before
@@ -380,9 +384,8 @@ land-cover and land-use polygons. OSM also supplies building-part visibility,
 road class, path and service type, surface, tunnels, and permanent waterways;
 those attributes drive building filtering, road widths and materials, vegetation
 placement, and narrow water surfaces without relying on regional data sources.
-Detailed OSM hedges, fences, walls, guard rails, and roadside noise barriers come
-from small cached Overpass queries because the general-purpose OpenMapTiles schema
-omits them; four level-16 terrain tiles share each level-14 query region.
+Street lamps are placed deterministically from the road plan. The client does not
+query the public Overpass API while streaming terrain detail.
 
 ### Interior building layouts
 

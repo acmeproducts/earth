@@ -1,5 +1,4 @@
 import type { Mesh, TransformNode } from "@babylonjs/core";
-import type { BarrierFeature } from "./OpenStreetMapBarriers";
 import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
 import type { RockFieldResult } from "./RockField";
@@ -41,7 +40,6 @@ export interface StreamedTile {
   landCover?: WorldCover;
   preCarvingElevations: Float32Array;
   mapTiles?: Promise<MapTile[]>;
-  barrierFeatures?: Promise<BarrierFeature[]>;
   lakeContextTiles?: Promise<MapTile[]>;
   roadAndBuildingPlan: RoadAndBuildingPlan;
   terrain: Mesh;

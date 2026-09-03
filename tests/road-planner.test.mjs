@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planRoad } from "../src/RoadPlanner.ts";
+import { planRoad, roadVegetationShoulderMeters } from "../src/RoadPlanner.ts";
 
 test("plans major roads with lane-marking visuals", () => {
   assert.deepEqual(planRoad({ class: "primary", surface: "paved" }), {
@@ -23,11 +23,22 @@ test("uses path and service subtypes for globally applicable widths", () => {
 
 test("separates pedestrian, unpaved, and tunnel rendering decisions", () => {
   assert.equal(planRoad({ class: "path", subclass: "cycleway" })?.visualStyle, "pedestrian");
-  assert.equal(planRoad({ class: "path", subclass: "footway" })?.visualStyle, "unpaved");
+  assert.equal(planRoad({ class: "path", subclass: "footway" })?.visualStyle, "dirt");
+  assert.equal(planRoad({ class: "track" })?.visualStyle, "dirt");
+  assert.equal(planRoad({ class: "minor", surface: "unpaved" })?.visualStyle, "unpaved");
   assert.equal(planRoad({ class: "track", surface: "paved" })?.visualStyle, "paved");
   assert.equal(planRoad({ class: "secondary", brunnel: "tunnel" })?.isTunnel, true);
   assert.equal(planRoad({ class: "secondary", brunnel: "bridge" })?.structure, "bridge");
   assert.equal(planRoad({ class: "track", brunnel: "ford" })?.visualStyle, "ford");
+});
+
+test("lets vegetation occupy most of a small dirt road's soft shoulder", () => {
+  const dirt = planRoad({ class: "track" });
+  const gravel = planRoad({ class: "minor", surface: "unpaved" });
+  assert.ok(dirt);
+  assert.ok(gravel);
+  assert.ok(Math.abs(roadVegetationShoulderMeters(dirt) - 0.11) < 1e-9);
+  assert.equal(roadVegetationShoulderMeters(gravel), 0.9);
 });
 
 test("plans shoulders, ramps, construction, and vertical layers", () => {

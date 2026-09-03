@@ -8,16 +8,13 @@ const barriers = readFileSync(
 );
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
+const streetLamps = readFileSync(new URL("../src/StreetLamps.ts", import.meta.url), "utf8");
+const index = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 
-test("loads globally mapped linear barriers in shared parent regions", () => {
-  assert.match(barriers, /private static readonly QUERY_ZOOM = 14/);
-  assert.match(barriers, /private static readonly cache = new Map/);
-  assert.match(
-    barriers,
-    /hedge\|fence\|wall\|guard_rail\|jersey_barrier\|cable_barrier\|retaining_wall/,
-  );
-  assert.match(barriers, /out tags geom qt/);
-  assert.match(barriers, /meta\[name="overpass-url"\]/);
+test("does not contact Overpass while streaming map detail", () => {
+  assert.doesNotMatch(game + barriers + streetLamps + index, /overpass|api\/interpreter/i);
+  assert.doesNotMatch(game, /OpenStreetMapBarriers\.fetch|StreetLamps\.fetch/);
+  assert.doesNotMatch(streamedTile, /barrierFeatures/);
 });
 
 test("clips and terrain-conforms barrier geometry before committing it", () => {
@@ -38,10 +35,10 @@ test("renders ordinary fences as chain-link and preserves wood-tagged fences", (
   assert.match(barriers, /case "chainlink"/);
 });
 
-test("barriers share detailed-map lifecycle and vegetation exclusion", () => {
-  assert.match(streamedTile, /barrierFeatures\?: Promise<BarrierFeature\[\]>/);
-  assert.match(game, /OpenStreetMapBarriers\.createExclusionMask\(/);
-  assert.match(game, /combineHorizontalExclusionMasks\(\[/);
-  assert.match(game, /OpenStreetMapBarriers\.createLayer\(/);
-  assert.match(game, /barrierLayer\.root\.parent = mapFeatures\.root/);
+test("barrier renderer remains available without owning a network source", () => {
+  assert.match(barriers, /static async createLayer\(/);
+  assert.match(barriers, /static async createPlannedLayer\(/);
+  assert.match(barriers, /static createPlannedExclusionMask\(/);
+  assert.match(barriers, /static createExclusionMask\(/);
+  assert.doesNotMatch(barriers, /static fetch\(|fetchRegion\(/);
 });
