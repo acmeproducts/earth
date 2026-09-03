@@ -10,13 +10,10 @@ import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
   ImpostorAssetLease,
-  ImpostorAssets,
   ImpostorVariant,
 } from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
-
-export type GrassImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 0.85;
 // Keeping the patch compact and relatively tall lets its blades use the square
@@ -51,21 +48,6 @@ const grassImpostors = createImpostorAssetProvider({
     resolution: { default: 128, minimum: 48, maximum: 512 },
   },
 });
-
-/** Shares one grass atlas capture per scene and capture-attribute combination. */
-export function getGrassImpostorAssets(
-  scene: Scene,
-  horizontalSamples = grassImpostors.getDefaultSampling().horizontalSamples,
-  verticalSamples = grassImpostors.getDefaultSampling().verticalSamples,
-  resolution = grassImpostors.getDefaultSampling().resolution,
-  variant?: ImpostorVariant,
-): Promise<GrassImpostorAssets> {
-  return grassImpostors.getAssets(scene, {
-    horizontalSamples,
-    verticalSamples,
-    resolution,
-  }, variant);
-}
 
 export function acquireGrassImpostorAssets(
   scene: Scene,

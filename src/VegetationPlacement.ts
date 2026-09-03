@@ -1,5 +1,6 @@
-import { Matrix } from "@babylonjs/core";
-import type { HorizontalExclusionMask } from "./Geo";
+import { Matrix, Vector3 } from "@babylonjs/core";
+import { sampleElevation, type HorizontalExclusionMask } from "./Geo";
+import type { TerrainData } from "./TerrainData";
 import type { VegetationRenderMode } from "./VegetationField";
 import type { LandCoverSampler } from "./WorldCover";
 import type { ProceduralRegionFamily, ProceduralVariant } from "./procedural/ProceduralRegions";
@@ -29,6 +30,22 @@ export interface VegetationPlacementOptions {
   impostorCaptureMode?: "fast" | "cooperative";
   /** Creates the field hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
+}
+
+export function sampleTerrainNormal(
+  terrain: TerrainData,
+  x: number,
+  z: number,
+  meshWidth: number,
+  meshDepth: number,
+  metersPerUnit: number,
+): Vector3 {
+  const step = 1.5 / metersPerUnit;
+  const left = sampleElevation(terrain, x - step, z, meshWidth, meshDepth) / metersPerUnit;
+  const right = sampleElevation(terrain, x + step, z, meshWidth, meshDepth) / metersPerUnit;
+  const back = sampleElevation(terrain, x, z - step, meshWidth, meshDepth) / metersPerUnit;
+  const front = sampleElevation(terrain, x, z + step, meshWidth, meshDepth) / metersPerUnit;
+  return new Vector3(left - right, step * 2, back - front).normalize();
 }
 
 export interface PlacementGrid {

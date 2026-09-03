@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { planBuilding } = await import("../src/BuildingPlanner.ts");
 const { buildingWindowStyle, windowRegionAt } = await import(
   "../src/BuildingWindowStyle.ts"

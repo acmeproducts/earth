@@ -92,10 +92,10 @@ test("medium-range tree shadows use the full field instead of visual LOD buffers
 test("staged vegetation rebuilds the expensive shadow caster list only once", () => {
   const stage = game.slice(
     game.indexOf("private stageTileField"),
-    game.indexOf("private activateTileVegetation"),
+    game.indexOf("private async activateTileVegetation"),
   );
   const activation = game.slice(
-    game.indexOf("private activateTileVegetation"),
+    game.indexOf("private async activateTileVegetation"),
     game.indexOf("private refreshShadowCasters"),
   );
   assert.doesNotMatch(stage, /refreshShadowCasters/);

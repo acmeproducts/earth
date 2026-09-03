@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { createFrameBudgetYielder, waitForNextFrame } = await import("../src/FrameBudget.ts");
 
 function stubDocument(hidden) {

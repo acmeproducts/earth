@@ -28,7 +28,7 @@ test("WebGPU is opt-in and falls back to WebGL", () => {
 
 test("all scene modes use the shared renderer", () => {
   assert.match(index, /createRenderingEngine\(canvas, backend, engineOptions\)/);
-  assert.match(index, /new TreeImpostorValidation\(activeCanvas, engine\)/);
+  assert.match(index, /new TreeImpostorValidation\(engine\)/);
   assert.match(index, /new TreeImpostorDemo\(activeCanvas, engine\)/);
   assert.match(index, /new Game\(activeCanvas, engine\)/);
 });

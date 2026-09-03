@@ -1,7 +1,15 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "./PlanningFrame.mjs";
-import { decomposeToConvexPolygons } from "./PolygonDecomposition.mjs";
-type CartesianAxis = "x" | "y";
+import { decomposeToConvexPolygons, mergeConvexNeighbours } from "./PolygonDecomposition.mjs";
+import {
+  clipPolygonAtAxis,
+  cutSegment,
+  overlappingSegment,
+  polygonArea,
+  polygonBounds,
+  samePoint,
+  type CartesianAxis,
+} from "./PolygonGeometry";
 
 interface PolygonSplit {
   first: Point2D[];
@@ -10,14 +18,19 @@ interface PolygonSplit {
   axis: CartesianAxis;
   coordinate: number;
 }
-
 export const MINIMUM_ROOM_AREA_SQUARE_METERS = 12;
 /** Keep generated rooms wide enough to furnish and move through comfortably. */
 export const MINIMUM_ROOM_CLEAR_WIDTH_METERS = 2.8;
 const MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 12;
-const MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 30;
+// Keep the upper bound high enough for large, open-plan apartments. Since
+// subdivision stops once a piece would fall below twice this target, this
+// also raises the largest room size the planner can intentionally retain.
+const MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 60;
 
-export type ApartmentRoomType = "room";
+export type ApartmentRoomType = "room" | "living-room" | "toilet" | "kitchen";
+
+/** Rooms below this area are suitable candidates for the first bathroom. */
+export const SMALL_ROOM_AREA_SQUARE_METERS = 25;
 
 export interface ApartmentPlannerInput {
   apartmentPolygon: Polygon2D;
@@ -28,16 +41,23 @@ export interface ApartmentPlannerInput {
 
 export interface ApartmentLayout extends PolygonLayout<ApartmentRoomType> {}
 
-export interface ApartmentLayoutPlanner {
-  (input: ApartmentPlannerInput): ApartmentLayout;
+/** Keep the room target proportional to the apartment footprint. */
+export function maximumMinimumRoomAreaForApartment(apartment: Polygon2D): number {
+  return Math.max(
+    MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS,
+    Math.min(MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS, polygonArea(apartment.outer) / 2),
+  );
 }
 
 /** Recursively bisects an apartment into balanced rooms using orthogonal walls. */
 export function planApartmentLayout(input: ApartmentPlannerInput): ApartmentLayout {
-  const minimumRoomArea = validatedMinimumRoomArea(input.minimumRoomAreaSquareMeters);
   const frame = planningFrameForPolygon(input.apartmentPolygon.outer);
   const toLocal = (point: Point2D): Point2D => pointInPlanningFrame(point, frame);
   const toWorld = (point: Point2D): Point2D => pointFromPlanningFrame(point, frame);
+  const minimumRoomArea = validatedMinimumRoomArea(
+    input.minimumRoomAreaSquareMeters,
+    maximumMinimumRoomAreaForApartment(input.apartmentPolygon),
+  );
   const layout = planApartmentLayoutInLocalFrame({
     apartmentPolygon: { outer: input.apartmentPolygon.outer.map(toLocal) },
     minimumRoomAreaSquareMeters: minimumRoomArea,
@@ -78,10 +98,44 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
     polygon: { outer },
     label: `Room ${index + 1}`,
   }));
+  assignApartmentRoomTypes(rooms);
   return { boundary, rooms, openings: [...openings, ...internalRoomDoors(rooms)] };
 }
 
-export const defaultApartmentLayoutPlanner: ApartmentLayoutPlanner = planApartmentLayout;
+/**
+ * Assigns the first useful room functions in a finished apartment.
+ *
+ * The assignment is deliberately deterministic: when several rooms qualify
+ * for the toilet, the smallest one wins, and the largest remaining room gets
+ * the kitchen.
+ */
+export function assignApartmentRoomTypes(
+  rooms: LayoutRoom<ApartmentRoomType>[],
+): void {
+  if (rooms.length === 0) return;
+  if (rooms.length === 1) {
+    rooms[0].type = "living-room";
+    rooms[0].label = "Living room";
+    return;
+  }
+
+  const area = (room: LayoutRoom<ApartmentRoomType>): number => polygonArea(room.polygon.outer);
+  const smallRoom = rooms
+    .filter((room) => area(room) < SMALL_ROOM_AREA_SQUARE_METERS)
+    .sort((first, second) => area(first) - area(second))[0];
+  if (smallRoom) {
+    smallRoom.type = "toilet";
+    smallRoom.label = "Toilet";
+  }
+
+  const kitchen = rooms
+    .filter((room) => room !== smallRoom)
+    .sort((first, second) => area(second) - area(first))[0];
+  if (kitchen) {
+    kitchen.type = "kitchen";
+    kitchen.label = "Kitchen";
+  }
+}
 
 function internalRoomDoors(rooms: readonly LayoutRoom<ApartmentRoomType>[]): Opening2D[] {
   if (rooms.length < 2) return [];
@@ -192,7 +246,10 @@ function bestSplit(
       const secondArea = polygonArea(split.second);
       const imbalance = Math.abs(firstArea - secondArea) / (firstArea + secondArea);
       const aspectPenalty = (Math.max(aspectRatio(split.first), aspectRatio(split.second)) - 1) * 0.25;
-      const score = imbalance + aspectPenalty + axisIndex * 0.02;
+      // Prefer splitting along the polygon's longest axis. The other axis is
+      // retained as a fallback for footprints where the preferred cut is
+      // blocked by an opening or cannot produce usable rooms.
+      const score = imbalance + aspectPenalty + axisIndex * 1_000_000;
       if (!best || score < best.score) best = { split, score };
     }
   });
@@ -217,7 +274,7 @@ function mergeUndersizedConvexPieces(
     let best: { index: number; polygon: Point2D[]; score: number } | undefined;
     for (let index = 0; index < remaining.length; index++) {
       if (index === target) continue;
-      const merged = mergeNeighbouringPieces(remaining[target], remaining[index]);
+      const merged = mergeConvexNeighbours(remaining[target], remaining[index])?.polygon;
       if (!merged) continue;
       const area = polygonArea(merged);
       const score = (isUsableRoom(merged, minimumRoomArea) ? 1_000_000 : 0) + area;
@@ -232,48 +289,17 @@ function mergeUndersizedConvexPieces(
   return remaining.every((piece) => isUsableRoom(piece, minimumRoomArea)) ? remaining : undefined;
 }
 
-function validatedMinimumRoomArea(value: number | undefined): number {
+function validatedMinimumRoomArea(value: number | undefined, maximumRoomArea: number): number {
   const minimumRoomArea = value ?? MINIMUM_ROOM_AREA_SQUARE_METERS;
   if (!Number.isFinite(minimumRoomArea) ||
       minimumRoomArea < MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS ||
-      minimumRoomArea > MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS) {
+      minimumRoomArea > maximumRoomArea) {
     throw new Error(
       `minimumRoomAreaSquareMeters must be between ${MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS} and ` +
-      `${MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS} square meters.`,
+      `${maximumRoomArea} square meters for this apartment.`,
     );
   }
   return minimumRoomArea;
-}
-
-function mergeNeighbouringPieces(first: readonly Point2D[], second: readonly Point2D[]): Point2D[] | undefined {
-  const edges = new Map<string, { start: Point2D; end: Point2D }>();
-  for (const polygon of [first, second]) {
-    for (let index = 0; index < polygon.length; index++) {
-      const start = polygon[index];
-      const end = polygon[(index + 1) % polygon.length];
-      const reverse = edgeKey(end, start);
-      if (edges.has(reverse)) edges.delete(reverse);
-      else edges.set(edgeKey(start, end), { start, end });
-    }
-  }
-  if (edges.size >= first.length + second.length) return undefined;
-  const remaining = [...edges.values()];
-  const firstEdge = remaining.shift();
-  if (!firstEdge) return undefined;
-  const polygon = [firstEdge.start];
-  let end = firstEdge.end;
-  while (remaining.length > 0) {
-    polygon.push(end);
-    const next = remaining.findIndex((edge) => samePoint(edge.start, end));
-    if (next < 0) return undefined;
-    end = remaining[next].end;
-    remaining.splice(next, 1);
-  }
-  return samePoint(end, polygon[0]) && polygon.length >= 3 ? polygon : undefined;
-}
-
-function edgeKey(start: Point2D, end: Point2D): string {
-  return `${start.x.toFixed(7)},${start.y.toFixed(7)}>${end.x.toFixed(7)},${end.y.toFixed(7)}`;
 }
 
 function aspectRatio(points: readonly Point2D[]): number {
@@ -288,8 +314,8 @@ function splitAtCoordinate(
   axis: CartesianAxis,
   coordinate: number,
 ): PolygonSplit | undefined {
-  const first = clipAtAxis(points, axis, coordinate, true);
-  const second = clipAtAxis(points, axis, coordinate, false);
+  const first = clipPolygonAtAxis(points, axis, coordinate, true);
+  const second = clipPolygonAtAxis(points, axis, coordinate, false);
   const wall = cutSegment(points, axis, coordinate);
   if (first.length < 3 || second.length < 3 || !wall) return undefined;
   return { first, second, wall, axis, coordinate };
@@ -305,7 +331,7 @@ function splitConvexPolygonEqual(
   const targetArea = polygonArea(points) / 2;
   for (let iteration = 0; iteration < 48; iteration++) {
     const middle = (low + high) / 2;
-    if (polygonArea(clipAtAxis(points, axis, middle, true)) < targetArea) low = middle;
+    if (polygonArea(clipPolygonAtAxis(points, axis, middle, true)) < targetArea) low = middle;
     else high = middle;
   }
   return splitAtCoordinate(points, axis, (low + high) / 2);
@@ -320,109 +346,4 @@ function validatedConvexPolygon(polygon: Polygon2D, subject: string): Polygon2D 
   if (polygon.holes?.length) throw new Error("Apartment planning does not support polygon holes yet.");
   if (polygonArea(outer) < 0.01) throw new Error("Apartment polygon area is too small.");
   return { outer };
-}
-
-function overlappingSegment(
-  a: Point2D,
-  b: Point2D,
-  c: Point2D,
-  d: Point2D,
-): readonly [Point2D, Point2D] | undefined {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const length = Math.hypot(dx, dy);
-  if (length < 1e-7 || Math.abs(dx * (c.y - a.y) - dy * (c.x - a.x)) > 1e-6 ||
-      Math.abs(dx * (d.y - a.y) - dy * (d.x - a.x)) > 1e-6) return undefined;
-  const project = (point: Point2D): number => ((point.x - a.x) * dx + (point.y - a.y) * dy) / length;
-  const low = Math.max(0, Math.min(project(c), project(d)));
-  const high = Math.min(length, Math.max(project(c), project(d)));
-  return high - low > 1e-7
-    ? [{ x: a.x + dx * low / length, y: a.y + dy * low / length },
-      { x: a.x + dx * high / length, y: a.y + dy * high / length }]
-    : undefined;
-}
-
-function polygonArea(points: readonly Point2D[]): number {
-  let area = 0;
-  for (let index = 0; index < points.length; index++) {
-    const current = points[index];
-    const next = points[(index + 1) % points.length];
-    area += current.x * next.y - next.x * current.y;
-  }
-  return Math.abs(area / 2);
-}
-
-function polygonBounds(points: readonly Point2D[]): { minX: number; minY: number; maxX: number; maxY: number } {
-  return {
-    minX: Math.min(...points.map((point) => point.x)),
-    minY: Math.min(...points.map((point) => point.y)),
-    maxX: Math.max(...points.map((point) => point.x)),
-    maxY: Math.max(...points.map((point) => point.y)),
-  };
-}
-
-function clipAtAxis(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-  keepLower: boolean,
-): Point2D[] {
-  const inside = (point: Point2D): boolean => keepLower
-    ? point[axis] <= coordinate
-    : point[axis] >= coordinate;
-  const output: Point2D[] = [];
-  let start = points[points.length - 1];
-  for (const end of points) {
-    if (inside(end)) {
-      if (!inside(start)) output.push(axisIntersection(start, end, axis, coordinate));
-      output.push(end);
-    } else if (inside(start)) output.push(axisIntersection(start, end, axis, coordinate));
-    start = end;
-  }
-  return output;
-}
-
-function axisIntersection(
-  start: Point2D,
-  end: Point2D,
-  axis: CartesianAxis,
-  coordinate: number,
-): Point2D {
-  const amount = (coordinate - start[axis]) / (end[axis] - start[axis]);
-  return axis === "x"
-    ? { x: coordinate, y: start.y + (end.y - start.y) * amount }
-    : { x: start.x + (end.x - start.x) * amount, y: coordinate };
-}
-
-function cutSegment(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-): readonly [Point2D, Point2D] | undefined {
-  const values: number[] = [];
-  for (let index = 0; index < points.length; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    if (Math.abs(start[axis] - coordinate) < 1e-7) values.push(axis === "x" ? start.y : start.x);
-    if ((start[axis] < coordinate && end[axis] > coordinate) ||
-        (start[axis] > coordinate && end[axis] < coordinate)) {
-      const amount = (coordinate - start[axis]) / (end[axis] - start[axis]);
-      values.push(axis === "x"
-        ? start.y + (end.y - start.y) * amount
-        : start.x + (end.x - start.x) * amount);
-    }
-  }
-  const uniqueValues = [...new Set(values.map((value) => value.toFixed(7)))].map(Number);
-  // Concave rooms are split only across a single interior segment. More than
-  // two intersections would join disconnected regions in the clip result.
-  if (uniqueValues.length !== 2) return undefined;
-  const minimum = Math.min(...uniqueValues);
-  const maximum = Math.max(...uniqueValues);
-  return axis === "x"
-    ? [{ x: coordinate, y: minimum }, { x: coordinate, y: maximum }]
-    : [{ x: minimum, y: coordinate }, { x: maximum, y: coordinate }];
-}
-
-function samePoint(a: Point2D, b: Point2D): boolean {
-  return a.x === b.x && a.y === b.y;
 }

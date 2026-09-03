@@ -72,7 +72,6 @@ export function worldTileAtLocation(
   level = WORLD_GRID_LEVEL,
 ): WorldTileId {
   const normalizedLevel = normalizeLevel(level);
-  const scale = 2 ** normalizedLevel;
   const coordinates = worldTileCoordinatesAtLocation(latitude, longitude, normalizedLevel);
   return {
     level: normalizedLevel,

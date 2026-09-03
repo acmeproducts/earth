@@ -22,7 +22,11 @@ import { clamp01 } from "../MathUtils";
 import { unitFromSeed } from "../Random";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
 import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
-import { planApartmentLayout, type ApartmentLayout } from "../ApartmentLayoutPlanner";
+import {
+  maximumMinimumRoomAreaForApartment,
+  planApartmentLayout,
+  type ApartmentLayout,
+} from "../ApartmentLayoutPlanner";
 import { segmentsIntersect, type Opening2D, type Point2D, type PolygonLayout } from "../FloorPlan";
 import {
   captureEncounteredBuildingLayout,
@@ -155,7 +159,6 @@ export class ProceduralBuildingRenderer {
     } else if (showRoofs) {
       const rooftop = createRooftopVolume(
         scene,
-        plan,
         prepared.outline,
         wallTopElevation,
         areaSquareMeters,
@@ -805,6 +808,7 @@ function planApartmentLayouts(
           minimumRoomAreaSquareMeters: apartmentRoomAreaTarget(
             buildingSeed,
             apartmentIndex,
+            room.polygon,
           ),
           openings: [...(building.openings ?? []), ...facadeOpenings]
             .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
@@ -822,11 +826,16 @@ function planApartmentLayouts(
   };
 }
 
-function apartmentRoomAreaTarget(buildingSeed: number, apartmentIndex: number): number {
-  // Keep the 12-30 m² variation bounded and deterministic: room proportions change by
+function apartmentRoomAreaTarget(
+  buildingSeed: number,
+  apartmentIndex: number,
+  apartmentPolygon: BuildingLayout["rooms"][number]["polygon"],
+): number {
+  // Keep the 12-60 m² variation bounded and deterministic: room proportions change by
   // building and apartment, but a rebuild never produces a different layout.
   const variation = unitFromSeed(buildingSeed ^ (apartmentIndex * 0x1f123bb5) ^ 0x3c6ef372);
-  return 12 + variation * 18;
+  const maximum = maximumMinimumRoomAreaForApartment(apartmentPolygon);
+  return 12 + variation * (maximum - 12);
 }
 
 function plannerInputFromOutline(
@@ -1753,7 +1762,6 @@ function configureBuildingSurfaceMaterials(
       )
       : 1;
     for (const vertex of windowVertices) {
-      const offset = vertex * 3;
       colors[vertex * 4 + 3] = BUILDING_WINDOW_CLOSE_ALPHA +
         (1 - BUILDING_WINDOW_CLOSE_ALPHA) * fade;
     }
@@ -1979,21 +1987,16 @@ function createPitchedRoof(
     addRoofFace(indices, [order[0], order[1], highStart + 1, highStart]);
     addRoofFace(indices, [order[1], order[2], highStart + 1]);
     addRoofFace(indices, [order[3], order[0], highStart]);
-  } else if ((roofShape === "gabled" || roofShape === "hipped") && eaves.length === 4) {
+  } else if (roofShape === "gabled" && eaves.length === 4) {
     const longestEdge = longestPolygonEdge(eaves);
     const order = [0, 1, 2, 3].map((offset) => (longestEdge + offset) % 4);
     const corners = order.map((index) => eaves[index]);
     const left = midpoint(corners[3], corners[0]);
     const right = midpoint(corners[1], corners[2]);
-    const inset = roofShape === "hipped"
-      ? Math.min(0.32, pointDistance(corners[0], corners[3]) / Math.max(0.01, pointDistance(left, right) * 2))
-      : 0;
-    const ridgeLeft = lerpPoint(left, right, inset);
-    const ridgeRight = lerpPoint(left, right, 1 - inset);
     const ridgeStart = vertices.length;
     vertices.push(
-      { x: ridgeLeft.x, y: peakY, z: ridgeLeft.z },
-      { x: ridgeRight.x, y: peakY, z: ridgeRight.z },
+      { x: left.x, y: peakY, z: left.z },
+      { x: right.x, y: peakY, z: right.z },
     );
     addRoofFace(indices, [order[0], order[1], ridgeStart + 1, ridgeStart]);
     addRoofFace(indices, [order[2], order[3], ridgeStart, ridgeStart + 1]);
@@ -2025,7 +2028,6 @@ function createPitchedRoof(
 
 function createRooftopVolume(
   scene: Scene,
-  plan: BuildingPlan,
   outline: ScenePoint[],
   roofElevation: number,
   areaSquareMeters: number,
@@ -2075,18 +2077,15 @@ function resolvedRoofShape(
 ): BuildingPlan["roofShape"] {
   if (plan.roofShape !== "unknown") {
     if (plan.roofShape === "flat") return "flat";
-    // Mono-pitch roofs read as visibly lopsided in the world view. Keep the
-    // source value accepted for compatibility, but render it symmetrically.
-    if (plan.roofShape === "skillion") return "gabled";
-    return isConvex(outline) && outline.length <= 12 ? plan.roofShape : "flat";
+    // Render pitched roofs with a full-length ridge. Hipped, pyramidal, and
+    // mono-pitch roofs taper in from their ends and look pinched in this view.
+    return isConvex(outline) && outline.length === 4 ? "gabled" : "flat";
   }
   if (outline.length !== 4 || !isConvex(outline) || areaSquareMeters > 650 || plan.heightMeters > 16) {
     return "flat";
   }
   const variation = unitFromSeed(plan.detailSeed ^ 0x7a4d2b);
-  if (variation < 0.34) return "gabled";
-  if (variation < 0.62) return "hipped";
-  if (variation < 0.78) return "pyramidal";
+  if (variation < 0.78) return "gabled";
   return "flat";
 }
 
@@ -2320,10 +2319,6 @@ function midpoint(a: ScenePoint, b: ScenePoint): ScenePoint {
   return { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
 }
 
-function lerpPoint(a: ScenePoint, b: ScenePoint, amount: number): ScenePoint {
-  return { x: a.x + (b.x - a.x) * amount, z: a.z + (b.z - a.z) * amount };
-}
-
 function addRoofFace(indices: number[], face: number[]): void {
   for (let index = 1; index < face.length - 1; index++) {
     indices.push(face[0], face[index + 1], face[index]);
@@ -2360,15 +2355,6 @@ function polygonCentroid(points: ScenePoint[]): ScenePoint {
   return Math.abs(area) < 1e-8
     ? averagePoint(points)
     : { x: x / (3 * area), z: z / (3 * area) };
-}
-
-function polygonBounds(points: ScenePoint[]): Bounds {
-  return points.reduce((bounds, point) => ({
-    minX: Math.min(bounds.minX, point.x),
-    maxX: Math.max(bounds.maxX, point.x),
-    minZ: Math.min(bounds.minZ, point.z),
-    maxZ: Math.max(bounds.maxZ, point.z),
-  }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
 }
 
 function clipPolygon(points: ScenePoint[], bounds: Bounds): ScenePoint[] {

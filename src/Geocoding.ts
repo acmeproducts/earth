@@ -1,4 +1,4 @@
-import { WEB_MERCATOR_MAX_LATITUDE } from "./Locations";
+import { WEB_MERCATOR_MAX_LATITUDE } from "./WorldGrid";
 import type { WorldLocation } from "./Locations";
 
 export interface GeocodedLocation extends WorldLocation {

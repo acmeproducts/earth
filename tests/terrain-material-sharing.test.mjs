@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 import { Mesh, NullEngine, Scene } from "@babylonjs/core";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { createTerrainMaterial, disposeTerrainMesh, isSharedTerrainMaterial } = await import(
   "../src/TerrainMaterial.ts"
 );

@@ -7,12 +7,9 @@ import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
   ImpostorAssetLease,
-  ImpostorAssets,
   ImpostorVariant,
 } from "./Impostor";
 import { createSeededRandom } from "./Random";
-
-export type BushImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
@@ -54,21 +51,6 @@ const bushImpostors = createImpostorAssetProvider({
     resolution: { default: 96, minimum: 48, maximum: 512 },
   },
 });
-
-/** Shares one shrub atlas capture per scene and capture-attribute combination. */
-export function getBushImpostorAssets(
-  scene: Scene,
-  horizontalSamples = bushImpostors.getDefaultSampling().horizontalSamples,
-  verticalSamples = bushImpostors.getDefaultSampling().verticalSamples,
-  resolution = bushImpostors.getDefaultSampling().resolution,
-  variant?: ImpostorVariant,
-): Promise<BushImpostorAssets> {
-  return bushImpostors.getAssets(scene, {
-    horizontalSamples,
-    verticalSamples,
-    resolution,
-  }, variant);
-}
 
 export function acquireBushImpostorAssets(
   scene: Scene,
@@ -249,43 +231,6 @@ export function createBushModel(scene: Scene, renderHeight: number, seed?: numbe
   bush.refreshBoundingInfo();
   setVertexColorModelHeight(bush, renderHeight);
   return bush;
-}
-
-function addBranch(
-  positions: number[],
-  indices: number[],
-  colors: number[],
-  start: Vector3,
-  end: Vector3,
-  radius: number,
-  sides: number,
-): void {
-  const vertexStart = positions.length / 3;
-  const direction = end.subtract(start).normalize();
-  const reference = Math.abs(direction.y) < 0.9 ? Vector3.Up() : Vector3.Right();
-  const axisX = Vector3.Cross(direction, reference).normalize();
-  const axisZ = Vector3.Cross(direction, axisX).normalize();
-
-  for (let ring = 0; ring < 2; ring++) {
-    const center = ring === 0 ? start : end;
-    const ringRadius = ring === 0 ? radius : radius * 0.35;
-    for (let side = 0; side < sides; side++) {
-      const angle = Math.PI * 2 * side / sides;
-      const offset = axisX.scale(Math.cos(angle) * ringRadius)
-        .add(axisZ.scale(Math.sin(angle) * ringRadius));
-      const point = center.add(offset);
-      positions.push(point.x, point.y, point.z);
-      const shade = 0.8 + ring * 0.14;
-      colors.push(0.2 * shade, 0.105 * shade, 0.045 * shade, 1);
-    }
-  }
-
-  for (let side = 0; side < sides; side++) {
-    const nextSide = (side + 1) % sides;
-    const bottom = vertexStart + side;
-    const top = vertexStart + sides + side;
-    indices.push(bottom, top, vertexStart + nextSide, vertexStart + nextSide, top, vertexStart + sides + nextSide);
-  }
 }
 
 /** Adds one softly cupped, pointed oval leaf with a subtle center fold. */

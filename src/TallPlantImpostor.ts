@@ -3,14 +3,12 @@ import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
 } from "./Impostor";
-import type { ImpostorAssetLease, ImpostorAssets, ImpostorVariant } from "./Impostor";
+import type { ImpostorAssetLease, ImpostorVariant } from "./Impostor";
 import {
   createVertexColorCaptureMaterial,
   setVertexColorModelHeight,
 } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
-
-export type TallPlantImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 1.9;
 const CAPTURE_DIAMETER = 3.1;
@@ -20,7 +18,6 @@ const LEAF_BASE = new Color3(0.16, 0.39, 0.09);
 const LEAF_TIP = new Color3(0.29, 0.5, 0.13);
 const SEED_HEAD = new Color3(0.63, 0.53, 0.34);
 const DAISY_STEM = new Color3(0.12, 0.36, 0.08);
-const DAISY_LEAF = new Color3(0.18, 0.47, 0.1);
 const DAISY_CENTER = new Color3(1, 0.67, 0.035);
 // Ordered as a hue ramp so the +/-1 drift inside one clump stays within a
 // plausible species range instead of jumping from cream to violet mid-stem.
@@ -81,13 +78,6 @@ const tallPlantImpostors = createImpostorAssetProvider({
     resolution: { default: 112, minimum: 48, maximum: 512 },
   },
 });
-
-export function getTallPlantImpostorAssets(
-  scene: Scene,
-  variant?: ImpostorVariant,
-): Promise<TallPlantImpostorAssets> {
-  return tallPlantImpostors.getAssets(scene, undefined, variant);
-}
 
 export function acquireTallPlantImpostorAssets(
   scene: Scene,

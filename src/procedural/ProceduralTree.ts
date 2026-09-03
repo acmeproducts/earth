@@ -889,7 +889,9 @@ function createConiferTree(
   }
 
   const cards = foliageCardShape(species);
-  const firstLevel = species === "pine" ? 4 : 2;
+  // Scots pine crowns vary wildly with light and competition. Some retain a
+  // low live bough while others self-prune higher, even inside one stand.
+  const firstLevel = species === "pine" ? 3 + Math.floor(random() * 2) : 2;
   addRootFlares(logBuffers, trunkPoints[0], 6, 0.13, 0.3, bark, barkCut, random);
   // Conifers shade out their own lower limbs and keep the dead stubs for years.
   // Below the first live whorl that bare stretch of trunk is all silhouette.
@@ -914,7 +916,7 @@ function createConiferTree(
     // limbs and alternating ring sizes keep the trunk visible and the crown
     // irregular without losing the species' characteristic tiering.
     const branches = species === "pine"
-      ? 5 + (level % 3 === 0 ? 1 : 0)
+      ? 5 + Math.floor(random() * 3)
       : species === "spruce"
         ? 7
         : 6;
@@ -923,10 +925,14 @@ function createConiferTree(
       // A Swedish Scots pine does not build a spindle-shaped crown. Once its
       // shaded lower limbs have died, the first surviving whorl is normally
       // the widest and successive whorls shorten toward the leader.
-      ? lerp(0.84, 0.14, Math.pow(crownT, 0.78))
+      ? lerp(0.88, 0.16, Math.pow(crownT, 0.72)) * (0.86 + random() * 0.28)
       : lerp(0.92, 0.16, Math.pow(crownT, 0.72));
 
     for (let branch = 0; branch < branches; branch++) {
+      // Broken whorls are a major part of a mature pine silhouette. The extra
+      // twig density below keeps these gaps organic rather than making the
+      // crown sparse.
+      if (species === "pine" && random() < 0.1) continue;
       const angle = level * 1.71 + branch * Math.PI * 2 / branches + (random() - 0.5) * 0.18;
       const horizontal = new Vector3(Math.cos(angle), 0, Math.sin(angle));
       const start = trunkPoints[level];
@@ -952,10 +958,10 @@ function createConiferTree(
       );
       addLimbAlongPath(branchBuffers, limbPath, radius, radius * 0.14, 5, heightT, bark, barkCut);
 
-      const sprays = species === "pine" ? 5 : species === "spruce" ? 8 : 6;
+      const sprays = species === "pine" ? 7 : species === "spruce" ? 8 : 6;
       for (let spray = 0; spray < sprays; spray++) {
         const along = species === "pine"
-          ? 0.48 + spray * 0.115 + random() * 0.035
+          ? 0.34 + spray * 0.09 + random() * 0.045
           : species === "spruce"
             ? 0.14 + spray * 0.095 + random() * 0.04
             : 0.2 + random() * 0.8;
@@ -980,11 +986,11 @@ function createConiferTree(
       // Foliage belongs on a feathered system of woody twigs, not in blobs along
       // a bare radial pole. Pine twigs sweep outward and up; spruce twigs spread
       // laterally and hang. Fir retains its simpler, compact branch structure.
-      const branchletCount = species === "pine" ? 5 : species === "spruce" ? 3 : 1;
+      const branchletCount = species === "pine" ? 7 : species === "spruce" ? 3 : 1;
       const lateral = new Vector3(-horizontal.z, 0, horizontal.x);
       for (let branchlet = 0; branchlet < branchletCount; branchlet++) {
         const along = species === "pine"
-          ? 0.3 + branchlet * 0.13 + random() * 0.055
+          ? 0.24 + branchlet * 0.095 + random() * 0.06
           : species === "spruce"
             ? 0.2 + branchlet * 0.18 + random() * 0.06
             : 0.4 + random() * 0.07;
@@ -1244,7 +1250,7 @@ function addPineNeedleTuft(
   cards?: FoliageCardShape,
   scale = 1,
 ): void {
-  const cardCount = 3;
+  const cardCount = 4;
   const shootDirection = growthDirection.lengthSquared() > 0.001
     ? growthDirection.normalize()
     : Vector3.Up();

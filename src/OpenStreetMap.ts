@@ -13,6 +13,7 @@ import {
   Vector2,
   Vector3,
   VertexBuffer,
+  VertexData,
 } from "@babylonjs/core";
 import type { BaseTexture } from "@babylonjs/core";
 import { VectorTile, VectorTileFeature } from "@mapbox/vector-tile";
@@ -20,16 +21,19 @@ import { PbfReader } from "pbf";
 import earcut from "earcut";
 import {
   combineHorizontalExclusionMasks,
+  clipPolyline,
   HorizontalExclusionMask,
   lonLatToScene,
   PolygonExclusionMask,
+  pointSegmentDistanceSquared,
+  resamplePath,
   sampleElevation,
   SEA_LEVEL_METERS,
 } from "./Geo";
 import { cellRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
 import { tiledValueNoise } from "./ValueNoise";
-import type { TileBounds } from "./WorldGrid";
+import { worldTileAtLocation, type TileBounds } from "./WorldGrid";
 import {
   BuildingDetailLevel,
   BuildingSource,
@@ -47,8 +51,12 @@ import {
   RoadSurface,
   RoadVisualStyle,
 } from "./RoadPlanner";
-import { conformTerrainToRoads as stampRoadTerrain } from "./RoadTerrain";
-import { conformTerrainToBuildings as stampBuildingTerrain } from "./BuildingTerrain";
+import {
+  planRoadsAndBuildings,
+  PlannedRoadPolygon,
+  RoadAndBuildingPlan,
+} from "./RoadAndBuildingPlanner";
+import { conformTerrainToPlannedFeatures } from "./PlannedFeatureTerrain";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "./TerrainLakePolygons";
@@ -85,6 +93,13 @@ interface RoadSource {
   properties: Readonly<Record<string, unknown>>;
 }
 
+/** Road centerlines retained for small roadside detail systems. */
+export interface RoadsideDetailRoad {
+  id: string;
+  paths: LonLat[][];
+  properties: Readonly<Record<string, unknown>>;
+}
+
 const buildingSourceCache = new WeakMap<VectorTile, readonly BuildingSource[]>();
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
@@ -98,6 +113,8 @@ interface MapLayerOptions {
   preCarvingElevations?: Float32Array;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
   startDisabled?: boolean;
+  /** Shared geometry plan prepared before terrain construction. */
+  planning?: RoadAndBuildingPlan;
 }
 
 interface MapClipBounds {
@@ -196,11 +213,11 @@ export class OpenStreetMap {
   private static readonly cache = new Map<string, Promise<VectorTile | undefined>>();
 
   static async fetch(bounds: TileBounds, zoom = this.ZOOM): Promise<MapTile[]> {
-    const northWest = tileFor(bounds.lonWest, bounds.latNorth, zoom);
+    const northWest = worldTileAtLocation(bounds.latNorth, bounds.lonWest, zoom);
     // Terrain bounds commonly end exactly on a slippy-tile boundary. Treat the
     // east and south edges as exclusive so we do not fetch an unused extra row
     // and column of vector tiles.
-    const southEast = tileFor(bounds.lonEast - 1e-10, bounds.latSouth + 1e-10, zoom);
+    const southEast = worldTileAtLocation(bounds.latSouth + 1e-10, bounds.lonEast - 1e-10, zoom);
     const requests: Array<Promise<MapTile | undefined>> = [];
     for (let x = northWest.x; x <= southEast.x; x++) {
       for (let y = northWest.y; y <= southEast.y; y++) {
@@ -240,6 +257,23 @@ export class OpenStreetMap {
       neighboringBuildingFootprints: tiles.flatMap((tile) =>
         buildingSources(tile).map((source) => source.polygon)),
     };
+    if (options.planning) {
+      const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
+      for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
+        const mesh = plannedMeshes[visualStyle];
+        if (mesh) roadMeshes[visualStyle].push(mesh);
+      }
+      const plannedShoulders = createPlannedShoulderMeshes(
+        scene,
+        options.planning.shoulders,
+        terrain,
+        options,
+      );
+      for (const surface of Object.keys(plannedShoulders) as RoadSurface[]) {
+        const mesh = plannedShoulders[surface];
+        if (mesh) roadShoulders[surface].push(mesh);
+      }
+    }
 
     for (const tile of tiles) {
       for (const source of buildingSources(tile)) {
@@ -257,13 +291,15 @@ export class OpenStreetMap {
       for (const source of roadSources(tile)) {
         const appearance = planRoad(source.properties);
         if (!appearance || appearance.isTunnel) continue;
+        if (options.planning && appearance.structure !== "bridge") continue;
         const target = roadMeshes[appearance.visualStyle];
         for (const line of source.paths) {
           const created = createRoad(scene, line, terrain, options, appearance);
           target.push(...created.surfaces);
           roadShoulders[appearance.surface].push(...created.shoulders);
           bridgeDecks.push(...created.bridgeDecks);
-          if (appearance.structure === "surface" || appearance.structure === "ford") {
+          if (!options.planning &&
+              (appearance.structure === "surface" || appearance.structure === "ford")) {
             for (const path of created.paths) {
               if (path.length < 2) continue;
               for (const point of [path[0], path[path.length - 1]]) {
@@ -327,6 +363,48 @@ export class OpenStreetMap {
         water: lakePolygons.length + waterways.length,
       },
     };
+  }
+
+  /**
+   * Exposes mapped road geometry without coupling roadside-detail renderers to
+   * the vector-tile implementation.  The geometry remains in longitude /
+   * latitude so it can be projected into the terrain tile that owns it.
+   */
+  static roadsideDetailRoads(tiles: readonly MapTile[]): readonly RoadsideDetailRoad[] {
+    return tiles.flatMap((tile) => roadSources(tile));
+  }
+
+  /** Projects map features once so terrain, meshes, and placement share one plan. */
+  static planRoadsAndBuildings(
+    tiles: readonly MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+  ): RoadAndBuildingPlan {
+    const project = ([lon, lat]: LonLat) =>
+      lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+    const roads = tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
+      const appearance = planRoad(source.properties);
+      return appearance ? [{
+        id: source.id,
+        paths: source.paths.map((path) => path.map(project)),
+        appearance,
+      }] : [];
+    }));
+    const buildings = tiles.flatMap((tile) => buildingSources(tile).map((source) => ({
+      id: source.id,
+      outline: source.polygon.outer.map(project),
+      holes: source.polygon.holes.map((hole) => hole.map(project)),
+    })));
+    return planRoadsAndBuildings(roads, buildings, options);
+  }
+
+  static conformTerrainToPlan(
+    planning: RoadAndBuildingPlan,
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    yieldControl?: () => Promise<void>,
+  ): Promise<number> {
+    return conformTerrainToPlannedFeatures(terrain, planning, options, yieldControl);
   }
 
   /** Projects and clips authoritative OSM lake rings into this terrain tile. */
@@ -421,11 +499,20 @@ export class OpenStreetMap {
       ford: [],
     };
     let count = 0;
+    if (options.planning) {
+      const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
+      for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
+        const mesh = plannedMeshes[visualStyle];
+        if (mesh) roadMeshes[visualStyle].push(mesh);
+      }
+      count = new Set(options.planning.roads.map((road) => road.sourceId)).size;
+    }
     for (const tile of tiles) {
       for (const source of roadSources(tile)) {
         const appearance = planRoad(source.properties);
         if (!appearance || appearance.isTunnel) continue;
-        count++;
+        if (options.planning && appearance.structure !== "bridge") continue;
+        if (!options.planning || appearance.structure === "bridge") count++;
         for (const line of source.paths) {
           const created = createRoad(scene, line, terrain, options, appearance, "far");
           roadMeshes[appearance.visualStyle].push(...created.surfaces);
@@ -485,17 +572,24 @@ export class OpenStreetMap {
       options,
       yieldControl,
     );
-    const buildings = [];
-    for (const tile of tiles) {
-      for (const source of buildingSources(tile)) {
-        const project = ([lon, lat]: LonLat) =>
-          lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
-        buildings.push({
-          outer: source.polygon.outer.map(project),
-          holes: source.polygon.holes.map((hole) => hole.map(project)),
-        });
+    const buildings = options.planning
+      ? options.planning.buildingSites.map((site) => ({
+        outer: site.outline,
+        holes: site.holes,
+      }))
+      : [];
+    if (!options.planning) {
+      for (const tile of tiles) {
+        for (const source of buildingSources(tile)) {
+          const project = ([lon, lat]: LonLat) =>
+            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+          buildings.push({
+            outer: source.polygon.outer.map(project),
+            holes: source.polygon.holes.map((hole) => hole.map(project)),
+          });
+        }
+        await yieldControl?.();
       }
-      await yieldControl?.();
     }
     return combineHorizontalExclusionMasks([
       roadMask,
@@ -504,60 +598,6 @@ export class OpenStreetMap {
         Math.max(0.25, 20 / options.metersPerUnit),
       ),
     ]);
-  }
-
-  static async conformTerrainToRoads(
-    tiles: MapTile[],
-    terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
-    yieldControl?: () => Promise<void>,
-  ): Promise<number> {
-    const paths = [];
-    for (const tile of tiles) {
-      for (const source of roadSources(tile)) {
-        const appearance = planRoad(source.properties);
-        if (!appearance || appearance.isTunnel || appearance.structure === "bridge") continue;
-        for (const coordinates of source.paths) {
-          const scenePoints = coordinates.map(([lon, lat]) =>
-            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
-          );
-          for (const points of clipPolyline(
-            scenePoints,
-            options.meshWidth / 2,
-            options.meshDepth / 2,
-          )) {
-            paths.push({
-              points,
-              widthMeters: appearance.widthMeters,
-              shoulderWidthMeters: appearance.shoulderWidthMeters,
-              structure: appearance.structure,
-            });
-          }
-        }
-      }
-      await yieldControl?.();
-    }
-    return stampRoadTerrain(terrain, paths, options, yieldControl);
-  }
-
-  static async conformTerrainToBuildings(
-    tiles: MapTile[],
-    terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
-    yieldControl?: () => Promise<void>,
-  ): Promise<number> {
-    const footprints = [];
-    for (const tile of tiles) {
-      for (const source of buildingSources(tile)) {
-        footprints.push({
-          outline: source.polygon.outer.map(([lon, lat]) =>
-            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
-          ),
-        });
-      }
-      await yieldControl?.();
-    }
-    return stampBuildingTerrain(terrain, footprints, options, yieldControl);
   }
 
   static createLandCoverSampler(
@@ -699,6 +739,162 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
   if (geometry.type === "LineString") return [geometry.coordinates as LonLat[]];
   if (geometry.type === "MultiLineString") return geometry.coordinates as LonLat[][];
   return [];
+}
+
+/** Batches disjoint planned polygons so their shared edges cannot z-fight. */
+function createPlannedRoadMeshes(
+  scene: Scene,
+  roads: readonly PlannedRoadPolygon[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+): Partial<Record<RoadVisualStyle, Mesh>> {
+  const byStyle: Record<RoadVisualStyle, PlannedRoadPolygon[]> = {
+    marked: [],
+    paved: [],
+    pedestrian: [],
+    unpaved: [],
+    ford: [],
+  };
+  for (const road of roads) {
+    if (road.structure !== "bridge") byStyle[road.visualStyle].push(road);
+  }
+  const result: Partial<Record<RoadVisualStyle, Mesh>> = {};
+  for (const style of Object.keys(byStyle) as RoadVisualStyle[]) {
+    if (byStyle[style].length > 0) {
+      result[style] = createPlannedRoadBatch(scene, byStyle[style], terrain, options);
+    }
+  }
+  return result;
+}
+
+function createPlannedShoulderMeshes(
+  scene: Scene,
+  roads: readonly PlannedRoadPolygon[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+): Partial<Record<RoadSurface, Mesh>> {
+  const bySurface: Record<RoadSurface, PlannedRoadPolygon[]> = { paved: [], unpaved: [] };
+  for (const road of roads) {
+    if (road.structure !== "bridge") bySurface[road.surface].push(road);
+  }
+  const result: Partial<Record<RoadSurface, Mesh>> = {};
+  for (const surface of Object.keys(bySurface) as RoadSurface[]) {
+    if (bySurface[surface].length > 0) {
+      result[surface] = createPlannedRoadBatch(
+        scene,
+        bySurface[surface],
+        terrain,
+        options,
+        ROAD_SHOULDER_CLEARANCE_METERS,
+        true,
+      );
+    }
+  }
+  return result;
+}
+
+function createPlannedRoadBatch(
+  scene: Scene,
+  roads: readonly PlannedRoadPolygon[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+  clearanceMeters = ROAD_SURFACE_CLEARANCE_METERS,
+  forceWorldUvs = false,
+): Mesh {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const uvs: number[] = [];
+  for (const road of roads) {
+    const outline = signedArea(road.outline) >= 0
+      ? road.outline
+      : [...road.outline].reverse();
+    if (outline.length < 3) continue;
+    const vertexOffset = positions.length / 3;
+    const startElevation = sampleElevation(
+      terrain,
+      road.centerline[0].x,
+      road.centerline[0].z,
+      options.meshWidth,
+      options.meshDepth,
+    );
+    const endElevation = sampleElevation(
+      terrain,
+      road.centerline[1].x,
+      road.centerline[1].z,
+      options.meshWidth,
+      options.meshDepth,
+    );
+    const dx = road.centerline[1].x - road.centerline[0].x;
+    const dz = road.centerline[1].z - road.centerline[0].z;
+    const lengthSquared = dx * dx + dz * dz;
+    for (const point of outline) {
+      const amount = lengthSquared <= 1e-12
+        ? 0
+        : Math.max(0, Math.min(1, (
+          (point.x - road.centerline[0].x) * dx +
+          (point.z - road.centerline[0].z) * dz
+        ) / lengthSquared));
+      positions.push(
+        point.x,
+        (startElevation + (endElevation - startElevation) * amount +
+          clearanceMeters) / options.metersPerUnit,
+        point.z,
+      );
+      const uv = plannedRoadUv(point, road, options.metersPerUnit, forceWorldUvs);
+      uvs.push(uv.x, uv.y);
+    }
+    const localIndices = earcut(outline.flatMap((point) => [point.x, point.z]));
+    for (let index = 0; index < localIndices.length; index += 3) {
+      // Babylon's left-handed ground/ribbon convention uses this winding for
+      // the face visible from above. Reversing it makes the whole road batch
+      // back-facing and therefore invisible with the default material culling.
+      indices.push(
+        vertexOffset + localIndices[index],
+        vertexOffset + localIndices[index + 1],
+        vertexOffset + localIndices[index + 2],
+      );
+    }
+  }
+  const normals: number[] = [];
+  VertexData.ComputeNormals(positions, indices, normals);
+  const vertexData = new VertexData();
+  vertexData.positions = positions;
+  vertexData.indices = indices;
+  vertexData.normals = normals;
+  vertexData.uvs = uvs;
+  const mesh = new Mesh("plannedRoadSurface", scene);
+  vertexData.applyToMesh(mesh, false);
+  mesh.isPickable = false;
+  return stageMapMesh(mesh);
+}
+
+function plannedRoadUv(
+  point: { x: number; z: number },
+  road: PlannedRoadPolygon,
+  metersPerUnit: number,
+  forceWorldUvs = false,
+): { x: number; y: number } {
+  const repeatMeters = road.visualStyle === "unpaved" || road.visualStyle === "ford"
+    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
+    : 4;
+  if (forceWorldUvs || road.visualStyle !== "marked") {
+    const scale = metersPerUnit / repeatMeters;
+    return { x: point.x * scale, y: point.z * scale };
+  }
+  const axis = road.textureAxis ?? road.centerline;
+  const dx = axis[1].x - axis[0].x;
+  const dz = axis[1].z - axis[0].z;
+  const lengthSquared = dx * dx + dz * dz;
+  const length = Math.sqrt(lengthSquared);
+  if (length <= 1e-8) return { x: 0, y: 0.5 };
+  const amount = Math.max(0, Math.min(1, (
+    (point.x - axis[0].x) * dx + (point.z - axis[0].z) * dz
+  ) / lengthSquared));
+  const across = ((point.x - axis[0].x) * -dz + (point.z - axis[0].z) * dx) / length;
+  return {
+    x: (road.startDistance + amount * length) * metersPerUnit / repeatMeters,
+    y: 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters),
+  };
 }
 
 function createRoad(
@@ -1096,44 +1292,6 @@ function stageMapMesh<T extends Mesh>(mesh: T): T {
   return mesh;
 }
 
-function resamplePath(
-  points: Array<{ x: number; z: number }>,
-  maximumSpacing: number,
-): Array<{ x: number; z: number }> {
-  if (points.length < 2 || maximumSpacing <= 0) return points;
-  const sampled = [points[0]];
-  for (let index = 1; index < points.length; index++) {
-    const start = points[index - 1];
-    const end = points[index];
-    const steps = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.z - start.z) / maximumSpacing));
-    for (let step = 1; step <= steps; step++) {
-      const amount = step / steps;
-      sampled.push({
-        x: start.x + (end.x - start.x) * amount,
-        z: start.z + (end.z - start.z) * amount,
-      });
-    }
-  }
-  return sampled;
-}
-
-function pointSegmentDistanceSquared(
-  x: number,
-  z: number,
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-): number {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const lengthSquared = dx * dx + dz * dz;
-  const amount = lengthSquared === 0
-    ? 0
-    : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
-  const offsetX = x - (start.x + dx * amount);
-  const offsetZ = z - (start.z + dz * amount);
-  return offsetX * offsetX + offsetZ * offsetZ;
-}
-
 function clipPolygon(
   points: Array<{ x: number; z: number }>,
   bounds: MapClipBounds,
@@ -1183,61 +1341,6 @@ function pointInPolygon(
   return inside;
 }
 
-function clipPolyline(
-  points: Array<{ x: number; z: number }>,
-  halfWidth: number,
-  halfDepth: number,
-): Array<Array<{ x: number; z: number }>> {
-  const paths: Array<Array<{ x: number; z: number }>> = [];
-  let current: Array<{ x: number; z: number }> | undefined;
-  for (let index = 1; index < points.length; index++) {
-    const segment = clipSegment(points[index - 1], points[index], halfWidth, halfDepth);
-    if (!segment) {
-      current = undefined;
-      continue;
-    }
-    if (!current || !samePoint(current[current.length - 1], segment[0])) {
-      current = [segment[0], segment[1]];
-      paths.push(current);
-    } else {
-      current.push(segment[1]);
-    }
-  }
-  return paths;
-}
-
-function clipSegment(
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-  halfWidth: number,
-  halfDepth: number,
-): [{ x: number; z: number }, { x: number; z: number }] | undefined {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  let minimum = 0;
-  let maximum = 1;
-  const tests: Array<[number, number]> = [
-    [-dx, start.x + halfWidth],
-    [dx, halfWidth - start.x],
-    [-dz, start.z + halfDepth],
-    [dz, halfDepth - start.z],
-  ];
-  for (const [direction, distance] of tests) {
-    if (direction === 0) {
-      if (distance < 0) return undefined;
-      continue;
-    }
-    const ratio = distance / direction;
-    if (direction < 0) minimum = Math.max(minimum, ratio);
-    else maximum = Math.min(maximum, ratio);
-    if (minimum > maximum) return undefined;
-  }
-  return [
-    { x: start.x + minimum * dx, z: start.z + minimum * dz },
-    { x: start.x + maximum * dx, z: start.z + maximum * dz },
-  ];
-}
-
 function atX(
   start: { x: number; z: number },
   end: { x: number; z: number },
@@ -1263,19 +1366,6 @@ function signedArea(points: Array<{ x: number; z: number }>): number {
     area += points[index].x * next.z - next.x * points[index].z;
   }
   return area / 2;
-}
-
-function samePoint(a: { x: number; z: number }, b: { x: number; z: number }): boolean {
-  return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.z - b.z) < 1e-6;
-}
-
-function tileFor(longitude: number, latitude: number, zoom: number): { x: number; y: number } {
-  const scale = 2 ** zoom;
-  const latitudeRadians = latitude * Math.PI / 180;
-  return {
-    x: Math.floor((longitude + 180) / 360 * scale),
-    y: Math.floor((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale),
-  };
 }
 
 function mergeRoads(

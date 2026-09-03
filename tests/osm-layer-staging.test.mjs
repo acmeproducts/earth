@@ -36,7 +36,7 @@ test("drapes roads at a meter-scale clearance", () => {
   assert.match(openStreetMap, /const ROAD_SURFACE_CLEARANCE_METERS = 0\.025/);
   assert.match(
     openStreetMap,
-    /\(leftElevation \+ clearanceMeters\) \/ options\.metersPerUnit/,
+    /\(centerElevation \+ clearanceMeters\) \/ options\.metersPerUnit/,
   );
   assert.doesNotMatch(openStreetMap, /leftElevation \/ options\.metersPerUnit \+ 0\.025/);
 });
@@ -49,12 +49,25 @@ test("renders surface roads with decal-style depth bias over terrain", () => {
   assert.match(openStreetMap, /visualStyle !== "bridgeDeck"/);
 });
 
-test("stamps roads after building aprons so terrain cannot rise through them", () => {
+test("uses one road and building plan before terrain construction", () => {
   const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-  const buildings = game.indexOf("OpenStreetMap.conformTerrainToBuildings(");
-  const roads = game.indexOf("OpenStreetMap.conformTerrainToRoads(");
+  assert.match(game, /OpenStreetMap\.planRoadsAndBuildings\(/);
+  assert.match(game, /OpenStreetMap\.conformTerrainToPlan\(/);
+  assert.doesNotMatch(game, /OpenStreetMap\.conformTerrainTo(?:Buildings|Roads)\(/);
+});
 
-  assert.ok(buildings >= 0 && roads > buildings);
+test("renders planned junctions once instead of layering endpoint ribbons", () => {
+  assert.match(openStreetMap, /createPlannedRoadMeshes\(scene, options\.planning\.roads/);
+  assert.match(openStreetMap, /new Mesh\("plannedRoadSurface", scene\)/);
+  assert.match(
+    openStreetMap,
+    /if \(options\.planning && appearance\.structure !== "bridge"\) continue;/,
+  );
+  assert.match(
+    openStreetMap,
+    /vertexOffset \+ localIndices\[index \+ 1\],[\s\S]*vertexOffset \+ localIndices\[index \+ 2\]/,
+  );
+  assert.match(openStreetMap, /VertexData\.ComputeNormals\(positions, indices, normals\)/);
 });
 
 test("styles OSM road classes, path types, and surfaces separately", () => {

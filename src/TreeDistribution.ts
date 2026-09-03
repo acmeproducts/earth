@@ -115,7 +115,7 @@ export function sampleWorldTreeSpecies(
     cumulative += tree.ratio;
     if (randomValue < cumulative) return tree.species;
   }
-  return distribution.trees.at(-1)?.species;
+  return distribution.trees[distribution.trees.length - 1]?.species;
 }
 
 function biomeInfluencesAt(lon: number, lat: number): BiomeWeights {

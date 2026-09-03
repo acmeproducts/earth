@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
-import { register } from "node:module";
 import test from "node:test";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 
 const {
   proceduralLocalVariantAtLocation,

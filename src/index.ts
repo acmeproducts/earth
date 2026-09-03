@@ -51,7 +51,7 @@ async function startApplication(): Promise<void> {
     const activeCanvas = rendering.canvas;
     const engine = rendering.engine;
     const game = isTreeImpostorTest
-      ? new TreeImpostorValidation(activeCanvas, engine)
+      ? new TreeImpostorValidation(engine)
       : isTreeImpostorDemo
         ? new TreeImpostorDemo(activeCanvas, engine)
         : new Game(activeCanvas, engine);

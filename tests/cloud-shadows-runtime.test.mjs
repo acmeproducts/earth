@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 import { NullEngine, Scene, Vector3 } from "@babylonjs/core";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { createCloudShadowProjector } = await import("../src/CloudShadows.ts");
 const { cloudPlacementsAround } = await import("../src/CloudDistribution.ts");
 const { createTerrainMaterial } = await import("../src/TerrainMaterial.ts");

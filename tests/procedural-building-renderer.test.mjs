@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 import {
   FreeCamera,
   Material,
@@ -13,7 +12,6 @@ import {
   VertexBuffer,
 } from "@babylonjs/core";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { planBuilding } = await import("../src/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
@@ -184,9 +182,31 @@ test("stable seeds vary roof construction, overhang, and color", () => {
     mesh.dispose(false, true);
   }
 
-  assert.ok(vertexCounts.size >= 3);
+  assert.ok(vertexCounts.size >= 2);
   assert.ok(widths.size >= 3);
   assert.ok(colors.size >= 6);
+  scene.dispose();
+  engine.dispose();
+});
+
+test("hipped and pyramidal metadata use the full-length gabled roof", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const roofPositions = (roofShape) => {
+    const mesh = ProceduralBuildingRenderer.createDetailed(
+      scene,
+      plan(97, { render_height: 12, roof_shape: roofShape }),
+      terrain,
+      options,
+    );
+    assert.ok(mesh);
+    return Array.from(mesh.getVerticesData(VertexBuffer.PositionKind));
+  };
+
+  const gabled = roofPositions("gabled");
+  assert.deepEqual(roofPositions("hipped"), gabled);
+  assert.deepEqual(roofPositions("pyramidal"), gabled);
+
   scene.dispose();
   engine.dispose();
 });

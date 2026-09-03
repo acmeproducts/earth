@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { hasWinterGroundCover } = await import("../src/TreeSeason.ts");
 
 test("winter ground cover follows the hemisphere", () => {

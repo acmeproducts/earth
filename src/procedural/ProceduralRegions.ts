@@ -148,23 +148,27 @@ export function proceduralLocalVariantAtLocation(
   latitude: number,
   worldSeed = DEFAULT_WORLD_SEED,
   sisterModels = 1,
+  localitySpanTiles = LOCALITY_SPAN_TILES,
+  localityBlendTiles = LOCALITY_BLEND_TILES,
 ): number {
   if (sisterModels <= 1) return 0;
   const position = worldTileCoordinatesAtLocation(latitude, longitude);
   const scale = 2 ** WORLD_GRID_LEVEL;
   const label = `${family}Locality`;
+  const spanTiles = Math.max(1, Math.min(scale, localitySpanTiles));
+  const blendTiles = Math.max(0, Math.min(spanTiles * 0.5, localityBlendTiles));
   const xCandidates = axisCandidates(
     wrap(position.x, scale),
-    LOCALITY_SPAN_TILES,
-    LOCALITY_BLEND_TILES,
-    scale / LOCALITY_SPAN_TILES,
+    spanTiles,
+    blendTiles,
+    Math.ceil(scale / spanTiles),
     true,
   );
   const yCandidates = axisCandidates(
     Math.max(0, Math.min(scale - 1e-9, position.y)),
-    LOCALITY_SPAN_TILES,
-    LOCALITY_BLEND_TILES,
-    Math.ceil(scale / LOCALITY_SPAN_TILES),
+    spanTiles,
+    blendTiles,
+    Math.ceil(scale / spanTiles),
     false,
   );
   const cells: AxisCandidate[] = [];

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { register } from "node:module";
 import test from "node:test";
 import { NullEngine, Scene } from "@babylonjs/core";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { PlayerPresence } = await import("../src/integration/PlayerPresence.ts");
 
 const basePose = {

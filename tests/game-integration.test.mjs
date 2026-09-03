@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { LocalGameConnection } = await import("../src/integration/GameConnection.ts");
 const { BrowserBroadcastGameConnection } = await import(
   "../src/integration/BrowserGameConnection.ts"
@@ -49,6 +47,9 @@ test("local server persists a pose and fans it out to sessions in the same world
   assert.deepEqual(await repository.loadPlayers("earth"), [{
     worldId: "earth",
     actorId: "alice",
+    temperature: 37,
+    hunger: 100,
+    thirst: 100,
     revision: 1,
     updatedAt: 1234,
     pose,

@@ -44,7 +44,7 @@ export class TreeImpostorValidation {
   private readonly camera: FreeCamera;
   private readonly fpsCounter: FpsCounter;
 
-  constructor(canvas: HTMLCanvasElement, engine: AbstractEngine) {
+  constructor(engine: AbstractEngine) {
     this.engine = engine;
     this.scene = new Scene(this.engine);
     this.fpsCounter = new FpsCounter(this.scene);

@@ -137,10 +137,11 @@ test("builds palms as layered fronds with texture-shaped leaflets", () => {
 });
 
 test("gives pine and spruce dense, twigged crowns and converges species brightness in low light", () => {
-  assert.match(proceduralTrees, /firstLevel = species === "pine" \? 4 : 2/);
+  assert.match(proceduralTrees, /firstLevel = species === "pine" \? 3 \+ Math\.floor\(random\(\) \* 2\) : 2/);
   assert.match(proceduralTrees, /species === "spruce"\s*\? 7/);
-  assert.match(proceduralTrees, /const branchletCount = species === "pine" \? 5 : species === "spruce" \? 3 : 1/);
-  assert.match(proceduralTrees, /const cardCount = 3/);
+  assert.match(proceduralTrees, /const sprays = species === "pine" \? 7/);
+  assert.match(proceduralTrees, /const branchletCount = species === "pine" \? 7 : species === "spruce" \? 3 : 1/);
+  assert.match(proceduralTrees, /const cardCount = 4/);
   assert.match(proceduralTrees, /center\.add\(shootDirection\.scale\(along\)\)/);
   assert.match(proceduralTrees, /function addPineNeedleTuft/);
   assert.match(proceduralTrees, /TREE_LOW_LIGHT_BRIGHTNESS/);
@@ -148,9 +149,16 @@ test("gives pine and spruce dense, twigged crowns and converges species brightne
 });
 
 test("tapers the Scots pine crown upward from its widest surviving whorl", () => {
-  assert.match(proceduralTrees, /lerp\(0\.84, 0\.14, Math\.pow\(crownT, 0\.78\)\)/);
+  assert.match(proceduralTrees, /lerp\(0\.88, 0\.16, Math\.pow\(crownT, 0\.72\)\)/);
   assert.doesNotMatch(proceduralTrees, /Math\.sin\(Math\.min\(1, crownT/);
   assert.match(proceduralTrees, /species === "pine"\s*\? 0\.93 \+ random\(\) \* 0\.1/);
+});
+
+test("selects a bounded sister-tree palette at application-tile scale", () => {
+  assert.match(treeField, /const TREE_SISTER_MODELS = 4/);
+  assert.match(treeField, /proceduralLocalVariantAtLocation\([\s\S]*?TREE_SISTER_MODELS,[\s\S]*?1,[\s\S]*?0/);
+  assert.match(treeField, /\/local\/\$\{localVariant\}\/season/);
+  assert.match(treeField, /sister-\$\{localVariant\}/);
 });
 
 test("scales pine up and spruce down", () => {

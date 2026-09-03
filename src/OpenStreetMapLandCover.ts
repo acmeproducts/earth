@@ -3,6 +3,7 @@ import {
   LandCoverClass,
   LandCoverSampler,
 } from "./WorldCover";
+import { worldTileAtLocation } from "./WorldGrid";
 
 export interface LandCoverMapTile {
   x: number;
@@ -36,7 +37,7 @@ class OpenStreetMapLandCover implements LandCoverSampler {
 
   sample(longitude: number, latitude: number): LandCoverClass {
     let cover = this.fallback.sample(longitude, latitude);
-    const tile = tileFor(longitude, latitude, this.zoom);
+    const tile = worldTileAtLocation(latitude, longitude, this.zoom);
     const regions = this.regionsByTile.get(`${this.zoom}/${tile.x}/${tile.y}`);
     if (!regions) return cover;
     for (const region of regions) {
@@ -174,15 +175,6 @@ function ringBounds(ring: ReadonlyArray<readonly [number, number]>): CoverRegion
     north = Math.max(north, latitude);
   }
   return { west, east, south, north };
-}
-
-function tileFor(longitude: number, latitude: number, zoom: number): { x: number; y: number } {
-  const count = 2 ** zoom;
-  const radians = Math.max(-85.05112878, Math.min(85.05112878, latitude)) * Math.PI / 180;
-  return {
-    x: Math.floor((longitude + 180) / 360 * count),
-    y: Math.floor((1 - Math.asinh(Math.tan(radians)) / Math.PI) / 2 * count),
-  };
 }
 
 function text(value: unknown): string | undefined {

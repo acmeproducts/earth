@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { register } from "node:module";
 
-// These sources use webpack-style extensionless relative imports, which
-// node's type stripping cannot resolve without this hook.
-register("./ts-extension-resolver.mjs", import.meta.url);
 const {
   providerElevationTileRange,
   providerPixelCrop,
@@ -176,11 +172,11 @@ test("builds a double-sided skirt below every terrain edge segment", () => {
 
 test("caches shared edges only after lake and map deformation", () => {
   const lakeStamp = game.indexOf("conformTerrainToLakePolygons(");
-  const buildingStamp = game.indexOf("OpenStreetMap.conformTerrainToBuildings");
+  const featureStamp = game.indexOf("OpenStreetMap.conformTerrainToPlan");
   const finalStitch = game.indexOf("stitchTerrainEdges(terrainData");
   assert.ok(lakeStamp >= 0);
-  assert.ok(buildingStamp > lakeStamp);
-  assert.ok(finalStitch > buildingStamp);
+  assert.ok(featureStamp > lakeStamp);
+  assert.ok(finalStitch > featureStamp);
   assert.equal((game.match(/stitchTerrainEdges\(terrainData/g) ?? []).length, 1);
   assert.match(game, /sharedLakeElevations: this\.lakeElevations/);
 });

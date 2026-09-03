@@ -10,8 +10,11 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import {
+  clipPolyline,
   HorizontalExclusionMask,
   lonLatToScene,
+  pointSegmentDistanceSquared,
+  resamplePath,
   sampleElevation,
 } from "./Geo";
 import { acquireBushImpostorAssets, createBushModel } from "./BushImpostor";
@@ -19,7 +22,7 @@ import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { createVegetationFieldResult } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
 import type { TerrainData } from "./TerrainData";
-import type { TileBounds } from "./WorldGrid";
+import { worldTileAtLocation, worldTileBounds, type TileBounds } from "./WorldGrid";
 
 export type BarrierType =
   | "hedge"
@@ -36,7 +39,6 @@ export interface BarrierFeature {
   coordinates: Array<readonly [number, number]>;
   tags: Readonly<Record<string, string>>;
 }
-
 export interface BarrierLayerOptions {
   meshWidth: number;
   meshDepth: number;
@@ -77,11 +79,11 @@ export class OpenStreetMapBarriers {
    * tiles therefore share one compact request and one cached response.
    */
   static fetch(bounds: TileBounds): Promise<BarrierFeature[]> {
-    const tile = tileFor(bounds.lonWest + 1e-10, bounds.latNorth - 1e-10, this.QUERY_ZOOM);
+    const tile = worldTileAtLocation(bounds.latNorth - 1e-10, bounds.lonWest + 1e-10, this.QUERY_ZOOM);
     const key = `${this.QUERY_ZOOM}/${tile.x}/${tile.y}`;
     let request = this.cache.get(key);
     if (!request) {
-      const queryBounds = tileBounds(tile.x, tile.y, this.QUERY_ZOOM);
+      const queryBounds = worldTileBounds(tile);
       request = this.fetchRegion(queryBounds).catch((error: unknown) => {
         // Barriers are optional scene detail. Retain an empty cached result so
         // one unavailable public endpoint cannot trigger a retry storm as the
@@ -433,7 +435,6 @@ function createChainlinkFence(
     const dz = end.z - start.z;
     const length = Math.hypot(dx, dz);
     if (length === 0) continue;
-    const yaw = Math.atan2(dx, dz);
     const steps = Math.max(1, Math.ceil(length / postSpacing));
     for (let step = 0; step <= steps; step++) {
       const amount = Math.min(1, step / steps);
@@ -610,120 +611,4 @@ class SegmentExclusionMask implements HorizontalExclusionMask {
     }
     return false;
   }
-}
-
-function pointSegmentDistanceSquared(
-  x: number,
-  z: number,
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-): number {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const lengthSquared = dx * dx + dz * dz;
-  const amount = lengthSquared === 0
-    ? 0
-    : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
-  const offsetX = x - (start.x + dx * amount);
-  const offsetZ = z - (start.z + dz * amount);
-  return offsetX * offsetX + offsetZ * offsetZ;
-}
-
-function resamplePath(
-  points: Array<{ x: number; z: number }>,
-  maximumSpacing: number,
-): Array<{ x: number; z: number }> {
-  if (points.length < 2 || maximumSpacing <= 0) return points;
-  const sampled = [points[0]];
-  for (let index = 1; index < points.length; index++) {
-    const start = points[index - 1];
-    const end = points[index];
-    const steps = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.z - start.z) / maximumSpacing));
-    for (let step = 1; step <= steps; step++) {
-      const amount = step / steps;
-      sampled.push({
-        x: start.x + (end.x - start.x) * amount,
-        z: start.z + (end.z - start.z) * amount,
-      });
-    }
-  }
-  return sampled;
-}
-
-function clipPolyline(
-  points: Array<{ x: number; z: number }>,
-  halfWidth: number,
-  halfDepth: number,
-): Array<Array<{ x: number; z: number }>> {
-  const paths: Array<Array<{ x: number; z: number }>> = [];
-  let current: Array<{ x: number; z: number }> | undefined;
-  for (let index = 1; index < points.length; index++) {
-    const segment = clipSegment(points[index - 1], points[index], halfWidth, halfDepth);
-    if (!segment) {
-      current = undefined;
-      continue;
-    }
-    if (!current || !samePoint(current[current.length - 1], segment[0])) {
-      current = [segment[0], segment[1]];
-      paths.push(current);
-    } else {
-      current.push(segment[1]);
-    }
-  }
-  return paths;
-}
-
-function clipSegment(
-  start: { x: number; z: number },
-  end: { x: number; z: number },
-  halfWidth: number,
-  halfDepth: number,
-): [{ x: number; z: number }, { x: number; z: number }] | undefined {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  let minimum = 0;
-  let maximum = 1;
-  const tests: Array<[number, number]> = [
-    [-dx, start.x + halfWidth],
-    [dx, halfWidth - start.x],
-    [-dz, start.z + halfDepth],
-    [dz, halfDepth - start.z],
-  ];
-  for (const [direction, distance] of tests) {
-    if (direction === 0) {
-      if (distance < 0) return undefined;
-      continue;
-    }
-    const ratio = distance / direction;
-    if (direction < 0) minimum = Math.max(minimum, ratio);
-    else maximum = Math.min(maximum, ratio);
-    if (minimum > maximum) return undefined;
-  }
-  return [
-    { x: start.x + minimum * dx, z: start.z + minimum * dz },
-    { x: start.x + maximum * dx, z: start.z + maximum * dz },
-  ];
-}
-
-function samePoint(a: { x: number; z: number }, b: { x: number; z: number }): boolean {
-  return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.z - b.z) < 1e-6;
-}
-
-function tileFor(longitude: number, latitude: number, zoom: number): { x: number; y: number } {
-  const scale = 2 ** zoom;
-  const latitudeRadians = latitude * Math.PI / 180;
-  return {
-    x: Math.floor((longitude + 180) / 360 * scale),
-    y: Math.floor((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2 * scale),
-  };
-}
-
-function tileBounds(x: number, y: number, zoom: number): TileBounds {
-  const scale = 2 ** zoom;
-  return {
-    lonWest: x / scale * 360 - 180,
-    lonEast: (x + 1) / scale * 360 - 180,
-    latNorth: Math.atan(Math.sinh(Math.PI * (1 - 2 * y / scale))) * 180 / Math.PI,
-    latSouth: Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / scale))) * 180 / Math.PI,
-  };
 }

@@ -776,7 +776,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8, @types/ws@npm:^8.5.10":
+"@types/ws@npm:^8.5.10":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:
@@ -1144,7 +1144,6 @@ __metadata:
     "@types/earcut": "npm:^3.0.0"
     "@types/node": "npm:^20.10.0"
     "@types/suncalc": "npm:^1.9.2"
-    "@types/ws": "npm:^8"
     astronomy-engine: "npm:^2.1.19"
     earcut: "npm:^3.2.3"
     html-webpack-plugin: "npm:^5.6.0"

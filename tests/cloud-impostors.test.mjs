@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 import { readFileSync } from "node:fs";
 
-// These sources use webpack-style extensionless relative imports, which
-// node's type stripping cannot resolve without this hook.
-register("./ts-extension-resolver.mjs", import.meta.url);
 const {
   CLOUD_VARIANT_COUNT,
   cloudPlacementsAround,

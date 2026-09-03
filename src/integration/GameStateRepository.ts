@@ -76,16 +76,6 @@ export class BrowserGameStateRepository implements GameStateRepository {
   }
 }
 
-export function createBrowserGameStateRepository(): BrowserGameStateRepository {
-  let storage: Storage | undefined;
-  try {
-    storage = window.localStorage;
-  } catch {
-    storage = undefined;
-  }
-  return new BrowserGameStateRepository(storage);
-}
-
 function emptyState(): PersistedGameState {
   return { version: 1, players: {} };
 }

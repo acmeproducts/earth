@@ -55,10 +55,10 @@ test("prebuilds every distant stand-in before demoting tile detail", () => {
 test("cross-fades all detailed vegetation with the retained tree impostors", () => {
   assert.match(
     game,
-    /this\.stageTileField\(record, "fernField", fernField, generation\)[\s\S]*?this\.activateTileVegetation\(record\);/,
+    /this\.stageTileField\(record, "fernField", fernField, generation\)[\s\S]*?this\.activateTileVegetation\(record, generation\);/,
   );
   assert.match(
     game,
-    /private activateTileVegetation[\s\S]*?this\.layerFades\.begin\(0, 1, \(fade\) => \{[\s\S]*?field\.setFade\(fade\);[\s\S]*?farTrees\.setFade\(1 - fade\);/,
+    /private async activateTileVegetation[\s\S]*?this\.layerFades\.begin\(0, 1, \(fade\) => \{[\s\S]*?field\.setFade\(fade\);[\s\S]*?farTrees\.setFade\(1 - fade\);/,
   );
 });

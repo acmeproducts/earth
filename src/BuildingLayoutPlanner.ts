@@ -1,14 +1,16 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "./PlanningFrame.mjs";
 import { isConvexPolygon } from "./PolygonDecomposition.mjs";
-type CartesianAxis = "x" | "y";
-
-interface Bounds2D {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
+import {
+  clipPolygonAtAxis,
+  cutSegment,
+  overlappingSegment,
+  polygonArea,
+  polygonBounds,
+  samePoint,
+  type Bounds2D,
+  type CartesianAxis,
+} from "./PolygonGeometry";
 
 interface PolygonSplit {
   first: Point2D[];
@@ -16,7 +18,6 @@ interface PolygonSplit {
   wall: readonly [Point2D, Point2D];
   coordinate: number;
 }
-
 interface Interval {
   minimum: number;
   maximum: number;
@@ -41,11 +42,6 @@ export interface BuildingPlannerInput {
 
 export interface BuildingLayout extends PolygonLayout<BuildingRoomType> {
   buildingType: BuildingLayoutType;
-}
-
-/** Callable contract for alternative building-planning strategies. */
-export interface BuildingLayoutPlanner {
-  (input: BuildingPlannerInput): BuildingLayout;
 }
 
 /**
@@ -116,8 +112,6 @@ function planBuildingLayoutInLocalFrame(input: BuildingPlannerInput): BuildingLa
     ...apartmentBuildingPlan(boundary, openings),
   };
 }
-
-export const defaultBuildingLayoutPlanner: BuildingLayoutPlanner = planBuildingLayout;
 
 function concaveBuildingPlan(
   boundary: Polygon2D,
@@ -647,78 +641,6 @@ function longestSharedSegment(
   return longest;
 }
 
-function overlappingSegment(
-  a: Point2D,
-  b: Point2D,
-  c: Point2D,
-  d: Point2D,
-): readonly [Point2D, Point2D] | undefined {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const length = Math.hypot(dx, dy);
-  if (length < 1e-7 || Math.abs(dx * (c.y - a.y) - dy * (c.x - a.x)) > 1e-6 ||
-      Math.abs(dx * (d.y - a.y) - dy * (d.x - a.x)) > 1e-6) return undefined;
-  const projection = (point: Point2D): number =>
-    ((point.x - a.x) * dx + (point.y - a.y) * dy) / length;
-  const minimum = Math.max(0, Math.min(projection(c), projection(d)));
-  const maximum = Math.min(length, Math.max(projection(c), projection(d)));
-  return maximum - minimum > 1e-7
-    ? [{ x: a.x + dx * minimum / length, y: a.y + dy * minimum / length },
-      { x: a.x + dx * maximum / length, y: a.y + dy * maximum / length }]
-    : undefined;
-}
-
-function longestSharedAxisAlignedSegment(
-  first: readonly Point2D[],
-  second: readonly Point2D[],
-): readonly [Point2D, Point2D] | undefined {
-  let longest: readonly [Point2D, Point2D] | undefined;
-  let longestLength = 0;
-  for (let firstIndex = 0; firstIndex < first.length; firstIndex++) {
-    const a = first[firstIndex];
-    const b = first[(firstIndex + 1) % first.length];
-    for (let secondIndex = 0; secondIndex < second.length; secondIndex++) {
-      const c = second[secondIndex];
-      const d = second[(secondIndex + 1) % second.length];
-      const shared = overlappingAxisAlignedSegment(a, b, c, d);
-      if (!shared) continue;
-      const length = Math.hypot(shared[1].x - shared[0].x, shared[1].y - shared[0].y);
-      if (length > longestLength) {
-        longest = shared;
-        longestLength = length;
-      }
-    }
-  }
-  return longest;
-}
-
-function overlappingAxisAlignedSegment(
-  a: Point2D,
-  b: Point2D,
-  c: Point2D,
-  d: Point2D,
-): readonly [Point2D, Point2D] | undefined {
-  const firstHorizontal = Math.abs(a.y - b.y) < 1e-7;
-  const secondHorizontal = Math.abs(c.y - d.y) < 1e-7;
-  if (firstHorizontal && secondHorizontal && Math.abs(a.y - c.y) < 1e-7) {
-    const minimum = Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x));
-    const maximum = Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x));
-    return maximum > minimum + 1e-7
-      ? [{ x: minimum, y: a.y }, { x: maximum, y: a.y }]
-      : undefined;
-  }
-  const firstVertical = Math.abs(a.x - b.x) < 1e-7;
-  const secondVertical = Math.abs(c.x - d.x) < 1e-7;
-  if (firstVertical && secondVertical && Math.abs(a.x - c.x) < 1e-7) {
-    const minimum = Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y));
-    const maximum = Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y));
-    return maximum > minimum + 1e-7
-      ? [{ x: a.x, y: minimum }, { x: a.x, y: maximum }]
-      : undefined;
-  }
-  return undefined;
-}
-
 function safePolygonSplit(
   polygon: readonly Point2D[],
   preferredAxis: CartesianAxis,
@@ -774,53 +696,6 @@ function validatedConvexPolygon(polygon: Polygon2D, subject: string): Polygon2D 
   return { outer };
 }
 
-function polygonArea(points: readonly Point2D[]): number {
-  let area = 0;
-  for (let index = 0; index < points.length; index++) {
-    const current = points[index];
-    const next = points[(index + 1) % points.length];
-    area += current.x * next.y - next.x * current.y;
-  }
-  return Math.abs(area / 2);
-}
-
-function polygonBounds(points: readonly Point2D[]): Bounds2D {
-  return {
-    minX: Math.min(...points.map((point) => point.x)),
-    minY: Math.min(...points.map((point) => point.y)),
-    maxX: Math.max(...points.map((point) => point.x)),
-    maxY: Math.max(...points.map((point) => point.y)),
-  };
-}
-
-function clipPolygonAtAxis(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-  keepLower: boolean,
-): Point2D[] {
-  if (points.length === 0) return [];
-  const inside = (point: Point2D): boolean => keepLower
-    ? point[axis] <= coordinate
-    : point[axis] >= coordinate;
-  const intersection = (start: Point2D, end: Point2D): Point2D => {
-    const amount = (coordinate - start[axis]) / (end[axis] - start[axis]);
-    return axis === "x"
-      ? { x: coordinate, y: start.y + (end.y - start.y) * amount }
-      : { x: start.x + (end.x - start.x) * amount, y: coordinate };
-  };
-  const output: Point2D[] = [];
-  let start = points[points.length - 1];
-  for (const end of points) {
-    if (inside(end)) {
-      if (!inside(start)) output.push(intersection(start, end));
-      output.push(end);
-    } else if (inside(start)) output.push(intersection(start, end));
-    start = end;
-  }
-  return output;
-}
-
 function splitConvexPolygonEqual(
   points: readonly Point2D[],
   axis: CartesianAxis,
@@ -849,34 +724,4 @@ function splitAtCoordinate(
   return first.length >= 3 && second.length >= 3 && wall
     ? { first, second, wall, coordinate }
     : undefined;
-}
-
-function cutSegment(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-): readonly [Point2D, Point2D] | undefined {
-  const values: number[] = [];
-  for (let index = 0; index < points.length; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    if (Math.abs(start[axis] - coordinate) < 1e-7) values.push(axis === "x" ? start.y : start.x);
-    if ((start[axis] < coordinate && end[axis] > coordinate) ||
-        (start[axis] > coordinate && end[axis] < coordinate)) {
-      const amount = (coordinate - start[axis]) / (end[axis] - start[axis]);
-      values.push(axis === "x"
-        ? start.y + (end.y - start.y) * amount
-        : start.x + (end.x - start.x) * amount);
-    }
-  }
-  if (values.length < 2) return undefined;
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  return axis === "x"
-    ? [{ x: coordinate, y: minimum }, { x: coordinate, y: maximum }]
-    : [{ x: minimum, y: coordinate }, { x: maximum, y: coordinate }];
-}
-
-function samePoint(a: Point2D, b: Point2D): boolean {
-  return a.x === b.x && a.y === b.y;
 }

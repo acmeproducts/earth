@@ -69,6 +69,105 @@ export interface HorizontalPolygon {
   holes?: ReadonlyArray<ReadonlyArray<{ x: number; z: number }>>;
 }
 
+export interface HorizontalPoint {
+  x: number;
+  z: number;
+}
+
+export function pointSegmentDistanceSquared(
+  x: number,
+  z: number,
+  start: HorizontalPoint,
+  end: HorizontalPoint,
+): number {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const lengthSquared = dx * dx + dz * dz;
+  const amount = lengthSquared === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
+  const offsetX = x - (start.x + dx * amount);
+  const offsetZ = z - (start.z + dz * amount);
+  return offsetX * offsetX + offsetZ * offsetZ;
+}
+
+export function resamplePath(points: HorizontalPoint[], maximumSpacing: number): HorizontalPoint[] {
+  if (points.length < 2 || maximumSpacing <= 0) return points;
+  const sampled = [points[0]];
+  for (let index = 1; index < points.length; index++) {
+    const start = points[index - 1];
+    const end = points[index];
+    const steps = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.z - start.z) / maximumSpacing));
+    for (let step = 1; step <= steps; step++) {
+      const amount = step / steps;
+      sampled.push({
+        x: start.x + (end.x - start.x) * amount,
+        z: start.z + (end.z - start.z) * amount,
+      });
+    }
+  }
+  return sampled;
+}
+
+export function clipPolyline(
+  points: HorizontalPoint[],
+  halfWidth: number,
+  halfDepth: number,
+): HorizontalPoint[][] {
+  const paths: HorizontalPoint[][] = [];
+  let current: HorizontalPoint[] | undefined;
+  for (let index = 1; index < points.length; index++) {
+    const segment = clipSegment(points[index - 1], points[index], halfWidth, halfDepth);
+    if (!segment) {
+      current = undefined;
+      continue;
+    }
+    if (!current || !sameHorizontalPoint(current[current.length - 1], segment[0])) {
+      current = [segment[0], segment[1]];
+      paths.push(current);
+    } else {
+      current.push(segment[1]);
+    }
+  }
+  return paths;
+}
+
+function clipSegment(
+  start: HorizontalPoint,
+  end: HorizontalPoint,
+  halfWidth: number,
+  halfDepth: number,
+): [HorizontalPoint, HorizontalPoint] | undefined {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  let minimum = 0;
+  let maximum = 1;
+  const tests: Array<[number, number]> = [
+    [-dx, start.x + halfWidth],
+    [dx, halfWidth - start.x],
+    [-dz, start.z + halfDepth],
+    [dz, halfDepth - start.z],
+  ];
+  for (const [direction, distance] of tests) {
+    if (direction === 0) {
+      if (distance < 0) return undefined;
+      continue;
+    }
+    const ratio = distance / direction;
+    if (direction < 0) minimum = Math.max(minimum, ratio);
+    else maximum = Math.min(maximum, ratio);
+    if (minimum > maximum) return undefined;
+  }
+  return [
+    { x: start.x + minimum * dx, z: start.z + minimum * dz },
+    { x: start.x + maximum * dx, z: start.z + maximum * dz },
+  ];
+}
+
+function sameHorizontalPoint(a: HorizontalPoint, b: HorizontalPoint): boolean {
+  return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.z - b.z) < 1e-6;
+}
+
 /** Combines mapped surfaces without coupling vegetation placement to their source. */
 export function combineHorizontalExclusionMasks(
   masks: readonly HorizontalExclusionMask[],

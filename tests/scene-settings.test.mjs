@@ -25,6 +25,7 @@ test("loads defaults and normalizes linked terrain sizes", () => {
     terrainTilesAcross: 17,
     cloudDensity: 0.65,
     windSpeedMetersPerSecond: 14,
+    showRoofs: true,
   });
 
   const reducedTerrain = updateSceneSetting(store.value, "terrainTilesAcross", 3);

@@ -25,6 +25,7 @@ import {
   addProceduralVariantPlacement,
   createPlacementGrid,
   packInstanceMatrices,
+  sampleTerrainNormal,
   type ProceduralPlacementBucket,
   type VegetationPlacementOptions,
 } from "./VegetationPlacement";
@@ -214,22 +215,6 @@ function countWaterNeighbours(
     if (landCover.sample(location.lon, location.lat) === LandCoverClass.Water) count++;
   }
   return count;
-}
-
-function sampleTerrainNormal(
-  terrain: TerrainData,
-  x: number,
-  z: number,
-  meshWidth: number,
-  meshDepth: number,
-  metersPerUnit: number,
-): Vector3 {
-  const step = 1.5 / metersPerUnit;
-  const left = sampleElevation(terrain, x - step, z, meshWidth, meshDepth) / metersPerUnit;
-  const right = sampleElevation(terrain, x + step, z, meshWidth, meshDepth) / metersPerUnit;
-  const back = sampleElevation(terrain, x, z - step, meshWidth, meshDepth) / metersPerUnit;
-  const front = sampleElevation(terrain, x, z + step, meshWidth, meshDepth) / metersPerUnit;
-  return new Vector3(left - right, step * 2, back - front).normalize();
 }
 
 function configureRockyBeachRenderers(

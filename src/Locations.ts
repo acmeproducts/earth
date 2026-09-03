@@ -46,14 +46,11 @@ export const EXAMPLE_LOCATIONS = [
   },
 ] as const;
 
-export type ExampleLocation = (typeof EXAMPLE_LOCATIONS)[number];
-
 export interface WorldLocation {
   lat: number;
   lon: number;
 }
 
-export const WEB_MERCATOR_MAX_LATITUDE = 85.05112878;
 const WEB_MERCATOR_MAX_SINE = Math.sin(WEB_MERCATOR_MAX_LATITUDE * Math.PI / 180);
 const LOCATION_STORAGE_KEY = "earth.location.v1";
 
@@ -140,3 +137,4 @@ export async function randomLandWorldLocation(
   }
   throw new Error(`Could not find a land location after ${maxAttempts} attempts.`);
 }
+import { WEB_MERCATOR_MAX_LATITUDE } from "./WorldGrid";

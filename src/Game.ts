@@ -54,6 +54,7 @@ import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
 import { OpenStreetMapBarriers } from "./OpenStreetMapBarriers";
 import type { BarrierFeature } from "./OpenStreetMapBarriers";
+import { StreetLamps } from "./StreetLamps";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
 import { disposeTerrainMesh } from "./TerrainMaterial";
@@ -564,20 +565,16 @@ export class Game {
     );
     if (generation !== this.streamingGeneration) return undefined;
     if (native) {
-      await reportInitializationProgress(onProgress, "Preparing mapped terrain", 34);
-      const roads = lakeTiles;
-      // Level foundations first. Their broad blend aprons can overlap nearby
-      // carriageways, so roads must be the final terrain deformation pass or
-      // those aprons can lift ground back through the road ribbons up close.
-      await OpenStreetMap.conformTerrainToBuildings(
-        roads,
-        terrainData,
-        { meshWidth, meshDepth, metersPerUnit },
-        yieldControl,
-      );
-      if (generation !== this.streamingGeneration) return undefined;
-      await OpenStreetMap.conformTerrainToRoads(
-        roads,
+      await reportInitializationProgress(onProgress, "Planning roads and building sites", 34);
+    }
+    const roadAndBuildingPlan = OpenStreetMap.planRoadsAndBuildings(
+      lakeTiles,
+      terrainData,
+      { meshWidth, meshDepth, metersPerUnit },
+    );
+    if (native) {
+      await OpenStreetMap.conformTerrainToPlan(
+        roadAndBuildingPlan,
         terrainData,
         { meshWidth, meshDepth, metersPerUnit },
         yieldControl,
@@ -660,6 +657,7 @@ export class Game {
       preCarvingElevations,
       mapTiles,
       lakeContextTiles,
+      roadAndBuildingPlan,
       terrain,
       meshWidth,
       meshDepth,
@@ -693,8 +691,10 @@ export class Game {
     const startDisabled = !onProgress;
     await reportInitializationProgress(onProgress, "Loading map features", 50);
     const barrierRequest = this.loadBarrierFeatures(record);
+    const streetLampRequest = StreetLamps.fetch(terrainData.bounds);
     const mapWays = await this.loadMapTiles(record);
     const barrierFeatures = await barrierRequest;
+    const streetLamps = await streetLampRequest;
     if (generation !== this.streamingGeneration) return;
     const placementLandCover = OpenStreetMap.createLandCoverSampler(
       mapWays,
@@ -709,6 +709,7 @@ export class Game {
       skyReflection: this.solarLighting?.skyReflectionTexture,
       showRoofs: this.sceneSettings.value.showRoofs,
       startDisabled,
+      planning: record.roadAndBuildingPlan,
     };
     let mappedExclusionMask;
     try {
@@ -904,12 +905,21 @@ export class Game {
       mapOptions,
       yieldControl,
     );
+    const streetLampLayer = StreetLamps.createLayer(
+      this.scene,
+      streetLamps,
+      OpenStreetMap.roadsideDetailRoads(mapWays),
+      terrainData,
+      mapOptions,
+    );
     if (generation !== this.streamingGeneration) {
       OpenStreetMap.disposeLayer(mapFeatures.root);
       barrierLayer.root.dispose(false, true);
+      streetLampLayer.root.dispose(false, true);
       return;
     }
     barrierLayer.root.parent = mapFeatures.root;
+    streetLampLayer.root.parent = mapFeatures.root;
     await this.streamingYielder.nextFrame();
     barrierLayer.root.setEnabled(true);
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
@@ -942,6 +952,7 @@ export class Game {
       `${rockField.count} rocks, ` +
       `${mapFeatures.counts.buildings} buildings, ` +
       `${mapFeatures.counts.roads} roads, ${barrierLayer.count} barriers`,
+      `${streetLampLayer.count} street lamps (${streetLampLayer.mappedCount} mapped)`,
     );
   }
 
@@ -966,6 +977,7 @@ export class Game {
         meshWidth: record.meshWidth,
         meshDepth: record.meshDepth,
         metersPerUnit,
+        planning: record.roadAndBuildingPlan,
       },
       this.streamingYielder,
     );
@@ -1026,6 +1038,7 @@ export class Game {
         metersPerUnit,
         showRoofs: this.sceneSettings.value.showRoofs,
         startDisabled: true,
+        planning: record.roadAndBuildingPlan,
       },
       "far",
       this.streamingYielder,
@@ -1060,6 +1073,7 @@ export class Game {
         metersPerUnit,
         preCarvingElevations: record.preCarvingElevations,
         startDisabled: true,
+        planning: record.roadAndBuildingPlan,
       },
       this.streamingYielder,
     );

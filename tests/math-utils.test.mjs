@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { register } from "node:module";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { clamp, clamp01, smoothstep } = await import("../src/MathUtils.ts");
 
 test("shared numeric helpers preserve normalized arithmetic", () => {

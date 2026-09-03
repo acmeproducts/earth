@@ -74,7 +74,10 @@ import {
   WIND_SHEAR_UNIFORMS,
 } from "./Wind";
 import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
-import { proceduralVariantAtLocation } from "./procedural/ProceduralRegions";
+import {
+  proceduralLocalVariantAtLocation,
+  proceduralVariantAtLocation,
+} from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
 
@@ -85,6 +88,8 @@ const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
 const MIN_TREE_VARIANT_SHARE = 0.08;
 /** A local forest reads more coherently and needs fewer atlases with a focused palette. */
 const MAX_TREE_SPECIES_PER_VARIANT = 3;
+/** A small reusable silhouette palette stops adjacent terrain tiles cloning one tree. */
+const TREE_SISTER_MODELS = 4;
 /** Sparse enough to read as deadfall rather than a second tree layer. */
 const FALLEN_LOG_CHANCE = 0.015;
 /** Fallen wood is reserved for the established interior of dense forest cover. */
@@ -703,11 +708,24 @@ export async function createTreeField(
           location.lat,
           modelVariantSeed,
         );
+        // Trees are the skyline, so repetition is much more obvious here than
+        // in low vegetation. Pick one of a small reusable model palette per
+        // application tile: every tree in a tile stays coherent, neighboring
+        // tiles usually change silhouette, and the atlas count remains bounded.
+        const localVariant = proceduralLocalVariantAtLocation(
+          "trees",
+          location.lon,
+          location.lat,
+          modelVariantSeed,
+          TREE_SISTER_MODELS,
+          1,
+          0,
+        );
         const season = treeSeasonAt(seasonalDate, location.lat, species);
         const variant: TreeImpostorVariant = {
           ...region,
-          key: `${region.key}/season/${season.key}`,
-          seed: layerSeed(region.seed, species),
+          key: `${region.key}/local/${localVariant}/season/${season.key}`,
+          seed: layerSeed(layerSeed(region.seed, `sister-${localVariant}`), species),
           season,
         };
         const bucketKey = `${species}:${variant.key}`;

@@ -67,7 +67,7 @@ test("the warp anchors to the subject, not to the oversized proxy box", () => {
 
 test("grass and bushes lean by a shear", () => {
   const wind = source("Wind.ts");
-  assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+ \}/);
+  assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+, tree: [\d.]+ \}/);
   assert.match(wind, /return windShearGradient\(localDirection, bend\) \* \(localPosition\.y - baseY\)/);
   // Nothing about the shear is captured, so it can follow one world direction.
   assert.match(wind, /vec2 windLocalDirection\(vec3 axisX, vec3 axisZ\)/);

@@ -7,12 +7,9 @@ import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
   ImpostorAssetLease,
-  ImpostorAssets,
   ImpostorVariant,
 } from "./Impostor";
 import { createSeededRandom } from "./Random";
-
-export type FernImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 1.2;
 const CAPTURE_DIAMETER = 2.7;
@@ -41,21 +38,6 @@ const fernImpostors = createImpostorAssetProvider({
     resolution: { default: 112, minimum: 48, maximum: 512 },
   },
 });
-
-/** Shares one procedural fern atlas per scene and capture configuration. */
-export function getFernImpostorAssets(
-  scene: Scene,
-  horizontalSamples = fernImpostors.getDefaultSampling().horizontalSamples,
-  verticalSamples = fernImpostors.getDefaultSampling().verticalSamples,
-  resolution = fernImpostors.getDefaultSampling().resolution,
-  variant?: ImpostorVariant,
-): Promise<FernImpostorAssets> {
-  return fernImpostors.getAssets(scene, {
-    horizontalSamples,
-    verticalSamples,
-    resolution,
-  }, variant);
-}
 
 export function acquireFernImpostorAssets(
   scene: Scene,

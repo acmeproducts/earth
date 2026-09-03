@@ -10,13 +10,10 @@ import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
   type ImpostorAssetLease,
-  type ImpostorAssets,
   type ImpostorVariant,
 } from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
-
-export type RockyBeachImpostorAssets = ImpostorAssets;
 
 const SOURCE_HEIGHT = 0.62;
 const CAPTURE_DIAMETER = 5.2;
@@ -49,20 +46,6 @@ const rockyBeachImpostors = createImpostorAssetProvider({
     resolution: { default: 128, minimum: 48, maximum: 512 },
   },
 });
-
-export function getRockyBeachImpostorAssets(
-  scene: Scene,
-  horizontalSamples = rockyBeachImpostors.getDefaultSampling().horizontalSamples,
-  verticalSamples = rockyBeachImpostors.getDefaultSampling().verticalSamples,
-  resolution = rockyBeachImpostors.getDefaultSampling().resolution,
-  variant?: ImpostorVariant,
-): Promise<RockyBeachImpostorAssets> {
-  return rockyBeachImpostors.getAssets(scene, {
-    horizontalSamples,
-    verticalSamples,
-    resolution,
-  }, variant);
-}
 
 export function acquireRockyBeachImpostorAssets(
   scene: Scene,

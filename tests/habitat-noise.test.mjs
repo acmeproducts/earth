@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { register } from "node:module";
 import test from "node:test";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { habitatField } = await import("../src/HabitatNoise.ts");
 
 const WORLD_SEED = 0x45415254;

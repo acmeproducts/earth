@@ -4,6 +4,7 @@ import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
 import type { RockFieldResult } from "./RockField";
 import type { TerrainData } from "./TerrainData";
+import type { RoadAndBuildingPlan } from "./RoadAndBuildingPlanner";
 import { disposeTerrainMesh } from "./TerrainMaterial";
 import { disposeTerrainLakeLayer } from "./TerrainLakeSurface";
 import type { TerrainLakeLayer } from "./TerrainLakeSurface";
@@ -42,6 +43,7 @@ export interface StreamedTile {
   mapTiles?: Promise<MapTile[]>;
   barrierFeatures?: Promise<BarrierFeature[]>;
   lakeContextTiles?: Promise<MapTile[]>;
+  roadAndBuildingPlan: RoadAndBuildingPlan;
   terrain: Mesh;
   meshWidth: number;
   meshDepth: number;

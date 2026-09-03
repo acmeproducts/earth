@@ -3,11 +3,10 @@ import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
 } from "./Impostor";
-import type { ImpostorAssetLease, ImpostorAssets, ImpostorVariant } from "./Impostor";
+import type { ImpostorAssetLease, ImpostorVariant } from "./Impostor";
 import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
-export type WheatImpostorAssets = ImpostorAssets;
 const SOURCE_HEIGHT = 1.42;
 const CAPTURE_DIAMETER = 2.15;
 const STEM = new Color3(0.34, 0.42, 0.075);

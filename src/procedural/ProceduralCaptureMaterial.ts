@@ -96,11 +96,6 @@ const BARK_BASE: Record<TreeBarkStyle, readonly [number, number, number]> = {
   spruce: [145, 137, 122],
 };
 
-/** Builds and caches one seamless, deterministic birch-bark texture per scene. */
-export function getBirchBarkTexture(scene: Scene): DynamicTexture {
-  return getTreeBarkTexture(scene, "birch");
-}
-
 /** Builds and caches a seamless, deterministic bark texture for each species. */
 export function getTreeBarkTexture(scene: Scene, species: TreeBarkStyle): DynamicTexture {
   let sceneTextures = barkTextures.get(scene);

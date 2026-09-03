@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { register } from "node:module";
 import test from "node:test";
 import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
 
-register("./ts-extension-resolver.mjs", import.meta.url);
 const {
   createTallPlantModel,
   tallPlantArchetypeForVariant,

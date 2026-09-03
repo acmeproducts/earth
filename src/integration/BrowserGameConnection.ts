@@ -13,7 +13,6 @@ import { isValidPlayerPose } from "./GameProtocol";
 import { GameServer } from "./GameServer";
 import type { GameStateRepository } from "./GameStateRepository";
 
-const CHANNEL_NAME = "earth.game.v1";
 const ACTOR_ID_STORAGE_KEY = "earth.tab-actor-id.v1";
 
 interface BroadcastChannelLike {
@@ -169,7 +168,6 @@ export class WebSocketGameConnection implements GameConnection {
   private readonly url: string;
   private readonly listeners = new Set<GameEventListener>();
   private socket?: WebSocket;
-  private request?: JoinGameRequest;
   private dispatchQueue: Promise<void> = Promise.resolve();
   private resolveConnect?: (snapshot: GameSnapshot) => void;
   private rejectConnect?: (error: Error) => void;
@@ -180,7 +178,6 @@ export class WebSocketGameConnection implements GameConnection {
 
   connect(request: JoinGameRequest): Promise<GameSnapshot> {
     if (this.socket) return Promise.reject(new Error("This game connection is already open."));
-    this.request = { ...request };
     this.socket = new WebSocket(this.url);
     this.socket.onopen = () => this.socket?.send(JSON.stringify({ type: "join", request }));
     this.socket.onmessage = (message) => this.handleMessage(message.data);
@@ -215,7 +212,6 @@ export class WebSocketGameConnection implements GameConnection {
     await this.dispatchQueue;
     this.socket?.close();
     this.socket = undefined;
-    this.request = undefined;
     this.listeners.clear();
   }
 

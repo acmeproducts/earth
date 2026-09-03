@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { register } from "node:module";
 
-// These sources use webpack-style extensionless relative imports, which
-// node's type stripping cannot resolve without this hook.
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { normalizeBuildingClass, planBuilding } = await import("../src/BuildingPlanner.ts");
 const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
 const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
@@ -28,7 +24,7 @@ test("selects explicit far and detailed geometry compilers from the shared plan"
   assert.match(planner, /export type BuildingDetailLevel = "far" \| "detailed"/);
   assert.match(
     openStreetMap,
-    /detail === "far"\s+\? ProceduralBuildingRenderer\.createFar\(scene, plan, terrain, options\)\s+: ProceduralBuildingRenderer\.createDetailed/,
+    /detail === "far"\s+\? ProceduralBuildingRenderer\.createFar\(scene, plan, terrain, renderOptions\)\s+: ProceduralBuildingRenderer\.createDetailed/,
   );
 });
 

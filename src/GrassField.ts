@@ -30,6 +30,7 @@ import {
   createPlacementGrid,
   addProceduralVariantPlacement,
   packInstanceMatrices,
+  sampleTerrainNormal,
   ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
@@ -63,7 +64,6 @@ export interface GrassDistanceFadeRange {
   near: number;
   far: number;
 }
-
 /** Resolves the radial grass dissolve from the active full-detail tile count. */
 export function grassDistanceFadeRange(
   tileWidth: number,
@@ -305,20 +305,4 @@ export function grassGroundColorMultiplier(
     const ratio = channel / GRASSLAND_REFERENCE_COLOR[index];
     return clamp(1 + (ratio - 1) * GRASS_GROUND_COLOR_INFLUENCE, 0.55, 1.35);
   }) as [number, number, number];
-}
-
-function sampleTerrainNormal(
-  terrain: TerrainData,
-  x: number,
-  z: number,
-  meshWidth: number,
-  meshDepth: number,
-  metersPerUnit: number,
-): Vector3 {
-  const step = 1.5 / metersPerUnit;
-  const left = sampleElevation(terrain, x - step, z, meshWidth, meshDepth) / metersPerUnit;
-  const right = sampleElevation(terrain, x + step, z, meshWidth, meshDepth) / metersPerUnit;
-  const back = sampleElevation(terrain, x, z - step, meshWidth, meshDepth) / metersPerUnit;
-  const front = sampleElevation(terrain, x, z + step, meshWidth, meshDepth) / metersPerUnit;
-  return new Vector3(left - right, step * 2, back - front).normalize();
 }

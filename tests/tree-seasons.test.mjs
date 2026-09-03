@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { register } from "node:module";
 
-// These sources use webpack-style extensionless relative imports, which
-// node's type stripping cannot resolve without this hook.
-register("./ts-extension-resolver.mjs", import.meta.url);
 const { treeSeasonAt } = await import("../src/TreeSeason.ts");
 
 test("temperate deciduous seasons follow the calendar and hemisphere", () => {
@@ -44,7 +40,7 @@ test("tree models and impostors receive one shared seasonal variant", () => {
   const field = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
   const impostor = readFileSync(new URL("../src/TreeImpostor.ts", import.meta.url), "utf8");
 
-  assert.match(field, /key: `\$\{region\.key\}\/season\/\$\{season\.key\}`/);
+  assert.match(field, /key: `\$\{region\.key\}\/local\/\$\{localVariant\}\/season\/\$\{season\.key\}`/);
   assert.match(field, /createTreeModels\([\s\S]*?variant\.season/);
   assert.match(impostor, /season: treeVariant\.season/);
 });
