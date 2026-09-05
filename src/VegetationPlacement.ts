@@ -92,6 +92,14 @@ export interface ProceduralPlacementBucket {
   colors: number[];
 }
 
+export interface ProceduralVariantSelection {
+  /** Optional shared anchor makes every placement in a field choose one variant. */
+  longitude: number;
+  latitude: number;
+  localitySpanTiles?: number;
+  localityBlendTiles?: number;
+}
+
 /** Names one bucket's meshes uniquely, including its sister-model index. */
 export function proceduralBucketSuffix(bucket: ProceduralPlacementBucket): string {
   const region = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
@@ -108,11 +116,14 @@ export function addProceduralVariantPlacement(
   matrix: Matrix,
   color?: readonly number[],
   sisterModels = 1,
+  selection?: ProceduralVariantSelection,
 ): void {
+  const variantLongitude = selection?.longitude ?? longitude;
+  const variantLatitude = selection?.latitude ?? latitude;
   const regionalVariant = proceduralVariantAtLocation(
     family,
-    longitude,
-    latitude,
+    variantLongitude,
+    variantLatitude,
     modelVariantSeed,
   );
   // Bound to the location, not to the field's random stream: a terrain tile
@@ -120,10 +131,12 @@ export function addProceduralVariantPlacement(
   // tiles reuse the same cached impostor atlas.
   const localVariant = proceduralLocalVariantAtLocation(
     family,
-    longitude,
-    latitude,
+    variantLongitude,
+    variantLatitude,
     modelVariantSeed,
     sisterModels,
+    selection?.localitySpanTiles,
+    selection?.localityBlendTiles,
   );
   const variant = localVariant === 0 ? regionalVariant : {
     ...regionalVariant,

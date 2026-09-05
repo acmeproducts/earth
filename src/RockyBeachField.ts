@@ -3,7 +3,6 @@ import {
   Matrix,
   Quaternion,
   Scene,
-  ShaderMaterial,
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
@@ -21,6 +20,7 @@ import {
   type VegetationFieldResult,
 } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import {
   addProceduralVariantPlacement,
   createPlacementGrid,
@@ -33,12 +33,16 @@ import { LandCoverClass, type LandCoverSampler } from "./WorldCover";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 
 const ROCK_PATCH_HEIGHT_METERS = 0.62;
-const ROCK_PATCH_SPACING_METERS = 3.4;
+const ROCK_PATCH_SPACING_METERS = 3;
 const ROCK_GROUND_OFFSET_METERS = 0.025;
 // Let the outer stones sit just below the shoreline so the patch reads as a
 // natural intertidal band instead of stopping at an artificial hard edge.
-const ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS = 0.18;
-const SHORE_PROBE_METERS = 9;
+const ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS = 1.6;
+const SUBMERGED_PATCH_DEPTH_METERS = 0.48;
+// WorldCover shore pixels and the elevation shoreline rarely coincide exactly.
+// A wider probe produces a continuous intertidal band instead of a single thin
+// row of cards hugging the classified water edge.
+const SHORE_PROBE_METERS = 24;
 const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0], [1, 0], [0, -1], [0, 1],
   [-0.707, -0.707], [0.707, -0.707], [-0.707, 0.707], [0.707, 0.707],
@@ -81,21 +85,22 @@ export async function createRockyBeachField(
         const z = meshDepth / 2 - (row + 0.18 + random() * 0.64) * grid.cellDepth;
         const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
         const cover = landCover.sample(location.lon, location.lat);
-        if (cover === LandCoverClass.Water || cover === LandCoverClass.BuiltUp) continue;
-        const waterNeighbours = countWaterNeighbours(
+        if (cover === LandCoverClass.BuiltUp) continue;
+        const shoreNeighbours = countShoreNeighbours(
           landCover, terrain, x, z, meshWidth, meshDepth, metersPerUnit,
         );
-        if (waterNeighbours === 0) continue;
+        const submerged = cover === LandCoverClass.Water;
+        if (submerged ? shoreNeighbours.land === 0 : shoreNeighbours.water === 0) continue;
 
         const character = rockyBeachCharacter(location.lon, location.lat, modelVariantSeed);
         const mappedRockySurface = cover === LandCoverClass.Bare;
-        const threshold = mappedRockySurface ? 0.3 : 0.72;
+        const threshold = mappedRockySurface ? 0.24 : 0.62;
         if (character < threshold) continue;
         const occupancy = Math.min(
           0.96,
-          ((mappedRockySurface ? 0.64 : 0.2) +
-            (character - threshold) * (mappedRockySurface ? 0.8 : 0.55) +
-            waterNeighbours * 0.035) *
+          ((mappedRockySurface ? 0.72 : 0.28) +
+            (character - threshold) * (mappedRockySurface ? 0.82 : 0.64) +
+            shoreNeighbours.water * 0.04) *
             Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
@@ -120,6 +125,12 @@ export async function createRockyBeachField(
           Quaternion.RotationAxis(Vector3.Up(), random() * Math.PI * 2),
         );
         const widthScale = 0.82 + random() * 0.42;
+        const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        // Keep the water-side row in the visible shallows even when the DEM's
+        // coastal shelf drops more abruptly than the rendered shoreline.
+        const groundedElevation = submerged
+          ? Math.max(elevation, waterLineMeters - SUBMERGED_PATCH_DEPTH_METERS)
+          : elevation;
         const matrix = Matrix.Compose(
           new Vector3(
             widthScale,
@@ -129,7 +140,7 @@ export async function createRockyBeachField(
           rotation,
           new Vector3(
             x,
-            (sampleElevation(terrain, x, z, meshWidth, meshDepth) + ROCK_GROUND_OFFSET_METERS) /
+            (groundedElevation + ROCK_GROUND_OFFSET_METERS) /
               metersPerUnit,
             z,
           ),
@@ -193,7 +204,7 @@ export function rockyBeachCharacter(longitude: number, latitude: number, seed: n
   return Math.max(0, Math.min(1, 0.5 + broad * 0.31 + secondary * 0.19));
 }
 
-function countWaterNeighbours(
+function countShoreNeighbours(
   landCover: LandCoverSampler,
   terrain: TerrainData,
   x: number,
@@ -201,9 +212,10 @@ function countWaterNeighbours(
   meshWidth: number,
   meshDepth: number,
   metersPerUnit: number,
-): number {
+): { water: number; land: number } {
   const probe = SHORE_PROBE_METERS / metersPerUnit;
-  let count = 0;
+  let water = 0;
+  let land = 0;
   for (const [directionX, directionZ] of SHORE_DIRECTIONS) {
     const location = sceneToLonLat(
       x + directionX * probe,
@@ -212,33 +224,33 @@ function countWaterNeighbours(
       meshWidth,
       meshDepth,
     );
-    if (landCover.sample(location.lon, location.lat) === LandCoverClass.Water) count++;
+    if (landCover.sample(location.lon, location.lat) === LandCoverClass.Water) water++;
+    else land++;
   }
-  return count;
+  return { water, land };
 }
 
 function configureRockyBeachRenderers(
   impostor: import("@babylonjs/core").Mesh,
   model: import("@babylonjs/core").Mesh,
 ): void {
-  if (impostor.material instanceof ShaderMaterial) {
-    impostor.material.setFloat("impostorLodNear", 14);
-    impostor.material.setFloat("impostorLodFar", 30);
-    impostor.material.setFloat("instanceColorCoverage", 1);
-    impostor.material.setFloat("groundColorBlend", 0.1);
-    impostor.material.setFloat("impostorColorContrast", 1.2);
-    // The impostor has a single stable canopy normal; reduce its sky bias so
-    // its average value matches the varied normals used by the live stones.
-    impostor.material.setFloat("impostorAmbientUpward", 0.54);
-    impostor.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    impostor.material.setFloat("vegetationShadowDarkness", 0.42);
-    impostor.material.setColor3("distanceGroundColor", new Color3(0.43, 0.42, 0.39));
-  }
-  if (model.material instanceof ShaderMaterial) {
-    model.material.setFloat("instanceColorCoverage", 1);
-    model.material.setFloat("groundColorBlend", 0.1);
-    model.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    model.material.setFloat("vegetationShadowDarkness", 0.42);
-    model.material.setColor3("distanceGroundColor", new Color3(0.43, 0.42, 0.39));
-  }
+  configureVegetationMaterials([impostor, model], {
+    floats: {
+      instanceColorCoverage: 1,
+      groundColorBlend: 0.1,
+      vegetationShadowAtInstanceRoot: 1,
+      vegetationShadowDarkness: 0.42,
+    },
+    colors: { distanceGroundColor: new Color3(0.43, 0.42, 0.39) },
+  });
+  configureVegetationMaterials([impostor], {
+    floats: {
+      impostorLodNear: 14,
+      impostorLodFar: 30,
+      impostorColorContrast: 1.2,
+      // The impostor has one stable canopy normal; reduce its sky bias so its
+      // average value matches the varied normals used by the live stones.
+      impostorAmbientUpward: 0.54,
+    },
+  });
 }

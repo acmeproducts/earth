@@ -35,6 +35,12 @@ const CHOP_DRIFT_METERS_PER_SECOND = 1.4;
 const WATER_WIND_RESPONSE = 1;
 const WATER_MOTION_GAIN = 1.25;
 /**
+ * Normal-map strength was authored around the procedural wind's 0..1 range.
+ * Manual weather can report strengths up to 3; feeding that straight into the
+ * material exposes the square boundary of every repeated chop tile.
+ */
+const MAX_WAVE_ROUGHNESS_WIND = 1;
+/**
  * Water reflects almost nothing head-on and almost everything at a grazing
  * angle. This is the head-on value; the material's Fresnel term takes it the
  * rest of the way. It sits above SSR's reflectivity threshold so the ocean is
@@ -353,8 +359,9 @@ function animateWaves(
     chop.vOffset = 0.289 + seconds * chopRepeatsPerSecond * directionX * speed;
     // Wind makes the surface more broken without changing the authored look
     // at calm conditions. Lakes respond less dramatically than open sea.
-    const chopLevel = (kind === 'lake' ? 0.38 : 0.6) * (0.72 + wind.strength * 0.28);
-    water.bumpTexture!.level = (kind === 'lake' ? 0.72 : 0.9) * (0.78 + wind.strength * 0.22);
+    const roughnessWind = Math.min(MAX_WAVE_ROUGHNESS_WIND, wind.strength);
+    const chopLevel = (kind === 'lake' ? 0.38 : 0.6) * (0.72 + roughnessWind * 0.28);
+    water.bumpTexture!.level = (kind === 'lake' ? 0.72 : 0.9) * (0.78 + roughnessWind * 0.22);
     water.detailMap.bumpLevel = chopLevel;
   });
 

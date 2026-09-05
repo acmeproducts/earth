@@ -147,10 +147,8 @@ test("grass models and impostors share terrain-root shadow sampling", () => {
 
 test("shadowed grass retains enough fill to sit on the shaded terrain", () => {
   assert.match(grass, /const GRASS_SHADOW_DARKNESS = 0\.3/);
-  const shadowFloorAssignments = grass.match(
-    /setFloat\("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS\)/g,
-  ) ?? [];
-  assert.equal(shadowFloorAssignments.length, 2);
+  assert.match(grass, /configureVegetationMaterials\(\[grass, grassModel\]/);
+  assert.match(grass, /vegetationShadowDarkness: GRASS_SHADOW_DARKNESS/);
 });
 
 test("shadows custom vegetation direct light while preserving ambient light", () => {

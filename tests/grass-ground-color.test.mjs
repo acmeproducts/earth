@@ -29,7 +29,8 @@ test("WorldCover exposes a continuous tint across source raster cells", () => {
 });
 
 test("grass applies the tint consistently to models and impostors", () => {
-  assert.match(fieldSource, /instanceColorCoverage", 1/g);
+  assert.match(fieldSource, /configureVegetationMaterials\(\[grass, grassModel\]/);
+  assert.match(fieldSource, /instanceColorCoverage: 1/);
   assert.match(impostorSource, /max\(petalMask, instanceColorCoverage\)/);
   assert.match(modelSource, /max\(petalMask, instanceColorCoverage\)/);
   assert.match(impostorSource, /setFloat\("instanceColorCoverage", 0\)/);
@@ -69,7 +70,7 @@ test("loaded and newly committed grass fields use the current detail setting", (
 
 test("grass uses ground-aware ambient light and a lifted deep-shadow floor", () => {
   assert.match(fieldSource, /GRASS_SHADOW_DARKNESS = 0\.3;/);
-  assert.match(fieldSource, /impostorAmbientUpward", GRASS_AMBIENT_UPWARD/);
-  assert.match(fieldSource, /vegetationShadowDarkness", GRASS_SHADOW_DARKNESS/g);
+  assert.match(fieldSource, /impostorAmbientUpward: GRASS_AMBIENT_UPWARD/);
+  assert.match(fieldSource, /vegetationShadowDarkness: GRASS_SHADOW_DARKNESS/);
   assert.match(impostorSource, /mix\(groundColor, skyColor, impostorAmbientUpward\)/);
 });

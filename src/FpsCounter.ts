@@ -3,6 +3,7 @@ import {
   Engine,
   EngineInstrumentation,
   Mesh,
+  RenderTargetTexture,
   Scene,
   SceneInstrumentation,
 } from "@babylonjs/core";
@@ -10,8 +11,10 @@ import {
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 2;
+const REPORT_VERSION = 3;
 const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
+const BENCHMARK_WARMUP_FRAMES = 20;
+const BENCHMARK_SAMPLE_FRAMES = 60;
 
 export interface CpuFrameSample {
   gameMilliseconds: number;
@@ -20,6 +23,47 @@ export interface CpuFrameSample {
   activeTileBuilds: number;
   terrainTiles: number;
   detailTiles: number;
+  activeLayerFades?: number;
+}
+
+export interface RenderBenchmarkPhase {
+  name: string;
+  apply: () => void;
+}
+
+interface RenderBenchmarkSample {
+  frameIntervalMilliseconds: number;
+  gameMilliseconds: number;
+  renderMilliseconds: number;
+  gpuFrameMilliseconds: number;
+  drawCalls: number;
+  activeTriangles: number;
+}
+
+interface RenderBenchmarkResult {
+  name: string;
+  samples: number;
+  frameInterval: Record<string, number> | null;
+  fps: Record<string, number> | null;
+  gpuFrame: Record<string, number> | null;
+  game: Record<string, number> | null;
+  renderCall: Record<string, number> | null;
+  drawCalls: Record<string, number> | null;
+  activeTriangles: Record<string, number> | null;
+  relativeToBaseline?: {
+    averageFpsPercent: number;
+    averageFrameTimePercent: number;
+    averageGpuTimePercent: number | null;
+  };
+}
+
+interface ActiveRenderBenchmark {
+  phases: readonly RenderBenchmarkPhase[];
+  phaseIndex: number;
+  warmupFrames: number;
+  samples: RenderBenchmarkSample[];
+  results: RenderBenchmarkResult[];
+  onComplete: () => void;
 }
 
 interface LongFrameEntry extends PerformanceEntry {
@@ -92,6 +136,8 @@ export class FpsCounter {
   private readonly frameHistory: FrameHistorySample[] = [];
   private frameHistoryCursor = 0;
   private readonly stallHistory: StallSample[] = [];
+  private benchmark?: ActiveRenderBenchmark;
+  private benchmarkResults?: RenderBenchmarkResult[];
 
   constructor(
     scene: Scene,
@@ -112,7 +158,7 @@ export class FpsCounter {
   }
 
   update(engine: AbstractEngine, scene?: Scene, cpu?: CpuFrameSample): void {
-    if (cpu) this.recordCpuSample(cpu);
+    if (cpu) this.recordCpuSample(cpu, scene);
     const now = performance.now();
     if (now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
 
@@ -188,6 +234,10 @@ export class FpsCounter {
         : "",
       `${triangles}  ${formatCount(scene.getActiveMeshes().length)} meshes  ` +
         `${Math.round(drawCalls)} draws`,
+      this.benchmark
+        ? `benchmark ${this.benchmark.phaseIndex + 1}/${this.benchmark.phases.length}: ` +
+          `${this.benchmark.phases[this.benchmark.phaseIndex].name}`
+        : "",
       streaming
         ? `stream ${streaming.activeTileBuilds} build  ${streaming.terrainTiles} terrain  ` +
           `${streaming.detailTiles} detail`
@@ -203,6 +253,29 @@ export class FpsCounter {
     this.expanded = !this.expanded;
     this.lastUpdate = 0;
     this.updateAppearance();
+  }
+
+  startComparativeBenchmark(
+    phases: readonly RenderBenchmarkPhase[],
+    onComplete: () => void,
+  ): boolean {
+    if (this.benchmark || phases.length < 2) return false;
+    if (!this.expanded) {
+      this.expanded = true;
+      this.updateAppearance();
+    }
+    this.benchmarkResults = undefined;
+    this.benchmark = {
+      phases,
+      phaseIndex: 0,
+      warmupFrames: BENCHMARK_WARMUP_FRAMES,
+      samples: [],
+      results: [],
+      onComplete,
+    };
+    phases[0].apply();
+    this.lastUpdate = 0;
+    return true;
   }
 
   dispose(): void {
@@ -267,7 +340,10 @@ export class FpsCounter {
     this.engineInstrumentation.captureShaderCompilationTime = enabled;
   }
 
-  private recordCpuSample(sample: CpuFrameSample): void {
+  private recordCpuSample(
+    sample: CpuFrameSample,
+    scene?: Scene,
+  ): void {
     const recordedAtMilliseconds = performance.now();
     const frameIntervalMilliseconds = this.lastFrameRecordedAt === undefined
       ? 0
@@ -326,6 +402,54 @@ export class FpsCounter {
       this.frameHistory[this.frameHistoryCursor] = historySample;
     }
     this.frameHistoryCursor = (this.frameHistoryCursor + 1) % FRAME_HISTORY_SIZE;
+    this.recordBenchmarkSample(sample, frameIntervalMilliseconds, scene);
+  }
+
+  private recordBenchmarkSample(
+    sample: CpuFrameSample,
+    frameIntervalMilliseconds: number,
+    scene?: Scene,
+  ): void {
+    const benchmark = this.benchmark;
+    if (!benchmark || !scene || frameIntervalMilliseconds <= 0) return;
+    // Streaming and cross-fades change the workload independently of the
+    // feature under test. Wait for them instead of contaminating a phase.
+    if (sample.activeTileBuilds > 0 || (sample.activeLayerFades ?? 0) > 0) {
+      benchmark.warmupFrames = BENCHMARK_WARMUP_FRAMES;
+      benchmark.samples.length = 0;
+      return;
+    }
+    if (benchmark.warmupFrames > 0) {
+      benchmark.warmupFrames--;
+      return;
+    }
+    const gpuNanoseconds = this.engineInstrumentation.gpuFrameTimeCounter?.current ?? 0;
+    benchmark.samples.push({
+      frameIntervalMilliseconds,
+      gameMilliseconds: sample.gameMilliseconds,
+      renderMilliseconds: sample.renderMilliseconds,
+      gpuFrameMilliseconds: gpuNanoseconds / 1_000_000,
+      drawCalls: this.instrumentation.drawCallsCounter.current,
+      activeTriangles: scene.getActiveIndices() / 3,
+    });
+    if (benchmark.samples.length < BENCHMARK_SAMPLE_FRAMES) return;
+
+    benchmark.results.push(summarizeBenchmarkPhase(
+      benchmark.phases[benchmark.phaseIndex].name,
+      benchmark.samples,
+    ));
+    benchmark.phaseIndex++;
+    if (benchmark.phaseIndex < benchmark.phases.length) {
+      benchmark.samples = [];
+      benchmark.warmupFrames = BENCHMARK_WARMUP_FRAMES;
+      benchmark.phases[benchmark.phaseIndex].apply();
+      this.lastUpdate = 0;
+      return;
+    }
+
+    this.benchmarkResults = addBenchmarkDeltas(benchmark.results);
+    this.benchmark = undefined;
+    benchmark.onComplete();
   }
 
   private frameBudgetMilliseconds(): number {
@@ -442,6 +566,22 @@ export class FpsCounter {
         receivesShadows: mesh.receiveShadows,
       };
     }).sort((a, b) => b.estimatedRenderedTriangles - a.estimatedRenderedTriangles);
+    const meshWorkloads = groupMeshWorkloads(meshDetails);
+    const renderTargets = scene.textures
+      .filter((texture): texture is RenderTargetTexture => texture instanceof RenderTargetTexture)
+      .map((texture) => {
+        const size = texture.getSize();
+        return {
+          name: texture.name,
+          width: size.width,
+          height: size.height,
+          samples: texture.samples,
+          refreshRate: texture.refreshRate,
+          renderListMeshes: texture.renderList?.length ?? null,
+          hasActiveCamera: Boolean(texture.activeCamera),
+          noPrePassRenderer: texture.noPrePassRenderer,
+        };
+      });
 
     const backendInfo = engine as AbstractEngine & {
       getInfo?: () => { vendor: string; renderer: string; version: string };
@@ -531,6 +671,12 @@ export class FpsCounter {
         stutterSamples: frameHistory.filter((sample) => sample.stutter),
         samples: frameHistory,
       },
+      comparativeBenchmark: {
+        status: this.benchmark ? "running" : this.benchmarkResults ? "complete" : "not-run",
+        warmupFramesPerPhase: BENCHMARK_WARMUP_FRAMES,
+        sampleFramesPerPhase: BENCHMARK_SAMPLE_FRAMES,
+        phases: this.benchmarkResults ?? [],
+      },
       stalls: {
         observer: this.stallKind ?? "unavailable",
         retainedEntries: this.stallHistory.length,
@@ -598,6 +744,8 @@ export class FpsCounter {
           };
         }),
         activeMeshes: meshDetails,
+        meshWorkloads,
+        renderTargets,
       },
     };
   }
@@ -611,6 +759,101 @@ export class FpsCounter {
       ...this.frameHistory.slice(0, this.frameHistoryCursor),
     ];
   }
+}
+
+function addBenchmarkDeltas(results: RenderBenchmarkResult[]): RenderBenchmarkResult[] {
+  const baseline = results[0];
+  const baselineFps = baseline?.fps?.average;
+  const baselineFrame = baseline?.frameInterval?.average;
+  const baselineGpu = baseline?.gpuFrame?.average;
+  return results.map((result) => ({
+    ...result,
+    relativeToBaseline: {
+      averageFpsPercent: percentChange(result.fps?.average, baselineFps),
+      averageFrameTimePercent: percentChange(result.frameInterval?.average, baselineFrame),
+      averageGpuTimePercent: result.gpuFrame?.average && baselineGpu
+        ? percentChange(result.gpuFrame.average, baselineGpu)
+        : null,
+    },
+  }));
+}
+
+function percentChange(value: number | undefined, baseline: number | undefined): number {
+  if (value === undefined || baseline === undefined || baseline === 0) return 0;
+  return ((value - baseline) / baseline) * 100;
+}
+
+function summarizeBenchmarkPhase(
+  name: string,
+  samples: readonly RenderBenchmarkSample[],
+): RenderBenchmarkResult {
+  const frameIntervals = samples.map((sample) => sample.frameIntervalMilliseconds);
+  return {
+    name,
+    samples: samples.length,
+    frameInterval: summarizeSamples(frameIntervals),
+    fps: summarizeSamples(frameIntervals.map((milliseconds) => 1000 / milliseconds)),
+    gpuFrame: summarizeSamples(
+      samples.map((sample) => sample.gpuFrameMilliseconds).filter((milliseconds) => milliseconds > 0),
+    ),
+    game: summarizeSamples(samples.map((sample) => sample.gameMilliseconds)),
+    renderCall: summarizeSamples(samples.map((sample) => sample.renderMilliseconds)),
+    drawCalls: summarizeSamples(samples.map((sample) => sample.drawCalls)),
+    activeTriangles: summarizeSamples(samples.map((sample) => sample.activeTriangles)),
+  };
+}
+
+function groupMeshWorkloads(
+  meshes: Array<{
+    name: string;
+    sourceTriangles: number;
+    estimatedRenderedTriangles: number;
+    instances: number;
+    thinInstances: number;
+  }>,
+): Array<Record<string, number | string>> {
+  const groups = new Map<string, {
+    meshes: number;
+    sourceTriangles: number;
+    estimatedRenderedTriangles: number;
+    instances: number;
+  }>();
+  for (const mesh of meshes) {
+    const category = meshCategory(mesh.name);
+    const group = groups.get(category) ?? {
+      meshes: 0,
+      sourceTriangles: 0,
+      estimatedRenderedTriangles: 0,
+      instances: 0,
+    };
+    group.meshes++;
+    group.sourceTriangles += mesh.sourceTriangles;
+    group.estimatedRenderedTriangles += mesh.estimatedRenderedTriangles;
+    group.instances += Math.max(1, mesh.instances + mesh.thinInstances);
+    groups.set(category, group);
+  }
+  return [...groups.entries()]
+    .map(([category, values]) => ({ category, ...values }))
+    .sort((a, b) => b.estimatedRenderedTriangles - a.estimatedRenderedTriangles);
+}
+
+function meshCategory(name: string): string {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("grass")) return "grass";
+  if (normalized.includes("tree") || normalized.includes("sapling")) return "trees";
+  if (normalized.includes("bush") || normalized.includes("fern") || normalized.includes("plant")) {
+    return "undergrowth";
+  }
+  if (normalized.includes("rock")) return "rocks";
+  if (normalized.includes("terrain") || normalized.includes("ground")) return "terrain";
+  if (normalized.includes("building")) return "buildings";
+  if (normalized.includes("road") || normalized.includes("barrier")) return "map-features";
+  if (normalized.includes("water") || normalized.includes("lake")) return "water";
+  if (normalized.includes("cloud") || normalized.includes("sky") || normalized.includes("star") ||
+      normalized.includes("moon") || normalized.includes("sun") || normalized.includes("fog")) {
+    return "sky";
+  }
+  return "other";
 }
 
 interface CounterLike {

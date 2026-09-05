@@ -30,7 +30,7 @@ test("an impostor material defaults to the flattened center plane", () => {
 test("grass pulls its depth plane out to the near blades", () => {
   assert.match(
     grassFieldSource,
-    /setFloat\("impostorDepthPull", grassImpostorDepthPull\(grassHeight\)\)/,
+    /impostorDepthPull: grassImpostorDepthPull\(grassHeight\)/,
   );
   assert.match(
     grassFieldSource,

@@ -8,7 +8,7 @@ import {
 import { lonLatToScene, sceneToLonLat } from "../Geo";
 import type { SceneGeographicFrame } from "../Geo";
 import type { GameConnection } from "./GameConnection";
-import { createBrowserLocalGameConnection } from "./BrowserGameConnection";
+import { createBrowserGameConnection } from "./BrowserGameConnection";
 import type {
   GameEvent,
   MovementMode,
@@ -242,7 +242,7 @@ export class PlayerPresence {
 }
 
 function defaultBrowserIntegration(): GameIntegrationOptions {
-  const local = createBrowserLocalGameConnection();
+  const local = createBrowserGameConnection();
   return {
     connection: local.connection,
     worldId: "earth",

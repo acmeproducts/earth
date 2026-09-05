@@ -156,9 +156,11 @@ test("tapers the Scots pine crown upward from its widest surviving whorl", () =>
 
 test("selects a bounded sister-tree palette at application-tile scale", () => {
   assert.match(treeField, /const TREE_SISTER_MODELS = 4/);
-  assert.match(treeField, /proceduralLocalVariantAtLocation\([\s\S]*?TREE_SISTER_MODELS,[\s\S]*?1,[\s\S]*?0/);
-  assert.match(treeField, /\/local\/\$\{localVariant\}\/season/);
-  assert.match(treeField, /sister-\$\{localVariant\}/);
+  assert.match(treeField, /const TREE_VARIANT_SPAN_TILES = 256/);
+  assert.match(treeField, /const tileVariantLocation = sceneToLonLat/);
+  assert.match(treeField, /proceduralLocalVariantAtLocation\([\s\S]*?TREE_SISTER_MODELS,[\s\S]*?TREE_VARIANT_SPAN_TILES,[\s\S]*?0/);
+  assert.match(treeField, /\/local\/\$\{tileLocalVariant\}\/season/);
+  assert.match(treeField, /sister-\$\{tileLocalVariant\}/);
 });
 
 test("scales pine up and spruce down", () => {

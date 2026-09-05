@@ -22,8 +22,9 @@ sockets.on("connection", (socket) => {
     try {
       const message = JSON.parse(raw.toString());
       if (message.type === "join") {
+        if (session) throw new Error("This connection has already joined a game.");
+        const snapshot = await game.connect(message.request, listener);
         session = message.request;
-        const snapshot = await game.connect(session, listener);
         send({ type: "snapshot", snapshot });
       } else if (message.type === "action" && session) {
         await game.dispatch(session.sessionId, message.action);

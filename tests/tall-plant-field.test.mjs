@@ -122,6 +122,11 @@ test("tall plants form sizeable irregular colonies on plausible land cover", () 
   // The rarest layer, and the most uneven where it does appear.
   assert.match(field, /barrenShare: 0\.45/);
   assert.match(field, /const SPECIES_VARIANTS = 3/);
+  assert.match(field, /const SPECIES_LOCALITY_SPAN_TILES = 64/);
+  assert.match(field, /const tileVariantLocation = sceneToLonLat/);
+  assert.match(field, /longitude: tileVariantLocation\.lon/);
+  assert.match(field, /latitude: tileVariantLocation\.lat/);
+  assert.match(field, /localityBlendTiles: 0/);
   assert.match(field, /^\s+SPECIES_VARIANTS,$/m);
   for (const cover of ["Grassland", "Wetland", "Shrubland"]) {
     assert.match(field, new RegExp(`LandCoverClass\\.${cover}`));

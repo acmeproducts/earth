@@ -1,4 +1,4 @@
-import { Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import {
   acquireBushImpostorAssets,
   bushRenderedCaptureSize,
@@ -18,6 +18,7 @@ import {
 } from "./VegetationField";
 import { createSeededRandom } from "./Random";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
   createPlacementGrid,
@@ -174,10 +175,9 @@ export async function createBushField(
         createModel: () => createBushModel(scene, bushHeight, bucket.variant.seed),
       });
     variantRoot.parent = root;
-    if (bush.material instanceof ShaderMaterial) {
-      bush.material.setFloat("impostorLodNear", 20);
-      bush.material.setFloat("impostorLodFar", 50);
-    }
+    configureVegetationMaterials([bush], {
+      floats: { impostorLodNear: 20, impostorLodFar: 50 },
+    });
     setVegetationWindShear([bush, bushModel], windShearFraction("bush"));
     fields.push(await createVegetationFieldResult(
       variantRoot,

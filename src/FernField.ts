@@ -1,4 +1,4 @@
-import { Color3, Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import {
   acquireFernImpostorAssets,
@@ -16,6 +16,7 @@ import {
   VegetationFieldResult,
 } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
@@ -225,20 +226,20 @@ function configureFernRenderers(
   meshDepth: number,
 ): void {
   setVegetationWindShear([fern, fernModel], windShearFraction("grass") * 0.65);
-  if (fern.material instanceof ShaderMaterial) {
-    fern.material.setFloat("impostorLodNear", 28);
-    fern.material.setFloat("impostorLodFar", 58);
-    fern.material.setFloat("distanceFadeNear", Math.min(meshWidth, meshDepth) * 0.8);
-    fern.material.setFloat("distanceFadeFar", Math.min(meshWidth, meshDepth) * 1.75);
-    fern.material.setFloat("groundColorBlend", 0.14);
-    fern.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    fern.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
-    fern.material.setColor3("distanceGroundColor", new Color3(0.12, 0.25, 0.09));
-  }
-  if (fernModel.material instanceof ShaderMaterial) {
-    fernModel.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    fernModel.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
-    fernModel.material.setFloat("groundColorBlend", 0.14);
-    fernModel.material.setColor3("distanceGroundColor", new Color3(0.12, 0.25, 0.09));
-  }
+  configureVegetationMaterials([fern, fernModel], {
+    floats: {
+      groundColorBlend: 0.14,
+      vegetationShadowAtInstanceRoot: 1,
+      vegetationShadowDarkness: SHADOW_DARKNESS,
+    },
+    colors: { distanceGroundColor: new Color3(0.12, 0.25, 0.09) },
+  });
+  configureVegetationMaterials([fern], {
+    floats: {
+      impostorLodNear: 28,
+      impostorLodFar: 58,
+      distanceFadeNear: Math.min(meshWidth, meshDepth) * 0.8,
+      distanceFadeFar: Math.min(meshWidth, meshDepth) * 1.75,
+    },
+  });
 }

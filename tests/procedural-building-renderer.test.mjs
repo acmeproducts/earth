@@ -227,6 +227,34 @@ test("mapped building materials survive batching as procedural surface attribute
   engine.dispose();
 });
 
+test("pitched roof faces expose upward normals to sky lighting", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const detailed = ProceduralBuildingRenderer.createDetailed(
+    scene,
+    plan(83, { render_height: 12, roof_shape: "gabled", roof_material: "tile" }),
+    terrain,
+    options,
+  );
+  assert.ok(detailed);
+
+  const normals = detailed.getVerticesData(VertexBuffer.NormalKind);
+  const materials = detailed.getVerticesData(BUILDING_MATERIAL_VERTEX_KIND);
+  const pitchedNormalYs = [];
+  for (let vertex = 0; vertex < detailed.getTotalVertices(); vertex++) {
+    const material = materials[vertex * 2];
+    const normalY = normals[vertex * 3 + 1];
+    if (material >= 6 && Math.abs(normalY) > 1e-5 && Math.abs(normalY) < 1 - 1e-5) {
+      pitchedNormalYs.push(normalY);
+    }
+  }
+  assert.ok(pitchedNormalYs.length > 0);
+  assert.ok(pitchedNormalYs.every((normalY) => normalY > 0));
+
+  scene.dispose();
+  engine.dispose();
+});
+
 test("hipped and pyramidal metadata use the full-length gabled roof", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

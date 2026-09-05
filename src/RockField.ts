@@ -74,9 +74,9 @@ const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [0, 1],
 ];
 const ROCK_COLORS: ReadonlyArray<readonly [number, number, number]> = [
-  [0.43, 0.42, 0.38],
-  [0.36, 0.39, 0.39],
-  [0.48, 0.44, 0.36],
+  [0.41, 0.41, 0.4],
+  [0.36, 0.38, 0.38],
+  [0.44, 0.43, 0.41],
 ];
 const MOSS_COLOR: readonly [number, number, number] = [0.25, 0.32, 0.13];
 
@@ -390,17 +390,17 @@ function createRockMaterial(scene: Scene): StandardMaterial {
   // One shared procedural texture gives every thin-instance bucket the same
   // scale of stone grain without adding image assets or per-rock materials.
   const grain = new NoiseProceduralTexture("rockGrain", 256, scene);
-  grain.octaves = 4;
-  grain.persistence = 0.72;
-  grain.brightness = 0.82;
+  grain.octaves = 6;
+  grain.persistence = 0.64;
+  grain.brightness = 0.78;
   grain.animationSpeedFactor = 0;
-  grain.uScale = 3.8;
-  grain.vScale = 3.8;
+  grain.uScale = 5.4;
+  grain.vScale = 5.4;
   material.bumpTexture = grain;
-  material.bumpTexture.level = 0.28;
+  material.bumpTexture.level = 0.36;
   material.detailMap.texture = grain;
-  material.detailMap.diffuseBlendLevel = 0.16;
-  material.detailMap.bumpLevel = 0.18;
+  material.detailMap.diffuseBlendLevel = 0.24;
+  material.detailMap.bumpLevel = 0.3;
   material.detailMap.isEnabled = true;
   material.freeze();
   return material;
@@ -437,15 +437,18 @@ function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
     const y = positions[vertex * 3 + 1];
     const upward = normals[vertex * 3 + 1];
-    const patch = Math.sin(
-      positions[vertex * 3] * 5.7 + positions[vertex * 3 + 2] * 7.9 + variant,
-    );
+    const x = positions[vertex * 3];
+    const z = positions[vertex * 3 + 2];
+    const patch = Math.sin(x * 5.7 + z * 7.9 + variant);
+    const fineGrain = Math.sin(x * 23.7 - y * 17.3 + z * 29.1 + variant * 3.7);
+    const darkInclusion = fineGrain < -0.82 && patch < 0.25;
     const hasMoss = mossy && upward > 0.35 && y + patch * 0.14 > 0.12;
-    const shade = 0.88 + 0.1 * upward + patch * 0.025;
+    const shade = 0.86 + 0.11 * upward + patch * 0.035 + fineGrain * 0.018;
     const color = hasMoss ? MOSS_COLOR : stone;
-    colors[vertex * 4] = color[0] * shade;
-    colors[vertex * 4 + 1] = color[1] * shade;
-    colors[vertex * 4 + 2] = color[2] * shade;
+    const mineralTint = darkInclusion ? -0.055 : fineGrain > 0.9 ? 0.035 : 0;
+    colors[vertex * 4] = Math.max(0, color[0] * shade + mineralTint);
+    colors[vertex * 4 + 1] = Math.max(0, color[1] * shade + mineralTint * 0.93);
+    colors[vertex * 4 + 2] = Math.max(0, color[2] * shade + mineralTint * 0.78);
     colors[vertex * 4 + 3] = 1;
   }
   rock.updateVerticesData(VertexBuffer.PositionKind, positions);

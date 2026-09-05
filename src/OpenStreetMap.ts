@@ -910,13 +910,34 @@ function plannedRoadUv(
     (point.x - axis[0].x) * dx + (point.z - axis[0].z) * dz
   ) / lengthSquared));
   const across = ((point.x - axis[0].x) * -dz + (point.z - axis[0].z) * dx) / length;
+  const isJoin = Math.hypot(
+    road.centerline[1].x - road.centerline[0].x,
+    road.centerline[1].z - road.centerline[0].z,
+  ) <= 1e-8;
+  // Junction discs and bend wedges borrow an incident road's texture axis,
+  // but that axis must not also decide which connections receive the dirt
+  // texture's transparent edge. Fade these filler polygons radially instead:
+  // every incident approach then remains opaque at its centre and the alpha
+  // falloff is reserved for the exposed outside of the join.
+  const acrossUv = isJoin
+    ? radialJoinUv(point, road)
+    : 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters);
   return {
     x: (road.startDistance + amount * length) * metersPerUnit / repeatMeters,
-    y: Math.max(0, Math.min(
-      1,
-      0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters),
-    )),
+    y: Math.max(0, Math.min(1, acrossUv)),
   };
+}
+
+function radialJoinUv(
+  point: { x: number; z: number },
+  road: PlannedRoadPolygon,
+): number {
+  const center = road.centerline[0];
+  const radius = Math.max(1e-8, ...road.outline.map((vertex) =>
+    Math.hypot(vertex.x - center.x, vertex.z - center.z)
+  ));
+  const distance = Math.hypot(point.x - center.x, point.z - center.z);
+  return 0.5 + 0.5 * distance / radius;
 }
 
 function createRoad(

@@ -88,8 +88,14 @@ const TREE_SPECIES_CLUSTER_SIZE_METERS = 42;
 const MIN_TREE_VARIANT_SHARE = 0.08;
 /** A local forest reads more coherently and needs fewer atlases with a focused palette. */
 const MAX_TREE_SPECIES_PER_VARIANT = 3;
-/** A small reusable silhouette palette stops adjacent terrain tiles cloning one tree. */
+/** A small reusable silhouette palette gives distant parts of Earth distinct forests. */
 const TREE_SISTER_MODELS = 4;
+/**
+ * Keep one silhouette set across an area far wider than the maximum streamed
+ * window. At zoom 16 this is roughly 150 km across near the equator, so normal
+ * play reuses its atlases while long-distance travel still reaches new trees.
+ */
+const TREE_VARIANT_SPAN_TILES = 256;
 /** Sparse enough to read as deadfall rather than a second tree layer. */
 const FALLEN_LOG_CHANCE = 0.015;
 /** Fallen wood is reserved for the established interior of dense forest cover. */
@@ -671,6 +677,31 @@ export async function createTreeField(
   const random = createSeededRandom(seed);
   const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
   const speciesDetailNoise = new SimplexNoise2D(speciesSeed ^ 0x434c5553);
+  // Variant identity is a property of the terrain tile, not each individual
+  // tree. Otherwise boundary tiles can discover several complete atlas sets.
+  const tileVariantLocation = sceneToLonLat(
+    0,
+    0,
+    terrain.bounds,
+    meshWidth,
+    meshDepth,
+  );
+  const tileRegion = proceduralVariantAtLocation(
+    "trees",
+    tileVariantLocation.lon,
+    tileVariantLocation.lat,
+    modelVariantSeed,
+    TREE_VARIANT_SPAN_TILES,
+  );
+  const tileLocalVariant = proceduralLocalVariantAtLocation(
+    "trees",
+    tileVariantLocation.lon,
+    tileVariantLocation.lat,
+    modelVariantSeed,
+    TREE_SISTER_MODELS,
+    TREE_VARIANT_SPAN_TILES,
+    0,
+  );
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
@@ -770,28 +801,14 @@ export async function createTreeField(
           ),
         );
         matrices.push(matrix);
-        const region = proceduralVariantAtLocation(
-          "trees",
-          location.lon,
-          location.lat,
-          modelVariantSeed,
-        );
-        // Trees are the skyline, so repetition is much more obvious here than
-        // in low vegetation. Pick one of a small reusable model palette per
-        // broad locality. Adjacent streamed tiles then reuse the same atlas
-        // instead of extending the capture queue as the terrain ring fills.
-        const localVariant = proceduralLocalVariantAtLocation(
-          "trees",
-          location.lon,
-          location.lat,
-          modelVariantSeed,
-          TREE_SISTER_MODELS,
-        );
-        const season = treeSeasonAt(seasonalDate, location.lat, species);
+        const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species);
         const variant: TreeImpostorVariant = {
-          ...region,
-          key: `${region.key}/local/${localVariant}/season/${season.key}`,
-          seed: layerSeed(layerSeed(region.seed, `sister-${localVariant}`), species),
+          ...tileRegion,
+          key: `${tileRegion.key}/local/${tileLocalVariant}/season/${season.key}`,
+          seed: layerSeed(layerSeed(
+            tileRegion.seed,
+            `sister-${tileLocalVariant}`,
+          ), species),
           season,
         };
         const bucketKey = `${species}:${variant.key}`;

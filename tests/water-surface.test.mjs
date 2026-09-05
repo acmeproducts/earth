@@ -40,6 +40,13 @@ test("water motion is zero at calm wind and grows sublinearly", () => {
   assert.doesNotMatch(water, /Math\.max\(0\.15, wind\.strength\)/);
 });
 
+test("strong manual wind cannot expose the wave texture tile grid", () => {
+  assert.match(water, /const MAX_WAVE_ROUGHNESS_WIND = 1/);
+  assert.match(water, /const roughnessWind = Math\.min\(MAX_WAVE_ROUGHNESS_WIND, wind\.strength\)/);
+  assert.doesNotMatch(water, /0\.72 \+ wind\.strength \* 0\.28/);
+  assert.doesNotMatch(water, /0\.78 \+ wind\.strength \* 0\.22/);
+});
+
 test("retains the terrain water mask for coastline shaping and bridge clearance", () => {
   assert.match(terrainData, /waterMask\?: Uint8Array/);
   assert.match(worldCover, /terrain\.waterMask = cropWaterMask\(/);

@@ -2293,7 +2293,12 @@ function midpoint(a: ScenePoint, b: ScenePoint): ScenePoint {
 
 function addRoofFace(indices: number[], face: number[]): void {
   for (let index = 1; index < face.length - 1; index++) {
-    indices.push(face[0], face[index + 1], face[index]);
+    // Building outlines are counter-clockwise in the XZ plane. Babylon's
+    // left-handed coordinates therefore need this order for the roof normal
+    // to face the sky. The reverse order remains visible because the shared
+    // material is double-sided, but shades the roof as a downward-facing
+    // underside and creates extreme light/dark splits between its slopes.
+    indices.push(face[0], face[index], face[index + 1]);
   }
 }
 

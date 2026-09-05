@@ -24,6 +24,7 @@ import {
   VegetationFieldResult,
 } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import { LandCoverClass, landCoverSurfaceColor } from "./WorldCover";
 import { varyGroundColor } from "./GroundVariation";
 import { createSeededRandom } from "./Random";
@@ -268,35 +269,32 @@ function configureGrassRenderers(
   meshDepth: number,
   grassHeight: number,
 ): void {
-  if (grass.material instanceof ShaderMaterial) {
-    grass.material.setFloat("impostorDepthPull", grassImpostorDepthPull(grassHeight));
-    grass.material.setFloat("impostorLodNear", 40);
-    grass.material.setFloat("impostorLodFar", 80);
-    grass.material.setFloat("instanceColorCoverage", 1);
-    const fade = grassDistanceFadeRange(
-      Math.min(meshWidth, meshDepth),
-      DEFAULT_DETAIL_TILES_ACROSS,
-    );
-    grass.material.setFloat("distanceFadeNear", fade.near);
-    grass.material.setFloat("distanceFadeFar", fade.far);
-    grass.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
-    grass.material.setFloat("distanceGroundBlend", 1);
-    grass.material.setFloat("impostorAmbientUpward", GRASS_AMBIENT_UPWARD);
-    grass.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    grass.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
-    grass.material.setColor3("distanceGroundColor", Color3.FromArray(GRASSLAND_REFERENCE_COLOR));
-  }
+  const distanceGroundColor = Color3.FromArray(GRASSLAND_REFERENCE_COLOR);
+  configureVegetationMaterials([grass, grassModel], {
+    floats: {
+      instanceColorCoverage: 1,
+      groundColorBlend: GRASS_GROUND_COLOR_BLEND,
+      vegetationShadowAtInstanceRoot: 1,
+      vegetationShadowDarkness: GRASS_SHADOW_DARKNESS,
+    },
+    colors: { distanceGroundColor },
+  });
+  const fade = grassDistanceFadeRange(
+    Math.min(meshWidth, meshDepth),
+    DEFAULT_DETAIL_TILES_ACROSS,
+  );
+  configureVegetationMaterials([grass], {
+    floats: {
+      impostorDepthPull: grassImpostorDepthPull(grassHeight),
+      impostorLodNear: 40,
+      impostorLodFar: 80,
+      distanceFadeNear: fade.near,
+      distanceFadeFar: fade.far,
+      distanceGroundBlend: 1,
+      impostorAmbientUpward: GRASS_AMBIENT_UPWARD,
+    },
+  });
   setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
-  if (grassModel.material instanceof ShaderMaterial) {
-    grassModel.material.setFloat("instanceColorCoverage", 1);
-    grassModel.material.setFloat("groundColorBlend", GRASS_GROUND_COLOR_BLEND);
-    grassModel.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    grassModel.material.setFloat("vegetationShadowDarkness", GRASS_SHADOW_DARKNESS);
-    grassModel.material.setColor3(
-      "distanceGroundColor",
-      Color3.FromArray(GRASSLAND_REFERENCE_COLOR),
-    );
-  }
 }
 
 /**

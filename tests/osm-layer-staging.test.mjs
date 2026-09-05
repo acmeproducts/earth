@@ -86,6 +86,9 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /Material\.MATERIAL_ALPHABLEND/);
   assert.match(openStreetMap, /texture\.hasAlpha = visualStyle === "dirt"/);
   assert.match(openStreetMap, /visualStyle === "marked" \|\| visualStyle === "dirt"/);
+  assert.match(openStreetMap, /const isJoin = Math\.hypot\(/);
+  assert.match(openStreetMap, /\? radialJoinUv\(point, road\)/);
+  assert.match(openStreetMap, /0\.5 \+ 0\.5 \* distance \/ radius/);
   assert.match(openStreetMap, /const dirtEdgeStart = 0\.03 \+ gravelBroad \* 0\.05/);
   assert.match(openStreetMap, /dirtEdgeAmount \* dirtEdgeAmount \* \(3 - 2 \* dirtEdgeAmount\)/);
   assert.match(openStreetMap, /\* dirtEdge\)/);

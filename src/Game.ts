@@ -1482,6 +1482,8 @@ export class Game {
         this.fpsCounter.toggleExpanded();
       } else if (kbInfo.event.key === "r" || kbInfo.event.key === "R") {
         this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
+      } else if (kbInfo.event.key === "b" || kbInfo.event.key === "B") {
+        this.startRenderBenchmark();
       } else if (kbInfo.event.key === "0") {
         void this.changeToRandomTerrainLocation();
       } else if (/^[1-9]$/.test(kbInfo.event.key)) {
@@ -1491,6 +1493,52 @@ export class Game {
         }
       }
     });
+  }
+
+  /** Runs controlled feature ablations at one camera position, then downloads the measurements. */
+  private startRenderBenchmark(): void {
+    const originalModes = { ...this.vegetationModes };
+    const reflections = this.screenSpaceReflections;
+    const originalReflectionsEnabled = reflections?.isEnabled ?? false;
+    const restoreVegetation = (): void => {
+      this.setVegetationMode("trees", originalModes.trees);
+      this.setVegetationMode("grass", originalModes.grass);
+      this.setVegetationMode("bushes", originalModes.bushes);
+    };
+    const setSingleImpostorCategory = (category: VegetationCategory): void => {
+      restoreVegetation();
+      this.setVegetationMode(category, "impostors");
+    };
+    const phases = [
+      { name: "baseline", apply: () => { if (reflections) reflections.isEnabled = originalReflectionsEnabled; } },
+      ...(originalReflectionsEnabled && reflections ? [{
+        name: "reflections-off",
+        apply: () => { reflections.isEnabled = false; },
+      }] : []),
+      {
+        name: "trees-impostors",
+        apply: () => {
+          if (reflections) reflections.isEnabled = originalReflectionsEnabled;
+          setSingleImpostorCategory("trees");
+        },
+      },
+      { name: "grass-impostors", apply: () => setSingleImpostorCategory("grass") },
+      { name: "bushes-impostors", apply: () => setSingleImpostorCategory("bushes") },
+      {
+        name: "all-vegetation-impostors",
+        apply: () => this.setAllVegetationModes("impostors"),
+      },
+      ...(originalReflectionsEnabled && reflections ? [{
+        name: "reflections-off-and-all-vegetation-impostors",
+        apply: () => { reflections.isEnabled = false; },
+      }] : []),
+    ];
+    const started = this.fpsCounter.startComparativeBenchmark(phases, () => {
+      if (reflections) reflections.isEnabled = originalReflectionsEnabled;
+      restoreVegetation();
+      this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
+    });
+    if (!started) console.warn("[Render benchmark] A benchmark is already running.");
   }
 
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
@@ -1907,6 +1955,7 @@ export class Game {
         activeTileBuilds: this.activeTileBuilds.size,
         terrainTiles: this.tiles.size,
         detailTiles,
+        activeLayerFades: this.layerFades.size,
       });
     });
   }

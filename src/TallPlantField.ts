@@ -1,4 +1,4 @@
-import { Color3, Matrix, Scene, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
@@ -16,6 +16,7 @@ import {
 } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
 import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
@@ -42,6 +43,8 @@ const COLONY_RADIUS_METERS = 6.2;
 // to the locality, so neighbouring stands share a species and one tile normally
 // builds a single one of them instead of paying for an atlas per variant.
 const SPECIES_VARIANTS = 3;
+/** One flower archetype dominates a broad 64-tile locality. */
+const SPECIES_LOCALITY_SPAN_TILES = 64;
 
 /**
  * Wildflowers are the rarest of the scattered layers and the most uneven: a
@@ -90,6 +93,15 @@ export async function createTallPlantField(
   if (startDisabled) root.setEnabled(false);
   const random = createSeededRandom(seed);
   const habitat = habitatField("tallPlants", modelVariantSeed, HABITAT);
+  // Choose once at the tile centre. Sampling the variant for every plant made
+  // transition tiles build several complete impostor atlases at spawn time.
+  const tileVariantLocation = sceneToLonLat(
+    0,
+    0,
+    terrain.bounds,
+    meshWidth,
+    meshDepth,
+  );
   const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
     meshWidth,
     meshDepth,
@@ -218,6 +230,12 @@ export async function createTallPlantField(
       matrix,
       undefined,
       SPECIES_VARIANTS,
+      {
+        longitude: tileVariantLocation.lon,
+        latitude: tileVariantLocation.lat,
+        localitySpanTiles: SPECIES_LOCALITY_SPAN_TILES,
+        localityBlendTiles: 0,
+      },
     );
   }
 }
@@ -229,17 +247,20 @@ function configureRenderers(
   meshDepth: number,
 ): void {
   setVegetationWindShear([plants, plantModel], windShearFraction("grass") * 0.78);
-  for (const mesh of [plants, plantModel]) {
-    if (!(mesh.material instanceof ShaderMaterial)) continue;
-    mesh.material.setFloat("groundColorBlend", 0.08);
-    mesh.material.setColor3("distanceGroundColor", new Color3(0.17, 0.31, 0.1));
-    mesh.material.setFloat("vegetationShadowAtInstanceRoot", 1);
-    mesh.material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
-  }
-  if (plants.material instanceof ShaderMaterial) {
-    plants.material.setFloat("impostorLodNear", 26);
-    plants.material.setFloat("impostorLodFar", 58);
-    plants.material.setFloat("distanceFadeNear", Math.min(meshWidth, meshDepth) * 0.9);
-    plants.material.setFloat("distanceFadeFar", Math.min(meshWidth, meshDepth) * 1.8);
-  }
+  configureVegetationMaterials([plants, plantModel], {
+    floats: {
+      groundColorBlend: 0.08,
+      vegetationShadowAtInstanceRoot: 1,
+      vegetationShadowDarkness: SHADOW_DARKNESS,
+    },
+    colors: { distanceGroundColor: new Color3(0.17, 0.31, 0.1) },
+  });
+  configureVegetationMaterials([plants], {
+    floats: {
+      impostorLodNear: 26,
+      impostorLodFar: 58,
+      distanceFadeNear: Math.min(meshWidth, meshDepth) * 0.9,
+      distanceFadeFar: Math.min(meshWidth, meshDepth) * 1.8,
+    },
+  });
 }

@@ -388,6 +388,7 @@ export function createVertexColorCaptureMaterial(
         varying vec4 vColor;
         varying vec2 vUv;
         varying vec3 vWorldNormal;
+        varying vec3 vObjectPosition;
         varying float vHeight01;
         varying vec3 vInstanceColor;
         varying float vInstanceLodBlend;
@@ -401,6 +402,7 @@ export function createVertexColorCaptureMaterial(
           vColor = color;
           vUv = uv;
           vWorldNormal = normalize(rotation * normal);
+          vObjectPosition = position / max(modelHeight, 0.0001);
           vHeight01 = clamp(position.y / max(modelHeight, 0.0001), 0.0, 1.0);
           #ifdef THIN_INSTANCES
           vInstanceColor = vegetationColor;
@@ -432,6 +434,7 @@ export function createVertexColorCaptureMaterial(
         varying vec4 vColor;
         varying vec2 vUv;
         varying vec3 vWorldNormal;
+        varying vec3 vObjectPosition;
         varying float vHeight01;
         varying vec3 vInstanceColor;
         varying float vInstanceLodBlend;
@@ -443,6 +446,7 @@ export function createVertexColorCaptureMaterial(
         uniform float leafTextureEnabled;
         uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
+        uniform float rockTextureStrength;
         uniform float instanceColorCoverage;
         uniform float fieldFade;
         uniform float groundColorBlend;
@@ -459,12 +463,47 @@ export function createVertexColorCaptureMaterial(
           float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
           return (4.0 * lowValue + highValue) / 16.0;
         }
+        float rockHash(vec3 point) {
+          return fract(sin(dot(point, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+        }
+        float rockNoise(vec3 point) {
+          vec3 cell = floor(point);
+          vec3 local = fract(point);
+          local = local * local * (3.0 - 2.0 * local);
+          return mix(
+            mix(
+              mix(rockHash(cell), rockHash(cell + vec3(1.0, 0.0, 0.0)), local.x),
+              mix(rockHash(cell + vec3(0.0, 1.0, 0.0)), rockHash(cell + vec3(1.0, 1.0, 0.0)), local.x),
+              local.y
+            ),
+            mix(
+              mix(rockHash(cell + vec3(0.0, 0.0, 1.0)), rockHash(cell + vec3(1.0, 0.0, 1.0)), local.x),
+              mix(rockHash(cell + vec3(0.0, 1.0, 1.0)), rockHash(cell + vec3(1.0, 1.0, 1.0)), local.x),
+              local.y
+            ),
+            local.z
+          );
+        }
         void main(void) {
           if (vInstanceLodBlend <= bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) discard;
           // Whole-field dither lets streamed tiles fade their vegetation in
           // and out without true transparency.
           if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
           vec3 surfaceColor = vColor.rgb;
+          // Rock sources opt into a scale-stable mineral texture. Unlike
+          // per-vertex tint, this is evaluated for every captured/live pixel,
+          // preserving fine detail across even the low-poly beach pebbles.
+          vec3 rockPoint = vObjectPosition;
+          float rockMottle = rockNoise(rockPoint * 18.0) - 0.5;
+          float rockGrain = rockNoise(rockPoint * 67.0 + vec3(9.7, 3.1, 5.3)) - 0.5;
+          float mineralFleck = smoothstep(
+            0.91,
+            0.98,
+            rockNoise(rockPoint * 103.0 + vec3(17.0, 29.0, 11.0))
+          );
+          vec3 rockTexture = vec3(1.0 + rockMottle * 0.16 + rockGrain * 0.075)
+            + mineralFleck * vec3(0.08, 0.075, 0.065);
+          surfaceColor *= mix(vec3(1.0), rockTexture, rockTextureStrength);
           if (vUv.x >= 1.5) {
             if (barkTextureEnabled > 0.5) {
               surfaceColor *= texture2D(barkTexture, vec2(vUv.x - 2.0, vUv.y)).rgb;
@@ -541,6 +580,7 @@ export function createVertexColorCaptureMaterial(
         "leafTextureEnabled",
         "barkTextureEnabled",
         "lowLightAlbedoScale",
+        "rockTextureStrength",
         "instanceColorCoverage",
         "fieldFade",
         "groundColorBlend",
@@ -581,6 +621,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("leafTextureEnabled", 0);
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
+  material.setFloat("rockTextureStrength", 0);
   material.setFloat("instanceColorCoverage", 0);
   // Species opt into wind explicitly; trees remain still.
   setWindShear(material, 0);

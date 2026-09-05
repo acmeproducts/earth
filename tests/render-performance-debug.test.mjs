@@ -32,6 +32,24 @@ test("render stats can be dumped from the debug keyboard controls", () => {
   assert.match(fpsCounter, /capabilities: primitiveProperties\(caps\)/);
 });
 
+test("comparative benchmark measures feature ablations only after streaming settles", () => {
+  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  assert.match(game, /key === "b"/);
+  assert.match(game, /startComparativeBenchmark/);
+  assert.match(game, /reflections-off/);
+  assert.match(game, /all-vegetation-impostors/);
+  assert.match(fpsCounter, /sample\.activeTileBuilds > 0/);
+  assert.match(fpsCounter, /comparativeBenchmark:/);
+  assert.match(fpsCounter, /gpuFrameMilliseconds/);
+});
+
+test("render report groups mesh workloads and describes render targets", () => {
+  assert.match(fpsCounter, /meshWorkloads/);
+  assert.match(fpsCounter, /groupMeshWorkloads/);
+  assert.match(fpsCounter, /renderTargets/);
+  assert.match(fpsCounter, /renderListMeshes/);
+});
+
 test("frame pacing catches stutters outside the measured render callback", () => {
   assert.match(fpsCounter, /frameIntervalMilliseconds/);
   assert.match(fpsCounter, /unattributedMilliseconds/);
