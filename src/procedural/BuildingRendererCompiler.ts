@@ -35,6 +35,7 @@ import {
 } from "../BuildingLayoutDebugCapture";
 import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
 import { buildingProfile } from "../BuildingProfile";
+import { createInteriorFurniture, planInteriorFurniture } from "./InteriorFurniture";
 import type { TerrainData } from "../TerrainData";
 import type {
   BuildingAppearance,
@@ -520,6 +521,7 @@ function createEnterableBuilding(
 
     if (plannedInterior) {
       const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
+      const furniture = plannedInterior.apartments.flatMap(planInteriorFurniture);
       for (let floor = 0; floor < floorCount; floor++) {
         addPlannedInteriorWalls(
           parts,
@@ -530,6 +532,11 @@ function createEnterableBuilding(
           options,
           wallColor,
         );
+        const props = createInteriorFurniture(scene, furniture,
+          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+          options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+          plan.detailSeed + floor);
+        if (props) parts.push(props);
       }
     }
   }
