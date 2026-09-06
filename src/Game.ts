@@ -1,3 +1,4 @@
+import { monitorRenderHealth } from "./RenderHealth";
 import {
   AbstractEngine,
   BaseTexture,
@@ -23,6 +24,7 @@ import { stitchTerrainEdges } from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
 import {
   createTerrainLakeLayer,
+  LAKE_SURFACE_CLEARANCE_METERS,
   disposeTerrainLakeLayer,
 } from "./TerrainLakeSurface";
 import {
@@ -232,6 +234,7 @@ export class Game {
     // Reverse depth can be isolated explicitly once the base renderer is sound.
     this.engine.useReverseDepthBuffer = !this.engine.isWebGPU || forceReverseDepth;
     this.scene = new Scene(this.engine);
+    monitorRenderHealth(this.scene);
     this.antialiasingMode = loadAntialiasing(query);
     if (this.antialiasingMode === "taa" && !this.engine.getCaps().texelFetch) {
       this.antialiasingMode = "msaa";
@@ -618,6 +621,7 @@ export class Game {
         meshDepth,
         metersPerUnit,
         sharedLakeElevations: this.lakeElevations,
+        smallWaterSurfaceClearanceMeters: LAKE_SURFACE_CLEARANCE_METERS,
         surfaceSources: surfaceLakeSources,
       },
       yieldControl,
@@ -1962,7 +1966,7 @@ export class Game {
 
   private async changeToCoordinates(target: WorldLocation): Promise<void> {
     console.log(`Loading coordinates: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
-    await this.startWorld(target);
+    await this.reloadAtLocation(target);
   }
 
   private setMenuOpen(isOpen: boolean): void {

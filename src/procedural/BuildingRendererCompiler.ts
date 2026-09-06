@@ -435,13 +435,23 @@ function createEnterableBuilding(
     ? createPlannedInterior(outline, entranceOpenings, options)
     : undefined;
   const plannedInterior = planningAttempt?.interior;
+  const interiorUse = plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
   const facadeOpenings = plannedFacadeOpenings(
     plan, outline, storyHeight, entranceEdge, windowStyle, options,
     plannedInterior?.building,
     blockedFacadeEdges,
   );
   if (plannedInterior) {
-    const apartmentPlanning = planApartmentLayouts(
+    const apartmentPlanning = interiorUse !== "residential" && interiorUse !== "hotel" ? {
+      // Keep commercial suites open, preserving the shared corridor and stair core.
+      apartments: plannedInterior.building.rooms.filter((room) => room.type === "apartment").map((room): ApartmentLayout => ({
+        boundary: room.polygon,
+        rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
+        openings: [...(plannedInterior.building.openings ?? []), ...facadeOpenings]
+          .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
+      })),
+      failure: undefined,
+    } : planApartmentLayouts(
       plannedInterior.building,
       facadeOpenings,
       plan.detailSeed,
@@ -521,12 +531,28 @@ function createEnterableBuilding(
 
     if (plannedInterior) {
       const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
-      const furniture = plannedInterior.apartments.flatMap(planInteriorFurniture);
       for (let floor = 0; floor < floorCount; floor++) {
+        // One ground-floor suite serves as reception; upper floors retain their rooms.
+        const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
+          (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
+        const entrance = entranceOpenings[0]?.start;
+        const receptionIndex = entrance ? plannedInterior.apartments.reduce((best, apartment, index, apartments) => {
+          const gap = (layout: ApartmentLayout): number => Math.min(...layout.boundary.outer.map((p) => Math.hypot(p.x - entrance.x, p.y - entrance.y)));
+          return gap(apartment) < gap(apartments[best]) ? index : best;
+        }, 0) : 0;
+        const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
+          hasReception && index === receptionIndex ? {
+            ...apartment,
+            rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
+            openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
+          } : apartment) };
+        const furniture = floorInterior.apartments.flatMap((apartment, index) =>
+          planInteriorFurniture(apartment, plan.detailSeed + floor * 7919 + index * 101,
+            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : interiorUse));
         addPlannedInteriorWalls(
           parts,
           scene,
-          plannedInterior,
+          floorInterior,
           baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
           storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
           options,
@@ -536,6 +562,17 @@ function createEnterableBuilding(
           baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
           options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
           plan.detailSeed + floor);
+        if (props) parts.push(props);
+      }
+    } else if (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage") {
+      const boundary = { outer: outline.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit })) };
+      const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
+        openings: [...entranceOpenings, ...facadeOpenings] };
+      for (let floor = 0; floor < floorCount; floor++) {
+        const furniture = planInteriorFurniture(layout, plan.detailSeed + floor * 7919, interiorUse);
+        const props = createInteriorFurniture(scene, furniture,
+          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+          options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
         if (props) parts.push(props);
       }
     }
@@ -1783,6 +1820,8 @@ function createBuildingShadowCaster(
   return caster;
 }
 
+const interiorLoadFrames = new WeakMap<Scene, number>();
+
 function configureLazyInteriors(
   exterior: Mesh,
   parent: TransformNode,
@@ -1836,6 +1875,8 @@ function configureLazyInteriors(
 
     let loaded = 0;
     while (loaded < BUILDING_INTERIORS_PER_CHECK && pendingInteriors.length > 0) {
+      // Every tile/chunk has an observer; the limit must apply scene-wide.
+      if (interiorLoadFrames.get(scene) === scene.getFrameId()) break;
       let nearestIndex = 0;
       let nearestDistanceMeters = Number.POSITIVE_INFINITY;
       for (let index = 0; index < pendingInteriors.length; index++) {
@@ -1853,6 +1894,7 @@ function configureLazyInteriors(
       }
       const candidate = pendingInteriors[nearestIndex];
       if (nearestDistanceMeters > BUILDING_INTERIOR_LOAD_DISTANCE_METERS) break;
+      interiorLoadFrames.set(scene, scene.getFrameId());
       pendingInteriors.splice(nearestIndex, 1);
       const interiorSource = candidate.load();
       if (!interiorSource) continue;

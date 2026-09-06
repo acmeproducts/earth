@@ -1,3 +1,4 @@
+import { ResourceCache } from "./ResourceCache";
 import {
   Color3,
   Material,
@@ -24,7 +25,7 @@ import earcut from "earcut";
 import {
   combineHorizontalExclusionMasks,
   clipPolyline,
-  HorizontalExclusionMask,
+  type HorizontalExclusionMask,
   lonLatToScene,
   PolygonExclusionMask,
   pointSegmentDistanceSquared,
@@ -38,9 +39,9 @@ import { tiledValueNoise } from "./ValueNoise";
 import { worldTileAtLocation, type TileBounds } from "./WorldGrid";
 import { buildingBelongsToWorldTile } from "./BuildingTileOwnership";
 import {
-  BuildingDetailLevel,
-  BuildingSource,
-  LonLat,
+  type BuildingDetailLevel,
+  type BuildingSource,
+  type LonLat,
   planBuilding,
 } from "./BuildingPlanner";
 import { ProceduralBuildingRenderer } from "./procedural/ProceduralBuildingRenderer";
@@ -50,16 +51,16 @@ import {
 } from "./Water";
 import {
   planRoad,
-  RoadPlan,
-  RoadSurface,
-  RoadVisualStyle,
+  type RoadPlan,
+  type RoadSurface,
+  type RoadVisualStyle,
   roadVegetationShoulderMeters,
 } from "./RoadPlanner";
 import {
   planRoadsAndBuildings,
   roadGradeAmount,
-  PlannedRoadPolygon,
-  RoadAndBuildingPlan,
+  type PlannedRoadPolygon,
+  type RoadAndBuildingPlan,
 } from "./RoadAndBuildingPlanner";
 import { conformTerrainToPlannedFeatures } from "./PlannedFeatureTerrain";
 import { clipToBounds, pointInRing, signedArea } from "./PlanarGeometry";
@@ -68,6 +69,7 @@ import type { TerrainSurface } from "./TerrainSurface";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "./TerrainLakePolygons";
+import { createWaterBuildingOverlapFilter } from "./WaterBuildingOverlap";
 
 export interface MapTile {
   x: number;
@@ -75,6 +77,9 @@ export interface MapTile {
   zoom: number;
   data: VectorTile;
 }
+
+// Finish the current building, then flush the merge batch without reducing detail.
+const BUILDING_MERGE_VERTEX_BUDGET = 32_000;
 
 /** Enough separation to avoid z-fighting without making roads hover. */
 const ROAD_SURFACE_CLEARANCE_METERS = 0.025;
@@ -208,7 +213,9 @@ export interface RoadFeatureLayer {
 export class OpenStreetMap {
   private static readonly ZOOM = 14;
   private static readonly TILE_URL = "https://tiles.openfreemap.org/planet/latest";
-  private static readonly cache = new Map<string, Promise<VectorTile | undefined>>();
+  private static readonly cache = new ResourceCache<{ data: VectorTile | undefined; bytes: number }>(
+    16 * 1024 * 1024, (tile) => tile.bytes,
+  );
 
   static async fetch(bounds: TileBounds, zoom = this.ZOOM): Promise<MapTile[]> {
     const northWest = worldTileAtLocation(bounds.latNorth, bounds.lonWest, zoom);
@@ -235,6 +242,9 @@ export class OpenStreetMap {
     const root = new TransformNode("mapFeatures", scene);
     if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
+    const buildingChunks: Mesh[] = [];
+    let buildingCount = 0;
+    let chunkVertices = 0;
     const roadMeshes: Record<RoadVisualStyle, Mesh[]> = {
       marked: [],
       paved: [],
@@ -279,13 +289,19 @@ export class OpenStreetMap {
       for (const source of buildingSources(tile)) {
         if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
         await yieldControl?.();
-        const mesh = ProceduralBuildingRenderer.createDetailed(
-          scene,
-          planBuilding(source),
-          terrain,
-          renderOptions,
-        );
-        if (mesh) buildings.push(mesh);
+        const plan = planBuilding(source);
+        const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+        if (mesh) {
+          buildings.push(mesh);
+          buildingCount++;
+          chunkVertices += mesh.getTotalVertices();
+          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+            const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
+            if (chunk) buildingChunks.push(chunk);
+            buildings.length = 0;
+            chunkVertices = 0;
+          }
+        }
         await yieldControl?.();
       }
       await yieldControl?.();
@@ -340,6 +356,7 @@ export class OpenStreetMap {
     }
 
     const meshes = [
+      ...buildingChunks,
       ProceduralBuildingRenderer.merge(buildings, "buildings", root),
       mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
       mergeRoads(roadShoulders.unpaved, "unpavedRoadShoulders", "unpavedShoulder", root),
@@ -362,7 +379,7 @@ export class OpenStreetMap {
       meshes,
       lakePolygons,
       counts: {
-        buildings: buildings.length,
+        buildings: buildingCount,
         roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
         water: lakePolygons.length + waterways.length,
       },
@@ -431,12 +448,24 @@ export class OpenStreetMap {
     };
     const project = ([lon, lat]: LonLat) =>
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+    const overlapsBuildings = createWaterBuildingOverlapFilter(
+      tiles.flatMap((tile) => buildingSources(tile).map(({ polygon }) => ({
+        outline: polygon.outer.map(project),
+        holes: polygon.holes.map((hole) => hole.map(project)),
+      }))),
+      Math.max(options.meshWidth, options.meshDepth) / 8,
+    );
     for (const tile of tiles) {
       forEachFeature(tile, "water", (feature, featureIndex) => {
         if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
         const waterPolygons = polygonRings(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
           const rings = waterPolygons[polygonIndex];
+          // Test the full provider polygon, before application-tile clipping.
+          if (overlapsBuildings({
+            outline: withoutClosingPoint(rings[0]).map(project),
+            holes: rings.slice(1).map((ring) => withoutClosingPoint(ring).map(project)),
+          })) continue;
           const outline = clipToBounds(withoutClosingPoint(rings[0]).map(project), clipBounds);
           if (outline.length < 3) continue;
           const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
@@ -462,6 +491,9 @@ export class OpenStreetMap {
     const root = new TransformNode(name, scene);
     if (options.startDisabled) root.setEnabled(false);
     const buildings: Mesh[] = [];
+    const meshes: Mesh[] = [];
+    let count = 0;
+    let chunkVertices = 0;
     const renderOptions = {
       ...options,
       renderWholeBuildingFootprints: true,
@@ -476,16 +508,28 @@ export class OpenStreetMap {
         const mesh = detail === "far"
           ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
           : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-        if (mesh) buildings.push(mesh);
+        if (mesh) {
+          buildings.push(mesh);
+          count++;
+          chunkVertices += mesh.getTotalVertices();
+          // Bound merge copies and GPU uploads instead of duplicating a whole
+          // dense city tile in memory in one uninterrupted merge.
+          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+            if (chunk) meshes.push(chunk);
+            buildings.length = 0;
+            chunkVertices = 0;
+          }
+        }
         await yieldControl?.();
       }
       await yieldControl?.();
     }
 
     const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
-    const meshes = merged ? [merged] : [];
+    if (merged) meshes.push(merged);
     for (const mesh of meshes) mesh.setEnabled(true);
-    return { root, meshes, count: buildings.length };
+    return { root, meshes, count };
   }
 
   /** Keeps road surfaces visible beyond the full map-feature detail rings. */
@@ -640,20 +684,13 @@ export class OpenStreetMap {
 
   private static async fetchTile(x: number, y: number, zoom: number): Promise<MapTile | undefined> {
     const key = `${zoom}/${x}/${y}`;
-    let request = this.cache.get(key);
-    if (!request) {
-      request = fetch(`${this.TILE_URL}/${key}.pbf`)
+    const request = this.cache.getOrCreate(key, () => fetch(`${this.TILE_URL}/${key}.pbf`)
         .then(async (response) => {
           if (!response.ok) throw new Error(`Map tile request failed (${response.status}).`);
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return bytes.length ? new VectorTile(new PbfReader(bytes)) : undefined;
-        }).catch((error: unknown) => {
-          this.cache.delete(key);
-          throw error;
-        });
-      this.cache.set(key, request);
-    }
-    const data = await request;
+          return { data: bytes.length ? new VectorTile(new PbfReader(bytes)) : undefined, bytes: bytes.byteLength };
+        }));
+    const { data } = await request;
     return data ? { x, y, zoom, data } : undefined;
   }
 }

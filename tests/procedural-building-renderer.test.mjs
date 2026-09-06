@@ -650,6 +650,7 @@ test("tall buildings remain enterable and include stairs", () => {
   assert.equal(tower.metadata.enterable, true);
   assert.equal(tower.metadata.interiorFloorCount, 20);
   assert.equal(tower.metadata.stairFlightCount, 19);
+  assert.ok(meshBounds(tower).maximumY >= meshBounds(far).maximumY);
   assert.ok(tower.getTotalVertices() > far.getTotalVertices());
 
   const merged = ProceduralBuildingRenderer.merge(
@@ -660,6 +661,39 @@ test("tall buildings remain enterable and include stairs", () => {
   assert.ok(merged.material instanceof MultiMaterial);
   assert.ok(merged.metadata.pendingInteriorCount > 0);
 
+  scene.dispose();
+  engine.dispose();
+});
+
+test("large city footprints retain entrances and pending interiors", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const building = planBuilding({
+    id: "large-city-block",
+    polygon: { outer: [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9], [0.1, 0.1]], holes: [] },
+    properties: { render_height: 6.2, levels: 2 },
+  });
+  const mesh = ProceduralBuildingRenderer.createDetailed(scene, building, terrain, options);
+  assert.equal(mesh.metadata.detailFallback, undefined);
+  assert.equal(mesh.metadata.enterable, true);
+  assert.ok(mesh.metadata.pendingInterior);
+  assert.equal(mesh.metadata.interiorFloorCount, 2);
+  assert.equal(mesh.metadata.stairFlightCount, 1);
+  scene.dispose();
+  engine.dispose();
+});
+
+test("interior construction is limited across all tile chunks in a frame", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const chunks = [123, 124, 125].map((id) => ProceduralBuildingRenderer.merge([
+    ProceduralBuildingRenderer.createDetailed(scene,
+      plan(id, { render_height: 3.1, levels: 1 }), terrain, options),
+  ], "buildings", new TransformNode(`tile-${id}`, scene)));
+  scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+  scene.onAfterRenderObservable.notifyObservers(scene);
+  assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.loadedInteriorCount, 0), 1);
+  assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.pendingInteriorCount, 0), 2);
   scene.dispose();
   engine.dispose();
 });

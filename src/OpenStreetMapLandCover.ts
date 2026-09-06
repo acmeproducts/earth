@@ -1,7 +1,7 @@
 import type { VectorTile } from "@mapbox/vector-tile";
 import {
   LandCoverClass,
-  LandCoverSampler,
+  type LandCoverSampler,
 } from "./WorldCover";
 import { worldTileAtLocation } from "./WorldGrid";
 

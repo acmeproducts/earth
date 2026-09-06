@@ -15,6 +15,7 @@ export interface BuildingSource {
 }
 
 export type BuildingDetailLevel = "far" | "detailed";
+export type BuildingInteriorUse = "residential" | "shop" | "office" | "hotel" | "education" | "medical" | "warehouse" | "industrial" | "garage";
 
 /** The stable, coarse use categories understood by the renderer. */
 export type BuildingClass =
@@ -48,6 +49,7 @@ export interface BuildingPlan {
   id: string;
   footprint: BuildingPolygon;
   buildingClass: BuildingClass;
+  interiorUse?: BuildingInteriorUse;
   heightMeters: number;
   minimumHeightMeters: number;
   levels?: number;
@@ -73,7 +75,8 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
   return {
     id: source.id,
     footprint: source.polygon,
-    buildingClass: normalizeBuildingClass(source.properties.class),
+    buildingClass: normalizeBuildingClass(source.properties.class ?? source.properties.building),
+    interiorUse: buildingInteriorUse(source.properties),
     heightMeters,
     minimumHeightMeters,
     levels: positiveNumber(source.properties.levels),
@@ -94,6 +97,23 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
   };
 }
 
+/** Use the tags supplied by the tile; no POI-to-building association is assumed. */
+function buildingInteriorUse(properties: BuildingSource["properties"]): BuildingPlan["interiorUse"] {
+  const values = [properties.class, properties.building, properties["building:use"]].map(textProperty);
+  const shop = textProperty(properties.shop), office = textProperty(properties.office);
+  if (values.includes("hotel") || textProperty(properties.tourism) === "hotel") return "hotel";
+  const amenity = textProperty(properties.amenity);
+  for (const value of [...values, amenity, textProperty(properties.healthcare)]) {
+    const category = normalizeBuildingClass(value);
+    if (["education", "medical", "warehouse", "industrial", "garage"].includes(category)) return category as BuildingInteriorUse;
+  }
+  if ((shop && !["no", "vacant"].includes(shop)) || values.some((v) => v === "retail" || v === "supermarket")) return "shop";
+  if ((office && office !== "no") || values.includes("office")) return "office";
+  if (values.some((v) => normalizeBuildingClass(v) === "residential")) return "residential";
+  if (values.includes("commercial")) return "office";
+  return undefined;
+}
+
 /** Maps provider/OSM-specific values onto the small vocabulary used in-world. */
 export function normalizeBuildingClass(value: unknown): BuildingClass {
   const normalized = textProperty(value);
@@ -105,11 +125,11 @@ export function normalizeBuildingClass(value: unknown): BuildingClass {
   }
   if (["industrial", "factory", "manufacture"].includes(normalized)) return "industrial";
   if (["warehouse", "storage"].includes(normalized)) return "warehouse";
-  if (["garage", "carport", "parking"].includes(normalized)) return "garage";
-  if (["school", "college", "university", "kindergarten"].includes(normalized)) {
+  if (["garage", "garages", "carport", "parking"].includes(normalized)) return "garage";
+  if (["education", "school", "college", "university", "kindergarten"].includes(normalized)) {
     return "education";
   }
-  if (["hospital", "clinic", "healthcare"].includes(normalized)) return "medical";
+  if (["medical", "hospital", "clinic", "healthcare", "doctors"].includes(normalized)) return "medical";
   if (["church", "chapel", "mosque", "temple", "synagogue", "religious"].includes(normalized)) {
     return "religious";
   }

@@ -364,8 +364,11 @@ export class SolarLighting {
         this.longitude,
         elevationDegrees,
       );
-      this.directLight.setEnabled(daylight);
-      this.directLight.intensity = 0.55 + 1.55 * Math.sqrt(elevationFactor);
+      // Keep the light/sampler layout stable across day/night. Removing the
+      // light while Babylon hot-swaps shaders can leave the previous program
+      // expecting a shadow-comparison sampler on a unit now used by an atlas.
+      // Zero intensity removes sunlight without recompiling every lit material.
+      this.directLight.intensity = daylight ? 0.55 + 1.55 * Math.sqrt(elevationFactor) : 0;
       this.sunMesh.setEnabled(daylight);
       // Avoid the old horizon discontinuity (0.32 -> 0.06) and retain a soft
       // ambient floor so vegetation does not collapse into black silhouettes.

@@ -1,6 +1,6 @@
 import type { TerrainData } from "./TerrainData";
 import { smoothstep } from "./MathUtils";
-import { distanceToRing, pointInRing } from "./PlanarGeometry";
+import { distanceToRing, pointInRing, signedArea } from "./PlanarGeometry";
 
 export interface TerrainLakePoint {
   x: number;
@@ -31,13 +31,21 @@ export interface TerrainLakePolygonOptions {
   surfaceSources?: readonly TerrainLakeSource[];
   /** Makes every streamed piece of one OSM lake reuse exactly one level. */
   sharedLakeElevations?: Map<string, number>;
+  /** Enables small-water plausibility checks using the renderer's vertical offset. */
+  smallWaterSurfaceClearanceMeters?: number;
 }
 
 /** Maximum default distance at which an OSM lake can alter neighboring terrain. */
 export const LAKE_TERRAIN_CONTEXT_METERS = 240;
 
 /** Low shoreline samples capture outlets without letting steep banks set the lake level. */
-const LAKE_SHORE_LEVEL_PERCENTILE = 0.15;
+const LAKE_SHORE_LEVEL_PERCENTILE = 0.05;
+const LAKE_INTERIOR_LEVEL_PERCENTILE = 0.15;
+/** Allow small DEM seams, never manufacture tall banks to hold up water. */
+const LAKE_MAX_TERRAIN_RAISE_METERS = 0.5;
+
+const SMALL_WATER_MAX_AREA_METERS_SQUARED = 500;
+const SMALL_WATER_FLOATING_GAP_METERS = 0.25;
 
 interface Bounds {
   minimumX: number;
@@ -54,7 +62,8 @@ interface PreparedLake {
 /**
  * Shapes terrain from the same OSM rings used by the water mesh. WorldCover's
  * older raster carve is restored around the vector edge before a short,
- * smooth shoreline and shallow submerged bed are applied.
+ * smooth shoreline and submerged bed are applied. Existing deeper ground is
+ * retained; fitting the mapped water must not build a plateau around it.
  */
 export async function conformTerrainToLakePolygons(
   terrain: TerrainData,
@@ -126,9 +135,15 @@ export async function conformTerrainToLakePolygons(
       const index = row * terrain.width + column;
       const restored = carvedElevations[index] +
         (rawElevations[index] - carvedElevations[index]) * repair;
-      terrain.elevations[index] = targetWeight === 0
+      const shaped = targetWeight === 0
         ? restored
         : restored + (targetSum / targetWeight - restored) * strongestShore;
+      // Bound only lake shaping, not restoration of an obsolete raster carve.
+      // Use raw DEM heights so repeated shaping cannot accumulate uplift.
+      terrain.elevations[index] = Math.min(
+        shaped,
+        Math.max(restored, rawElevations[index] + LAKE_MAX_TERRAIN_RAISE_METERS),
+      );
     }
     await yieldControl?.();
   }
@@ -161,7 +176,9 @@ function lakeLevels(
   for (const [sourceId, pieces] of groups) {
     const shared = options.sharedLakeElevations?.get(sourceId);
     if (shared !== undefined) {
-      levels.set(sourceId, shared);
+      if (!isUnsupportedSmallWater(pieces, shared, terrain, elevations, options)) {
+        levels.set(sourceId, shared);
+      }
       continue;
     }
 
@@ -223,15 +240,69 @@ function lakeLevels(
     shoreSamples.sort((a, b) => a - b);
     const interiorLevel = interiorSamples.length === 0
       ? Infinity
-      : percentile(interiorSamples, 0.5);
+      : percentile(interiorSamples, LAKE_INTERIOR_LEVEL_PERCENTILE);
     const shoreLevel = shoreSamples.length === 0
       ? Infinity
       : percentile(shoreSamples, LAKE_SHORE_LEVEL_PERCENTILE);
     const level = Math.min(interiorLevel, shoreLevel);
+    if (isUnsupportedSmallWater(pieces, level, terrain, elevations, options)) continue;
     levels.set(sourceId, level);
     options.sharedLakeElevations?.set(sourceId, level);
   }
   return levels;
+}
+
+/** Test unmodified terrain: lake shaping would manufacture its own supporting banks. */
+function isUnsupportedSmallWater(
+  pieces: readonly TerrainLakeSource[],
+  level: number,
+  terrain: TerrainData,
+  elevations: Float32Array,
+  options: TerrainLakePolygonOptions,
+): boolean {
+  const clearance = options.smallWaterSurfaceClearanceMeters;
+  if (clearance === undefined) return false;
+  const bounds = combinedBounds(pieces);
+  const margin = 2 / options.metersPerUnit;
+  // Never classify clipped or off-tile context as an entire small water body.
+  if (bounds.minimumX <= -options.meshWidth / 2 + margin ||
+      bounds.maximumX >= options.meshWidth / 2 - margin ||
+      bounds.minimumZ <= -options.meshDepth / 2 + margin ||
+      bounds.maximumZ >= options.meshDepth / 2 - margin) return false;
+  const area = pieces.reduce((sum, piece) => sum + Math.max(0,
+    Math.abs(signedArea(piece.outline)) -
+    piece.holes.reduce((holes, ring) => holes + Math.abs(signedArea(ring)), 0)), 0) *
+    options.metersPerUnit ** 2;
+  if (area > SMALL_WATER_MAX_AREA_METERS_SQUARED) return false;
+
+  let perimeter = 0;
+  let unsupported = 0;
+  for (const piece of pieces) {
+    for (let index = 0; index < piece.outline.length; index++) {
+      const a = piece.outline[index];
+      const b = piece.outline[(index + 1) % piece.outline.length];
+      const length = Math.hypot(b.x - a.x, b.z - a.z) * options.metersPerUnit;
+      if (length === 0) continue;
+      const count = Math.max(1, Math.ceil(length / 2));
+      for (let sample = 0; sample < count; sample++) {
+        const t = (sample + 0.5) / count;
+        const x = a.x + (b.x - a.x) * t;
+        const z = a.z + (b.z - a.z) * t;
+        const dx = -(b.z - a.z) * 2 / length;
+        const dz = (b.x - a.x) * 2 / length;
+        const side = pieces.some((candidate) => pointInLake(x + dx, z + dz, candidate)) ? -1 : 1;
+        const ground = sampleGridElevation(terrain,
+          x + dx * side, z + dz * side,
+          options.meshWidth, options.meshDepth, elevations);
+        if (!Number.isFinite(ground)) return false;
+        perimeter += length / count;
+        if (level + clearance - ground > SMALL_WATER_FLOATING_GAP_METERS) {
+          unsupported += length / count;
+        }
+      }
+    }
+  }
+  return perimeter > 0 && unsupported / perimeter >= 0.75;
 }
 
 function percentile(sorted: readonly number[], fraction: number): number {

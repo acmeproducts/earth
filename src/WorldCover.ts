@@ -1,4 +1,5 @@
 import type { TerrainData } from "./TerrainData";
+import { ResourceCache } from "./ResourceCache";
 import type { TileBounds } from "./WorldGrid";
 import { shapeCoastlineElevations } from "./Coastline";
 import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
@@ -62,7 +63,9 @@ export class WorldCover {
   private static readonly MAX_LONGITUDE = 180;
   private static readonly MIN_LATITUDE = -60;
   private static readonly MAX_LATITUDE = 84;
-  private static readonly cache = new Map<string, Promise<Lerc.LercData>>();
+  private static readonly cache = new ResourceCache<Lerc.LercData>(16 * 1024 * 1024,
+    (tile) => tile.pixels.reduce((bytes, pixels) => bytes + pixels.byteLength, 0) +
+      (tile.mask?.byteLength ?? 0));
   private static decoderReady?: Promise<void>;
 
   private constructor(
@@ -272,19 +275,13 @@ export class WorldCover {
   ): Promise<readonly [string, Lerc.LercData]> {
     const tileKey = `${row}/${column}`;
     const cacheKey = `${level}/${tileKey}`;
-    let request = this.cache.get(cacheKey);
-    if (!request) {
-      request = fetch(`${this.TILE_URL}/${cacheKey}`, {
+    const request = this.cache.getOrCreate(cacheKey, () =>
+      fetch(`${this.TILE_URL}/${cacheKey}`, {
         signal: AbortSignal.timeout(15_000),
       }).then(async (response) => {
         if (!response.ok) throw new Error(`WorldCover tile request failed (${response.status}).`);
         return Lerc.decode(await response.arrayBuffer());
-      }).catch((error: unknown) => {
-        this.cache.delete(cacheKey);
-        throw error;
-      });
-      this.cache.set(cacheKey, request);
-    }
+      }));
     return [tileKey, await request];
   }
 

@@ -242,3 +242,47 @@ test("rejects mapped water below the inland-water threshold", async () => {
 
   assert.deepEqual(lakes, []);
 });
+
+test("low shoreline outlets lower the lake instead of becoming tall artificial banks", async () => {
+  const raw = new Float32Array(25).fill(80);
+  // A short low outlet was missed by the former 15th-percentile shore estimate.
+  raw[10] = 20;
+  raw[15] = 20;
+  const grid = terrain(raw);
+  const lakes = await conformTerrainToLakePolygons(grid, raw, [square()], {
+    meshWidth: 10, meshDepth: 10, metersPerUnit: 1, shorelineBlendMeters: 3,
+  });
+  assert.equal(lakes[0].elevationMeters, 20);
+  assert.ok(grid.elevations[10] <= 20.5);
+});
+
+test("an established high lake cannot raise lower streamed terrain into a plateau", async () => {
+  for (const metersPerUnit of [1, 10]) {
+    const raw = new Float32Array(25).fill(20);
+    const grid = terrain(raw);
+    const source = square();
+    source.outline = source.outline.map(({ x, z }) => ({
+      x: x / metersPerUnit, z: z / metersPerUnit,
+    }));
+    const options = {
+      meshWidth: 10 / metersPerUnit, meshDepth: 10 / metersPerUnit, metersPerUnit,
+      sharedLakeElevations: new Map([[source.sourceId, 80]]),
+    };
+    const lakes = await conformTerrainToLakePolygons(grid, raw, [source], options);
+    assert.equal(lakes[0].elevationMeters, 80);
+    assert.ok(grid.elevations.every(height => height <= 20.5));
+    await conformTerrainToLakePolygons(grid, raw, [source], options);
+    assert.ok(grid.elevations.every(height => height <= 20.5));
+  }
+});
+
+test("retains deep lake beds rather than filling them to the water surface", async () => {
+  const raw = new Float32Array(25).fill(40);
+  raw[12] = 5;
+  const grid = terrain(raw);
+  await conformTerrainToLakePolygons(grid, raw, [square()], {
+    meshWidth: 10, meshDepth: 10, metersPerUnit: 1,
+    sharedLakeElevations: new Map([[square().sourceId, 40]]),
+  });
+  assert.ok(grid.elevations[12] <= 5.5);
+});

@@ -16,7 +16,7 @@ test("plans one semantic building description before creating geometry", () => {
   assert.match(planner, /detailSeed: hashString\(source\.id\)/);
   assert.match(
     openStreetMap,
-    /ProceduralBuildingRenderer\.createDetailed\([\s\S]*?planBuilding\(source\)/,
+    /const plan = planBuilding\(source\);[\s\S]*?ProceduralBuildingRenderer\.createDetailed\(scene, plan, terrain, renderOptions\)/,
   );
 });
 

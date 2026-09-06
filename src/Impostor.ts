@@ -14,6 +14,7 @@ import {
 import { documentIsBackgrounded, waitForNextFrame as nextFrame } from "./FrameBudget";
 import { waitForVertexColorTextures } from "./procedural/ProceduralCaptureMaterial";
 import { bakeTreeExposure, packExposureFace } from "./DirectionalExposure";
+import { publishGeneratedAsset } from "./GeneratedAssetPreview";
 
 export interface ImpostorAssets {
   /** Eight directional visibility channels, packed into two 3-by-2 face atlases. */
@@ -74,6 +75,8 @@ export const AXISYMMETRIC_IMPOSTOR_FACES: readonly CubeFace[] = [
 ];
 
 export interface ImpostorCaptureOptions {
+  /** Publishes an existing color capture for the loading screen. */
+  previewName?: string;
   /** Data pass: raw RGBA channels must bypass canvas alpha and color processing. */
   captureRawFace?: (face: number, pixels: Uint8Array, width: number, height: number) => void;
   name: string;
@@ -218,6 +221,7 @@ export function createImpostorAssetProvider(
     overrides: Partial<ImpostorSampling>,
     variant: ImpostorVariant,
     requestOptions: ImpostorAssetRequestOptions,
+    retainAtlasCanvases: boolean,
   ): { cache: Map<string, ImpostorCacheEntry>; entry: ImpostorCacheEntry } => {
     const requestedSampling = { ...getDefaultSampling(), ...overrides };
     const regionalVariant = variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
@@ -239,6 +243,7 @@ export function createImpostorAssetProvider(
       sampling.horizontalSamples,
       sampling.verticalSamples,
       sampling.resolution,
+      retainAtlasCanvases ? "export" : "runtime",
     ].join(":");
     const existing = cache.get(key);
     if (existing) {
@@ -254,6 +259,7 @@ export function createImpostorAssetProvider(
         sampling,
         variant,
         cooperative,
+        retainAtlasCanvases,
       ),
     );
     const entry: ImpostorCacheEntry = {
@@ -272,7 +278,7 @@ export function createImpostorAssetProvider(
   return {
     getDefaultSampling,
     getAssets(scene, overrides = {}, variant = DEFAULT_IMPOSTOR_VARIANT, requestOptions = {}) {
-      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions);
+      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions, true);
       // Legacy callers do not expose a lifetime, so their capture must remain valid.
       entry.pinned = true;
       pruneCache(cache);
@@ -284,7 +290,7 @@ export function createImpostorAssetProvider(
       variant = DEFAULT_IMPOSTOR_VARIANT,
       requestOptions = {},
     ) {
-      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions);
+      const { cache, entry } = getEntry(scene, overrides, variant, requestOptions, false);
       entry.references++;
       pruneCache(cache);
       let assets: ImpostorAssets;
@@ -335,6 +341,7 @@ async function captureDefinition(
   sampling: ImpostorSampling,
   variant: ImpostorVariant,
   cooperativeOverride?: boolean,
+  retainAtlasCanvases = true,
 ): Promise<ImpostorAssets> {
   const cooperative = cooperativeOverride ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
   if (cooperative) await nextFrame();
@@ -368,6 +375,7 @@ async function captureDefinition(
       : sampling.resolution;
 
     const captureOptions: ImpostorCaptureOptions = {
+      previewName: definition.name,
       name: variant.key === DEFAULT_IMPOSTOR_VARIANT.key
         ? definition.name
         : `${definition.name}-${resourceKey(variant.key)}`,
@@ -395,6 +403,15 @@ async function captureDefinition(
         disposeImpostorAssets(assets);
         throw error;
       }
+    }
+    if (!retainAtlasCanvases) {
+      // Streaming only uses the uploaded textures. The demo/export path keeps
+      // its canvases, but runtime variants must not retain a second atlas copy.
+      for (const canvas of assets.atlasCanvases) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      assets.atlasCanvases = [];
     }
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
@@ -604,6 +621,16 @@ export async function captureImpostorAtlases(
         0,
         0,
       );
+      if (faceIndex === 0 && options.previewName && !options.captureRawFace) {
+        publishGeneratedAsset({
+          name: options.previewName,
+          canvas: canvases[faceIndex],
+          x: Math.floor(gridWidth / 2) * resolutionWidth,
+          y: (upperHemisphereOnly ? 0 : Math.floor(gridHeight / 2)) * resolutionHeight,
+          width: resolutionWidth,
+          height: resolutionHeight,
+        });
+      }
       await nextFrame();
       sliceStart = performance.now();
       viewsThisFrame = 0;
