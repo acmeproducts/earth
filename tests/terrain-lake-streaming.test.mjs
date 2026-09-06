@@ -22,9 +22,23 @@ test("loads padded lake context while keeping rendered water tile-clipped", () =
   assert.match(game, /surfaceSources: surfaceLakeSources/);
 });
 
-test("carries lake surfaces through native terrain promotion", () => {
-  assert.match(game, /let lakeSurfaces = previous\?\.lakeSurfaces/);
-  assert.match(game, /previous\.lakeSurfaces = undefined/);
+test("rebuilds lake intersections with replacement terrain and disposes the old layer", () => {
+  const terrainBuild = game.slice(
+    game.indexOf("private async buildTileTerrain"),
+    game.indexOf("private async buildTileDetail"),
+  );
+  assert.match(terrainBuild, /const lakeSurfaces = await createTerrainLakeLayer\(\s*this\.scene,\s*lakePolygons,\s*\{\s*terrain,/);
+  assert.doesNotMatch(terrainBuild, /previous\??\.lakeSurfaces/);
+  assert.match(terrainBuild, /if \(previous\) disposeStreamedTile\(previous\)/);
+  const lakeBuildStart = terrainBuild.indexOf("const lakeSurfaces = await");
+  const terrainCommit = terrainBuild.indexOf("terrain.setEnabled(true)");
+  assert.ok(terrainBuild.indexOf("terrain.setEnabled(false)") < lakeBuildStart);
+  assert.ok(terrainCommit > lakeBuildStart);
+  assert.ok(terrainBuild.indexOf("disposeTerrainLakeLayer(lakeSurfaces)") < terrainCommit,
+    "cancelled builds must dispose their new lake layer before committing");
+});
+
+test("keeps lake surfaces when only scenery detail is demoted", () => {
   const demotion = game.slice(
     game.indexOf("private demoteTileDetail"),
     game.indexOf("private evictCooledTiles"),

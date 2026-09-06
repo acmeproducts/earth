@@ -202,15 +202,14 @@ export async function createTerrainMesh(
     surfaceColors,
     TERRAIN_SKIRT_OVERLAP_METERS / metersPerUnit,
     TERRAIN_SKIRT_SURFACE_DROP_METERS / metersPerUnit,
+    normals,
   );
   const skirt = new Mesh(`${name} skirt`, scene);
   const skirtVertexData = new VertexData();
   skirtVertexData.positions = skirtGeometry.positions;
   skirtVertexData.uvs = skirtGeometry.uvs;
   skirtVertexData.indices = skirtGeometry.indices;
-  const skirtNormals = new Float32Array(skirtGeometry.positions.length);
-  for (let index = 1; index < skirtNormals.length; index += 3) skirtNormals[index] = 1;
-  skirtVertexData.normals = skirtNormals;
+  skirtVertexData.normals = skirtGeometry.normals;
   if (skirtGeometry.colors) skirtVertexData.colors = skirtGeometry.colors;
   skirtVertexData.applyToMesh(skirt);
   skirt.parent = ground;

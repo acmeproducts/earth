@@ -678,33 +678,34 @@ export class Game {
     }
     setFrozenMeshOffset(terrain, offset.x, offset.z);
     terrain.checkCollisions = true;
-    terrain.setEnabled(true);
+    terrain.setEnabled(false);
 
     trace?.stage("lake surfaces and terrain commit");
-    let lakeSurfaces = previous?.lakeSurfaces;
-    if (!lakeSurfaces) {
-      lakeSurfaces = await createTerrainLakeLayer(
-        this.scene,
-        lakePolygons,
-        {
-          terrain,
-          meshWidth,
-          meshDepth,
-          metersPerUnit,
-          worldOffsetX: offset.x,
-          worldOffsetZ: offset.z,
-          skyReflection: this.solarLighting?.skyReflectionTexture,
-        },
-        yieldControl,
-      );
-      if (generation !== this.streamingGeneration) {
-        disposeTerrainMesh(terrain);
-        disposeTerrainLakeLayer(lakeSurfaces);
-        return undefined;
-      }
+    // Shorelines are sampled from this mesh's triangles. Rebuild them on
+    // promotion so they follow native terrain instead of the old coarse bed.
+    // Keep the previous terrain and lake layer visible until both are ready.
+    const lakeSurfaces = await createTerrainLakeLayer(
+      this.scene,
+      lakePolygons,
+      {
+        terrain,
+        meshWidth,
+        meshDepth,
+        metersPerUnit,
+        worldOffsetX: offset.x,
+        worldOffsetZ: offset.z,
+        skyReflection: this.solarLighting?.skyReflectionTexture,
+      },
+      yieldControl,
+    );
+    if (generation !== this.streamingGeneration) {
+      disposeTerrainMesh(terrain);
+      disposeTerrainLakeLayer(lakeSurfaces);
+      return undefined;
     }
     setTransformNodeOffset(lakeSurfaces.root, offset.x, offset.z);
     for (const mesh of lakeSurfaces.meshes) mesh.freezeWorldMatrix();
+    terrain.setEnabled(true);
     lakeSurfaces.root.setEnabled(true);
 
     // Upgrading a streamed tile from the coarse terrain tier to native detail
@@ -721,7 +722,6 @@ export class Game {
         previous.farBuildings = undefined;
       }
       previous.farRoads = undefined;
-      previous.lakeSurfaces = undefined;
     }
     const now = performance.now();
     const record: StreamedTile = {

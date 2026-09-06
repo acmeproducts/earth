@@ -167,7 +167,42 @@ test("builds a double-sided skirt below every terrain edge segment", () => {
   const lastSegmentOuterEnd = skirt.positions.length / 3 - 1;
   assert.equal(skirt.positions[lastSegmentOuterEnd * 3], -0.5);
   assert.equal(skirt.positions[lastSegmentOuterEnd * 3 + 2], 0.5);
-  assert.ok(Math.abs(skirt.positions[2 * 3 + 1] - (positions[1] - 0.02)) < 1e-5);
+  assert.ok(skirt.positions[2 * 3 + 1] < positions[1] - 0.02);
+});
+
+test("overlap strips stay beneath sloping terrain, including diagonal corners", () => {
+  for (const slopeX of [3, 0, -3]) {
+    for (const slopeZ of [-2, 0, 2]) {
+      const subdivisions = 2;
+      const positions = [];
+      const uvs = [];
+      const normals = [];
+      const length = Math.hypot(slopeX, 1, slopeZ);
+      const normal = [-slopeX / length, 1 / length, -slopeZ / length];
+      const heightAt = (x, z) => 10 + slopeX * x + slopeZ * z;
+      for (let row = 0; row <= subdivisions; row++) {
+        for (let column = 0; column <= subdivisions; column++) {
+          positions.push(column, heightAt(column, -row), -row);
+          uvs.push(column, row);
+          normals.push(...normal);
+        }
+      }
+      const skirt = createTerrainSkirtGeometry(
+        positions, uvs, subdivisions, -1, undefined, 0.5, 0.02, normals,
+      );
+      for (let segment = 0; segment < subdivisions * 4; segment++) {
+        for (const offset of [2, 3, 4, 5]) {
+          const vertex = (segment * 8 + offset) * 3;
+          const [x, y, z] = skirt.positions.slice(vertex, vertex + 3);
+          assert.ok(y <= heightAt(x, z) - 0.019,
+            `overlap protrudes at (${x}, ${z}) on slope (${slopeX}, ${slopeZ})`);
+          for (let axis = 0; axis < 3; axis++) {
+            assert.ok(Math.abs(skirt.normals[vertex + axis] - normal[axis]) < 1e-6);
+          }
+        }
+      }
+    }
+  }
 });
 
 test("caches shared edges only after lake and map deformation", () => {

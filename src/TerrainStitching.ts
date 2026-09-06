@@ -4,6 +4,7 @@ export type TerrainEdgeElevationCache = Map<string, number>;
 
 export interface TerrainSkirtGeometry {
   positions: Float32Array;
+  normals: Float32Array;
   uvs: Float32Array;
   colors?: Float32Array;
   indices: Uint32Array;
@@ -82,11 +83,13 @@ export function createTerrainSkirtGeometry(
   surfaceColors?: Float32Array | number[],
   overlap = 0,
   surfaceDrop = 0,
+  surfaceNormals?: Float32Array | number[],
 ): TerrainSkirtGeometry {
   const rowSize = subdivisions + 1;
   if (subdivisions < 1 || surfacePositions.length < rowSize * rowSize * 3) {
     return {
       positions: new Float32Array(),
+      normals: new Float32Array(),
       uvs: new Float32Array(),
       colors: surfaceColors ? new Float32Array() : undefined,
       indices: new Uint32Array(),
@@ -106,6 +109,7 @@ export function createTerrainSkirtGeometry(
   // Each segment owns separate cap and wall vertices so their normals cannot
   // average into a dark diagonal at the fold.
   const positions = new Float32Array(boundary.length * 8 * 3);
+  const normals = new Float32Array(positions.length);
   const uvs = new Float32Array(boundary.length * 8 * 2);
   const colors = surfaceColors ? new Float32Array(boundary.length * 8 * 4) : undefined;
   const indices = new Uint32Array(boundary.length * 24);
@@ -114,6 +118,10 @@ export function createTerrainSkirtGeometry(
     positions[target * 3] = surfacePositions[source * 3];
     positions[target * 3 + 1] = y ?? surfacePositions[source * 3 + 1];
     positions[target * 3 + 2] = surfacePositions[source * 3 + 2];
+    for (let axis = 0; axis < 3; axis++) {
+      normals[target * 3 + axis] = surfaceNormals?.[source * 3 + axis]
+        ?? (axis === 1 ? 1 : 0);
+    }
     uvs[target * 2] = surfaceUvs[source * 2];
     uvs[target * 2 + 1] = surfaceUvs[source * 2 + 1];
     if (colors && surfaceColors) {
@@ -145,20 +153,43 @@ export function createTerrainSkirtGeometry(
     return [miterX * overlap / projection, miterZ * overlap / projection];
   };
 
+  const outerHeight = (source: number, offset: [number, number]): number => {
+    const row = Math.floor(source / rowSize);
+    const column = source % rowSize;
+    const height = surfacePositions[source * 3 + 1];
+    // A fixed 2 cm drop leaves the half-metre cap sticking out of downhill
+    // terrain. Lower it by the local slope in both axes (also at corners).
+    // Use absolute slopes so the hidden overlap never rises on uphill edges.
+    const slopeDrop = (neighbor: number, axis: number, distance: number): number => {
+      const span = Math.abs(surfacePositions[neighbor * 3 + axis]
+        - surfacePositions[source * 3 + axis]);
+      return span > 0
+        ? Math.abs(surfacePositions[neighbor * 3 + 1] - height) / span * Math.abs(distance)
+        : 0;
+    };
+    const neighborX = source + (column === subdivisions ? -1 : 1);
+    const neighborZ = source + (row === subdivisions ? -rowSize : rowSize);
+    return height - surfaceDrop
+      - slopeDrop(neighborX, 0, offset[0])
+      - slopeDrop(neighborZ, 2, offset[1]);
+  };
+
   for (let segment = 0; segment < boundary.length; segment++) {
     const start = boundary[segment];
     const end = boundary[(segment + 1) % boundary.length];
     const vertex = segment * 8;
     const startOffset = outerOffset(segment);
     const endOffset = outerOffset((segment + 1) % boundary.length);
+    const startHeight = outerHeight(start, startOffset);
+    const endHeight = outerHeight(end, endOffset);
     copyVertex(start, vertex);
     copyVertex(end, vertex + 1);
-    copyVertex(start, vertex + 2, surfacePositions[start * 3 + 1] - surfaceDrop);
-    copyVertex(end, vertex + 3, surfacePositions[end * 3 + 1] - surfaceDrop);
-    copyVertex(start, vertex + 4, surfacePositions[start * 3 + 1] - surfaceDrop);
-    copyVertex(end, vertex + 5, surfacePositions[end * 3 + 1] - surfaceDrop);
-    copyVertex(start, vertex + 6, bottomY);
-    copyVertex(end, vertex + 7, bottomY);
+    copyVertex(start, vertex + 2, startHeight);
+    copyVertex(end, vertex + 3, endHeight);
+    copyVertex(start, vertex + 4, startHeight);
+    copyVertex(end, vertex + 5, endHeight);
+    copyVertex(start, vertex + 6, Math.min(bottomY, startHeight));
+    copyVertex(end, vertex + 7, Math.min(bottomY, endHeight));
     for (const outerVertex of [vertex + 2, vertex + 4, vertex + 6]) {
       positions[outerVertex * 3] += startOffset[0];
       positions[outerVertex * 3 + 2] += startOffset[1];
@@ -181,7 +212,7 @@ export function createTerrainSkirtGeometry(
     ], index);
   }
 
-  return { positions, uvs, colors, indices };
+  return { positions, normals, uvs, colors, indices };
 }
 
 function terrainEdgeSampleKey(terrain: TerrainData, x: number, y: number): string {
