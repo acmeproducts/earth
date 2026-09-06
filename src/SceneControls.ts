@@ -3,7 +3,6 @@ import type { WorldLocation } from "./Locations";
 import { formatCalendarDate } from "./CalendarDate";
 import { geocodeLocationName } from "./Geocoding";
 import { getGameDate } from "./GameTime";
-import { isDirectionalExposureEnabled, setDirectionalExposureEnabled } from "./DirectionalExposure";
 import { SCENE_SETTING_DEFINITIONS } from "./SceneSettings";
 import type {
   SceneSettingDefinition,
@@ -11,8 +10,13 @@ import type {
   SceneSettings,
 } from "./SceneSettings";
 import type { ClockMode, ClockSettings } from "./ClockSettings";
+import { ANTIALIASING_OPTIONS, isAntialiasingMode } from "./Antialiasing";
+import type { AntialiasingMode } from "./Antialiasing";
 
 export interface SceneControlsOptions {
+  antialiasing: AntialiasingMode;
+  temporalAASupported: boolean;
+  onAntialiasingChange: (mode: AntialiasingMode) => void;
   settings: Readonly<SceneSettings>;
   clockSettings: Readonly<ClockSettings>;
   initialLocation: WorldLocation;
@@ -98,18 +102,6 @@ export class SceneControls {
     roofsRow.append(roofsLabel, roofsInput);
     sceneGroup.appendChild(roofsRow);
 
-    const exposureRow = document.createElement("label");
-    exposureRow.className = "scene-control-row visibility-control-row";
-    const exposureLabel = document.createElement("span");
-    exposureLabel.textContent = "Directional leaf sunlight";
-    const exposureInput = document.createElement("input");
-    exposureInput.type = "checkbox";
-    exposureInput.checked = isDirectionalExposureEnabled();
-    exposureInput.setAttribute("aria-label", "Directional leaf sunlight");
-    exposureInput.addEventListener("change", () => setDirectionalExposureEnabled(exposureInput.checked));
-    exposureRow.append(exposureLabel, exposureInput);
-    sceneGroup.appendChild(exposureRow);
-
     const clockModeRow = document.createElement("label");
     clockModeRow.className = "scene-control-row clock-mode-row";
     const clockModeLabel = document.createElement("span");
@@ -167,6 +159,38 @@ export class SceneControls {
     sceneGroup.appendChild(timeRow);
     this.element.appendChild(sceneGroup);
     this.element.appendChild(weatherGroup);
+
+    const graphicsGroup = this.createGroup("Graphics");
+    const aaRow = document.createElement("label");
+    aaRow.className = "scene-control-row antialiasing-control-row";
+    const aaLabel = document.createElement("span");
+    aaLabel.textContent = "Antialiasing";
+    const aaSelect = document.createElement("select");
+    aaSelect.setAttribute("aria-label", "Antialiasing");
+    const aaDescription = document.createElement("p");
+    aaDescription.id = "antialiasing-description";
+    aaDescription.className = "antialiasing-description";
+    aaSelect.setAttribute("aria-describedby", aaDescription.id);
+    for (const entry of ANTIALIASING_OPTIONS) {
+      const option = document.createElement("option");
+      option.value = entry.value;
+      option.textContent = entry.label;
+      option.disabled = entry.value === "taa" && !options.temporalAASupported;
+      aaSelect.appendChild(option);
+    }
+    aaSelect.value = options.antialiasing;
+    const updateDescription = (): void => {
+      aaDescription.textContent = ANTIALIASING_OPTIONS.find(entry => entry.value === aaSelect.value)?.description ?? "";
+    };
+    updateDescription();
+    aaSelect.addEventListener("change", () => {
+      if (!isAntialiasingMode(aaSelect.value)) return;
+      options.onAntialiasingChange(aaSelect.value);
+      updateDescription();
+    });
+    aaRow.append(aaLabel, aaSelect);
+    graphicsGroup.append(aaRow, aaDescription);
+    this.element.appendChild(graphicsGroup);
 
     const locationGroup = this.createGroup("Location");
     const placeForm = document.createElement("form");

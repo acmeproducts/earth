@@ -156,7 +156,9 @@
       justify-self: start;
       width: auto;
     }
-    .date-control-row input {
+    .antialiasing-control-row { grid-template-columns: 1fr; }
+    .antialiasing-description { color: #a8b8ae; font-size: 12px; line-height: 1.4; margin: 8px 0 0; }
+    .date-control-row input, .antialiasing-control-row select {
       grid-column: 2 / 4;
       min-width: 0;
       box-sizing: border-box;
@@ -168,6 +170,7 @@
       color-scheme: dark;
       font: inherit;
     }
+    .antialiasing-control-row select { grid-column: 1; width: 100%; padding: 7px; }
     .scene-control-row output {
       color: #fff;
       font-variant-numeric: tabular-nums;
@@ -272,10 +275,13 @@
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0a0a0f 100%);
+      padding: 28px 24px;
+      overflow: auto;
+      color: #e4eadc;
+      background: radial-gradient(ellipse at 50% 38%, #26382b 0%, #101c18 48%, #090f0e 100%);
       z-index: 100;
       transition: opacity 0.5s ease-out;
-      font-family: 'Courier New', monospace;
+      font-family: system-ui, sans-serif;
     }
 
     #loading.hidden {
@@ -283,47 +289,44 @@
       pointer-events: none;
     }
 
-    .loader {
-      width: 60px;
-      height: 60px;
-      border: 3px solid #2a2a4a;
-      border-top-color: #6366f1;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+    .loader-gallery { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, 85vw, 65vh); aspect-ratio: 1; }
+    .loader-gallery::before {
+      content: ''; position: absolute; inset: 12% 8% 20%; border: 1px solid #acc4971f; border-radius: 50%;
+      background: repeating-linear-gradient(0deg, transparent 0 31px, #acc49709 31px 32px), repeating-linear-gradient(90deg, transparent 0 31px, #acc49709 31px 32px);
     }
+    .loader-actor { position: relative; display: block; width: 100%; height: 100%; pointer-events: none; }
+    .loader-actor-caption { position: absolute; top: 100%; width: 100%; color: #bac7b4; text-align: center; font: 17px Georgia, serif; }
+    .loader-status { position: absolute; top: calc(50% + min(230px, 42.5vw, 32.5vh) + 48px); width: min(360px, calc(100% - 48px)); padding-bottom: 24px; }
+    .loader-status-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .loader-percent { color: #c8d6b5; font: 12px 'Courier New', monospace; font-variant-numeric: tabular-nums; }
+    .loader-retry { display: none; margin: 18px auto 0; padding: 9px 18px; border: 1px solid #9aaa95; border-radius: 4px; color: #e4eadc; background: #26382b; cursor: pointer; font: inherit; }
+    .loader-retry:focus-visible { outline: 2px solid #c8d6b5; outline-offset: 4px; }
 
     .loader-text {
-      margin-top: 20px;
-      color: #6366f1;
-      font-size: 14px;
-      letter-spacing: 3px;
-      text-transform: uppercase;
-      text-align: center;
+      color: #bac7b4;
+      font-size: 12px;
       min-height: 17px;
     }
 
     .loader-progress {
-      width: min(320px, calc(100vw - 48px));
-      height: 4px;
-      margin-top: 16px;
+      width: 100%;
+      height: 3px;
+      margin-top: 13px;
       overflow: hidden;
       border-radius: 999px;
-      background: #2a2a4a;
+      background: #ffffff12;
     }
 
     .loader-progress-bar {
       width: 0;
       height: 100%;
       border-radius: inherit;
-      background: linear-gradient(90deg, #6366f1, #8b5cf6);
-      box-shadow: 0 0 12px rgba(99, 102, 241, 0.65);
+      background: linear-gradient(90deg, #739b68, #d2dfac);
+      box-shadow: 0 0 12px #b5ce8050;
       transition: width 0.3s ease-out;
     }
 
-    #loading.error .loader {
-      animation: none;
-      border-color: #ef4444;
-    }
+    #loading.error .loader-retry { display: block; }
 
     #loading.error .loader-text {
       color: #f87171;
@@ -333,8 +336,12 @@
       background: #ef4444;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    @media (prefers-reduced-motion: reduce) {
+      #loading, .loader-progress-bar { transition: none; }
+    }
+    @media (max-height: 560px) {
+      .loader-gallery { width: min(240px, 50vh, 80vw); }
+      .loader-status { top: calc(75% + 34px); }
     }
 
     #impostorControls {
@@ -361,7 +368,6 @@
     #capturePreview { display: block; width: 100%; height: auto; border: 1px solid #364049; background: #000; image-rendering: auto; }
     #captureStatus { display: block; min-height: 30px; margin-top: 10px; color: #b9c4cc; line-height: 1.35; }
     .impostor-mode #loading { background: #101419; }
-    .impostor-mode .loader { border-color: #34404a; border-top-color: #62a67e; }
     .impostor-mode .loader-text { color: #8fc4a4; letter-spacing: 0; }
     #impostorValidation { position: fixed; inset: 0; z-index: 20; overflow: auto; padding: 20px; background: #101419; color: #e7edf2; font: 14px/1.4 system-ui, sans-serif; }
     #impostorValidation h1 { margin: 0 0 8px; font-size: 22px; }
@@ -379,17 +385,26 @@
 </head>
 <body>
   <div id="loading">
-    <div class="loader"></div>
-    <div class="loader-text" aria-live="polite">Preparing the scene</div>
-    <div
-      class="loader-progress"
-      role="progressbar"
-      aria-label="World initialization progress"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow="0"
-    >
-      <div class="loader-progress-bar"></div>
+    <figure class="loader-gallery">
+      <canvas class="loader-actor" width="460" height="460" role="img" aria-label="Rotating preview of procedurally generated trees and ferns"></canvas>
+      <figcaption class="loader-actor-caption"></figcaption>
+    </figure>
+    <div class="loader-status">
+      <div class="loader-status-row">
+        <div class="loader-text" aria-live="polite">Preparing the scene</div>
+        <span class="loader-percent" aria-hidden="true">0%</span>
+      </div>
+      <div
+        class="loader-progress"
+        role="progressbar"
+        aria-label="World initialization progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+      >
+        <div class="loader-progress-bar"></div>
+      </div>
+      <button class="loader-retry" type="button">Try again</button>
     </div>
   </div>
   <canvas id="renderCanvas"></canvas>

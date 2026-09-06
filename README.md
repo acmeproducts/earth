@@ -43,6 +43,13 @@ pnpm dev
 
 The app will open at [http://localhost:3000](http://localhost:3000)
 
+Press Escape and open Graphics to choose antialiasing: MSAA 4x (default), FXAA,
+TAA (experimental), or Off. Changes apply immediately and are saved locally.
+The `aa=msaa`, `aa=fxaa`, `aa=taa`, and `aa=off` query parameters override the saved choice.
+Babylon 7's basic TAA resets history during camera movement and can leave trails
+on animated water and vegetation; it does not provide motion reprojection.
+Devices without TAA support fall back to MSAA and disable the TAA menu option.
+
 By default, the game runs without a backend and saves your position, orientation,
 and movement mode in localStorage, restoring them on your next visit.
 Use `?persistence=local` to explicitly select this mode.
@@ -404,7 +411,8 @@ land-cover and land-use polygons. OSM also supplies building-part visibility,
 road class, path and service type, surface, tunnels, and permanent waterways;
 those attributes drive building filtering, road widths and materials, vegetation
 placement, and narrow water surfaces without relying on regional data sources.
-Street lamps are placed deterministically from the road plan. The client does not
+Street lamps are placed deterministically from the road plan, only within 50 metres
+of a building footprint (including mapped lamps). The client does not
 query the public Overpass API while streaming terrain detail.
 
 ### Interior building layouts

@@ -1,4 +1,4 @@
-import { bindDirectionalExposure, directionalExposureDeclaration, registerExposureCutout } from "../DirectionalExposure";
+import { directionalExposureDeclaration, registerExposureCutout } from "../DirectionalExposure";
 import {
   Color3,
   DirectionalLight,
@@ -650,7 +650,6 @@ export function createVertexColorCaptureMaterial(
   material.setTexture("barkTexture", fallbackTexture);
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
   material.setFloat("exposureCaptureBand", 0);
-  bindDirectionalExposure(material);
   registerExposureCutout(material, leafTextureUrl);
   material.setFloat("modelHeight", 1);
   material.setFloat("leafTextureEnabled", 0);

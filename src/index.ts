@@ -1,4 +1,5 @@
 import { Game } from './Game';
+import { LoadingActors } from './LoadingActors';
 import {
   createRenderingEngine,
   requestedRenderer,
@@ -18,6 +19,10 @@ async function startApplication(): Promise<void> {
   const loadingText = loading?.querySelector<HTMLElement>('.loader-text');
   const loadingProgress = loading?.querySelector<HTMLElement>('.loader-progress');
   const loadingProgressBar = loading?.querySelector<HTMLElement>('.loader-progress-bar');
+  const loadingPercent = loading?.querySelector<HTMLElement>('.loader-percent');
+  loading?.querySelector<HTMLButtonElement>('.loader-retry')?.addEventListener('click', () => {
+    window.location.reload();
+  });
 
   if (!canvas) {
     console.error('Canvas element not found!');
@@ -36,13 +41,26 @@ async function startApplication(): Promise<void> {
     if (loadingText) loadingText.textContent = step;
     if (loadingProgressBar) loadingProgressBar.style.width = `${normalizedProgress}%`;
     if (loadingProgress) loadingProgress.setAttribute('aria-valuenow', String(normalizedProgress));
+    if (loadingPercent) loadingPercent.textContent = `${Math.round(normalizedProgress)}%`;
   };
 
   const engineOptions: RenderingEngineOptions = isTreeImpostorTest
     ? { preserveDrawingBuffer: true, stencil: true, antialias: false }
     : isTreeImpostorDemo
       ? { preserveDrawingBuffer: true, stencil: false, antialias: true }
-      : { preserveDrawingBuffer: false, stencil: false, antialias: true };
+      // Scene AA is controlled through render targets so it can change live.
+      : { preserveDrawingBuffer: false, stencil: false, antialias: false };
+
+  let loadingActors: LoadingActors | undefined;
+  const actorCanvas = loading?.querySelector<HTMLCanvasElement>('.loader-actor');
+  const actorCaption = loading?.querySelector<HTMLElement>('.loader-actor-caption');
+  if (actorCanvas && actorCaption) {
+    try {
+      loadingActors = new LoadingActors(actorCanvas, actorCaption);
+    } catch (error) {
+      console.warn('Loading actor preview unavailable:', error);
+    }
+  }
 
   try {
     const backend = requestedRenderer(query);
@@ -61,6 +79,7 @@ async function startApplication(): Promise<void> {
     if (loading) {
       loading.classList.add('hidden');
       setTimeout(() => {
+        loadingActors?.dispose();
         loading.remove();
       }, 500);
     }
@@ -73,6 +92,7 @@ async function startApplication(): Promise<void> {
       game.resize();
     });
   } catch (error) {
+    loadingActors?.dispose();
     console.error('Failed to initialize game:', error);
     loading?.classList.add('error');
     if (loadingText) loadingText.textContent = 'Unable to load the world';

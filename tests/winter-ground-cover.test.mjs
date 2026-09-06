@@ -23,6 +23,7 @@ test("winter ground cover suppresses seasonal low vegetation and rock patches", 
   const seasonalFields = [
     ["createGrassField", "grass"],
     ["createTallPlantField", "tallPlants"],
+    ["createWheatField", "tallPlants"],
     ["createBushField", "bushes"],
     ["createFernField", "ferns"],
     ["createRockyBeachField", "rocks"],

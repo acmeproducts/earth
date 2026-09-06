@@ -81,7 +81,7 @@ import {
 } from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
-import { bindDirectionalExposure, directionalExposureDeclaration } from "./DirectionalExposure";
+import { directionalExposureDeclaration } from "./DirectionalExposure";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -1264,7 +1264,6 @@ export function createImpostorMaterial(
     },
   );
   material.backFaceCulling = true;
-  bindDirectionalExposure(material);
   if (assets.exposureTextures) {
     material.options.defines.push("#define TREE_EXPOSURE");
     material.options.samplers.push("exposureLowAtlas", "exposureHighAtlas");

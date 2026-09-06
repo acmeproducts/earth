@@ -3,7 +3,7 @@ import test from "node:test";
 import { Vector3 } from "@babylonjs/core";
 import {
   bakeExposureGeometry, EXPOSURE_DIRECTIONS,
-  bindDirectionalExposure, setDirectionalExposureEnabled, packExposureFace,
+  packExposureFace,
 } from "../src/DirectionalExposure.ts";
 
 function card(center, size, sun, cutout) {
@@ -69,30 +69,4 @@ test("exposure is invariant to tree scale and cooperatively yields", async () =>
     assert.ok(Math.abs(original[m][i] - scaled[m][i]) < 0.01);
     assert.ok(original[m][i] >= 0 && original[m][i] <= 1);
   }
-});
-
-test("toggle updates existing and newly bound materials", () => {
-  function material() {
-    let bind;
-    const target = {
-      options: { uniforms: [] },
-      setFloat(_name, value) { this.value = value; },
-      onBindObservable: { add(callback) { bind = callback; } },
-    };
-    bindDirectionalExposure(target);
-    return { target, bind: () => bind() };
-  }
-  try {
-    const old = material();
-    setDirectionalExposureEnabled(false);
-    old.bind();
-    const streamed = material();
-    assert.equal(old.target.value, 0);
-    assert.equal(streamed.target.value, 0);
-    setDirectionalExposureEnabled(true);
-    old.bind();
-    streamed.bind();
-    assert.equal(old.target.value, 1);
-    assert.equal(streamed.target.value, 1);
-  } finally { setDirectionalExposureEnabled(true); }
 });

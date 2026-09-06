@@ -25,12 +25,14 @@ import type { LandCoverSampler } from "./WorldCover";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
+import { hasWinterGroundCover } from "./TreeSeason";
 
 export interface RockFieldResult {
   root: TransformNode;
   meshes: Mesh[];
   count: number;
   setFade(fade: number): void;
+  setSnowCovered(snowCovered: boolean): void;
 }
 
 const ROCK_VARIANTS = 3;
@@ -249,10 +251,27 @@ export async function createRockField(
     }
   }
 
+  const setSnowCovered = (snowCovered: boolean): void => {
+    for (const mesh of meshes) mesh.useVertexColors = !snowCovered;
+    if (!material) return;
+    material.unfreeze();
+    material.diffuseColor = snowCovered ? new Color3(0.9, 0.94, 0.98) : Color3.White();
+    material.specularColor = snowCovered
+      ? new Color3(0.16, 0.18, 0.2)
+      : new Color3(0.055, 0.06, 0.05);
+    material.specularPower = snowCovered ? 48 : 18;
+    material.freeze();
+  };
+  setSnowCovered(hasWinterGroundCover(
+    options.seasonalDate,
+    (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
+  ));
+
   return {
     root,
     meshes,
     count,
+    setSnowCovered,
     setFade: (fade: number) => {
       const visibility = Math.max(0, Math.min(1, fade));
       for (const mesh of meshes) mesh.visibility = visibility;

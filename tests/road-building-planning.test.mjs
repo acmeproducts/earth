@@ -73,7 +73,7 @@ test("records clipped building-site polygons in the same construction plan", () 
   assert.ok(plan.buildingSites[0].outline.every((point) => Math.abs(point.x) <= 6));
 });
 
-test("places street lamps just beyond lit road beds and keeps mapped lamps authoritative", () => {
+test("places street lamps near buildings just beyond lit road beds and respects nearby mapped lamps", () => {
   const wideOptions = { meshWidth: 200, meshDepth: 200, metersPerUnit: 1 };
   const plan = planRoadsAndBuildings([
     { id: "avenue", paths: [[{ x: -90, z: 0 }, { x: 90, z: 0 }]], appearance },
@@ -82,14 +82,16 @@ test("places street lamps just beyond lit road beds and keeps mapped lamps autho
       paths: [[{ x: -90, z: 60 }, { x: 90, z: 60 }]],
       appearance: { ...appearance, roadClass: "path" },
     },
-  ], [], wideOptions, [
+  ], [{ id: "frontage", outline: [
+    { x: -90, z: 10 }, { x: 90, z: 10 }, { x: 90, z: 20 }, { x: -90, z: 20 },
+  ] }], wideOptions, [
     { id: "lamp/far", position: { x: 0, z: -80 } },
     { id: "lamp/roadside", position: { x: 0, z: 2.7 } },
     { id: "lamp/outside", position: { x: 500, z: 0 } },
   ]);
 
   const mapped = plan.streetLamps.filter((lamp) => lamp.source === "mapped");
-  assert.deepEqual(mapped.map((lamp) => lamp.sourceId).sort(), ["lamp/far", "lamp/roadside"]);
+  assert.deepEqual(mapped.map((lamp) => lamp.sourceId), ["lamp/roadside"]);
   const procedural = plan.streetLamps.filter((lamp) => lamp.source === "procedural");
   assert.ok(procedural.length >= 4, `expected roadside infill, got ${procedural.length}`);
   const offset = appearance.widthMeters / 2 + appearance.shoulderWidthMeters + 0.7;
@@ -112,7 +114,10 @@ test("keeps procedural lamps off every planned road bed, including crossing road
     { id: "east-west", paths: [[{ x: -90, z: 0 }, { x: 90, z: 0 }]], appearance: wide },
     { id: "north-south", paths: [[{ x: 0, z: -90 }, { x: 0, z: 90 }]], appearance: wide },
     { id: "diagonal", paths: [[{ x: -90, z: -90 }, { x: 90, z: 90 }]], appearance: wide },
-  ], [], wideOptions);
+  ], [-65, 0, 65].flatMap((x) => [-65, 0, 65].map((z) => ({
+    id: `building/${x}/${z}`,
+    outline: [{ x, z }, { x: x + 6, z }, { x: x + 6, z: z + 6 }, { x, z: z + 6 }],
+  }))), wideOptions);
 
   const procedural = plan.streetLamps.filter((lamp) => lamp.source === "procedural");
   assert.ok(procedural.length >= 6);
@@ -120,6 +125,39 @@ test("keeps procedural lamps off every planned road bed, including crossing road
     for (const bed of [...plan.roads, ...plan.shoulders]) {
       assert.equal(pointInPolygon(lamp.position.x, lamp.position.z, bed.outline), false,
         `lamp from ${lamp.sourceId} at ${lamp.position.x},${lamp.position.z} stands on a road bed`);
+    }
+  }
+});
+
+test("omits all street lamps when no buildings are nearby", () => {
+  const roads = [{ id: "rural", paths: [[{ x: -150, z: 0 }, { x: 150, z: 0 }]], appearance }];
+  const wideOptions = { meshWidth: 400, meshDepth: 400, metersPerUnit: 1 };
+  const mapped = [{ id: "mapped", position: { x: 0, z: 3 } }];
+  assert.deepEqual(planRoadsAndBuildings(roads, [], wideOptions, mapped).streetLamps, []);
+  const remote = [{ id: "remote", outline: [
+    { x: -5, z: 100 }, { x: 5, z: 100 }, { x: 5, z: 110 }, { x: -5, z: 110 },
+  ] }];
+  assert.deepEqual(planRoadsAndBuildings(roads, remote, wideOptions, mapped).streetLamps, []);
+});
+
+test("limits lamps along a partly developed road by footprint distance at different scene scales", () => {
+  for (const metersPerUnit of [1, 5]) {
+    const point = (x, z) => ({ x: x / metersPerUnit, z: z / metersPerUnit });
+    const plan = planRoadsAndBuildings([
+      { id: "long-road", paths: [[point(-180, 0), point(180, 0)]], appearance },
+    ], [{ id: "building", outline: [point(-10, 10), point(10, 10), point(10, 20), point(-10, 20)] }],
+    { meshWidth: 400 / metersPerUnit, meshDepth: 400 / metersPerUnit, metersPerUnit }, [
+      { id: "at-limit", position: point(60, 15) },
+      { id: "past-limit", position: point(60.1, 15) },
+      { id: "diagonal-far", position: point(55, 60) },
+    ]);
+    assert.deepEqual(plan.streetLamps.filter((lamp) => lamp.source === "mapped").map((lamp) => lamp.sourceId), ["at-limit"]);
+    const procedural = plan.streetLamps.filter((lamp) => lamp.source === "procedural");
+    assert.ok(procedural.length > 0);
+    for (const lamp of procedural) {
+      const x = lamp.position.x * metersPerUnit;
+      const z = lamp.position.z * metersPerUnit;
+      assert.ok(Math.hypot(Math.max(0, Math.abs(x) - 10), 10 - z) <= 50);
     }
   }
 });

@@ -197,7 +197,7 @@ export function planRoadsAndBuildings(
     }];
   });
 
-  const streetLamps = planStreetLamps(roadInputs, lampInputs, shoulders, bounds, options);
+  const streetLamps = planStreetLamps(roadInputs, lampInputs, buildingSites, shoulders, bounds, options);
   const plots = planBuildingPlots(buildingSites, outerCandidates, bounds, options);
   const plotBoundaries = planPlotBoundaries(
     plots,
@@ -212,6 +212,7 @@ export function planRoadsAndBuildings(
 const LAMP_SPACING_METERS = 34;
 const MAPPED_LAMP_CLEARANCE_METERS = 25;
 const LAMP_EDGE_MARGIN_METERS = 0.7;
+const LAMP_BUILDING_DISTANCE_METERS = 50;
 const LAMP_ROAD_CLASSES = new Set(["primary", "secondary", "tertiary", "minor", "service"]);
 const PLOT_DEPTH_METERS = 12;
 const PLOT_BOUNDARY_SHARE = 0.62;
@@ -395,18 +396,35 @@ function undirectedEdgeKey(start: PlanningPoint, end: PlanningPoint): string {
 }
 
 /**
- * Street-lamp nodes are sparse in mapped data, so the plan keeps every mapped
- * lamp and fills the remaining lit road classes with deterministic road-side
+ * Street-lamp nodes are sparse in mapped data, so the plan keeps nearby mapped
+ * lamps and fills the remaining lit road classes with deterministic road-side
  * placements. Lamps stand just beyond the planned road bed, alternating sides
- * so avenues do not read as rigidly mirrored boulevards.
+ * so avenues do not read as rigidly mirrored boulevards. All lamps require a
+ * building footprint within 50 meters.
  */
 function planStreetLamps(
   roadInputs: readonly PlanningRoadInput[],
   lampInputs: readonly PlanningLampInput[],
+  buildingSites: readonly PlannedBuildingSite[],
   roadBeds: readonly PlannedRoadPolygon[],
   bounds: RoadAndBuildingPlanBounds,
   options: RoadAndBuildingPlanningOptions,
 ): PlannedStreetLamp[] {
+  if (buildingSites.length === 0) return [];
+  const buildingDistance = LAMP_BUILDING_DISTANCE_METERS / options.metersPerUnit;
+  const buildingIndex = new PlanarCellIndex<PlannedBuildingSite>(planningCellSize(options));
+  for (const site of buildingSites) {
+    buildingIndex.add(site, pointBounds(site.outline), buildingDistance);
+  }
+  const nearBuilding = (position: PlanningPoint): boolean =>
+    buildingIndex.queryPoint(position).some((site) => {
+      if (!pointInRing(position, site.outline)) {
+        return distanceToRing(position, site.outline) <= buildingDistance;
+      }
+      const hole = site.holes.find((ring) => pointInRing(position, ring));
+      return !hole || distanceToRing(position, hole) <= buildingDistance;
+    });
+
   // Lamps stand clear of their own road, but near junctions the lateral
   // offset can land on a crossing road's bed; those spots are rejected.
   const bedClearance = 0.3 / options.metersPerUnit;
@@ -423,7 +441,7 @@ function planStreetLamps(
   const lamps: PlannedStreetLamp[] = [];
   const mapped: PlanningPoint[] = [];
   for (const lamp of lampInputs) {
-    if (!insideBounds(lamp.position, bounds)) continue;
+    if (!insideBounds(lamp.position, bounds) || !nearBuilding(lamp.position)) continue;
     mapped.push(lamp.position);
     lamps.push({
       sourceId: lamp.id,
@@ -461,7 +479,7 @@ function planStreetLamps(
             x: start.x + dx * amount - dz / length * offset * side,
             z: start.z + dz * amount + dx / length * offset * side,
           };
-          if (insideBounds(position, bounds) && !onAnyRoadBed(position) && !mapped.some((lamp) =>
+          if (insideBounds(position, bounds) && nearBuilding(position) && !onAnyRoadBed(position) && !mapped.some((lamp) =>
             (lamp.x - position.x) ** 2 + (lamp.z - position.z) ** 2 < clearanceSquared,
           )) {
             lamps.push({

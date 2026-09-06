@@ -27,17 +27,7 @@ export const EXPOSURE_DIRECTIONS = EXPOSURE_ELEVATIONS.flatMap((elevation) =>
   }),
 );
 
-let enabled = true;
-export function isDirectionalExposureEnabled(): boolean { return enabled; }
-export function setDirectionalExposureEnabled(value: boolean): void { enabled = value; }
-export function bindDirectionalExposure(material: ShaderMaterial): void {
-  material.options.uniforms.push("directionalExposureEnabled");
-  material.setFloat("directionalExposureEnabled", enabled ? 1 : 0);
-  material.onBindObservable.add(() => material.setFloat("directionalExposureEnabled", enabled ? 1 : 0));
-}
-
 export const directionalExposureDeclaration = `
-uniform float directionalExposureEnabled;
 float directionalExposure(vec4 lowExposure, vec4 highExposure, vec3 sun) {
   float azimuth = mod(atan(sun.z, sun.x) / 1.57079632679 + 4.0, 4.0);
   vec4 weights = max(vec4(0.0), vec4(1.0) - min(
@@ -52,7 +42,7 @@ float directionalExposure(vec4 lowExposure, vec4 highExposure, vec3 sun) {
 }
 float exposureSunlightScale(float exposure) {
   // Ambient light stays intact. Exposed foliage gets a small lift; interiors lose direct light.
-  return mix(1.0, mix(0.18, 1.22, exposure), directionalExposureEnabled);
+  return mix(0.18, 1.22, exposure);
 }
 `;
 

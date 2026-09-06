@@ -67,6 +67,14 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
+  const woodPositions: number[] = [];
+  const woodIndices: number[] = [];
+  const woodColors: number[] = [];
+  const woodRandom = createSeededRandom(seed ^ 0x574f4f44);
+  const branchSegments: Array<readonly [Vector3, Vector3]> = [];
+  const addWood = (start: Vector3, end: Vector3, radius: number, tipRadius: number): void => {
+    addBranch(woodPositions, woodIndices, woodColors, start, end, radius, tipRadius);
+  };
   // Each regional seed gets a coherent but asymmetric crown. Low-frequency
   // lobes read as natural growth; exact rotational copies read as a pattern.
   const crownRadius = 0.88 + random() * 0.14;
@@ -97,6 +105,30 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     + Math.sin((angle - crownRotation) * 5 + secondaryLobePhase) * 0.075
   );
 
+  // A shrub grows from several basal stems, each bending out into the crown.
+  // Keep wood in the same mesh so both the close model and atlas share it.
+  const stemCount = 7 + Math.floor(woodRandom() * 4);
+  for (let stem = 0; stem < stemCount; stem++) {
+    const angle = crownRotation + stem / stemCount * Math.PI * 2
+      + (woodRandom() - 0.5) * 0.42;
+    const reach = radiusAtAngle(angle) * crownWidth * (0.5 + woodRandom() * 0.3);
+    const root = new Vector3(Math.cos(angle) * 0.085, -SOURCE_HEIGHT / 2, Math.sin(angle) * 0.085);
+    const fork = new Vector3(
+      Math.cos(angle) * reach * 0.36 + crownLeanX * 0.4,
+      -0.55 + woodRandom() * 0.2,
+      Math.sin(angle) * reach * 0.36 + crownLeanZ * 0.4,
+    );
+    const tip = new Vector3(
+      Math.cos(angle) * reach + crownLeanX,
+      0.12 + woodRandom() * 0.44 * crownHeight,
+      Math.sin(angle) * reach + crownLeanZ,
+    );
+    const thickness = 0.024 + woodRandom() * 0.016;
+    addWood(root, fork, thickness, thickness * 0.65);
+    addWood(fork, tip, thickness * 0.65, 0.006);
+    branchSegments.push([root, fork], [fork, tip]);
+  }
+
   // Build short compound sprays rather than grass-like ribbons. Paired side
   // leaves and a terminal leaf keep the close model legible, while random
   // orientation and gentle camber prevent the atlas from looking like cards.
@@ -114,7 +146,7 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
         + Math.sin(baseAngle * 2 + lobePhase) * 0.09
         + (random() - 0.5) * 0.13,
     );
-    const localBottom = -0.94 + normalizedRadius * 0.28 + (random() - 0.5) * 0.1;
+    const localBottom = -0.76 + normalizedRadius * 0.24 + (random() - 0.5) * 0.1;
     const baseY = localBottom + Math.pow(random(), 0.72)
       * Math.max(0.08, localTop - localBottom - 0.16);
     const growthAngle = baseAngle + (random() - 0.5) * 1.3;
@@ -128,6 +160,23 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     const sprayLength = Math.min(desiredLength, availableRise / growthDirection.y);
     const sprayStart = new Vector3(baseX, baseY, baseZ);
     const sprayEnd = sprayStart.add(growthDirection.scale(sprayLength));
+    // Every leafy shoot joins the nearest woody stem, leaving a visible,
+    // connected framework in the gaps between sprays.
+    let attachment = branchSegments[0][0];
+    let nearestDistance = Infinity;
+    for (const [start, end] of branchSegments) {
+      const axis = end.subtract(start);
+      const along = Math.max(0, Math.min(1,
+        Vector3.Dot(sprayStart.subtract(start), axis) / axis.lengthSquared()));
+      const candidate = start.add(axis.scale(along));
+      const distance = Vector3.DistanceSquared(candidate, sprayStart);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        attachment = candidate;
+      }
+    }
+    addWood(attachment, sprayStart, 0.008 + woodRandom() * 0.004, 0.004);
+    addWood(sprayStart, sprayEnd, 0.004, 0.0015);
     const paletteOffset = random() < 0.16 ? (random() < 0.5 ? -1 : 1) : 0;
     const palette = FOLIAGE_PALETTES[
       Math.max(0, Math.min(FOLIAGE_PALETTES.length - 1, paletteCenter + paletteOffset))
@@ -197,6 +246,10 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
     }
   }
 
+  const foliageVertices = positions.length / 3;
+  for (const value of woodPositions) positions.push(value);
+  for (const value of woodIndices) indices.push(value + foliageVertices);
+  for (const value of woodColors) colors.push(value);
   const data = new VertexData();
   const normals = new Float32Array(positions.length);
   VertexData.ComputeNormals(positions, indices, normals);
@@ -204,8 +257,12 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   data.indices = indices;
   data.normals = normals;
   data.colors = colors;
-  // Solid leaf geometry needs no texture, but UVs mark it as foliage for exposure.
-  data.uvs = new Float32Array(positions.length / 3 * 2);
+  // UV.x = 2 marks bark for solid-surface lighting and opaque occlusion.
+  const uvs = new Float32Array(positions.length / 3 * 2);
+  for (let vertex = foliageVertices; vertex < positions.length / 3; vertex++) {
+    uvs[vertex * 2] = 2;
+  }
+  data.uvs = uvs;
 
   const bush = new Mesh("bushImpostorProceduralSource", scene);
   data.applyToMesh(bush);
@@ -260,6 +317,42 @@ export async function createBushModel(scene: Scene, renderHeight: number, seed?:
   bush.refreshBoundingInfo();
   setVertexColorModelHeight(bush, renderHeight);
   return bush;
+}
+
+/** A closed, tapered hexagonal stem with subtle longitudinal bark variation. */
+function addBranch(
+  positions: number[], indices: number[], colors: number[],
+  start: Vector3, end: Vector3, radius: number, tipRadius: number,
+): void {
+  const axis = end.subtract(start);
+  if (axis.lengthSquared() < 0.000001) return;
+  axis.normalize();
+  const reference = Math.abs(axis.y) < 0.9 ? Vector3.Up() : Vector3.Right();
+  const side = Vector3.Cross(axis, reference).normalize();
+  const across = Vector3.Cross(axis, side).normalize();
+  const first = positions.length / 3;
+  const sides = 6;
+  for (let ring = 0; ring < 2; ring++) {
+    const center = ring === 0 ? start : end;
+    const width = ring === 0 ? radius : tipRadius;
+    for (let corner = 0; corner < sides; corner++) {
+      const angle = corner / sides * Math.PI * 2;
+      const point = center.add(side.scale(Math.cos(angle) * width))
+        .add(across.scale(Math.sin(angle) * width));
+      positions.push(point.x, point.y, point.z);
+      const shade = 0.84 + (corner % 3) * 0.09 + ring * 0.04;
+      colors.push(0.25 * shade, 0.18 * shade, 0.11 * shade, 1);
+    }
+  }
+  for (let corner = 0; corner < sides; corner++) {
+    const next = (corner + 1) % sides;
+    indices.push(first + corner, first + next, first + sides + corner,
+      first + next, first + sides + next, first + sides + corner);
+  }
+  for (let corner = 1; corner < sides - 1; corner++) {
+    indices.push(first, first + corner + 1, first + corner,
+      first + sides, first + sides + corner, first + sides + corner + 1);
+  }
 }
 
 /** Adds one softly cupped, pointed oval leaf with a subtle center fold. */

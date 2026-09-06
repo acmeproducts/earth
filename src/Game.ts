@@ -6,6 +6,9 @@ import {
   Ray,
   Scene,
   SSRRenderingPipeline,
+  TAARenderingPipeline,
+  FxaaPostProcess,
+  PassPostProcess,
   UniversalCamera,
   Vector3,
   Color4,
@@ -13,6 +16,8 @@ import {
   KeyboardEventTypes,
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
+import { loadAntialiasing, saveAntialiasing } from "./Antialiasing";
+import type { AntialiasingMode } from "./Antialiasing";
 import { TerrainElevationSource } from "./TerrainElevationSource";
 import { stitchTerrainEdges } from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
@@ -198,6 +203,9 @@ export class Game {
   private sceneControls?: SceneControls;
   private readonly waterReflectionsEnabled: boolean;
   private screenSpaceReflections?: SSRRenderingPipeline;
+  private antialiasingMode: AntialiasingMode;
+  private temporalAA?: TAARenderingPipeline;
+  private antialiasingPass?: FxaaPostProcess | PassPostProcess;
   private flyCamera?: UniversalCamera;
   private playerControls?: PlayerControls;
   private terrainCoordinateFrame?: SceneGeographicFrame;
@@ -224,6 +232,10 @@ export class Game {
     // Reverse depth can be isolated explicitly once the base renderer is sound.
     this.engine.useReverseDepthBuffer = !this.engine.isWebGPU || forceReverseDepth;
     this.scene = new Scene(this.engine);
+    this.antialiasingMode = loadAntialiasing(query);
+    if (this.antialiasingMode === "taa" && !this.engine.getCaps().texelFetch) {
+      this.antialiasingMode = "msaa";
+    }
     this.layerFades = new LayerFades({
       refreshShadows: () => this.solarLighting?.refreshShadows(),
       refreshShadowsDuringFade: () => {
@@ -346,6 +358,7 @@ export class Game {
     this.solarLighting.setTimeOfDay(this.initialTimeOfDay);
     this.vegetationDate = this.solarLighting.currentDate;
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
+    this.applyAntialiasing(camera);
 
     // Load terrain at the active example location. Only the center tile
     // blocks the loading screen; the rest streams in from the render loop.
@@ -355,6 +368,13 @@ export class Game {
     this.worldLocation.completeDestination();
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.sceneControls = new SceneControls({
+      antialiasing: this.antialiasingMode,
+      temporalAASupported: this.engine.getCaps().texelFetch,
+      onAntialiasingChange: (mode) => {
+        this.antialiasingMode = mode;
+        this.applyAntialiasing(camera);
+        saveAntialiasing(mode);
+      },
       settings: this.sceneSettings.value,
       clockSettings: this.clockSettings.value,
       initialLocation: location,
@@ -879,7 +899,7 @@ export class Game {
     const wheatField = await createWheatField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "wheat"),
-      densityScale: () => actorMix.tallPlants.densityScale,
+      densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
       renderMode: this.vegetationModes.grass,
     });
     await this.prepareTileFieldLod(
@@ -1300,6 +1320,33 @@ export class Game {
     this.solarLighting?.setShadowCasters(casters);
   }
 
+  /** Replace AA passes live, releasing temporal history and projection jitter. */
+  private applyAntialiasing(camera: UniversalCamera): void {
+    this.temporalAA?.dispose();
+    if (this.temporalAA) this.scene.postProcessRenderPipelineManager.removePipeline("temporalAA");
+    this.temporalAA = undefined;
+    this.antialiasingPass?.dispose(camera);
+    this.antialiasingPass = undefined;
+    camera.getProjectionMatrix(true);
+
+    const samples = this.antialiasingMode === "msaa" ? 4 : 1;
+    if (this.screenSpaceReflections) this.screenSpaceReflections.samples = samples;
+    if (this.antialiasingMode === "taa") {
+      const taa = new TAARenderingPipeline("temporalAA", this.scene, [camera]);
+      taa.samples = 8;
+      taa.msaaSamples = 1;
+      taa.disableOnCameraMove = true;
+      taa.factor = 0.2;
+      this.temporalAA = taa;
+    } else if (this.antialiasingMode === "fxaa") {
+      this.antialiasingPass = new FxaaPostProcess("FXAA", 1, camera);
+    } else if (this.antialiasingMode === "msaa" && !this.screenSpaceReflections) {
+      // Keep MSAA available with reflections disabled, without recreating the engine.
+      this.antialiasingPass = new PassPostProcess("MSAA", 1, camera);
+      this.antialiasingPass.samples = 4;
+    }
+  }
+
   /**
    * Screen-space reflections, aimed at the ocean.
    *
@@ -1357,7 +1404,7 @@ export class Game {
     reflections.attenuateBackfaceReflection = true;
     // The prepass takes rendering off the back buffer, so the engine's own
     // anti-aliasing no longer applies to the scene.
-    reflections.samples = 4;
+    reflections.samples = this.antialiasingMode === "msaa" ? 4 : 1;
     this.screenSpaceReflections = reflections;
     this.keepRenderTargetsOutOfPrePass();
   }
@@ -1764,6 +1811,7 @@ export class Game {
         const latitude = (record.terrainData.bounds.latNorth + record.terrainData.bounds.latSouth) / 2;
         const snowCovered = hasWinterGroundCover(date, latitude);
         setTerrainSnowCovered(this.scene, record.terrain, snowCovered);
+        record.rockField?.setSnowCovered(snowCovered);
         if (snowCovered) {
           // Old summer undergrowth must not obscure the newly visible snow
           // while replacement tree atlases are being generated.
