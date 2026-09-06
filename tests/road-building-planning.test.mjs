@@ -284,6 +284,51 @@ test("selectively plans plot hedges and fences with road entrance gaps", () => {
   assert.ok(entranceFound, "a treated road frontage should retain a driveway-sized gap");
 });
 
+test("leaves isolated plots open toward nature, including beneath bridges", () => {
+  for (let index = 0; index < 20; index++) {
+    const buildings = [{
+      id: `house-${index}`,
+      outline: [{ x: -4, z: 7 }, { x: 4, z: 7 }, { x: 4, z: 13 }, { x: -4, z: 13 }],
+    }];
+    const wideOptions = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
+    for (const roads of [[], [{
+      id: "bridge",
+      paths: [[{ x: -45, z: 0 }, { x: 45, z: 0 }]],
+      appearance: { ...appearance, structure: "bridge", layer: 1 },
+    }]]) {
+      const plan = planRoadsAndBuildings(roads, buildings, wideOptions);
+      assert.equal(plan.plots.length, 1);
+      assert.deepEqual(plan.plotBoundaries, [], "open land is not evidence of a boundary");
+    }
+  }
+});
+
+test("treats only the shared portion of unequal neighboring plot edges at any scene scale", () => {
+  for (const metersPerUnit of [1, 5]) {
+    let count = 0;
+    for (let index = 0; index < 20; index++) {
+      const rectangle = (minX, maxX, minZ, maxZ) => [
+        { x: minX, z: minZ }, { x: maxX, z: minZ },
+        { x: maxX, z: maxZ }, { x: minX, z: maxZ },
+      ].map(({ x, z }) => ({ x: x / metersPerUnit, z: z / metersPerUnit }));
+      const plan = planRoadsAndBuildings([], [
+        { id: `house-${index}`, outline: rectangle(-12, -4, 0, 6) },
+        { id: `neighbor-${index}`, outline: rectangle(4, 12, 2, 4) },
+      ], { meshWidth: 100 / metersPerUnit, meshDepth: 100 / metersPerUnit, metersPerUnit });
+      count += plan.plotBoundaries.length;
+      assert.ok(plan.plotBoundaries.length <= 1, "shared contact is rendered only once");
+      for (const boundary of plan.plotBoundaries) {
+        for (const point of boundary.path) {
+          assert.ok(Math.abs(point.x) < 1e-6, "only the neighbor-facing side is treated");
+          assert.ok(point.z * metersPerUnit >= -10 - 1e-6 && point.z * metersPerUnit <= 16 + 1e-6,
+            "barriers stop at the end of the shorter neighboring plot");
+        }
+      }
+    }
+    assert.ok(count > 0, "neighbor contacts should receive barriers");
+  }
+});
+
 test("reuses one building pad elevation across independently processed tiles", async () => {
   const sharedBuildingElevations = new Map();
   const makeTerrain = (fill, x) => ({

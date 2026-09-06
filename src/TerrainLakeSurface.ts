@@ -1,8 +1,6 @@
 import {
   Mesh,
-  PBRMaterial,
   PolygonMeshBuilder,
-  StandardMaterial,
   TransformNode,
   Vector2,
   VertexBuffer,
@@ -10,12 +8,13 @@ import {
 import type { BaseTexture, Scene } from "@babylonjs/core";
 import earcut from "earcut";
 import type { TerrainLakePolygon } from "./TerrainLakePolygons";
+import { distanceToRing, pointInRing } from './PlanarGeometry';
+import { attachShoreline } from './Shoreline';
 import {
   createWaterSurfaceMaterial,
+  bindWaterMaterial,
   prepareWaterSurfaceMesh,
 } from "./Water";
-
-const terrainLakeMaterials = new WeakMap<Scene, PBRMaterial | StandardMaterial>();
 
 export interface TerrainLakeSurfaceOptions {
   meshWidth: number;
@@ -24,6 +23,8 @@ export interface TerrainLakeSurfaceOptions {
   worldOffsetX?: number;
   worldOffsetZ?: number;
   skyReflection?: BaseTexture | null;
+  /** Rendered bed for the same terrain-following shore waves as the ocean. */
+  terrain?: Mesh;
 }
 
 export interface TerrainLakeLayer {
@@ -33,7 +34,7 @@ export interface TerrainLakeLayer {
 
 export const LAKE_SURFACE_CLEARANCE_METERS = 0.35;
 
-/** Builds one flat water mesh for each prepared OSM lake polygon piece. */
+/** The common water shader moves each prepared OSM lake polygon piece. */
 export async function createTerrainLakeLayer(
   scene: Scene,
   polygons: readonly TerrainLakePolygon[],
@@ -44,18 +45,16 @@ export async function createTerrainLakeLayer(
   root.setEnabled(false);
   if (polygons.length === 0) return { root, meshes: [] };
 
-  let material = terrainLakeMaterials.get(scene);
-  if (!material) {
-    material = createWaterSurfaceMaterial(scene, {
-      name: "terrainLakeMaterial",
-      kind: "lake",
-      width: options.meshWidth,
-      height: options.meshDepth,
-      metersPerUnit: options.metersPerUnit,
-      skyReflection: options.skyReflection,
-    });
-    terrainLakeMaterials.set(scene, material);
-  }
+  const material = createWaterSurfaceMaterial(scene, {
+    name: "terrainLakeMaterial",
+    kind: "lake",
+    width: options.meshWidth,
+    height: options.meshDepth,
+    metersPerUnit: options.metersPerUnit,
+    skyReflection: options.skyReflection,
+  });
+  const bedPositions = options.terrain?.getVerticesData(VertexBuffer.PositionKind);
+  const bedIndices = options.terrain?.getIndices();
   const meshes: Mesh[] = [];
   for (let index = 0; index < polygons.length; index++) {
     const polygon = polygons[index];
@@ -74,11 +73,34 @@ export async function createTerrainLakeLayer(
     ) / options.metersPerUnit;
     setWaterUvs(mesh, options);
     prepareWaterSurfaceMesh(mesh);
-    mesh.material = material;
+    bindWaterMaterial(mesh, material, options.metersPerUnit, 'lake');
     mesh.isPickable = false;
     mesh.receiveShadows = true;
     mesh.parent = root;
     meshes.push(mesh);
+    if (options.terrain && bedPositions && bedIndices) {
+      const padding = 24 / options.metersPerUnit;
+      const minimumX = Math.min(...polygon.outline.map(point => point.x)) - padding;
+      const maximumX = Math.max(...polygon.outline.map(point => point.x)) + padding;
+      const minimumZ = Math.min(...polygon.outline.map(point => point.z)) - padding;
+      const maximumZ = Math.max(...polygon.outline.map(point => point.z)) + padding;
+      const shore = await attachShoreline(options.terrain, bedPositions, bedIndices,
+        options.metersPerUnit, yieldControl, {
+          kind: 'lake', elevation: mesh.position.y, parent: root,
+          // Restrict equal-height contours to this lake and its bank. Holes
+          // contribute their own shores, while distant same-height land does not.
+          includesPoint: (x, z) => {
+            if (x < minimumX || x > maximumX || z < minimumZ || z > maximumZ) return false;
+            const point = { x, z };
+            if (pointInRing(point, polygon.outline)) {
+              const hole = polygon.holes.find(ring => pointInRing(point, ring));
+              return !hole || distanceToRing(point, hole) <= padding;
+            }
+            return distanceToRing(point, polygon.outline) <= padding;
+          },
+        });
+      if (shore) meshes.push(shore);
+    }
     await yieldControl?.();
   }
   return { root, meshes };

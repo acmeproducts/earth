@@ -98,6 +98,8 @@ export interface ProceduralVariantSelection {
   latitude: number;
   localitySpanTiles?: number;
   localityBlendTiles?: number;
+  /** Optional bounded sister-model offset, e.g. a secondary colony species. */
+  localVariantOffset?: number;
 }
 
 /** Names one bucket's meshes uniquely, including its sister-model index. */
@@ -129,7 +131,7 @@ export function addProceduralVariantPlacement(
   // Bound to the location, not to the field's random stream: a terrain tile
   // then normally builds one sister model instead of all of them, and adjacent
   // tiles reuse the same cached impostor atlas.
-  const localVariant = proceduralLocalVariantAtLocation(
+  const localVariant = (proceduralLocalVariantAtLocation(
     family,
     variantLongitude,
     variantLatitude,
@@ -137,7 +139,7 @@ export function addProceduralVariantPlacement(
     sisterModels,
     selection?.localitySpanTiles,
     selection?.localityBlendTiles,
-  );
+  ) + (selection?.localVariantOffset ?? 0)) % Math.max(1, sisterModels);
   const variant = localVariant === 0 ? regionalVariant : {
     ...regionalVariant,
     key: `${regionalVariant.key}/local/${localVariant}`,

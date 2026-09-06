@@ -168,7 +168,7 @@ test("shadows custom vegetation direct light while preserving ambient light", ()
     receivers,
     /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?#else[\s\S]*?uniform sampler2D vegetationShadowSampler/,
   );
-  assert.match(receivers, /scene\.onBeforeRenderObservable\.add\(updateShadowUniforms\)/);
+  assert.match(receivers, /scene\.onBeforeRenderObservable\.add\(\(\) => updateShadowUniforms\(\)\)/);
   assert.doesNotMatch(receivers, /material\.onBindObservable\.add/);
 });
 

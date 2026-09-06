@@ -1,19 +1,27 @@
 import {
   BaseTexture,
+  BoundingInfo,
   Color3,
   DynamicTexture,
   Material,
   Mesh,
   MeshBuilder,
-  Nullable,
-  Observer,
   PBRMaterial,
+  RawTexture,
   Scene,
   StandardMaterial,
   Texture,
   VertexBuffer,
 } from '@babylonjs/core';
-import { currentWindState } from './Wind';
+import type { Nullable, Observer } from '@babylonjs/core';
+import { waterFrame } from './WaterFrame';
+import { WaterMotionPlugin } from './WaterMotion';
+import { maximumWaterLift, WATER_PROFILES } from './WaterProfile';
+import type { WaterSurfaceKind } from './WaterProfile';
+export type { WaterSurfaceKind } from './WaterProfile';
+
+const waterMaterials = new WeakMap<Scene, Map<string, PBRMaterial | StandardMaterial>>();
+const waterMaterialUsers = new WeakMap<Material, number>();
 
 const WAVE_NORMAL_MAP_URL = 'https://assets.babylonjs.com/textures/waterbump.png';
 /** Ground distance spanned by one repeat of the broad swell normal map. */
@@ -50,6 +58,8 @@ const WATER_REFLECTIVITY = 0.08;
 /** Neutral detail: no albedo or roughness change, and a flat normal. */
 const DETAIL_MAP_NEUTRAL = 'rgba(128, 128, 128, 0.502)';
 const DETAIL_MAP_SIZE = 256;
+/** Shared by the ocean and its terrain-conforming shoreline ribbon. */
+export const OCEAN_ELEVATION = -0.01;
 
 /**
  * Creates the ocean plane.
@@ -83,10 +93,9 @@ export function createWaterPlane(
   const {
     width = 100,
     height = 100,
-    // This surface has no vertex displacement. One quad avoids exposing an
-    // otherwise pointless 64x64 triangle grid on precision-sensitive GPUs.
+    // Broad water heaves uniformly; only the shore needs crest tessellation.
     subdivisions = 1,
-    elevation = -0.01,
+    elevation = OCEAN_ELEVATION,
     metersPerUnit = 1,
     skyReflection = null,
     kind = 'ocean',
@@ -109,13 +118,14 @@ export function createWaterPlane(
     kind,
   });
 
-  waterMesh.material = water;
+  bindWaterMaterial(waterMesh, water, metersPerUnit, kind);
   waterMesh.isPickable = false;
   waterMesh.freezeWorldMatrix();
   return waterMesh;
 }
 
 export interface WaterSurfaceMaterialOptions {
+  /** Kept for callers that describe mesh dimensions; textures use world metres. */
   width: number;
   height: number;
   /** Scene units are not metres; wave scale is authored in metres. */
@@ -126,8 +136,6 @@ export interface WaterSurfaceMaterialOptions {
   kind?: WaterSurfaceKind;
   name?: string;
 }
-
-export type WaterSurfaceKind = 'ocean' | 'lake';
 
 /** Maps wind strength to water motion while preserving exactly still water at zero. */
 export function waterMotionSpeed(windStrength: number, exposure = 1): number {
@@ -141,13 +149,21 @@ export function createWaterSurfaceMaterial(
   options: WaterSurfaceMaterialOptions,
 ): PBRMaterial | StandardMaterial {
   const {
-    width,
-    height,
     metersPerUnit = 1,
     skyReflection = null,
     name = 'waterMaterial',
     kind = 'ocean',
   } = options;
+
+  let cache = waterMaterials.get(scene);
+  if (!cache) waterMaterials.set(scene, cache = new Map());
+  const key = `${kind}:${metersPerUnit}`;
+  const cached = cache.get(key);
+  if (cached) {
+    if (skyReflection) cached.reflectionTexture = skyReflection;
+    return cached;
+  }
+  const profile = WATER_PROFILES[kind];
 
   const water = scene.getEngine().isWebGPU
     ? new StandardMaterial(name, scene)
@@ -161,9 +177,7 @@ export function createWaterSurfaceMaterial(
   // space and converts on output, so convert the authored colour once here
   // instead of re-picking it by eye.
   if (water instanceof PBRMaterial) {
-    water.albedoColor = (kind === 'lake'
-      ? new Color3(0.055, 0.24, 0.29)
-      : new Color3(0.05, 0.2, 0.4)).toLinearSpace();
+    water.albedoColor = new Color3(...profile.color).toLinearSpace();
     // Leaving metallic/roughness unset keeps the specular-glossiness workflow,
     // where reflectivity is exactly the F0 the prepass hands to SSR.
     water.reflectivityColor = new Color3(
@@ -171,67 +185,82 @@ export function createWaterSurfaceMaterial(
       WATER_REFLECTIVITY,
       WATER_REFLECTIVITY
     );
-    water.microSurface = kind === 'lake' ? 0.84 : 0.9;
+    water.microSurface = profile.glossiness;
     water.reflectionTexture = skyReflection;
     water.enableSpecularAntiAliasing = true;
     water.useHorizonOcclusion = true;
   } else {
     // Use Babylon's native StandardMaterial WGSL path as the WebGPU baseline.
     // Direct sun specular keeps it readable without a live reflection probe.
-    water.diffuseColor = kind === 'lake'
-      ? new Color3(0.045, 0.2, 0.22)
-      : new Color3(0.035, 0.16, 0.3);
-    water.ambientColor = kind === 'lake'
-      ? new Color3(0.018, 0.07, 0.065)
-      : new Color3(0.015, 0.055, 0.09);
-    water.specularColor = kind === 'lake'
-      ? new Color3(0.58, 0.72, 0.7)
-      : new Color3(0.65, 0.76, 0.86);
-    water.specularPower = kind === 'lake' ? 72 : 96;
+    water.diffuseColor = new Color3(...profile.color);
+    water.ambientColor = water.diffuseColor.scale(0.25);
+    water.specularColor = new Color3(0.65, 0.76, 0.86);
+    water.specularPower = 32 + profile.glossiness * 64;
+    water.reflectionTexture = skyReflection;
   }
 
-  const swellTileUnits = SWELL_TILE_METERS / metersPerUnit;
   const swell = tileOverPlane(
     new Texture(WAVE_NORMAL_MAP_URL, scene),
     'waterSwell',
-    width,
-    height,
-    swellTileUnits
+    SWELL_TILE_METERS
   );
   const chop = tileOverPlane(
     packAsDetailMap(scene, WAVE_NORMAL_MAP_URL),
     'waterChop',
-    width,
-    height,
-    swellTileUnits / CHOP_TILE_RATIO
+    SWELL_TILE_METERS / CHOP_TILE_RATIO
   );
   water.bumpTexture = swell;
   // Babylon's detail map reads its normal from green and alpha, not from an
   // RGB normal map, so the second wave scale is packed into that layout
   // instead of being handed the bump image directly.
   water.detailMap.texture = chop;
-  water.detailMap.bumpLevel = kind === 'lake' ? 0.38 : 0.6;
+  water.detailMap.bumpLevel = profile.chopNormal;
   water.detailMap.diffuseBlendLevel = 0;
   water.detailMap.roughnessBlendLevel = 0;
   water.detailMap.isEnabled = true;
 
   animateWaves(scene, water, swell, chop, kind);
+  new WaterMotionPlugin(water, metersPerUnit, profile);
+  cache.set(key, water);
+  water.onDisposeObservable.add(() => { cache.delete(key); });
   return water;
 }
 
+/** Every water mesh holds a reference; streamed tiles cannot dispose a sibling's material. */
+export function bindWaterMaterial(
+  mesh: Mesh,
+  material: PBRMaterial | StandardMaterial,
+  metersPerUnit: number,
+  kind: WaterSurfaceKind,
+): void {
+  mesh.material = material;
+  waterMaterialUsers.set(material, (waterMaterialUsers.get(material) ?? 0) + 1);
+  const bounds = mesh.getBoundingInfo();
+  const padding = (maximumWaterLift(WATER_PROFILES[kind]) + 0.001) / metersPerUnit;
+  const minimum = bounds.minimum.clone();
+  const maximum = bounds.maximum.clone();
+  minimum.y -= padding;
+  maximum.y += padding;
+  mesh.setBoundingInfo(new BoundingInfo(minimum, maximum));
+  mesh.onDisposeObservable.add(() => {
+    mesh.material = null;
+    const remaining = (waterMaterialUsers.get(material) ?? 1) - 1;
+    waterMaterialUsers.set(material, remaining);
+    if (remaining === 0) {
+      material.reflectionTexture = null;
+      material.dispose(false, true);
+    }
+  });
+}
+
 /**
- * Tears down a water plane and the wave textures it owns.
+ * Releases this plane's reference to the shared water material.
  *
- * The sky reflection is not one of them: it belongs to the lighting and is
- * still in use after the plane goes, but Babylon's forced texture disposal
- * walks every texture slot on the material and would take it down too.
+ * The last water mesh releases its wave textures. Its borrowed sky reflection
+ * remains owned by the lighting, including during world/location changes.
  */
 export function disposeWaterPlane(waterMesh: Mesh): void {
-  const material = waterMesh.material;
-  if (material instanceof PBRMaterial || material instanceof StandardMaterial) {
-    material.reflectionTexture = null;
-  }
-  waterMesh.dispose(false, true);
+  waterMesh.dispose(false, false);
 }
 
 /**
@@ -250,19 +279,25 @@ export function prepareWaterSurfaceMesh(mesh: Mesh): void {
     tangents[vertex * 4 + 3] = 1; // Handedness of the derived bitangent.
   }
   mesh.setVerticesData(VertexBuffer.TangentKind, tangents);
+  // x = terrain height relative to water in metres, y = crest-enabled region.
+  // Broad ocean and lake polygons use the common heave, without shore crests.
+  const shore = new Float32Array(vertexCount * 2);
+  for (let vertex = 0; vertex < vertexCount; vertex++) shore[vertex * 2] = -100;
+  mesh.setVerticesData('waterShore', shore, false, 2);
+  if (!mesh.isVerticesDataPresent(VertexBuffer.UVKind)) {
+    mesh.setVerticesData(VertexBuffer.UVKind, new Float32Array(vertexCount * 2));
+  }
 }
 
 /** Repeats a wave layer so one tile covers a fixed real-world distance. */
 function tileOverPlane(
   texture: Texture,
   name: string,
-  width: number,
-  height: number,
-  tileUnits: number
+  tileMeters: number
 ): Texture {
   texture.name = name;
-  texture.uScale = Math.max(1, width / tileUnits);
-  texture.vScale = Math.max(1, height / tileUnits);
+  texture.uScale = 1 / tileMeters;
+  texture.vScale = 1 / tileMeters;
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   // The ocean runs to the horizon, so most of it is seen at a grazing angle
@@ -283,6 +318,9 @@ function tileOverPlane(
  * texture stays neutral and only the primary wave layer shows.
  */
 function packAsDetailMap(scene: Scene, url: string): Texture {
+  if (typeof document === 'undefined') {
+    return RawTexture.CreateRGBATexture(new Uint8Array([128, 128, 128, 128]), 1, 1, scene);
+  }
   const packed = new DynamicTexture(
     'waterChopDetail',
     { width: DETAIL_MAP_SIZE, height: DETAIL_MAP_SIZE },
@@ -343,11 +381,11 @@ function animateWaves(
     (CHOP_DRIFT_METERS_PER_SECOND * CHOP_TILE_RATIO) / SWELL_TILE_METERS;
   const observer: Nullable<Observer<Scene>> = scene.onBeforeRenderObservable.add(() => {
     // Absolute page time keeps separately streamed water materials in phase.
-    const seconds = performance.now() / 1000;
-    const wind = currentWindState();
+    const { seconds, wind } = waterFrame(scene);
     const directionX = wind.direction.x;
     const directionY = wind.direction.y;
-    const exposure = kind === 'lake' ? 0.62 : 1;
+    const profile = WATER_PROFILES[kind];
+    const exposure = profile.exposure;
     const speed = waterMotionSpeed(wind.strength, exposure);
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
@@ -360,8 +398,8 @@ function animateWaves(
     // Wind makes the surface more broken without changing the authored look
     // at calm conditions. Lakes respond less dramatically than open sea.
     const roughnessWind = Math.min(MAX_WAVE_ROUGHNESS_WIND, wind.strength);
-    const chopLevel = (kind === 'lake' ? 0.38 : 0.6) * (0.72 + roughnessWind * 0.28);
-    water.bumpTexture!.level = (kind === 'lake' ? 0.72 : 0.9) * (0.78 + roughnessWind * 0.22);
+    const chopLevel = profile.chopNormal * (0.72 + roughnessWind * 0.28);
+    water.bumpTexture!.level = profile.swellNormal * (0.78 + roughnessWind * 0.22);
     water.detailMap.bumpLevel = chopLevel;
   });
 

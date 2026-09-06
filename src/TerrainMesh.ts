@@ -6,7 +6,9 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import type { TerrainData } from "./TerrainData";
-import { sceneToLonLat, SEA_LEVEL_METERS, sinkSubmergedElevation } from "./Geo";
+import { sampleElevation, sceneToLonLat, SEA_LEVEL_METERS, sinkSubmergedElevation } from "./Geo";
+import { beachSurfaceColor } from "./BeachSurface";
+import { attachShoreline } from "./Shoreline";
 import { varyGroundColor } from "./GroundVariation";
 import {
   createTerrainMaterial,
@@ -164,6 +166,21 @@ export async function createTerrainMesh(
       metersPerVertex,
       worldSeed,
     }, yieldControl);
+    // Apply after land-cover smoothing so green tint cannot bleed back over
+    // the beach. Sample the same padded contour used to shape the terrain.
+    if (terrain.shoreDistanceMeters) {
+      for (let index = 0; index < coverClasses.length; index++) {
+        const target = index * 4;
+        const distance = sampleElevation(terrain, positions[index * 3],
+          positions[index * 3 + 2], meshWidth, meshDepth, terrain.shoreDistanceMeters);
+        const color = beachSurfaceColor(
+          [surfaceColors[target], surfaceColors[target + 1], surfaceColors[target + 2]],
+          distance, positions[index * 3 + 1] * metersPerUnit,
+        );
+        surfaceColors.set(color, target);
+        if ((index & 511) === 511) await yieldControl?.();
+      }
+    }
   }
 
   await yieldToNextFrame(yieldControl);
@@ -208,6 +225,9 @@ export async function createTerrainMesh(
 
   await yieldToNextFrame(yieldControl);
   applyDefaultTerrainMaterial(scene, ground);
+  if (terrain.shoreDistanceMeters) {
+    await attachShoreline(ground, positions, indices, metersPerUnit, yieldControl);
+  }
   return ground;
 }
 

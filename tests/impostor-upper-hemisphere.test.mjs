@@ -17,7 +17,7 @@ test("upper-hemisphere impostors remap side capture and runtime sampling togethe
 test("all non-tree vegetation opts in while trees retain the full range", () => {
   for (const name of [
     "GrassImpostor.ts",
-    "TallPlantImpostor.ts",
+    "PlantImpostor.ts",
     "BushImpostor.ts",
     "FernImpostor.ts",
   ]) {
@@ -42,7 +42,7 @@ test("impostor sampling defaults do not exceed five views per axis", () => {
     "FernImpostor.ts",
     "GrassImpostor.ts",
     "RockyBeachImpostor.ts",
-    "TallPlantImpostor.ts",
+    "PlantImpostor.ts",
     "TreeImpostor.ts",
     "WheatImpostor.ts",
   ]) {

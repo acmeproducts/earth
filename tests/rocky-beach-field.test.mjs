@@ -31,7 +31,9 @@ test("uses a broader, more detailed rocky shoreline treatment", () => {
   assert.match(field, /ROCK_PATCH_SPACING_METERS = 3/);
   assert.match(field, /SHORE_PROBE_METERS = 24/);
   assert.match(field, /ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS = 1\.6/);
-  assert.match(field, /SUBMERGED_PATCH_DEPTH_METERS = 0\.48/);
+  assert.doesNotMatch(field, /SUBMERGED_PATCH_DEPTH_METERS|groundedElevation/);
+  assert.match(field, /\(elevation \+ ROCK_GROUND_OFFSET_METERS\)/);
+  assert.match(field, /depth: \{ groundPlaneHeight: 0\.08 \/ metersPerUnit \}/);
   assert.match(field, /submerged \? shoreNeighbours\.land === 0/);
   assert.match(impostor, /CAPTURE_DIAMETER = 6\.2/);
   assert.match(impostor, /resolution: \{ default: 192/);

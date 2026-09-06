@@ -145,6 +145,10 @@ Grass, wildflowers, bushes, and ferns lean in a looping wind cycle; trees remain
 linearly with height above the base, so roots stay planted and tips lean
 furthest. Gusts travel across the world, making an instance's position set its
 phase so nearby vegetation reads as one moving air mass.
+All vegetation materials share one wind sample per scene frame, including across
+the loop reset. Gust travel uses a fixed spatial direction so changing weather
+does not shift the pattern at distant world positions; the lean still follows
+the current wind direction.
 
 The shear needs no captured animation frames. Real geometry adds the gradient
 to its vertices, while an impostor subtracts the same gradient from the point it

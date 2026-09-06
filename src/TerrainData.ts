@@ -15,4 +15,6 @@ export interface TerrainData {
   bounds: TileBounds;
   /** Water classification used when carving terrain shoreline depressions. */
   waterMask?: Uint8Array;
+  /** Signed distance to the smoothed classified shoreline, positive on land. */
+  shoreDistanceMeters?: Float32Array;
 }

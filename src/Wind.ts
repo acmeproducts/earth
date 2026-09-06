@@ -1,4 +1,4 @@
-import { ShaderMaterial, Vector2 } from "@babylonjs/core";
+import { Scene, ShaderMaterial, Vector2 } from "@babylonjs/core";
 import { SimplexNoise2D } from "./SimplexNoise";
 
 /**
@@ -39,7 +39,7 @@ const strengthScale = queryStrengthScale();
 // Stores the spatial frequency scale for the current ground scale. Every
 // wind-aware material reads the sampled direction on bind.
 const gustFrequency = new Vector2();
-const sampledGustFrequency = new Vector2();
+const frameSamples = new WeakMap<Scene, { frameId: number; phase: number; state: WindState }>();
 /** Wind blows the way its gusts travel. */
 const direction = GUST_DIRECTION.clone().normalize();
 let metersPerUnit = 0;
@@ -106,9 +106,10 @@ export function windShearFraction(kind: ShearedVegetation): number {
 }
 
 /** Position within the current wind loop, wrapped to [0, 1). */
-export function currentWindLoopPhase(): number {
-  if (typeof performance === "undefined") return 0;
-  const loops = performance.now() / 1000 / LOOP_SECONDS;
+export function currentWindLoopPhase(
+  nowMilliseconds = typeof performance === "undefined" ? 0 : performance.now(),
+): number {
+  const loops = Math.max(0, nowMilliseconds) / 1000 / LOOP_SECONDS;
   return loops - Math.floor(loops);
 }
 
@@ -119,10 +120,22 @@ export function setWindShear(material: ShaderMaterial, shearFraction: number): v
 
 /** Advances a material through the shared wind loop. */
 export function bindWindPhase(material: ShaderMaterial): void {
-  const state = currentWindState();
-  sampledGustFrequency.copyFrom(state.direction).scaleInPlace(gustFrequency.length());
-  material.setFloat("windPhase", currentWindLoopPhase());
-  material.setVector2("windGustFrequency", sampledGustFrequency);
+  const scene = material.getScene();
+  const frameId = scene.getFrameId();
+  let sample = frameSamples.get(scene);
+  if (!sample || sample.frameId !== frameId) {
+    // Models, impostors, and render passes must see the same instant, even
+    // when a frame straddles the loop boundary or takes longer to render.
+    const now = typeof performance === "undefined" ? 0 : performance.now();
+    sample = { frameId, phase: currentWindLoopPhase(now), state: currentWindState(now) };
+    frameSamples.set(scene, sample);
+  }
+  const { state } = sample;
+  material.setFloat("windPhase", sample.phase);
+  // Rotating the spatial frequency with weather changes shifts the phase by
+  // an amount proportional to world position, making distant plants jerk.
+  // Keep gust travel stable; the lean direction still follows the weather.
+  material.setVector2("windGustFrequency", gustFrequency);
   material.setVector2("windDirection", state.direction);
   material.setFloat("windStrength", state.strength);
 }

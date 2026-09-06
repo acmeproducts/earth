@@ -4,6 +4,8 @@ export interface CoastlineElevationGrid {
   maxElevation: number;
   width: number;
   height: number;
+  /** Signed metres from the smoothed shore; positive on land. */
+  shoreDistanceMeters?: Float32Array;
 }
 
 export interface CoastlineShapeOptions {
@@ -71,6 +73,7 @@ export async function shapeCoastlineElevations(
 
   const distance = await distanceFromShore(
     water,
+    coverage,
     sampleWidth,
     sampleHeight,
     metersPerPixelX,
@@ -78,6 +81,7 @@ export async function shapeCoastlineElevations(
     yieldControl,
   );
   const landClearance = 0.25;
+  terrain.shoreDistanceMeters = new Float32Array(terrain.width * terrain.height);
 
   terrain.minElevation = Infinity;
   terrain.maxElevation = -Infinity;
@@ -86,19 +90,21 @@ export async function shapeCoastlineElevations(
       const terrainIndex = y * terrain.width + x;
       const sampleIndex = (y + terrainOffsetY) * sampleWidth + x + terrainOffsetX;
       const isWater = water[sampleIndex] === 1;
+      const shoreDistance = Math.min(1e6, distance[sampleIndex]);
+      terrain.shoreDistanceMeters[terrainIndex] = isWater ? -shoreDistance : shoreDistance;
       const blendWidth = isWater ? waterBlendWidthMeters : landBlendWidthMeters;
-      const amount = Math.min(1, distance[sampleIndex] / blendWidth);
+      const amount = Math.min(1, shoreDistance / blendWidth);
       const blend = amount * amount * (3 - 2 * amount);
       const shorelineElevation = isWater
-        ? shallowWaterDepthMeters
-        : landClearance * Math.max(0, 1 - 2 * coverage[sampleIndex]);
+        ? shallowWaterDepthMeters * Math.min(1, shoreDistance / 20)
+        : Math.min(landClearance, shoreDistance * 0.1);
       const corrected = isWater
         ? Math.min(terrain.elevations[terrainIndex], deepWaterCeilingMeters)
         : Math.max(terrain.elevations[terrainIndex], landClearance);
       const elevation = shorelineElevation + (corrected - shorelineElevation) * blend;
       terrain.elevations[terrainIndex] = elevation;
-      terrain.minElevation = Math.min(terrain.minElevation, elevation);
-      terrain.maxElevation = Math.max(terrain.maxElevation, elevation);
+      terrain.minElevation = Math.min(terrain.minElevation, terrain.elevations[terrainIndex]);
+      terrain.maxElevation = Math.max(terrain.maxElevation, terrain.elevations[terrainIndex]);
     }
     await yieldControl?.();
   }
@@ -106,6 +112,7 @@ export async function shapeCoastlineElevations(
 
 async function distanceFromShore(
   water: Uint8Array,
+  coverage: Float32Array,
   width: number,
   height: number,
   metersPerPixelX: number,
@@ -117,16 +124,35 @@ async function distanceFromShore(
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
       let nearestBoundary = Infinity;
+      // Recover a subpixel contour from the continuous coverage. Thresholding
+      // first and measuring to cell edges throws away this information and
+      // recreates a staircase even after the classification was smoothed.
+      const left = Math.max(0, x - 1);
+      const right = Math.min(width - 1, x + 1);
+      const top = Math.max(0, y - 1);
+      const bottom = Math.min(height - 1, y + 1);
+      const dx = (coverage[y * width + right] - coverage[y * width + left]) /
+        (Math.max(1, right - left) * metersPerPixelX);
+      const dy = (coverage[bottom * width + x] - coverage[top * width + x]) /
+        (Math.max(1, bottom - top) * metersPerPixelY);
+      const gradient = Math.hypot(dx, dy);
+      const contourDistance = gradient > 1e-8
+        ? Math.abs(coverage[index] - 0.5) / gradient
+        : Infinity;
+      if (contourDistance <= 2 * Math.max(metersPerPixelX, metersPerPixelY)) {
+        nearestBoundary = contourDistance;
+      }
       if (
         (x > 0 && water[index - 1] !== water[index]) ||
         (x + 1 < width && water[index + 1] !== water[index])
-      ) nearestBoundary = distanceToCellEdge(metersPerPixelX);
+      ) nearestBoundary = Number.isFinite(contourDistance)
+        ? contourDistance : distanceToCellEdge(metersPerPixelX);
       if (
         (y > 0 && water[index - width] !== water[index]) ||
         (y + 1 < height && water[index + width] !== water[index])
       ) nearestBoundary = Math.min(
         nearestBoundary,
-        distanceToCellEdge(metersPerPixelY),
+        Number.isFinite(contourDistance) ? contourDistance : distanceToCellEdge(metersPerPixelY),
       );
       distance[index] = nearestBoundary;
     }

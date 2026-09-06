@@ -3,10 +3,10 @@ import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
-  acquireTallPlantImpostorAssets,
-  createTallPlantModel,
-  tallPlantRenderedCaptureSize,
-} from "./TallPlantImpostor";
+  acquirePlantImpostorAssets,
+  createPlantModel,
+  plantRenderedCaptureSize,
+} from "./PlantImpostor";
 import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
@@ -39,9 +39,11 @@ const COLONY_SPACING_METERS = 9.25;
 const COLONY_MIN_COUNT = 7;
 const COLONY_MAX_COUNT = 14;
 const COLONY_RADIUS_METERS = 6.2;
+/** Controls how often a colony starts without thinning plants inside it. */
+const COLONY_SPAWN_SCALE = 1.24;
 // Sister flower models available inside one region. Placement binds the choice
-// to the locality, so neighbouring stands share a species and one tile normally
-// builds a single one of them instead of paying for an atlas per variant.
+// to the locality, with a minority of colonies using one secondary sister model.
+// Tile-centre selection bounds each tile to at most two shared atlases.
 const SPECIES_VARIANTS = 3;
 /** One flower archetype dominates a broad 64-tile locality. */
 const SPECIES_LOCALITY_SPAN_TILES = 64;
@@ -108,9 +110,10 @@ export async function createTallPlantField(
     spacingMeters,
     metersPerUnit,
   );
-  const maximumHalfWidth = tallPlantRenderedCaptureSize(renderHeight) * 0.58;
+  const maximumHalfWidth = plantRenderedCaptureSize(renderHeight) * 0.58;
   const matrices: Matrix[] = [];
   const variantBuckets = new Map<string, ProceduralPlacementBucket>();
+  let colonyVariantOffset = 0;
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
@@ -132,7 +135,7 @@ export async function createTallPlantField(
 
         const colonyStrength = habitat.sample(anchorLocation.lon, anchorLocation.lat);
         if (colonyStrength <= 0) continue;
-        const occupancy = Math.min(1, coverOccupancy * colonyStrength * 3.1
+        const occupancy = Math.min(1, coverOccupancy * colonyStrength * COLONY_SPAWN_SCALE
           * Math.max(0, densityScale?.(anchorX, anchorZ) ?? 1));
         if (random() > occupancy) continue;
 
@@ -140,6 +143,7 @@ export async function createTallPlantField(
           random() * (COLONY_MAX_COUNT - COLONY_MIN_COUNT + 1),
         );
         const colonyRotation = random() * Math.PI * 2;
+        colonyVariantOffset = random() < 0.22 ? 1 : 0;
         const colonyVigor = 0.82 + random() * 0.34;
         addPlant(anchorX, anchorZ, colonyVigor * (0.94 + random() * 0.12));
         for (let member = 1; member < colonyCount; member++) {
@@ -165,10 +169,10 @@ export async function createTallPlantField(
     const { root: variantRoot, impostor: plants, model: plantModel } =
       await createVegetationFieldRenderers(scene, {
         rootName: `tallPlantField-${suffix}`,
-        impostorName: `tallPlantImpostors-${suffix}`,
+        impostorName: `plantImpostors-${suffix}`,
         renderHeight,
-        loadAssets: () => acquireTallPlantImpostorAssets(scene, bucket.variant),
-        createModel: () => createTallPlantModel(
+        loadAssets: () => acquirePlantImpostorAssets(scene, bucket.variant),
+        createModel: () => createPlantModel(
           scene,
           renderHeight,
           bucket.variant.seed,
@@ -184,7 +188,7 @@ export async function createTallPlantField(
       await packInstanceMatrices(bucket.matrices, yieldControl),
       metersPerUnit,
       renderMode,
-      undefined,
+      new Float32Array(bucket.colors),
       yieldControl,
     ));
   }
@@ -221,6 +225,8 @@ export async function createTallPlantField(
       new Vector3(x, (elevation + GROUND_OFFSET_METERS) / metersPerUnit, z),
     );
     matrices.push(matrix);
+    const brightness = 0.9 + random() * 0.16;
+    const warmth = (random() - 0.5) * 0.07;
     addProceduralVariantPlacement(
       variantBuckets,
       "tallPlants",
@@ -228,13 +234,14 @@ export async function createTallPlantField(
       lat,
       modelVariantSeed,
       matrix,
-      undefined,
+      [brightness + warmth, brightness, brightness - warmth],
       SPECIES_VARIANTS,
       {
         longitude: tileVariantLocation.lon,
         latitude: tileVariantLocation.lat,
         localitySpanTiles: SPECIES_LOCALITY_SPAN_TILES,
         localityBlendTiles: 0,
+        localVariantOffset: colonyVariantOffset,
       },
     );
   }

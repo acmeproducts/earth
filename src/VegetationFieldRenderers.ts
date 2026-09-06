@@ -1,12 +1,13 @@
 import { Mesh, Scene, TransformNode } from "@babylonjs/core";
 import type { ImpostorAssetLease, ImpostorAssets } from "./Impostor";
-import { createImpostorPrototypeFromAssets } from "./TreeField";
+import { createImpostorPrototypeFromAssets, type ImpostorDepthOptions } from "./TreeField";
 
 interface VegetationFieldRendererOptions {
   rootName: string;
   impostorName: string;
   renderHeight: number;
   startDisabled?: boolean;
+  depth?: ImpostorDepthOptions;
   loadAssets: () => Promise<ImpostorAssets | ImpostorAssetLease>;
   createModel: () => Mesh;
 }
@@ -36,6 +37,7 @@ export async function createVegetationFieldRenderers(
       options.renderHeight,
       root,
       options.impostorName,
+      options.depth,
     );
     const model = options.createModel();
     model.parent = root;

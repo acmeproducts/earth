@@ -255,9 +255,9 @@ export function createCloudLayer(
     driftX += driftDirection.x * wind.speedMetersPerSecond * deltaSeconds / metersPerUnit;
     driftZ += driftDirection.y * wind.speedMetersPerSecond * deltaSeconds / metersPerUnit;
     mesh.position.set(driftX, 0, driftZ);
-    shadowProjector.setDrift(driftX, driftZ);
     lighting.copyLightingTo(lightingSnapshot);
-    shadowProjector.update(cameraPosition, lightingSnapshot.sunDirection);
+    // Drift and camera/light changes share one footprint selection and sort.
+    shadowProjector.update(cameraPosition, lightingSnapshot.sunDirection, driftX, driftZ);
 
     // Select cells in the field's moving frame so its edges remain beyond the fade.
     const nextCellX = Math.floor((cameraPosition.x - driftX) / cellSize);

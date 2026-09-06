@@ -50,6 +50,30 @@ test("render report groups mesh workloads and describes render targets", () => {
   assert.match(fpsCounter, /renderListMeshes/);
 });
 
+test("benchmark isolates shadows and reflections and restores shadows between phases", () => {
+  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const benchmark = game.slice(game.indexOf("private startRenderBenchmark"),
+    game.indexOf("private setVegetationMode"));
+  assert.match(benchmark, /name: "shadows-off"/);
+  assert.match(benchmark, /name: "shadows-off-and-reflections-off"/);
+  assert.match(benchmark, /this\.scene\.shadowsEnabled = false/);
+  assert.match(benchmark, /this\.scene\.shadowsEnabled = originalShadowsEnabled/);
+  assert.match(benchmark, /restore\(\); phase\.apply\(\)/);
+  assert.match(benchmark, /\[variants, \[\.\.\.variants\]\.reverse\(\)\]/);
+  assert.match(benchmark, /shadowMapPassesIncludingWarmup/);
+  assert.match(benchmark, /onBeforeBindObservable\.add/);
+  assert.match(benchmark, /onBeforeBindObservable\.remove/);
+  assert.match(benchmark, /activePostProcesses:/);
+  assert.match(benchmark, /prePassEnabled:/);
+});
+
+test("custom shadow receivers honor scene and light shadow switches", () => {
+  const receiver = readFileSync(new URL("../src/VegetationShadowReceiver.ts", import.meta.url), "utf8");
+  assert.match(receiver, /!scene\.shadowsEnabled/);
+  assert.match(receiver, /!sun\.shadowEnabled/);
+  assert.match(receiver, /vegetationShadowEnabled < 0\.5\) return 1\.0/);
+});
+
 test("frame pacing catches stutters outside the measured render callback", () => {
   assert.match(fpsCounter, /frameIntervalMilliseconds/);
   assert.match(fpsCounter, /unattributedMilliseconds/);

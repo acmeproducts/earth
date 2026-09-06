@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { NullEngine, Scene, ShaderMaterial } from "@babylonjs/core";
+import { bindWindPhase, currentWindLoopPhase } from "../src/Wind.ts";
 
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
@@ -54,4 +56,32 @@ test("gusts travel through the world rather than pulsing in place", () => {
 
 test("an absent wind parameter is not read as a request for stillness", () => {
   assert.match(wind, /if \(raw === null\) return 1/);
+});
+
+test("materials share a wind sample across a loop boundary and advance next frame", (t) => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  t.after(() => { scene.dispose(); engine.dispose(); });
+  let now = 3599;
+  let frame = 1;
+  t.mock.method(performance, "now", () => now);
+  t.mock.method(scene, "getFrameId", () => frame);
+  const model = new ShaderMaterial("model", scene, {}, {});
+  const impostor = new ShaderMaterial("impostor", scene, {}, {});
+  bindWindPhase(model);
+  now = 3601;
+  bindWindPhase(impostor);
+  assert.equal(model._floats.windPhase, impostor._floats.windPhase);
+  assert.equal(model._floats.windStrength, impostor._floats.windStrength);
+  assert.deepEqual(model._vectors2.windDirection, impostor._vectors2.windDirection);
+  const frequency = model._vectors2.windGustFrequency.asArray();
+  frame++;
+  bindWindPhase(impostor);
+  assert.equal(impostor._floats.windPhase, currentWindLoopPhase(now));
+  assert.ok(impostor._floats.windPhase < 0.001);
+  now = 90_000;
+  frame++;
+  bindWindPhase(impostor);
+  assert.deepEqual(impostor._vectors2.windGustFrequency.asArray(), frequency,
+    "weather direction changes must not rephase the spatial gust field");
 });

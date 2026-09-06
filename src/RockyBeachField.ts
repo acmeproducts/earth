@@ -38,7 +38,6 @@ const ROCK_GROUND_OFFSET_METERS = 0.025;
 // Let the outer stones sit just below the shoreline so the patch reads as a
 // natural intertidal band instead of stopping at an artificial hard edge.
 const ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS = 1.6;
-const SUBMERGED_PATCH_DEPTH_METERS = 0.48;
 // WorldCover shore pixels and the elevation shoreline rarely coincide exactly.
 // A wider probe produces a continuous intertidal band instead of a single thin
 // row of cards hugging the classified water edge.
@@ -126,11 +125,6 @@ export async function createRockyBeachField(
         );
         const widthScale = 0.82 + random() * 0.42;
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
-        // Keep the water-side row in the visible shallows even when the DEM's
-        // coastal shelf drops more abruptly than the rendered shoreline.
-        const groundedElevation = submerged
-          ? Math.max(elevation, waterLineMeters - SUBMERGED_PATCH_DEPTH_METERS)
-          : elevation;
         const matrix = Matrix.Compose(
           new Vector3(
             widthScale,
@@ -140,7 +134,7 @@ export async function createRockyBeachField(
           rotation,
           new Vector3(
             x,
-            (groundedElevation + ROCK_GROUND_OFFSET_METERS) /
+            (elevation + ROCK_GROUND_OFFSET_METERS) /
               metersPerUnit,
             z,
           ),
@@ -174,6 +168,8 @@ export async function createRockyBeachField(
       rootName: `rockyBeachField-${suffix}`,
       impostorName: `rockyBeachImpostors-${suffix}`,
       renderHeight,
+      // Pebbles occupy a low surface, not a camera-facing depth card.
+      depth: { groundPlaneHeight: 0.08 / metersPerUnit },
       loadAssets: () => acquireRockyBeachImpostorAssets(scene, bucket.variant),
       createModel: () => createRockyBeachModel(scene, renderHeight, bucket.variant.seed),
     });

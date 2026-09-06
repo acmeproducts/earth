@@ -9,6 +9,7 @@ import {
   Texture,
   Vector2,
 } from "@babylonjs/core";
+import type { Matrix, Observer } from "@babylonjs/core";
 
 export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
 /**
@@ -19,11 +20,12 @@ export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
  */
 export const SHADOW_DARKNESS = 0.3;
 const fallbackShadowTextures = new WeakMap<Scene, RawTexture>();
-interface VegetationShadowReceiverBinding {
-  material: ShaderMaterial;
-  update: () => void;
+interface VegetationShadowReceiverState {
+  materials: Set<ShaderMaterial>;
+  update: (materials?: Iterable<ShaderMaterial>) => void;
+  observer: Observer<Scene>;
 }
-const receiverBindings = new WeakMap<Scene, Set<VegetationShadowReceiverBinding>>();
+const receiverStates = new WeakMap<Scene, VegetationShadowReceiverState>();
 
 function fallbackShadowTexture(scene: Scene): RawTexture {
   const cached = fallbackShadowTextures.get(scene);
@@ -109,63 +111,89 @@ float vegetationShadowVisibility(void) {
 
 /** Supplies Babylon's regular depth shadow texture to custom vegetation shaders. */
 export function bindVegetationShadowReceiver(material: ShaderMaterial, scene: Scene): void {
+  if (receiverStates.get(scene)?.materials.has(material)) return;
   material.setTexture("vegetationShadowSampler", fallbackShadowTexture(scene));
   material.setFloat("vegetationShadowEnabled", 0);
   material.setFloat("vegetationShadowDarkness", SHADOW_DARKNESS);
   material.setFloat("vegetationShadowAtInstanceRoot", 0);
   material.setFloat("vegetationShadowReverseDepth", scene.getEngine().useReverseDepthBuffer ? 1 : 0);
-  const updateShadowUniforms = (): void => {
+  const state = shadowReceiverState(scene);
+  state.materials.add(material);
+  state.update([material]);
+  material.onDisposeObservable.addOnce(() => {
+    state.materials.delete(material);
+    if (state.materials.size === 0) {
+      scene.onBeforeRenderObservable.remove(state.observer);
+      receiverStates.delete(scene);
+    }
+  });
+}
+
+/** All receivers use the same sun, camera, transform and texture each frame. */
+function shadowReceiverState(scene: Scene): VegetationShadowReceiverState {
+  const existing = receiverStates.get(scene);
+  if (existing) return existing;
+  const materials = new Set<ShaderMaterial>();
+  const texelSize = Vector2.Zero();
+  const depthValues = Vector2.Zero();
+  let enabled: boolean | undefined;
+  let previousMap: RenderTargetTexture | undefined;
+  let previousMatrix: Matrix | undefined;
+  let previousFloatTexture: number | undefined;
+  const disable = (receivers?: Iterable<ShaderMaterial>): void => {
+    const targets = enabled !== false ? materials : receivers;
+    enabled = false;
+    if (targets) for (const material of targets) material.setFloat("vegetationShadowEnabled", 0);
+  };
+  const updateShadowUniforms = (receivers?: Iterable<ShaderMaterial>): void => {
     const sun = scene.lights.find((light): light is DirectionalLight => (
       light instanceof DirectionalLight && light.name === "sunLight"
     ));
     const generator = sun?.getShadowGenerator();
     const camera = scene.activeCamera;
-    if (!sun || !(generator instanceof ShadowGenerator) || !camera || !sun.isEnabled()) {
-      material.setFloat("vegetationShadowEnabled", 0);
+    if (!scene.shadowsEnabled || !sun || !sun.shadowEnabled ||
+        !(generator instanceof ShadowGenerator) || !camera || !sun.isEnabled()) {
+      disable(receivers);
       return;
     }
     const shadowMap = generator.getShadowMapForRendering();
     if (!shadowMap) {
-      material.setFloat("vegetationShadowEnabled", 0);
+      disable(receivers);
       return;
     }
 
     const size = shadowMap.getSize();
-    material.setFloat("vegetationShadowEnabled", 1);
-    material.setFloat(
-      "vegetationShadowFloatTexture",
-      isFloatShadowTexture(shadowMap.textureType) ? 1 : 0,
-    );
-    material.setMatrix("vegetationShadowMatrix", generator.getTransformMatrix());
-    material.setVector2(
-      "vegetationShadowTexelSize",
-      new Vector2(1 / Math.max(1, size.width), 1 / Math.max(1, size.height)),
-    );
-    material.setVector2(
-      "vegetationShadowDepthValues",
-      new Vector2(
-        sun.getDepthMinZ(camera),
-        sun.getDepthMinZ(camera) + sun.getDepthMaxZ(camera),
-      ),
-    );
-    material.setTexture("vegetationShadowSampler", shadowMap);
+    const matrix = generator.getTransformMatrix();
+    const floatTexture = isFloatShadowTexture(shadowMap.textureType) ? 1 : 0;
+    const minDepth = sun.getDepthMinZ(camera);
+    texelSize.set(1 / Math.max(1, size.width), 1 / Math.max(1, size.height));
+    depthValues.set(minDepth, minDepth + sun.getDepthMaxZ(camera));
+    // ShaderMaterial retains matrix/vector references and uploads their current
+    // values on bind. Mutating the shared values above needs no repeated setters.
+    const changed = enabled !== true || previousMap !== shadowMap ||
+      previousMatrix !== matrix || previousFloatTexture !== floatTexture;
+    const targets = changed ? materials : receivers;
+    enabled = true;
+    previousMap = shadowMap;
+    previousMatrix = matrix;
+    previousFloatTexture = floatTexture;
+    if (!targets) return;
+    for (const material of targets) {
+      material.setFloat("vegetationShadowEnabled", 1);
+      material.setFloat("vegetationShadowFloatTexture", floatTexture);
+      material.setMatrix("vegetationShadowMatrix", matrix);
+      material.setVector2("vegetationShadowTexelSize", texelSize);
+      material.setVector2("vegetationShadowDepthValues", depthValues);
+      material.setTexture("vegetationShadowSampler", shadowMap);
+    }
   };
   // ShaderMaterial's onBind observable fires after its stored values have
   // already been uploaded. Update before rendering so the current frame—not a
   // later material rebind—receives the shadow texture and transform.
-  updateShadowUniforms();
-  const binding = { material, update: updateShadowUniforms };
-  let bindings = receiverBindings.get(scene);
-  if (!bindings) {
-    bindings = new Set();
-    receiverBindings.set(scene, bindings);
-  }
-  bindings.add(binding);
-  const observer = scene.onBeforeRenderObservable.add(updateShadowUniforms);
-  material.onDisposeObservable.addOnce(() => {
-    scene.onBeforeRenderObservable.remove(observer);
-    bindings?.delete(binding);
-  });
+  const observer = scene.onBeforeRenderObservable.add(() => updateShadowUniforms());
+  const state = { materials, update: updateShadowUniforms, observer };
+  receiverStates.set(scene, state);
+  return state;
 }
 
 /** Detaches the shadow target from every custom sampler before it is rendered. */
@@ -174,9 +202,9 @@ export function suspendVegetationShadowReceivers(
   shadowMap: RenderTargetTexture,
 ): void {
   const fallback = fallbackShadowTexture(scene);
-  for (const binding of receiverBindings.get(scene) ?? []) {
-    binding.material.setFloat("vegetationShadowEnabled", 0);
-    binding.material.setTexture("vegetationShadowSampler", fallback);
+  for (const material of receiverStates.get(scene)?.materials ?? []) {
+    material.setFloat("vegetationShadowEnabled", 0);
+    material.setTexture("vegetationShadowSampler", fallback);
   }
 
   // ShaderMaterial setters only change the next effect bind. WebGL forbids a
@@ -193,9 +221,10 @@ export function suspendVegetationShadowReceivers(
 
 /** Restores the live shadow target after its framebuffer has been detached. */
 export function resumeVegetationShadowReceivers(scene: Scene): void {
-  for (const binding of receiverBindings.get(scene) ?? []) {
-    binding.update();
-  }
+  const state = receiverStates.get(scene);
+  // Suspension deliberately replaced the sampler, even if the source map did
+  // not change. Force all bindings back onto the live texture after unbinding.
+  state?.update(state.materials);
 }
 
 /** Babylon packs depth into RGBA only for the unsigned-byte fallback. */

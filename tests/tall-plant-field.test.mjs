@@ -2,21 +2,71 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
+import { Matrix } from "@babylonjs/core";
+import { addProceduralVariantPlacement } from "../src/VegetationPlacement.ts";
 
 const {
-  createTallPlantModel,
-  tallPlantArchetypeForVariant,
-} = await import("../src/TallPlantImpostor.ts");
+  createPlantModel,
+  plantArchetypeForVariant,
+} = await import("../src/PlantImpostor.ts");
 
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
+test("secondary colonies stay within two repeatable variants and retain their tints", () => {
+  function place() {
+    const buckets = new Map();
+    for (let index = 0; index < 40; index++) {
+      addProceduralVariantPlacement(buckets, "tallPlants", 18 + index * 0.001, 59,
+        12345, Matrix.Identity(), [0.94, 0.97, 0.92], 3, {
+          longitude: 18, latitude: 59, localitySpanTiles: 64, localityBlendTiles: 0,
+          localVariantOffset: index % 5 === 0 ? 1 : 0,
+        });
+    }
+    return buckets;
+  }
+  const buckets = place();
+  assert.equal(buckets.size, 2);
+  assert.deepEqual([...buckets.keys()], [...place().keys()]);
+  assert.deepEqual([...buckets.values()].map(b => b.matrices.length).sort((a, b) => a - b), [8, 32]);
+  for (const bucket of buckets.values()) {
+    assert.equal(bucket.colors.length, bucket.matrices.length * 3);
+    assert.deepEqual(bucket.colors.slice(0, 3), [0.94, 0.97, 0.92]);
+  }
+});
+
+test("all plant archetypes have finite geometry and repeatable colors across seeds", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    for (const archetype of [0, 1, 2]) {
+      for (const seed of [1, 42, 54321, 0xffffffff]) {
+        const first = createPlantModel(scene, 1.75, seed, archetype);
+        const second = createPlantModel(scene, 1.75, seed, archetype);
+        const positions = first.getVerticesData(VertexBuffer.PositionKind);
+        const colors = first.getVerticesData(VertexBuffer.ColorKind);
+        assert.ok(positions.every(Number.isFinite));
+        for (let i = 1; i < positions.length; i += 3) {
+          assert.ok(positions[i] >= -1e-6 && positions[i] <= 1.75 + 1e-6);
+        }
+        assert.deepEqual(colors, second.getVerticesData(VertexBuffer.ColorKind));
+        assert.ok(colors.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
+        first.dispose(false, true);
+        second.dispose(false, true);
+      }
+    }
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
 test("tall plants share varied procedural geometry between models and impostors", () => {
-  const capture = source("TallPlantImpostor.ts");
+  const capture = source("PlantImpostor.ts");
 
   assert.match(capture, /const STEM_COUNT = 14/);
   assert.match(capture, /faces: IMPOSTOR_CUBE_FACES/);
   assert.match(capture, /rotationallySymmetric: false/);
-  assert.match(capture, /export function createTallPlantModel/);
+  assert.match(capture, /export function createPlantModel/);
   assert.match(capture, /const stage = random\(\)/);
   assert.match(capture, /isSeed/);
   assert.match(capture, /isBud/);
@@ -29,7 +79,7 @@ test("tall plants share varied procedural geometry between models and impostors"
 });
 
 test("bloom palettes span more than one hue family", () => {
-  const capture = source("TallPlantImpostor.ts");
+  const capture = source("PlantImpostor.ts");
   const start = capture.indexOf("const BLOOM_PALETTES");
   const blooms = capture.slice(start, capture.indexOf("];", start));
   const brights = [...blooms.matchAll(
@@ -46,7 +96,7 @@ test("bloom palettes span more than one hue family", () => {
 test("the umbel archetype stays grounded inside its capture height", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
-  const umbels = createTallPlantModel(scene, 1.75, 24680, 2);
+  const umbels = createPlantModel(scene, 1.75, 24680, 2);
   const positions = umbels.getVerticesData(VertexBuffer.PositionKind);
   assert.ok(positions && positions.length > 5_000);
   const heights = positions.filter((_, index) => index % 3 === 1);
@@ -56,7 +106,7 @@ test("the umbel archetype stays grounded inside its capture height", () => {
   // Umbels carry their mass in a flat plate on top of bare stems. A spire
   // spreads blossom and foliage down its whole length, so comparing the two
   // keeps the check meaningful without pinning an arbitrary ratio.
-  const spires = createTallPlantModel(scene, 1.75, 24680, 0);
+  const spires = createPlantModel(scene, 1.75, 24680, 0);
   const spireHeights = spires.getVerticesData(VertexBuffer.PositionKind)
     .filter((_, index) => index % 3 === 1);
   const crownShare = (values) => {
@@ -70,15 +120,15 @@ test("the umbel archetype stays grounded inside its capture height", () => {
 
 test("the former daisy impostor is a short alternate tall-plant variant", () => {
   assert.deepEqual(
-    [0, 1, 2, 3].map(tallPlantArchetypeForVariant),
+    [0, 1, 2, 3].map(plantArchetypeForVariant),
     ["floweringSpire", "daisyPatch", "umbelHead", "floweringSpire"],
   );
   // The impostor path passes the signed seed, the model path its unsigned twin.
-  assert.equal(tallPlantArchetypeForVariant(-1), tallPlantArchetypeForVariant(0xffffffff));
+  assert.equal(plantArchetypeForVariant(-1), plantArchetypeForVariant(0xffffffff));
 
   const engine = new NullEngine();
   const scene = new Scene(engine);
-  const daisies = createTallPlantModel(scene, 1.75, 54321, 1);
+  const daisies = createPlantModel(scene, 1.75, 54321, 1);
   const positions = daisies.getVerticesData(VertexBuffer.PositionKind);
   assert.ok(positions && positions.length > 5_000);
   const heights = positions.filter((_, index) => index % 3 === 1);
@@ -91,8 +141,8 @@ test("the former daisy impostor is a short alternate tall-plant variant", () => 
 test("generated clumps are deterministic, grounded, and stay inside their capture height", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
-  const first = createTallPlantModel(scene, 1.75, 12345);
-  const second = createTallPlantModel(scene, 1.75, 12345);
+  const first = createPlantModel(scene, 1.75, 12345);
+  const second = createPlantModel(scene, 1.75, 12345);
   const firstPositions = first.getVerticesData(VertexBuffer.PositionKind);
   const secondPositions = second.getVerticesData(VertexBuffer.PositionKind);
   const colors = first.getVerticesData(VertexBuffer.ColorKind);
@@ -115,6 +165,11 @@ test("tall plants form sizeable irregular colonies on plausible land cover", () 
   assert.match(field, /const COLONY_MIN_COUNT = 7/);
   assert.match(field, /const COLONY_MAX_COUNT = 14/);
   assert.match(field, /const COLONY_RADIUS_METERS = 6\.2/);
+  assert.match(field, /const COLONY_SPAWN_SCALE = 1\.24/);
+  assert.match(
+    field,
+    /coverOccupancy \* colonyStrength \* COLONY_SPAWN_SCALE/,
+  );
   assert.match(field, /member \* 2\.399963229728653/);
   assert.match(field, /Math\.sqrt\(\(member \+ random\(\)\) \/ colonyCount\)/);
   assert.match(field, /habitatField\("tallPlants", modelVariantSeed, HABITAT\)/);

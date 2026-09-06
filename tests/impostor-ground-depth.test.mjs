@@ -93,7 +93,7 @@ test("depth is never left undefined and never reaches a shadow map", () => {
 });
 
 test("only tall sources pay for the depth proxy", () => {
-  assert.match(treeSource, /defines: depth\.depthProxy \? \["#define IMPOSTOR_DEPTH_PROXY"\] : \[\]/);
+  assert.match(treeSource, /: depth\.depthProxy \? \["#define IMPOSTOR_DEPTH_PROXY"\] : \[\]/);
   assert.match(treeSource, /rootName,\s*\{ depthProxy: true \},/);
   // Low ground cover keeps the cheap flattened plane and its forward pull.
   const renderers = readFileSync(
@@ -101,4 +101,18 @@ test("only tall sources pay for the depth proxy", () => {
     "utf8",
   );
   assert.doesNotMatch(renderers, /depthProxy/);
+});
+
+test("stone patches write ground-aligned pixel depth only in the camera pass", () => {
+  const block = treeSource.slice(
+    treeSource.indexOf("#ifdef IMPOSTOR_GROUND_PLANE", treeSource.indexOf("if (color.a <= alphaChoice) discard;")),
+    treeSource.indexOf("#ifdef IMPOSTOR_DEPTH_PROXY"),
+  );
+  assert.match(block, /#ifndef SM_DIRECTIONINLIGHTDATA/);
+  assert.match(block, /gl_FragDepthEXT = gl_FragCoord\.z;/);
+  assert.match(block, /cameraPosition \+ groundRay \* groundHit/);
+  assert.match(block, /gl_FragDepthEXT = 0\.5 \+ 0\.5 \* groundClip\.z \/ groundClip\.w;/);
+  assert.match(treeSource, /cross\(finalWorld\[2\]\.xyz, finalWorld\[0\]\.xyz\)/);
+  const renderers = readFileSync(new URL("../src/VegetationFieldRenderers.ts", import.meta.url), "utf8");
+  assert.match(renderers, /options\.impostorName,\s*options\.depth,/);
 });

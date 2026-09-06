@@ -43,7 +43,7 @@ interface CloudShadowSceneState {
 
 export interface CloudShadowProjector {
   setDrift(x: number, z: number): void;
-  update(cameraPosition: Vector3, sunDirection: Vector3): void;
+  update(cameraPosition: Vector3, sunDirection: Vector3, driftX?: number, driftZ?: number): void;
   upload(placements: readonly CloudPlacement[]): void;
   dispose(): void;
 }
@@ -76,6 +76,7 @@ uniform vec2 cloudShadowMetadata2;
 uniform vec2 cloudShadowMetadata3;
 
 float sampleVegetationCloudShadow(vec4 placement, vec2 metadata) {
+  if (min(placement.z, placement.w) < 0.000001) return 0.0;
   vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
   vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
   float placementEnabled = step(0.000001, min(placement.z, placement.w));
@@ -99,6 +100,8 @@ float sampleVegetationCloudShadow(vec4 placement, vec2 metadata) {
 }
 
 float vegetationCloudShadowVisibility(void) {
+  // Uniform branch: disabled clouds and night have exactly zero contribution.
+  if (cloudShadowLighting.x == 0.0) return 1.0;
   float coverage = 1.0;
   coverage *= 1.0 - sampleVegetationCloudShadow(
     cloudShadowPlacement0,
@@ -184,6 +187,7 @@ export function createCloudShadowTerrainMaterial(
     varying vec2 vCloudShadowWorldXZ;
 
     float sampleProjectedCloudShadow(vec4 placement, vec2 metadata) {
+      if (min(placement.z, placement.w) < 0.000001) return 0.0;
       vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
       vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
       float placementEnabled = step(0.000001, min(placement.z, placement.w));
@@ -207,26 +211,28 @@ export function createCloudShadowTerrainMaterial(
     }
   `);
   material.Fragment_Before_Fog(`
-    float cloudShadowCoverage = 1.0;
-    cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
-      cloudShadowPlacement0,
-      cloudShadowMetadata0
-    );
-    cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
-      cloudShadowPlacement1,
-      cloudShadowMetadata1
-    );
-    cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
-      cloudShadowPlacement2,
-      cloudShadowMetadata2
-    );
-    cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
-      cloudShadowPlacement3,
-      cloudShadowMetadata3
-    );
-    cloudShadowCoverage = 1.0 - cloudShadowCoverage;
-    color.rgb *= 1.0
-      - cloudShadowCoverage * cloudShadowLighting.x * ${CLOUD_SHADOW_DARKNESS};
+    if (cloudShadowLighting.x != 0.0) {
+      float cloudShadowCoverage = 1.0;
+      cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
+        cloudShadowPlacement0,
+        cloudShadowMetadata0
+      );
+      cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
+        cloudShadowPlacement1,
+        cloudShadowMetadata1
+      );
+      cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
+        cloudShadowPlacement2,
+        cloudShadowMetadata2
+      );
+      cloudShadowCoverage *= 1.0 - sampleProjectedCloudShadow(
+        cloudShadowPlacement3,
+        cloudShadowMetadata3
+      );
+      cloudShadowCoverage = 1.0 - cloudShadowCoverage;
+      color.rgb *= 1.0
+        - cloudShadowCoverage * cloudShadowLighting.x * ${CLOUD_SHADOW_DARKNESS};
+    }
   `);
   state.receivers.add(material);
   material.onDisposeObservable.add(() => state.receivers.delete(material));
@@ -333,9 +339,11 @@ export function createCloudShadowProjector(
       driftZ = z;
       updateSelection();
     },
-    update(nextCameraPosition: Vector3, nextSunDirection: Vector3) {
+    update(nextCameraPosition: Vector3, nextSunDirection: Vector3, nextDriftX = driftX, nextDriftZ = driftZ) {
       cameraPosition.copyFrom(nextCameraPosition);
       sunDirection.copyFrom(nextSunDirection);
+      driftX = nextDriftX;
+      driftZ = nextDriftZ;
       updateSelection();
     },
     upload(placements: readonly CloudPlacement[]) {

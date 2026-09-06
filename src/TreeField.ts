@@ -176,11 +176,21 @@ varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
 varying vec3 vCenterWorld;
+#ifdef IMPOSTOR_GROUND_PLANE
+varying vec3 vGroundRayPoint;
+varying vec4 vGroundPlane;
+#endif
 
 void main(void) {
   #include<instancesVertex>
   vec3 instanceOrigin = finalWorld[3].xyz;
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
+#ifdef IMPOSTOR_GROUND_PLANE
+  vGroundRayPoint = worldPosition.xyz;
+  vec3 groundNormal = normalize(cross(finalWorld[2].xyz, finalWorld[0].xyz));
+  vec3 groundPoint = (finalWorld * vec4(0.0, IMPOSTOR_GROUND_PLANE, 0.0, 1.0)).xyz;
+  vGroundPlane = vec4(groundNormal, -dot(groundNormal, groundPoint));
+#endif
   vCloudShadowWorldXZ = instanceOrigin.xz;
   vec4 shadowWorldPosition = mix(
     worldPosition,
@@ -250,6 +260,10 @@ varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
 varying vec3 vCenterWorld;
+#ifdef IMPOSTOR_GROUND_PLANE
+varying vec3 vGroundRayPoint;
+varying vec4 vGroundPlane;
+#endif
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform sampler2D atlas0;
@@ -535,6 +549,25 @@ void main(void) {
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
   #endif
   if (color.a <= alphaChoice) discard;
+
+#ifdef IMPOSTOR_GROUND_PLANE
+  #ifndef SM_DIRECTIONINLIGHTDATA
+  // Intersect the pixel's view ray with the tilted pebble surface. A flattened
+  // center depth (especially pulled toward the eye) draws underwater cards
+  // over the water even when their actual placement is below it.
+  vec3 groundRay = vGroundRayPoint - cameraPosition;
+  float groundDenominator = dot(vGroundPlane.xyz, groundRay);
+  gl_FragDepthEXT = gl_FragCoord.z;
+  if (cameraOrthographic < 0.5 && abs(groundDenominator) > 0.000001) {
+    float groundHit = -(dot(vGroundPlane.xyz, cameraPosition) + vGroundPlane.w) /
+      groundDenominator;
+    if (groundHit <= 0.0) discard;
+    vec4 groundClip = viewProjection * vec4(cameraPosition + groundRay * groundHit, 1.0);
+    if (groundClip.w <= 0.0) discard;
+    gl_FragDepthEXT = 0.5 + 0.5 * groundClip.z / groundClip.w;
+  }
+  #endif
+#endif
 
 #ifdef IMPOSTOR_DEPTH_PROXY
   // The shadow generator always defines SM_DIRECTIONINLIGHTDATA, so its absence
@@ -1141,6 +1174,8 @@ function sampleTreeSpecies(
  */
 export interface ImpostorDepthOptions {
   depthProxy?: boolean;
+  /** Local height of a ground-aligned depth surface, for flat stone patches. */
+  groundPlaneHeight?: number;
 }
 
 /** Creates the render mesh and shader material for any captured source. */
@@ -1193,7 +1228,9 @@ export function createImpostorMaterial(
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler", "cloudShadowAtlas"],
       // Writing depth costs the early depth test, so the dense low vegetation
       // that never needed it compiles without the proxy at all.
-      defines: depth.depthProxy ? ["#define IMPOSTOR_DEPTH_PROXY"] : [],
+      defines: depth.groundPlaneHeight !== undefined
+        ? [`#define IMPOSTOR_GROUND_PLANE ${depth.groundPlaneHeight.toFixed(9)}`]
+        : depth.depthProxy ? ["#define IMPOSTOR_DEPTH_PROXY"] : [],
       needAlphaBlending: false,
     },
   );

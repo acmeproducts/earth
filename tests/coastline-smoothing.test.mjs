@@ -13,6 +13,30 @@ function terrain(elevations) {
   };
 }
 
+test("shoreline follows fractional coverage instead of snapping to cell midpoints", async () => {
+  const run = async (offset) => {
+    const coverage = Float32Array.from({ length: 9 }, (_, x) => 0.5 + (x - 4 + offset) * 0.08);
+    const grid = terrain(Array(9).fill(8));
+    await shapeCoastlineElevations(grid, {
+      coverage, water: Uint8Array.from(coverage, value => Number(value >= 0.5)),
+      width: 9, height: 1,
+    }, {
+      metersPerPixelX: 10, metersPerPixelY: 10,
+      landBlendWidthMeters: 80, waterBlendWidthMeters: 160,
+      deepWaterCeilingMeters: -50,
+    });
+    return grid;
+  };
+  const before = await run(-0.01);
+  const after = await run(0.01);
+  assert.ok(before.elevations[4] > 0);
+  assert.ok(after.elevations[4] < 0);
+  assert.ok(Math.abs(before.elevations[4] - after.elevations[4]) < 0.03,
+    "crossing the threshold must not introduce a shallow-water depth jump");
+  assert.ok(Math.abs(before.shoreDistanceMeters[4] - 0.1) < 1e-4);
+  assert.ok(Math.abs(after.shoreDistanceMeters[4] + 0.1) < 1e-4);
+});
+
 test("builds a shallow shelf instead of a cliff at the waterline", async () => {
   const grid = terrain([12, 12, 12, 12, 0, 0, 0, 0, 0]);
   const water = new Uint8Array([0, 0, 0, 0, 1, 1, 1, 1, 1]);

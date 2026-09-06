@@ -221,7 +221,8 @@ const MINIMUM_BOUNDARY_RUN_METERS = 2.2;
 const PLOT_BUILDING_CLEARANCE_METERS = 2.5;
 
 /**
- * Selects a restrained, repeatable subset of plot edges. Road-facing edges
+ * Selects a restrained, repeatable subset of road and neighbor contacts.
+ * Unsupported outer edges face open land and remain untreated. Road-facing edges
  * receive an entrance gap; clipping edges at the tile bounds are never made
  * visible because they are data boundaries rather than real parcel lines.
  */
@@ -237,6 +238,12 @@ function planPlotBoundaries(
   const roadTolerance = 0.12 / options.metersPerUnit;
   const buildingClearance = PLOT_BUILDING_CLEARANCE_METERS / options.metersPerUnit;
   const buildingIndex = new PlanarCellIndex<PlannedBuildingSite>(planningCellSize(options));
+  const plotIndex = new PlanarCellIndex<PlannedPlot>(planningCellSize(options));
+  const roadIndex = new PlanarCellIndex<Candidate>(planningCellSize(options));
+  for (const plot of plots) plotIndex.add(plot, pointBounds(plot.outline), roadTolerance);
+  for (const road of roadCandidates) {
+    if (road.structure !== "bridge") roadIndex.add(road, pointBounds(road.outline), roadTolerance);
+  }
   for (const site of buildingSites) {
     buildingIndex.add(site, pointBounds(site.outline), buildingClearance);
   }
@@ -248,21 +255,35 @@ function planPlotBoundaries(
     const style = hashUnit(`${plot.sourceId}/plot-boundary-style`) < 0.72
       ? "hedge" as const
       : "woodFence" as const;
-    const candidates: Array<{ start: PlanningPoint; end: PlanningPoint; key: string; score: number }> = [];
+    const candidates: Array<{
+      start: PlanningPoint; end: PlanningPoint; key: string; score: number; facesRoad: boolean;
+    }> = [];
     for (let index = 0; index < plot.outline.length; index++) {
       const start = plot.outline[index];
       const end = plot.outline[(index + 1) % plot.outline.length];
       const length = Math.hypot(end.x - start.x, end.z - start.z);
-      if (length < minimumRun || liesOnPlanningBounds(start, end, bounds) ||
-          !edgeClearsBuildings(start, end, buildingIndex, buildingClearance)) continue;
-      const key = undirectedEdgeKey(start, end);
-      if (usedEdges.has(key)) continue;
-      candidates.push({
-        start,
-        end,
-        key,
-        score: hashUnit(`${plot.sourceId}/plot-edge/${key}`),
-      });
+      if (length < minimumRun || liesOnPlanningBounds(start, end, bounds)) continue;
+      const edgeBounds = pointBounds([start, end]);
+      const contacts = [
+        ...roadIndex.query(edgeBounds).map((road) => ({ outline: road.outline, facesRoad: true })),
+        ...plotIndex.query(edgeBounds).filter((neighbor) => neighbor !== plot)
+          .map((neighbor) => ({ outline: neighbor.outline, facesRoad: false })),
+      ];
+      for (const contact of plotEdgeContacts(start, end, contacts, roadTolerance)) {
+        const contactStart = interpolate(start, end, contact.from);
+        const contactEnd = interpolate(start, end, contact.to);
+        if ((contact.to - contact.from) * length < minimumRun ||
+            !edgeClearsBuildings(contactStart, contactEnd, buildingIndex, buildingClearance)) continue;
+        const key = undirectedEdgeKey(contactStart, contactEnd);
+        if (usedEdges.has(key)) continue;
+        candidates.push({
+          start: contactStart,
+          end: contactEnd,
+          key,
+          facesRoad: contact.facesRoad,
+          score: hashUnit(`${plot.sourceId}/plot-edge/${key}`),
+        });
+      }
     }
 
     // Even selected parcels remain visually porous: cap ordinary plots at
@@ -273,23 +294,61 @@ function planPlotBoundaries(
       .slice(0, 3);
     for (const edge of selected) {
       usedEdges.add(edge.key);
-      const midpoint = interpolate(edge.start, edge.end, 0.5);
-      const facesRoad = roadCandidates.some((road) =>
-        road.structure !== "bridge" && distanceToRing(midpoint, road.outline) <= roadTolerance
-      );
       const length = Math.hypot(edge.end.x - edge.start.x, edge.end.z - edge.start.z);
-      if (facesRoad && length >= entrance + minimumRun * 2) {
+      if (edge.facesRoad && length >= entrance + minimumRun * 2) {
         const halfGap = entrance / length / 2;
         boundaries.push(
           { sourceId: plot.sourceId, style, path: [edge.start, interpolate(edge.start, edge.end, 0.5 - halfGap)] },
           { sourceId: plot.sourceId, style, path: [interpolate(edge.start, edge.end, 0.5 + halfGap), edge.end] },
         );
-      } else {
+      } else if (!edge.facesRoad) {
         boundaries.push({ sourceId: plot.sourceId, style, path: [edge.start, edge.end] });
       }
     }
   }
   return boundaries;
+}
+
+/** Project parallel boundary contacts onto an edge; point contacts do not count. */
+function plotEdgeContacts(
+  start: PlanningPoint,
+  end: PlanningPoint,
+  contacts: readonly { outline: readonly PlanningPoint[]; facesRoad: boolean }[],
+  tolerance: number,
+): Array<{ from: number; to: number; facesRoad: boolean }> {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const length = Math.hypot(dx, dz);
+  const spans: Array<{ from: number; to: number; facesRoad: boolean }> = [];
+  for (const contact of contacts) {
+    for (let index = 0; index < contact.outline.length; index++) {
+      const a = contact.outline[index];
+      const b = contact.outline[(index + 1) % contact.outline.length];
+      if (Math.abs(cross(start, end, a)) / length > tolerance ||
+          Math.abs(cross(start, end, b)) / length > tolerance) continue;
+      const project = (point: PlanningPoint) =>
+        ((point.x - start.x) * dx + (point.z - start.z) * dz) / (length * length);
+      const first = project(a);
+      const second = project(b);
+      const from = Math.max(0, Math.min(first, second));
+      const to = Math.min(1, Math.max(first, second));
+      if (to - from > 1e-8) spans.push({ from, to, facesRoad: contact.facesRoad });
+    }
+  }
+  // Road beds are split into several polygons; reunite their contact spans
+  // before choosing barriers and cutting one entrance into the frontage.
+  spans.sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: typeof spans = [];
+  for (const span of spans) {
+    const previous = merged[merged.length - 1];
+    if (previous && span.from <= previous.to + 1e-8) {
+      previous.to = Math.max(previous.to, span.to);
+      previous.facesRoad ||= span.facesRoad;
+    } else {
+      merged.push({ ...span });
+    }
+  }
+  return merged;
 }
 
 function edgeClearsBuildings(

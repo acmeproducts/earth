@@ -41,7 +41,7 @@ test("renders each connected lake as one polygon mesh with attached holes", () =
 });
 
 test("shares the water material across far lake tiles", () => {
-  assert.match(surface, /const terrainLakeMaterials = new WeakMap<Scene/);
-  assert.match(surface, /terrainLakeMaterials\.get\(scene\)/);
-  assert.match(surface, /terrainLakeMaterials\.set\(scene, material\)/);
+  assert.match(surface, /const material = createWaterSurfaceMaterial\(scene/);
+  assert.match(surface, /bindWaterMaterial\(mesh, material/);
+  assert.doesNotMatch(surface, /new (PBRMaterial|StandardMaterial)/);
 });
