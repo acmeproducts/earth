@@ -5,6 +5,7 @@ import {
 } from "@babylonjs/core";
 import {
   measureFoliageTextures,
+  createTreeModelMaterial,
   TREE_SPECIES,
   TREE_SPECIES_LIST,
   TreeSpecies,
@@ -21,6 +22,9 @@ import {
 } from "./Impostor";
 import type { TreeSeasonAppearance } from "./TreeSeason";
 import { bakeTreeExposure } from "./DirectionalExposure";
+import { TreeModelGeometryCache } from "./TreeModelGeometryCache";
+
+const treeModelCaches = new WeakMap<Scene, TreeModelGeometryCache>();
 
 export interface TreeImpostorVariant extends ImpostorVariant {
   season?: TreeSeasonAppearance;
@@ -104,25 +108,39 @@ export async function createTreeModels(
 ): Promise<Mesh[]> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
-  const parts = treeDefinition.create(scene, {
-    name: `${species}TreeModels`,
-    liveLighting: true,
-    season,
-    ...(seed === undefined ? {} : { seed }),
-  });
-  const renderScale = renderHeight / treeDefinition.sourceHeight;
-  const meshes = [parts.log, parts.branches];
-  meshes.forEach((mesh) => { mesh.isVisible = false; });
-  try {
-    await bakeTreeExposure(meshes);
-  } catch (error) {
-    const materials = new Set(meshes.map((mesh) => mesh.material));
-    meshes.forEach((mesh) => mesh.dispose(false, false));
-    materials.forEach((material) => material?.dispose(true, false));
-    throw error;
+  let cache = treeModelCaches.get(scene);
+  if (!cache) {
+    cache = new TreeModelGeometryCache();
+    treeModelCaches.set(scene, cache);
+    scene.onDisposeObservable.addOnce(() => treeModelCaches.delete(scene));
   }
-  meshes.forEach((mesh) => { mesh.isVisible = true; });
+  // Height is applied after retrieval: mature trees and saplings can share a bake.
+  const key = JSON.stringify([species, seed ?? null, season ?? null]);
+  const meshes = await cache.create(key, scene, async () => {
+    const parts = treeDefinition.create(scene, {
+      name: `${species}TreeModels`,
+      liveLighting: true,
+      season,
+      ...(seed === undefined ? {} : { seed }),
+    });
+    const meshes = [parts.log, parts.branches];
+    meshes.forEach((mesh) => { mesh.isVisible = false; });
+    try {
+      await bakeTreeExposure(meshes);
+    } catch (error) {
+      const materials = new Set(meshes.map((mesh) => mesh.material));
+      meshes.forEach((mesh) => mesh.dispose(false, false));
+      materials.forEach((material) => material?.dispose(true, false));
+      throw error;
+    }
+    return meshes;
+  });
+  const material = createTreeModelMaterial(scene, `${species}TreeModels`, species);
+  material.options.defines.push("#define TREE_EXPOSURE");
+  material.options.attributes.push("sunExposureLow", "sunExposureHigh");
+  const renderScale = renderHeight / treeDefinition.sourceHeight;
   for (const mesh of meshes) {
+    mesh.material = material;
     scaleTreeMesh(mesh, renderScale, renderHeight / 2, renderHeight);
   }
   return meshes;

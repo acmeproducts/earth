@@ -227,6 +227,7 @@
     .place-field input { font-family: Arial, sans-serif; }
 
     .coordinate-go,
+    .random-location,
     .place-go {
       height: 34px;
       padding: 0 14px;
@@ -238,11 +239,15 @@
       cursor: pointer;
     }
 
+    .random-location { margin-top: 14px; }
+
     .coordinate-go:disabled,
+    .random-location:disabled,
     .place-go:disabled { opacity: 0.5; cursor: wait; }
     .coordinate-field input:focus-visible,
     .place-field input:focus-visible,
     .coordinate-go:focus-visible,
+    .random-location:focus-visible,
     .place-go:focus-visible { outline: 2px solid #8fc4a4; outline-offset: 2px; }
     .coordinate-status {
       display: block;

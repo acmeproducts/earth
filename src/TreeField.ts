@@ -20,6 +20,7 @@ import {
   sampleElevation,
 } from "./Geo";
 import type { TerrainData } from "./TerrainData";
+import { StreamingTrace } from "./StreamingDiagnostics";
 import {
   acquireTreeImpostorAssets,
   createTreeLogModel,
@@ -719,269 +720,283 @@ export async function createTreeField(
     prototypeNamePrefix = rootName,
   } = options;
   const treeHeight = renderHeightMeters / metersPerUnit;
-  const root = new TransformNode(rootName, scene);
-  if (startDisabled) root.setEnabled(false);
-  const random = createSeededRandom(seed);
-  const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
-  const speciesDetailNoise = new SimplexNoise2D(speciesSeed ^ 0x434c5553);
-  // Variant identity is a property of the terrain tile, not each individual
-  // tree. Otherwise boundary tiles can discover several complete atlas sets.
-  const tileVariantLocation = sceneToLonLat(
-    0,
-    0,
-    terrain.bounds,
-    meshWidth,
-    meshDepth,
-  );
-  const tileRegion = proceduralVariantAtLocation(
-    "trees",
-    tileVariantLocation.lon,
-    tileVariantLocation.lat,
-    modelVariantSeed,
-    TREE_VARIANT_SPAN_TILES,
-  );
-  const tileLocalVariant = proceduralLocalVariantAtLocation(
-    "trees",
-    tileVariantLocation.lon,
-    tileVariantLocation.lat,
-    modelVariantSeed,
-    TREE_SISTER_MODELS,
-    TREE_VARIANT_SPAN_TILES,
-    0,
-  );
-  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
-    meshWidth,
-    meshDepth,
-    spacingMeters,
-    metersPerUnit,
-  );
-  const maximumHalfWidth = Math.max(...TREE_SPECIES_LIST.map((species) => {
-    const definition = TREE_SPECIES[species];
-    return definition.captureDiameter * treeHeight / definition.sourceHeight;
-  })) * 0.55;
-  const matrices: Matrix[] = [];
-  let variantBuckets = new Map<string, TreeVariantBucket>();
-
-  if (landCover) {
-    const forestMask = new Uint8Array(rows * columns);
-    for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const x = -meshWidth / 2 + (column + 0.5) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.5) * cellDepth;
-        const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
-        const cover = landCover.sample(lon, lat);
-        if (cover === LandCoverClass.TreeCover || cover === LandCoverClass.Mangrove) {
-          forestMask[row * columns + column] = 1;
-        }
-      }
-      await yieldControl?.();
-    }
-
-    const edgeDistances = distanceInsideMask(
-      forestMask,
-      columns,
-      rows,
-      cellWidth * metersPerUnit,
-      cellDepth * metersPerUnit,
+  const trace = new StreamingTrace(`trees ${rootName} lon=${terrain.bounds.lonWest.toFixed(4)} lat=${terrain.bounds.latNorth.toFixed(4)} models=${includeModels}`);
+  try {
+    trace.stage("placement setup");
+    const root = new TransformNode(rootName, scene);
+    if (startDisabled) root.setEnabled(false);
+    const random = createSeededRandom(seed);
+    const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
+    const speciesDetailNoise = new SimplexNoise2D(speciesSeed ^ 0x434c5553);
+    // Variant identity is a property of the terrain tile, not each individual
+    // tree. Otherwise boundary tiles can discover several complete atlas sets.
+    const tileVariantLocation = sceneToLonLat(
+      0,
+      0,
+      terrain.bounds,
+      meshWidth,
+      meshDepth,
     );
-
-    for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const index = row * columns + column;
-        if (!forestMask[index]) continue;
-
-        const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
-        const elevation = elevationSampler
-          ? elevationSampler(x, z)
-          : sampleElevation(terrain, x, z, meshWidth, meshDepth);
-        if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
-        if (!isTerrainFootprintAbove(
-          terrain,
-          x,
-          z,
-          maximumHalfWidth,
-          maximumHalfWidth,
-          meshWidth,
-          meshDepth,
-          waterLineMeters,
-        )) continue;
-
-        const depth = Math.min(1, edgeDistances[index] / fullDensityDepthMeters);
-        const interiorWeight = depth * depth * (3 - 2 * depth);
-        const worldX = x + positionOffset.x;
-        const worldZ = z + positionOffset.z;
-        const localOccupancy = Math.min(
-          1,
-          (edgeOccupancy + (occupancy - edgeOccupancy) * interiorWeight) *
-            Math.max(0, densityScale?.(worldX, worldZ) ?? 1),
-        );
-        if (random() > localOccupancy) continue;
-
-        const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
-        const treeDistribution = treeDistributionAt(location.lon, location.lat);
-        // Geographic meters anchor the grove noise to the world rather than
-        // to this tile's local frame, keeping groves seamless across tiles.
-        const ground = groundMetersAt(location.lon, location.lat);
-        const species = sampleTreeSpecies(
-          speciesNoise,
-          speciesDetailNoise,
-          ground.x,
-          ground.y,
-          treeDistribution,
-          random(),
-        );
-        if (!species) continue;
-        const speciesScale = TREE_SPECIES_SCALE[species];
-        const heightScale = (0.75 + random() * 0.5) * speciesScale;
-        const widthScale = (0.75 + random() * 0.35) * speciesScale;
-        const yaw = (random() - 0.5) * Math.PI * 2;
-        const pitch = (random() - 0.5) * 0.08;
-        const roll = (random() - 0.5) * 0.08;
-        const matrix = Matrix.Compose(
-          new Vector3(widthScale, heightScale, widthScale),
-          new Vector3(pitch, yaw, roll).toQuaternion(),
-          new Vector3(
-            worldX,
-            elevation / metersPerUnit + positionOffset.y,
-            worldZ,
-          ),
-        );
-        matrices.push(matrix);
-        const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species);
-        const variant: TreeImpostorVariant = {
-          ...tileRegion,
-          key: `${tileRegion.key}/local/${tileLocalVariant}/season/${season.key}`,
-          seed: layerSeed(layerSeed(
-            tileRegion.seed,
-            `sister-${tileLocalVariant}`,
-          ), species),
-          season,
-        };
-        const bucketKey = `${species}:${variant.key}`;
-        let bucket = variantBuckets.get(bucketKey);
-        if (!bucket) {
-          bucket = { species, variant, matrices: [], fallenLogMatrices: [] };
-          variantBuckets.set(bucketKey, bucket);
-        }
-        bucket.matrices.push(matrix);
-        if (includeFallenLogs && depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH &&
-            random() < FALLEN_LOG_CHANCE) {
-          const logYaw = random() * Math.PI * 2;
-          const offsetDistance = (0.7 + random() * 0.9) / metersPerUnit;
-          const logX = x + Math.cos(logYaw + Math.PI / 2) * offsetDistance;
-          const logZ = z + Math.sin(logYaw + Math.PI / 2) * offsetDistance;
-          const logElevation = elevationSampler
-            ? elevationSampler(logX, logZ)
-            : sampleElevation(terrain, logX, logZ, meshWidth, meshDepth);
-          const lengthScale = (0.48 + random() * 0.3) * speciesScale;
-          const thicknessScale = (0.82 + random() * 0.3) * speciesScale;
-          bucket.fallenLogMatrices.push(Matrix.Compose(
-            new Vector3(thicknessScale, lengthScale, thicknessScale),
-            new Vector3(0, logYaw, Math.PI / 2 + (random() - 0.5) * 0.08).toQuaternion(),
-            new Vector3(
-              logX + positionOffset.x,
-              (logElevation + 0.14) / metersPerUnit + positionOffset.y,
-              logZ + positionOffset.z,
-            ),
-          ));
-        }
-      }
-      await yieldControl?.();
-    }
-  }
-
-  variantBuckets = consolidateTreeVariantBuckets(variantBuckets);
-
-  // Only species that placement actually encountered in this lon/lat tile get
-  // model geometry and an impostor capture. This avoids global up-front atlases.
-  const resources: Array<{
-    bucket: TreeVariantBucket;
-    prototype: ImpostorPrototype;
-    modelMeshes: Mesh[];
-    fallenLogModel?: Mesh;
-  }> = [];
-  // Impostor capture temporarily installs an orthographic scene camera. Capture
-  // species one at a time so each pass restores the real gameplay camera.
-  for (const bucket of variantBuckets.values()) {
-    const { species, variant } = bucket;
-    const suffix = `${species}-${variant.key.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
-    const prototype = await createTreeImpostorPrototype(
-      scene,
-      treeHeight,
-      `${prototypeNamePrefix}-${suffix}`,
-      species,
-      variant,
-      impostorCaptureMode === "cooperative",
+    const tileRegion = proceduralVariantAtLocation(
+      "trees",
+      tileVariantLocation.lon,
+      tileVariantLocation.lat,
+      modelVariantSeed,
+      TREE_VARIANT_SPAN_TILES,
     );
-    prototype.root.parent = root;
-    if (prototype.mesh.material instanceof ShaderMaterial) {
-      prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
-    }
-    const modelMeshes = includeModels
-      ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season)
-      : [];
-    // Trees move with the same wind field as their impostors, but at a much
-    // smaller amplitude so the canopy breathes without making trunks wobble.
-    setVegetationWindShear(modelMeshes, windShearFraction("tree"));
-    modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
-    const fallenLogModel = bucket.fallenLogMatrices.length > 0
-      ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season)
-      : undefined;
-    if (fallenLogModel) fallenLogModel.parent = prototype.root;
-    const modelMaterials = new Set(
-      [...modelMeshes, ...(fallenLogModel ? [fallenLogModel] : [])]
-        .map((mesh) => mesh.material).filter((material) => material !== null),
+    const tileLocalVariant = proceduralLocalVariantAtLocation(
+      "trees",
+      tileVariantLocation.lon,
+      tileVariantLocation.lat,
+      modelVariantSeed,
+      TREE_SISTER_MODELS,
+      TREE_VARIANT_SPAN_TILES,
+      0,
     );
-    prototype.root.onDisposeObservable.add(() => {
-      modelMaterials.forEach((material) => material.dispose(true, false));
-    });
-    resources.push({ bucket, prototype, modelMeshes, fallenLogModel });
-  }
-
-  const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const fields: VegetationFieldResult[] = [];
-  for (const { bucket, prototype, modelMeshes, fallenLogModel } of resources) {
-    const ownMatrices = await packInstanceMatrices(bucket.matrices, yieldControl);
-    const field = await createVegetationFieldResult(
-      prototype.root,
-      [prototype.mesh],
-      modelMeshes,
-      ownMatrices,
+    const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
+      meshWidth,
+      meshDepth,
+      spacingMeters,
       metersPerUnit,
-      renderMode,
-      undefined,
-      yieldControl,
     );
-    field.shadowCasterMeshes.push(...createTreeShadowCasters(
-      scene,
-      prototype.root,
-      prototype.mesh,
-      ownMatrices,
-      bucket.species,
-    ));
-    fields.push(field);
-    if (fallenLogModel) {
-      const logMatrices = await packInstanceMatrices(bucket.fallenLogMatrices, yieldControl);
-      const logField = await createVegetationFieldResult(
+    const maximumHalfWidth = Math.max(...TREE_SPECIES_LIST.map((species) => {
+      const definition = TREE_SPECIES[species];
+      return definition.captureDiameter * treeHeight / definition.sourceHeight;
+    })) * 0.55;
+    const matrices: Matrix[] = [];
+    let variantBuckets = new Map<string, TreeVariantBucket>();
+
+    if (landCover) {
+      trace.stage(`forest mask (${columns}x${rows} cells)`);
+      const forestMask = new Uint8Array(rows * columns);
+      for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+          const x = -meshWidth / 2 + (column + 0.5) * cellWidth;
+          const z = meshDepth / 2 - (row + 0.5) * cellDepth;
+          const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+          const cover = landCover.sample(lon, lat);
+          if (cover === LandCoverClass.TreeCover || cover === LandCoverClass.Mangrove) {
+            forestMask[row * columns + column] = 1;
+          }
+        }
+        await yieldControl?.();
+      }
+
+      trace.stage("forest edge distances");
+      const edgeDistances = distanceInsideMask(
+        forestMask,
+        columns,
+        rows,
+        cellWidth * metersPerUnit,
+        cellDepth * metersPerUnit,
+      );
+
+      trace.stage("placement: terrain/exclusion checks, species, transforms");
+      for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+          const index = row * columns + column;
+          if (!forestMask[index]) continue;
+
+          const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
+          const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
+          const elevation = elevationSampler
+            ? elevationSampler(x, z)
+            : sampleElevation(terrain, x, z, meshWidth, meshDepth);
+          if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
+          if (!isTerrainFootprintAbove(
+            terrain,
+            x,
+            z,
+            maximumHalfWidth,
+            maximumHalfWidth,
+            meshWidth,
+            meshDepth,
+            waterLineMeters,
+          )) continue;
+
+          const depth = Math.min(1, edgeDistances[index] / fullDensityDepthMeters);
+          const interiorWeight = depth * depth * (3 - 2 * depth);
+          const worldX = x + positionOffset.x;
+          const worldZ = z + positionOffset.z;
+          const localOccupancy = Math.min(
+            1,
+            (edgeOccupancy + (occupancy - edgeOccupancy) * interiorWeight) *
+              Math.max(0, densityScale?.(worldX, worldZ) ?? 1),
+          );
+          if (random() > localOccupancy) continue;
+
+          const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+          const treeDistribution = treeDistributionAt(location.lon, location.lat);
+          // Geographic meters anchor the grove noise to the world rather than
+          // to this tile's local frame, keeping groves seamless across tiles.
+          const ground = groundMetersAt(location.lon, location.lat);
+          const species = sampleTreeSpecies(
+            speciesNoise,
+            speciesDetailNoise,
+            ground.x,
+            ground.y,
+            treeDistribution,
+            random(),
+          );
+          if (!species) continue;
+          const speciesScale = TREE_SPECIES_SCALE[species];
+          const heightScale = (0.75 + random() * 0.5) * speciesScale;
+          const widthScale = (0.75 + random() * 0.35) * speciesScale;
+          const yaw = (random() - 0.5) * Math.PI * 2;
+          const pitch = (random() - 0.5) * 0.08;
+          const roll = (random() - 0.5) * 0.08;
+          const matrix = Matrix.Compose(
+            new Vector3(widthScale, heightScale, widthScale),
+            new Vector3(pitch, yaw, roll).toQuaternion(),
+            new Vector3(
+              worldX,
+              elevation / metersPerUnit + positionOffset.y,
+              worldZ,
+            ),
+          );
+          matrices.push(matrix);
+          const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species);
+          const variant: TreeImpostorVariant = {
+            ...tileRegion,
+            key: `${tileRegion.key}/local/${tileLocalVariant}/season/${season.key}`,
+            seed: layerSeed(layerSeed(
+              tileRegion.seed,
+              `sister-${tileLocalVariant}`,
+            ), species),
+            season,
+          };
+          const bucketKey = `${species}:${variant.key}`;
+          let bucket = variantBuckets.get(bucketKey);
+          if (!bucket) {
+            bucket = { species, variant, matrices: [], fallenLogMatrices: [] };
+            variantBuckets.set(bucketKey, bucket);
+          }
+          bucket.matrices.push(matrix);
+          if (includeFallenLogs && depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH &&
+              random() < FALLEN_LOG_CHANCE) {
+            const logYaw = random() * Math.PI * 2;
+            const offsetDistance = (0.7 + random() * 0.9) / metersPerUnit;
+            const logX = x + Math.cos(logYaw + Math.PI / 2) * offsetDistance;
+            const logZ = z + Math.sin(logYaw + Math.PI / 2) * offsetDistance;
+            const logElevation = elevationSampler
+              ? elevationSampler(logX, logZ)
+              : sampleElevation(terrain, logX, logZ, meshWidth, meshDepth);
+            const lengthScale = (0.48 + random() * 0.3) * speciesScale;
+            const thicknessScale = (0.82 + random() * 0.3) * speciesScale;
+            bucket.fallenLogMatrices.push(Matrix.Compose(
+              new Vector3(thicknessScale, lengthScale, thicknessScale),
+              new Vector3(0, logYaw, Math.PI / 2 + (random() - 0.5) * 0.08).toQuaternion(),
+              new Vector3(
+                logX + positionOffset.x,
+                (logElevation + 0.14) / metersPerUnit + positionOffset.y,
+                logZ + positionOffset.z,
+              ),
+            ));
+          }
+        }
+        await yieldControl?.();
+      }
+    }
+
+    variantBuckets = consolidateTreeVariantBuckets(variantBuckets);
+    trace.stage(`resources (${matrices.length} trees, ${variantBuckets.size} variants)`);
+
+    // Only species that placement actually encountered in this lon/lat tile get
+    // model geometry and an impostor capture. This avoids global up-front atlases.
+    const resources: Array<{
+      bucket: TreeVariantBucket;
+      prototype: ImpostorPrototype;
+      modelMeshes: Mesh[];
+      fallenLogModel?: Mesh;
+    }> = [];
+    // Impostor capture temporarily installs an orthographic scene camera. Capture
+    // species one at a time so each pass restores the real gameplay camera.
+    for (const bucket of variantBuckets.values()) {
+      const { species, variant } = bucket;
+      const suffix = `${species}-${variant.key.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+      trace.stage(`${species} impostor acquire (cached or capture)`);
+      const prototype = await createTreeImpostorPrototype(
+        scene,
+        treeHeight,
+        `${prototypeNamePrefix}-${suffix}`,
+        species,
+        variant,
+        impostorCaptureMode === "cooperative",
+      );
+      prototype.root.parent = root;
+      if (prototype.mesh.material instanceof ShaderMaterial) {
+        prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
+      }
+      trace.stage(`${species} model geometry + lighting bake`);
+      const modelMeshes = includeModels
+        ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season)
+        : [];
+      // Trees move with the same wind field as their impostors, but at a much
+      // smaller amplitude so the canopy breathes without making trunks wobble.
+      setVegetationWindShear(modelMeshes, windShearFraction("tree"));
+      modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
+      trace.stage(`${species} fallen logs`);
+      const fallenLogModel = bucket.fallenLogMatrices.length > 0
+        ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season)
+        : undefined;
+      if (fallenLogModel) fallenLogModel.parent = prototype.root;
+      const modelMaterials = new Set(
+        [...modelMeshes, ...(fallenLogModel ? [fallenLogModel] : [])]
+          .map((mesh) => mesh.material).filter((material) => material !== null),
+      );
+      prototype.root.onDisposeObservable.add(() => {
+        modelMaterials.forEach((material) => material.dispose(true, false));
+      });
+      resources.push({ bucket, prototype, modelMeshes, fallenLogModel });
+    }
+
+    trace.stage("instance buffers, LOD grid and shadow casters");
+    const matrixData = await packInstanceMatrices(matrices, yieldControl);
+    const fields: VegetationFieldResult[] = [];
+    for (const { bucket, prototype, modelMeshes, fallenLogModel } of resources) {
+      const ownMatrices = await packInstanceMatrices(bucket.matrices, yieldControl);
+      const field = await createVegetationFieldResult(
         prototype.root,
-        [],
-        [fallenLogModel],
-        logMatrices,
+        [prototype.mesh],
+        modelMeshes,
+        ownMatrices,
         metersPerUnit,
-        "auto",
+        renderMode,
         undefined,
         yieldControl,
       );
-      // Deadfall has no impostor side. It follows the normal detail distance
-      // but remains independent of the standing trees' selected render mode.
-      logField.count = 0;
-      logField.setRenderMode = () => undefined;
-      fields.push(logField);
+      field.shadowCasterMeshes.push(...createTreeShadowCasters(
+        scene,
+        prototype.root,
+        prototype.mesh,
+        ownMatrices,
+        bucket.species,
+      ));
+      fields.push(field);
+      if (fallenLogModel) {
+        const logMatrices = await packInstanceMatrices(bucket.fallenLogMatrices, yieldControl);
+        const logField = await createVegetationFieldResult(
+          prototype.root,
+          [],
+          [fallenLogModel],
+          logMatrices,
+          metersPerUnit,
+          "auto",
+          undefined,
+          yieldControl,
+        );
+        // Deadfall has no impostor side. It follows the normal detail distance
+        // but remains independent of the standing trees' selected render mode.
+        logField.count = 0;
+        logField.setRenderMode = () => undefined;
+        fields.push(logField);
+      }
+      await yieldControl?.();
     }
-    await yieldControl?.();
+    return combineVegetationFieldResults(root, fields, matrixData);
+  } finally {
+    trace.finish();
   }
-  return combineVegetationFieldResults(root, fields, matrixData);
 }
 
 /**

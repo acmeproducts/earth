@@ -118,10 +118,15 @@ await sleep(3000);
 
 await screenshot("loc1-initial");
 
-// Switch to example location 2 via the debug keyboard shortcut.
+// Switch to example location 2 via the coordinate form.
 const logCountBefore = consoleLogs.length;
-await key("rawKeyDown", "2", "Digit2", 50);
-await key("keyUp", "2", "Digit2", 50);
+await key("rawKeyDown", "Escape", "Escape", 27);
+await key("keyUp", "Escape", "Escape", 27);
+await evaluate(`
+  document.querySelector('[aria-label="Latitude"]').value = '59.8888085995981';
+  document.querySelector('[aria-label="Longitude"]').value = '10.593090176648504';
+  document.querySelector('.coordinate-form').requestSubmit();
+`);
 
 // The rebuild logs its final layer counts; wait for the OSM line.
 for (let attempt = 0; attempt < 180; attempt++) {

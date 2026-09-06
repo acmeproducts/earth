@@ -837,6 +837,7 @@ function createPlannedRoadBatch(
       (point) => grade(point) / options.metersPerUnit,
       clearance,
       options.terrainSurface,
+      road.structure === "surface" || road.structure === "ford",
     );
     for (const ring of rings) {
       const vertexOffset = positions.length / 3;

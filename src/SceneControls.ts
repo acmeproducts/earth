@@ -22,6 +22,7 @@ export interface SceneControlsOptions {
   onDateChange: (date: string) => void;
   onTimeOfDayChange: (hours: number) => void;
   onLocationChange: (location: WorldLocation) => Promise<void>;
+  onRandomLocation: () => Promise<void>;
   onMenuOpenChange: (isOpen: boolean) => void;
 }
 
@@ -41,6 +42,7 @@ export class SceneControls {
   private readonly longitudeInput: HTMLInputElement;
   private readonly locationStatus: HTMLOutputElement;
   private readonly goButton: HTMLButtonElement;
+  private readonly randomLocationButton: HTMLButtonElement;
   private readonly clockTimer: number;
   private readonly rangeControls = new Map<SceneSettingKey, RangeControl>();
   private readonly onMenuOpenChange: (isOpen: boolean) => void;
@@ -215,6 +217,14 @@ export class SceneControls {
       void this.navigateToCoordinates(options.onLocationChange);
     });
     locationGroup.appendChild(locationForm);
+    this.randomLocationButton = document.createElement("button");
+    this.randomLocationButton.type = "button";
+    this.randomLocationButton.className = "random-location";
+    this.randomLocationButton.textContent = "Random location";
+    this.randomLocationButton.addEventListener("click", () => {
+      void this.navigateToRandomLocation(options.onRandomLocation);
+    });
+    locationGroup.appendChild(this.randomLocationButton);
     locationGroup.appendChild(this.locationStatus);
     this.element.appendChild(locationGroup);
 
@@ -356,12 +366,27 @@ export class SceneControls {
     }
   }
 
+  private async navigateToRandomLocation(onRandomLocation: () => Promise<void>): Promise<void> {
+    this.setLocationBusy(true);
+    this.locationStatus.value = "Finding random land location...";
+    try {
+      await onRandomLocation();
+      this.setMenuOpen(false);
+    } catch (error) {
+      console.error("Failed to load random location:", error);
+      this.locationStatus.value = "Could not load a random location. Please try again.";
+    } finally {
+      this.setLocationBusy(false);
+    }
+  }
+
   private setLocationBusy(isBusy: boolean): void {
     this.placeInput.disabled = isBusy;
     this.latitudeInput.disabled = isBusy;
     this.longitudeInput.disabled = isBusy;
     this.placeGoButton.disabled = isBusy;
     this.goButton.disabled = isBusy;
+    this.randomLocationButton.disabled = isBusy;
   }
 
   private createRangeControl(

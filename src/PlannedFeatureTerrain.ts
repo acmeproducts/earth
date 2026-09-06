@@ -36,6 +36,10 @@ interface BuildingGrade {
   elevation: number;
 }
 
+// Elevations are in metres, independent of the scene scale. Roads may smooth
+// small irregularities, but must not cut a straight ramp through an entire hill.
+const MAX_ROAD_EARTHWORK_METERS = 1;
+
 /** Applies one coordinated terrain pass from the shared construction plan. */
 export async function conformTerrainToPlannedFeatures(
   terrain: TerrainData,
@@ -125,8 +129,12 @@ export async function conformTerrainToPlannedFeatures(
               ? buildingTarget
               : roadTarget!;
       const index = row * terrain.width + column;
+      const delta = selected.elevation - original[index];
+      const earthwork = selected === roadTarget
+        ? Math.max(-MAX_ROAD_EARTHWORK_METERS, Math.min(MAX_ROAD_EARTHWORK_METERS, delta))
+        : delta;
       terrain.elevations[index] = original[index] +
-        (selected.elevation - original[index]) * selected.weight;
+        earthwork * selected.weight;
       modified++;
     }
     await yieldControl?.();

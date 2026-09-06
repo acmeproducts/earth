@@ -176,13 +176,13 @@ test("separates true overpasses while treating fords as ground-level roads", () 
     .some((right) => hasPositiveAreaIntersection(left.outline, right.outline))));
 });
 
-test("grades roads across their width and building sites to one elevation in one pass", async () => {
+test("gently grades roads across their width and levels building sites in one pass", async () => {
   const width = 13;
   const height = 13;
   const elevations = new Float32Array(width * height);
   for (let row = 0; row < height; row++) {
     for (let column = 0; column < width; column++) {
-      elevations[row * width + column] = 20 + row * 2 + column * 0.25;
+      elevations[row * width + column] = 20 + row * 0.5 + column * 0.25;
     }
   }
   const terrain = {

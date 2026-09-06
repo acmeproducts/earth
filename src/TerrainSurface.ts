@@ -187,12 +187,15 @@ export interface DecalVertex {
  * envelope of two planes. That envelope is convex, and a convex function is
  * bounded above by the linear interpolation of its values at a triangle's
  * corners, so no point of the emitted geometry can sink below the ground.
+ * With followGround, use the ground plane directly when available; surface
+ * roads must not float over valleys that their limited earthwork preserves.
  */
 export function conformDecalPolygon(
   outline: readonly PlanarPoint[],
   plannedHeight: (point: PlanarPoint) => number,
   clearance: number,
   surface?: TerrainSurface,
+  followGround = false,
 ): DecalVertex[][] {
   if (outline.length < 3) return [];
   const pieces: TerrainSurfacePiece[] = surface
@@ -206,7 +209,9 @@ export function conformDecalPolygon(
     if (ring.length < 3) continue;
     rings.push(ring.map((point) => ({
       x: point.x,
-      y: Math.max(plannedHeight(point), piece.height(point)) + clearance,
+      y: (followGround && surface
+        ? piece.height(point)
+        : Math.max(plannedHeight(point), piece.height(point))) + clearance,
       z: point.z,
     })));
   }

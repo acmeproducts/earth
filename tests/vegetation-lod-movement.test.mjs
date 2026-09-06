@@ -48,6 +48,24 @@ function packMatrices(positions) {
   return data;
 }
 
+test("small field uploads respect the budget without forcing a frame per buffer", async () => {
+  const impostor = createMeshStub("impostor");
+  const model = createMeshStub("model");
+  const positions = [new Vector3(0, 0, 0), new Vector3(100, 0, 0)];
+  let budgetChecks = 0;
+  let forcedFrames = 0;
+  const yieldControl = Object.assign(async () => { budgetChecks++; }, {
+    nextFrame: async () => { forcedFrames++; },
+  });
+  const field = await createVegetationFieldResult(
+    {}, [impostor], [model], packMatrices(positions), 1, "auto", undefined, yieldControl,
+  );
+  await field.prepareLod(Vector3.Zero(), 20, yieldControl);
+  assert.ok(budgetChecks > 0, "uploads must still cooperate with the frame budget");
+  assert.equal(forcedFrames, 0, "tiny buffers must not each consume an entire frame");
+  assertFieldMatchesGroundTruth(impostor, model, positions, Vector3.Zero(), 20, "initial upload");
+});
+
 /** The weight the shader mask expects: 1 = model only, 0 = impostor only. */
 function expectedModelWeight(position, camera, distanceMeters, transitionWidthMeters) {
   const width = Math.min(transitionWidthMeters, distanceMeters);

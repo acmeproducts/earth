@@ -87,6 +87,7 @@ import {
   VEGETATION_FIELD_KINDS,
 } from "./StreamedTile";
 import type { StreamedTile, VegetationFieldKind } from "./StreamedTile";
+import { StreamingTrace } from "./StreamingDiagnostics";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -372,6 +373,7 @@ export class Game {
         if (this.clockSettings.value.mode === "manual") this.solarLighting?.setTimeOfDay(hours);
       },
       onLocationChange: (target) => this.changeToCoordinates(target),
+      onRandomLocation: () => this.changeToRandomTerrainLocation(),
       onMenuOpenChange: (isOpen) => this.setMenuOpen(isOpen),
     });
     this.setupDebugControls();
@@ -429,10 +431,12 @@ export class Game {
     const key = worldTileKey(id);
     if (this.activeTileBuilds.has(key)) return;
     this.activeTileBuilds.set(key, generation);
+    const trace = new StreamingTrace(`tile=${key} detail=${wantDetail}`);
     try {
       let record = this.tiles.get(key);
       if (!record || (wantDetail && !record.nativeTerrain)) {
-        record = await this.buildTileTerrain(id, wantDetail, generation, onProgress);
+        trace.stage("terrain");
+        record = await this.buildTileTerrain(id, wantDetail, generation, onProgress, trace);
       }
       if (!record) return;
       if (generation !== this.streamingGeneration) return;
@@ -449,7 +453,8 @@ export class Game {
       if (generation === this.streamingGeneration) onTerrainReady?.();
       if (wantDetail && !record.detailed) {
         try {
-          await this.buildTileDetail(record, generation, onProgress);
+          trace.stage("detail (vegetation, LOD preparation, map features)");
+          await this.buildTileDetail(record, generation, onProgress, trace);
         } catch (error: unknown) {
           // Detail is assembled in stages. Keep anything that did finish
           // visible when one optional feature compiler fails, instead of
@@ -462,11 +467,15 @@ export class Game {
       } else if (!wantDetail) {
         // Runs for undetailed tiles, and for detailed tiles the scheduler
         // queued ahead of a demotion (the stand-ins commit hidden there).
+        trace.stage("far trees (including exclusion mask)");
         if (!record.farTreeField) await this.buildFarTrees(record, generation);
+        trace.stage("far buildings");
         if (!record.farBuildings) await this.buildFarBuildings(record, generation);
+        trace.stage("far roads");
         if (!record.farRoads) await this.buildFarRoads(record, generation);
       }
     } finally {
+      trace.finish();
       if (this.activeTileBuilds.get(key) === generation) this.activeTileBuilds.delete(key);
     }
   }
@@ -476,20 +485,24 @@ export class Game {
     native: boolean,
     generation: number,
     onProgress?: InitializationProgress,
+    trace?: StreamingTrace,
   ): Promise<StreamedTile | undefined> {
     const key = worldTileKey(id);
     const previous = this.tiles.get(key);
     const area = worldTileArea(id, this.worldSeed);
     const yieldControl = onProgress ? undefined : this.streamingYielder;
+    trace?.stage("elevation fetch/resample");
     const terrainData = await TerrainElevationSource.fetchWorldArea(area, yieldControl);
     if (generation !== this.streamingGeneration) return undefined;
     await reportInitializationProgress(onProgress, "Loading land cover", 24);
+    trace?.stage("land cover fetch");
     const landCover = previous?.landCover ??
       await WorldCover.fetchForTerrain(terrainData).catch((error: unknown) => {
         console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
         return undefined;
       });
     if (generation !== this.streamingGeneration) return undefined;
+    trace?.stage("land cover terrain shaping");
     const preCarvingElevations = terrainData.elevations.slice();
     if (landCover) {
       await landCover.constrainElevations(
@@ -551,6 +564,7 @@ export class Game {
       meshDepth,
     });
 
+    trace?.stage("map and lake context fetch");
     let mapTiles = previous?.mapTiles;
     mapTiles ??= this.requestMapTiles(terrainData.bounds);
     let lakeContextTiles = previous?.lakeContextTiles;
@@ -560,6 +574,7 @@ export class Game {
     ));
     const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
     if (generation !== this.streamingGeneration) return undefined;
+    trace?.stage("lake terrain shaping");
     const surfaceLakeSources = OpenStreetMap.collectLakePolygons(
       lakeTiles,
       terrainData,
@@ -591,6 +606,7 @@ export class Game {
     if (native) {
       await reportInitializationProgress(onProgress, "Planning roads and building sites", 34);
     }
+    trace?.stage("road/building planning and terrain shaping");
     const roadAndBuildingPlan = OpenStreetMap.planRoadsAndBuildings(
       lakeTiles,
       terrainData,
@@ -623,6 +639,7 @@ export class Game {
         : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
     );
     await reportInitializationProgress(onProgress, "Building terrain mesh", 40);
+    trace?.stage("terrain mesh and textures");
     const terrain = await this.createTerrainMesh(`terrain ${key}`, terrainData, {
       meshWidth,
       meshDepth,
@@ -639,6 +656,7 @@ export class Game {
     terrain.checkCollisions = true;
     terrain.setEnabled(true);
 
+    trace?.stage("lake surfaces and terrain commit");
     let lakeSurfaces = previous?.lakeSurfaces;
     if (!lakeSurfaces) {
       lakeSurfaces = await createTerrainLakeLayer(
@@ -717,6 +735,7 @@ export class Game {
     record: StreamedTile,
     generation: number,
     onProgress?: InitializationProgress,
+    trace?: StreamingTrace,
   ): Promise<void> {
     const { terrainData } = record;
     const metersPerUnit = this.terrainMetersPerUnit;
@@ -724,6 +743,7 @@ export class Game {
     const yieldControl = onProgress ? undefined : this.streamingYielder;
     const startDisabled = !onProgress;
     await reportInitializationProgress(onProgress, "Loading map features", 50);
+    trace?.stage("detail map data and exclusion masks");
     const mapWays = await this.loadMapTiles(record);
     if (generation !== this.streamingGeneration) return;
     const placementLandCover = OpenStreetMap.createLandCoverSampler(
@@ -788,6 +808,7 @@ export class Game {
     const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
 
     await reportInitializationProgress(onProgress, "Planting trees", 58);
+    trace?.stage("trees and initial LOD");
     const treeField = await createTreeField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "trees"),
@@ -805,6 +826,7 @@ export class Game {
     if (!this.stageTileField(record, "treeField", treeField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Planting saplings", 63);
+    trace?.stage("saplings and initial LOD");
     const saplingField = await createSaplingField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "saplings"),
@@ -821,6 +843,7 @@ export class Game {
     if (!this.stageTileField(record, "saplingField", saplingField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing grass", 68);
+    trace?.stage("grass and initial LOD");
     const grassField = await createGrassField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "grass"),
@@ -836,6 +859,7 @@ export class Game {
     if (!this.stageTileField(record, "grassField", grassField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing wildflowers", 74);
+    trace?.stage("wildflowers and initial LOD");
     const tallPlantField = await createTallPlantField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "tallPlants"),
@@ -851,6 +875,7 @@ export class Game {
     if (!this.stageTileField(record, "tallPlantField", tallPlantField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing wheat", 76);
+    trace?.stage("wheat and initial LOD");
     const wheatField = await createWheatField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "wheat"),
@@ -866,6 +891,7 @@ export class Game {
     if (!this.stageTileField(record, "wheatField", wheatField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Adding bushes", 79);
+    trace?.stage("bushes and initial LOD");
     const bushField = await createBushField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "bushes"),
@@ -881,6 +907,7 @@ export class Game {
     if (!this.stageTileField(record, "bushField", bushField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Growing undergrowth", 83);
+    trace?.stage("ferns and initial LOD");
     const fernField = await createFernField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "ferns"),
@@ -896,6 +923,7 @@ export class Game {
     if (!this.stageTileField(record, "fernField", fernField, generation)) return;
 
     await reportInitializationProgress(onProgress, "Covering rocky beaches", 85);
+    trace?.stage("rocky beach and initial LOD");
     const rockyBeachField = await createRockyBeachField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
@@ -916,6 +944,7 @@ export class Game {
     )) return;
 
     await reportInitializationProgress(onProgress, "Scattering rocks", 86);
+    trace?.stage("rocks and vegetation activation");
     const rockField = await createRockField(this.scene, terrainData, {
       ...fieldOptions,
       seed: layerSeed(terrainData.generationSeed, "rocks"),
@@ -930,6 +959,7 @@ export class Game {
     await this.activateTileVegetation(record, generation);
 
     await reportInitializationProgress(onProgress, "Creating map features", 88);
+    trace?.stage("map features, boundaries, lamps and commit");
     const mapFeatures = await OpenStreetMap.createLayer(
       this.scene,
       mapWays,
@@ -1515,13 +1545,6 @@ export class Game {
         this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
       } else if (kbInfo.event.key === "b" || kbInfo.event.key === "B") {
         this.startRenderBenchmark();
-      } else if (kbInfo.event.key === "0") {
-        void this.changeToRandomTerrainLocation();
-      } else if (/^[1-9]$/.test(kbInfo.event.key)) {
-        const locationIndex = Number(kbInfo.event.key) - 1;
-        if (locationIndex < EXAMPLE_LOCATIONS.length) {
-          void this.reloadAtLocation(EXAMPLE_LOCATIONS[locationIndex]);
-        }
       }
     });
   }
@@ -1843,6 +1866,7 @@ export class Game {
     const now = performance.now();
     if (now - this.lastVegetationLodDebugLogMilliseconds < 2_000) return;
     this.lastVegetationLodDebugLogMilliseconds = now;
+    StreamingTrace.logActive();
     const fields: VegetationFieldResult[] = [];
     for (const record of this.tiles.values()) {
       for (const kind of VEGETATION_FIELD_KINDS) {
@@ -1867,7 +1891,7 @@ export class Game {
     );
   }
 
-  /** Persists a keyboard-selected destination, then rebuilds all scene-owned state. */
+  /** Persists a destination, then rebuilds all scene-owned state. */
   private async reloadAtLocation(target: WorldLocation): Promise<void> {
     if (this.reloadingLocation) return;
     this.reloadingLocation = true;

@@ -169,6 +169,7 @@ test("keeps every planned road surface above the ground it is drawn on", async (
       plannedGrade(road, terrain),
       clearance,
       surface,
+      true,
     );
     assert.ok(rings.length > 0, "every carriageway must produce geometry");
     lowest = Math.min(lowest, lowestClearance(rings, surface));
@@ -202,6 +203,54 @@ test("a road laid on its planned grade alone does cut through rugged ground", as
     lowest < -0.05 / options.metersPerUnit,
     "the unconformed grade should sink into the ground, or this network proves nothing",
   );
+});
+
+test("surface roads stay on the ground even when their endpoint grade spans a valley", () => {
+  const terrain = ruggedTerrain(17);
+  const surface = renderedSurface(terrain, 16);
+  const outline = [{ x: -8, z: -1 }, { x: 8, z: -1 }, { x: 8, z: 1 }, { x: -8, z: 1 }];
+  const clearance = 0.025 / options.metersPerUnit;
+  const rings = conformDecalPolygon(outline, () => 1000, clearance, surface, true);
+  assert.ok(rings.length > 0);
+  for (const ring of rings) {
+    for (const point of ring) {
+      assert.ok(Math.abs(point.y - surface.heightAt(point) - clearance) < 1e-6);
+    }
+  }
+  const elevated = conformDecalPolygon(outline, () => 1000, clearance, surface);
+  assert.equal(elevated[0][0].y, 1000 + clearance, "elevated geometry retains its planned grade");
+});
+
+test("road earthwork preserves hills and valleys without steep banks at either edge", async () => {
+  for (const metersPerUnit of [1, 24]) {
+    for (const direction of [-1, 1]) {
+      const localOptions = { meshWidth: 100 / metersPerUnit, meshDepth: 100 / metersPerUnit, metersPerUnit };
+      const terrain = ruggedTerrain(101);
+      for (let row = 0; row < 101; row++) {
+        for (let column = 0; column < 101; column++) {
+          terrain.elevations[row * 101 + column] = 100 + direction * 20 * Math.cos((column - 50) * Math.PI / 100);
+        }
+      }
+      const original = terrain.elevations.slice();
+      const plan = planRoadsAndBuildings([{
+        id: "hill-road",
+        paths: [[{ x: -45 / metersPerUnit, z: 0 }, { x: 45 / metersPerUnit, z: 0 }]],
+        appearance,
+      }], [], localOptions);
+      await conformTerrainToPlannedFeatures(terrain, plan, localOptions);
+      let maxChange = 0;
+      for (let index = 0; index < original.length; index++) {
+        maxChange = Math.max(maxChange, Math.abs(terrain.elevations[index] - original[index]));
+      }
+      assert.ok(maxChange > 0, "small road grading still occurs");
+      assert.ok(maxChange <= 1.00001, `earthwork must stay within one metre, got ${maxChange}`);
+      for (let row = 1; row < 101; row++) {
+        const slope = Math.abs(terrain.elevations[row * 101 + 50] - terrain.elevations[(row - 1) * 101 + 50]);
+        assert.ok(slope < 0.8, `no steep bank on either side of the road, got ${slope}`);
+      }
+      assert.equal(terrain.elevations[10 * 101 + 50], original[10 * 101 + 50], "distant terrain stays untouched");
+    }
+  }
 });
 
 test("splits a polygon into fragments that tile it exactly", () => {

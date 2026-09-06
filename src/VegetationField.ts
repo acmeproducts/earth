@@ -1,5 +1,4 @@
 import { Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
-import { yieldToNextFrame } from "./FrameBudget";
 import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
@@ -581,14 +580,16 @@ async function initializeMeshes(
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
   for (const mesh of meshes) {
-    await yieldToNextFrame(yieldControl);
+    // Small species buckets should share a frame; only yield once the shared
+    // streaming budget is spent, rather than paying three frames per mesh.
+    await yieldControl?.();
     mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
     if (instanceColors) {
-      await yieldToNextFrame(yieldControl);
+      await yieldControl?.();
       mesh.thinInstanceSetBuffer("vegetationColor", instanceColors, 3, false);
     }
     if (instanceLodBlend) {
-      await yieldToNextFrame(yieldControl);
+      await yieldControl?.();
       mesh.thinInstanceSetBuffer("instanceLodBlend", instanceLodBlend, 1, false);
     }
     await yieldControl?.();
@@ -684,12 +685,12 @@ async function updateMeshBuffersOverFrames(
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
   for (const mesh of meshes) {
-    await yieldToNextFrame(yieldControl);
+    await yieldControl?.();
     mesh.thinInstanceBufferUpdated("matrix");
     if (updateInstanceData) {
-      await yieldToNextFrame(yieldControl);
+      await yieldControl?.();
       mesh.thinInstanceBufferUpdated("vegetationColor");
-      await yieldToNextFrame(yieldControl);
+      await yieldControl?.();
       mesh.thinInstanceBufferUpdated("instanceLodBlend");
     }
   }

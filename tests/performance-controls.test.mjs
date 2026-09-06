@@ -134,7 +134,7 @@ test("remote players render as red geographic orbs and the local player stays hi
   assert.doesNotMatch(game, /remotePlayerMarkers|handleGameEvent|MeshBuilder\.CreateSphere/);
 });
 
-test("keyboard location shortcuts reload a clean scene", () => {
+test("random location UI reloads a clean scene without number-key shortcuts", () => {
   assert.match(game, /private async reloadAtLocation[\s\S]*?this\.reloadingLocation = true;[\s\S]*?worldLocation\.requestDestination\(target\)/);
   assert.match(game, /private updateTerrainStreaming\(\): void \{\s*if \(this\.reloadingLocation\) return;/);
   assert.match(game, /private publishLocalPlayerPose\(force = false\): void \{\s*if \(this\.reloadingLocation\) return;/);
@@ -143,7 +143,8 @@ test("keyboard location shortcuts reload a clean scene", () => {
     /private async reloadAtLocation\(target: WorldLocation\): Promise<void>[\s\S]*?this\.worldLocation\.update\(target\);[\s\S]*?playerPresence\.publishDestination[\s\S]*?window\.location\.reload\(\)/,
   );
   assert.match(playerPresence, /publishDestination[\s\S]*?this\.dispatchPose/);
-  assert.match(game, /void this\.reloadAtLocation\(EXAMPLE_LOCATIONS\[locationIndex\]\)/);
+  assert.doesNotMatch(game, /locationIndex|kbInfo\.event\.key === "0"/);
+  assert.match(game, /onRandomLocation: \(\) => this\.changeToRandomTerrainLocation\(\)/);
   assert.match(game, /Random location:[\s\S]*?await this\.reloadAtLocation\(target\)/);
   assert.doesNotMatch(game, /terrainLocationIndex|changeTerrainLocation/);
 });

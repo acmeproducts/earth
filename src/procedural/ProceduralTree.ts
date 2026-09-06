@@ -1131,7 +1131,21 @@ function createTreeParts(
   season?: TreeSeasonAppearance,
 ): ProceduralTreeParts {
   if (season) applySeasonalFoliage(branchBuffers, season);
-  const material = createVertexColorCaptureMaterial(
+  const material = createTreeModelMaterial(scene, name, species, liveLighting);
+  return {
+    log: createTreePartMesh(scene, `${name}Log`, logBuffers, material),
+    branches: createTreePartMesh(scene, `${name}Branches`, branchBuffers, material),
+  };
+}
+
+/** Fresh material bindings for each tile using shared generated tree data. */
+export function createTreeModelMaterial(
+  scene: Scene,
+  name: string,
+  species: TreeSpecies,
+  liveLighting = true,
+): ReturnType<typeof createVertexColorCaptureMaterial> {
+  return createVertexColorCaptureMaterial(
     scene,
     `${name}Material`,
     liveLighting,
@@ -1139,10 +1153,6 @@ function createTreeParts(
     getTreeBarkTexture(scene, species),
     TREE_LOW_LIGHT_BRIGHTNESS[species],
   );
-  return {
-    log: createTreePartMesh(scene, `${name}Log`, logBuffers, material),
-    branches: createTreePartMesh(scene, `${name}Branches`, branchBuffers, material),
-  };
 }
 
 /** Removes whole leaf cards and recolors the survivors before model/impostor creation. */
