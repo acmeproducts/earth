@@ -80,6 +80,7 @@ import {
 } from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
+import { bindDirectionalExposure, directionalExposureDeclaration } from "./DirectionalExposure";
 
 export type TreeFieldResult = VegetationFieldResult;
 export const DEFAULT_TREE_SPACING_METERS = 3.5;
@@ -307,6 +308,11 @@ uniform float fogStart;
 uniform float fogEnd;
 ${vegetationShadowFragmentDeclaration}
 ${cloudShadowFragmentDeclaration}
+${directionalExposureDeclaration}
+#ifdef TREE_EXPOSURE
+uniform sampler2D exposureLowAtlas;
+uniform sampler2D exposureHighAtlas;
+#endif
 
 vec4 atlasSample(float face, vec2 uv) {
   if (face < 0.5) return texture2D(atlas0, uv);
@@ -653,8 +659,16 @@ void main(void) {
     (dot(vLocalWorldUp, vLocalSunDirection) + 0.42) / 1.42
   );
   float shadowVisibility = vegetationShadowVisibility();
+  float exposureScale = 1.0;
+  #ifdef TREE_EXPOSURE
+  vec2 exposureUV = (selectedTile + mix(tileInset, vec2(1.0) - tileInset, imageUV)) / atlasTileCounts;
+  exposureUV = (vec2(mod(face, 3.0), floor(face / 3.0)) + exposureUV) / vec2(3.0, 2.0);
+  exposureScale = exposureSunlightScale(directionalExposure(
+    texture2D(exposureLowAtlas, exposureUV), texture2D(exposureHighAtlas, exposureUV), normalize(vLocalSunDirection)
+  ));
+  #endif
   vec3 lighting = clamp(
-    ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility,
+    ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility * exposureScale,
     vec3(0.0),
     vec3(1.25)
   );
@@ -1235,6 +1249,13 @@ export function createImpostorMaterial(
     },
   );
   material.backFaceCulling = true;
+  bindDirectionalExposure(material);
+  if (assets.exposureTextures) {
+    material.options.defines.push("#define TREE_EXPOSURE");
+    material.options.samplers.push("exposureLowAtlas", "exposureHighAtlas");
+    material.setTexture("exposureLowAtlas", assets.exposureTextures[0]);
+    material.setTexture("exposureHighAtlas", assets.exposureTextures[1]);
+  }
   // Preserve atlas alpha and the complementary model/impostor LOD mask in the
   // depth pass, avoiding a solid box shadow around each proxy.
   const shadowDepthWrapper = new ShadowDepthWrapper(material, scene, {

@@ -57,11 +57,11 @@ import { StreetLamps } from "./StreetLamps";
 import { LandCoverClass, WorldCover } from "./WorldCover";
 import type { LandCoverSampler } from "./WorldCover";
 import { disposeTerrainMesh } from "./TerrainMaterial";
-import { createTerrainMesh as buildTerrainMesh } from "./TerrainMesh";
+import { createTerrainMesh as buildTerrainMesh, setTerrainSnowCovered } from "./TerrainMesh";
 import { TerrainSurface } from "./TerrainSurface";
 import { configureWindSceneScale, setManualWindSpeed } from "./Wind";
 import { SolarLighting } from "./SolarLighting";
-import { hasWinterGroundCover } from "./TreeSeason";
+import { hasWinterGroundCover, treeSeasonAt } from "./TreeSeason";
 import { createCloudLayer } from "./CloudImpostors";
 import type { CloudLayer } from "./CloudImpostors";
 import { FpsCounter } from "./FpsCounter";
@@ -80,6 +80,7 @@ import {
 import { LayerFades } from "./LayerFades";
 import {
   disposeStreamedTile,
+  disposeTileDetail,
   setFrozenMeshOffset,
   setMapLayerFade,
   setTransformNodeOffset,
@@ -166,7 +167,7 @@ export class Game {
   private scene: Scene;
   private water?: Mesh;
   private readonly tiles = new Map<string, StreamedTile>();
-  private readonly activeTileBuilds = new Set<string>();
+  private readonly activeTileBuilds = new Map<string, number>();
   private readonly terrainEdgeElevations = new Map<string, number>();
   private readonly lakeElevations = new Map<string, number>();
   private readonly buildingElevations = new Map<string, number>();
@@ -187,8 +188,9 @@ export class Game {
   private readonly cloudsEnabled: boolean;
   private readonly initialDate?: string;
   private readonly initialTimeOfDay?: number;
-  /** Date captured once for vegetation generation; sky controls do not rebuild trees. */
+  /** Date used by the current generation of seasonal scenery. */
   private vegetationDate?: Date;
+  private sceneryRevision = 0;
   private readonly fpsCounter: FpsCounter;
   private readonly vegetationModes: VegetationModes;
   private sceneControls?: SceneControls;
@@ -355,7 +357,10 @@ export class Game {
       onClockModeChange: (mode) => this.changeClockMode(mode),
       onDateChange: (date) => {
         this.clockSettings.setManualDate(date);
-        if (this.clockSettings.value.mode === "manual") this.solarLighting?.setDate(date);
+        if (this.clockSettings.value.mode === "manual") {
+          this.solarLighting?.setDate(date);
+          this.refreshSeasonalScenery();
+        }
       },
       onTimeOfDayChange: (hours) => {
         this.clockSettings.setManualTimeOfDay(hours);
@@ -418,13 +423,24 @@ export class Game {
   ): Promise<void> {
     const key = worldTileKey(id);
     if (this.activeTileBuilds.has(key)) return;
-    this.activeTileBuilds.add(key);
+    this.activeTileBuilds.set(key, generation);
     try {
       let record = this.tiles.get(key);
       if (!record || (wantDetail && !record.nativeTerrain)) {
         record = await this.buildTileTerrain(id, wantDetail, generation, onProgress);
       }
       if (!record) return;
+      if (generation !== this.streamingGeneration) return;
+      if (record.sceneryRevision !== this.sceneryRevision) {
+        // Date/roof edits only affect appearance and generated objects. Keep
+        // the elevation, collision surface, map data, water and road plan.
+        disposeTileDetail(record);
+        record.farTreeField?.root.dispose(false, false);
+        record.farTreeField = undefined;
+        if (record.farBuildings) OpenStreetMap.disposeLayer(record.farBuildings);
+        record.farBuildings = undefined;
+        record.sceneryRevision = this.sceneryRevision;
+      }
       if (generation === this.streamingGeneration) onTerrainReady?.();
       if (wantDetail && !record.detailed) {
         try {
@@ -446,7 +462,7 @@ export class Game {
         if (!record.farRoads) await this.buildFarRoads(record, generation);
       }
     } finally {
-      this.activeTileBuilds.delete(key);
+      if (this.activeTileBuilds.get(key) === generation) this.activeTileBuilds.delete(key);
     }
   }
 
@@ -648,12 +664,15 @@ export class Game {
     // replaces its record. Keep the already-visible distant tree stand-in
     // alive across that replacement; buildTileDetail will cross-fade it only
     // after the matching detailed tree field has committed.
-    const carriedFarTreeField = previous?.farTreeField;
-    const carriedFarBuildings = previous?.farBuildings;
+    const retainScenery = previous?.sceneryRevision === this.sceneryRevision;
+    const carriedFarTreeField = retainScenery ? previous?.farTreeField : undefined;
+    const carriedFarBuildings = retainScenery ? previous?.farBuildings : undefined;
     const carriedFarRoads = previous?.farRoads;
     if (previous) {
-      previous.farTreeField = undefined;
-      previous.farBuildings = undefined;
+      if (retainScenery) {
+        previous.farTreeField = undefined;
+        previous.farBuildings = undefined;
+      }
       previous.farRoads = undefined;
       previous.lakeSurfaces = undefined;
     }
@@ -661,6 +680,7 @@ export class Game {
     const record: StreamedTile = {
       id: area.center,
       key,
+      sceneryRevision: this.sceneryRevision,
       terrainData,
       landCover,
       preCarvingElevations,
@@ -936,6 +956,10 @@ export class Game {
     await this.streamingYielder.nextFrame();
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
     await this.streamingYielder.nextFrame();
+    if (generation !== this.streamingGeneration) {
+      OpenStreetMap.disposeLayer(mapFeatures.root);
+      return;
+    }
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
@@ -1679,27 +1703,49 @@ export class Game {
     }
     if (detailSizeChanged || terrainSizeChanged) this.requestStreamingUpdate();
     if (detailSizeChanged) this.updateGrassDetailDistance();
-    if (modelRangeChanged) this.updateVegetationLod();
+    if (modelRangeChanged) {
+      for (const record of this.tiles.values()) record.lodResolved = false;
+      this.updateVegetationLod();
+    }
     if (cloudDensityChanged) this.cloudLayer?.setDensity(next.cloudDensity);
   }
 
   private changeRoofsVisibility(visible: boolean): void {
+    if (this.sceneSettings.value.showRoofs === visible) return;
     this.sceneSettings.setRoofsVisible(visible);
+    this.invalidateScenery();
+  }
+
+  /** Rebuild in place, retaining visible tiles until their replacements are ready. */
+  private invalidateScenery(): void {
+    this.sceneryRevision++;
     this.streamingGeneration++;
-    for (const record of this.tiles.values()) {
-      if (record.mapFeatures) {
-        const layer = record.mapFeatures;
-        record.mapFeatures = undefined;
-        OpenStreetMap.disposeLayer(layer);
-      }
-      if (record.farBuildings) {
-        const layer = record.farBuildings;
-        record.farBuildings = undefined;
-        OpenStreetMap.disposeLayer(layer);
-      }
-      record.detailed = false;
-    }
     this.requestStreamingUpdate();
+  }
+
+  private refreshSeasonalScenery(): void {
+    const date = this.solarLighting?.currentDate;
+    if (!date) return;
+    // All seasonal appearances (including southern seasons and snow) change
+    // on these same quarter boundaries. Time-only edits need no geometry work.
+    const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").season;
+    const nextSeason = treeSeasonAt(date, 45, "oak").season;
+    this.vegetationDate = date;
+    if (previousSeason !== nextSeason) {
+      for (const record of this.tiles.values()) {
+        const latitude = (record.terrainData.bounds.latNorth + record.terrainData.bounds.latSouth) / 2;
+        const snowCovered = hasWinterGroundCover(date, latitude);
+        setTerrainSnowCovered(this.scene, record.terrain, snowCovered);
+        if (snowCovered) {
+          // Old summer undergrowth must not obscure the newly visible snow
+          // while replacement tree atlases are being generated.
+          for (const kind of ["grassField", "tallPlantField", "wheatField", "fernField"] as const) {
+            record[kind]?.root.setEnabled(false);
+          }
+        }
+      }
+      this.invalidateScenery();
+    }
   }
 
   private changeClockMode(mode: ClockMode): void {
@@ -1711,6 +1757,7 @@ export class Game {
       this.solarLighting?.setDate(undefined);
       this.solarLighting?.setTimeOfDay(undefined);
     }
+    this.refreshSeasonalScenery();
   }
 
   private requestStreamingUpdate(): void {
@@ -1871,7 +1918,7 @@ export class Game {
         terrainTiles: this.tiles.size,
         detailTiles: [...this.tiles.values()].filter((tile) => tile.detailed).length,
         nativeTerrainTiles: [...this.tiles.values()].filter((tile) => tile.nativeTerrain).length,
-        activeBuilds: [...this.activeTileBuilds],
+        activeBuilds: [...this.activeTileBuilds.keys()],
         activeLayerFades: this.layerFades.size,
         tiles: [...this.tiles.values()].map((tile) => ({
           key: tile.key,
@@ -1982,7 +2029,7 @@ export class Game {
           if (wantDetail) record.detailLastNeededMilliseconds = now;
         }
         if (this.activeTileBuilds.has(key)) continue;
-        const needsTerrain = !record ||
+        const needsTerrain = !record || record.sceneryRevision !== this.sceneryRevision ||
           (wantDetail && !record.nativeTerrain) ||
           (!wantDetail && record.nativeTerrain && !record.detailed);
         const needsDetail = wantDetail && !(record?.detailed ?? false);
@@ -2014,6 +2061,7 @@ export class Game {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
       if (!this.fpsCounter.benchmarkRunning) this.playerControls?.updateMovement();
+      this.refreshSeasonalScenery();
       this.updateTerrainStreaming();
       this.layerFades.update();
       if (this.flyCamera) {

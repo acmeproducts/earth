@@ -3,6 +3,7 @@ import type { WorldLocation } from "./Locations";
 import { formatCalendarDate } from "./CalendarDate";
 import { geocodeLocationName } from "./Geocoding";
 import { getGameDate } from "./GameTime";
+import { isDirectionalExposureEnabled, setDirectionalExposureEnabled } from "./DirectionalExposure";
 import { SCENE_SETTING_DEFINITIONS } from "./SceneSettings";
 import type {
   SceneSettingDefinition,
@@ -94,6 +95,18 @@ export class SceneControls {
     roofsInput.addEventListener("change", () => options.onRoofsVisibilityChange(roofsInput.checked));
     roofsRow.append(roofsLabel, roofsInput);
     sceneGroup.appendChild(roofsRow);
+
+    const exposureRow = document.createElement("label");
+    exposureRow.className = "scene-control-row visibility-control-row";
+    const exposureLabel = document.createElement("span");
+    exposureLabel.textContent = "Directional leaf sunlight";
+    const exposureInput = document.createElement("input");
+    exposureInput.type = "checkbox";
+    exposureInput.checked = isDirectionalExposureEnabled();
+    exposureInput.setAttribute("aria-label", "Directional leaf sunlight");
+    exposureInput.addEventListener("change", () => setDirectionalExposureEnabled(exposureInput.checked));
+    exposureRow.append(exposureLabel, exposureInput);
+    sceneGroup.appendChild(exposureRow);
 
     const clockModeRow = document.createElement("label");
     clockModeRow.className = "scene-control-row clock-mode-row";

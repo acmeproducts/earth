@@ -66,9 +66,9 @@ test("a URL time override fixes both the sun and the settings clock", () => {
   assert.match(controls, /this\.setClockMode\(options\.clockSettings\.mode\)/);
 });
 
-test("live date and time share the accelerated game clock", () => {
-  assert.match(gameTime, /GAME_TIME_SPEED = 24/);
-  assert.match(gameTime, /new Date\(2026, 0, 1, 0, 0, 0, 0\)/);
+test("live date and time share the real clock", () => {
+  assert.match(gameTime, /now = Date\.now\(\)/);
+  assert.match(gameTime, /return new Date\(now\)/);
   assert.match(solarLighting, /const date = getGameDate\(\)/);
   assert.match(controls, /const gameDate = getGameDate\(\)/);
   assert.match(controls, /CLOCK_UPDATE_INTERVAL_MS = 1_000/);

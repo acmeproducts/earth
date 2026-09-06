@@ -43,15 +43,21 @@ pnpm dev
 
 The app will open at [http://localhost:3000](http://localhost:3000)
 
-The game backend is a separate local process. Start it alongside the frontend:
+By default, the game runs without a backend and saves your position, orientation,
+and movement mode in localStorage, restoring them on your next visit.
+Use `?persistence=local` to explicitly select this mode.
+
+To use the game server instead, open `?persistence=server` and start the backend:
 
 ```bash
 pnpm game:dev
 ```
 
-Local player state is persisted in `data/earth.sqlite` by the backend, not in browser storage.
-The browser connects to `ws://localhost:3001/game`; pass `?game-backend=wss://...` when using
-another backend endpoint.
+In server mode, player state is persisted in `data/earth.sqlite` by the backend.
+The browser connects to `ws://localhost:3001/game`; `?game-backend=wss://...` selects
+a custom server and enables server mode unless `persistence=local` is explicit.
+Local and server player saves are separate; changing modes does not migrate them.
+Scene and clock preferences continue to use browser storage in either mode.
 
 ### Production Build
 
@@ -231,11 +237,12 @@ camera reaches them and through their own high-altitude haze beyond the terrain
 fog; use `?clouds=off` for a cloud-free performance comparison.
 Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
 shadows, and `?date=2026-08-23` to hold the simulation on a specific local
-calendar date. Live game time starts at `2026-01-01 00:00` and advances at 24x
-real time, so one real hour spans one game day. The settings menu's Manual clock
+calendar date. The automatic clock follows the device's real local date and time.
+The settings menu's Manual clock
 toggle switches the date and time together. Clock mode and the last manual date
-and time persist across reloads, allowing a reload to regenerate seasonal trees
-for the selected date. `?clock=automatic` or `?clock=manual` can override the
+and time persist across reloads. Settings apply live; changing seasons rebuilds
+trees and ground cover in place as tiles stream, without a page reload.
+`?clock=automatic` or `?clock=manual` can override the
 persisted mode; supplying `?date` or `?time` selects manual mode by default.
 
 The world uses an application-owned Web Mercator grid at fixed level 16. A tile

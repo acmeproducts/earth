@@ -231,6 +231,14 @@ export async function createTerrainMesh(
   return ground;
 }
 
+/** Switches snow on an existing tile without rebuilding or fetching terrain. */
+export function setTerrainSnowCovered(scene: Scene, terrain: Mesh, snowCovered: boolean): void {
+  const metadata = terrain.metadata as TerrainMeshMetadata | null;
+  if (!metadata || metadata.snowCovered === snowCovered) return;
+  metadata.snowCovered = snowCovered;
+  applyDefaultTerrainMaterial(scene, terrain);
+}
+
 /** Rebuilds a terrain tile's shared material from its mesh metadata. */
 export function applyDefaultTerrainMaterial(scene: Scene, terrain: Mesh): void {
   disposeTerrainAppearance(terrain);

@@ -1,10 +1,30 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { ClockSettingsStore } from "../src/ClockSettings.ts";
 
 const source = readFileSync(new URL("../src/ClockSettings.ts", import.meta.url), "utf8");
 const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url), "utf8");
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+
+test("defaults use today's real date and manual choices survive switching modes", (t) => {
+  t.mock.method(Date, "now", () => new Date(2026, 8, 6, 14, 30).getTime());
+  let saved;
+  const storage = { getItem: () => saved, setItem: (_key, value) => { saved = value; } };
+  const store = new ClockSettingsStore(new URLSearchParams(), storage);
+  assert.deepEqual(store.value, {
+    mode: "automatic", manualDate: "2026-09-06", manualTimeOfDay: 14.5,
+  });
+  store.setMode("manual");
+  store.setManualDate("2026-12-25");
+  store.setManualTimeOfDay(18.5);
+  const restored = new ClockSettingsStore(new URLSearchParams(), storage);
+  assert.deepEqual(restored.value, store.value);
+  restored.setMode("automatic");
+  assert.deepEqual(restored.value, {
+    mode: "automatic", manualDate: "2026-12-25", manualTimeOfDay: 18.5,
+  });
+});
 
 test("clock settings default to automatic and retain manual values", () => {
   assert.match(source, /mode: "automatic"/);

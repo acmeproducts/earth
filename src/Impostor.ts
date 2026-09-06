@@ -6,14 +6,18 @@ import {
   RawTexture,
   RenderTargetTexture,
   Scene,
+  ShaderMaterial,
   Texture,
   Vector3,
   Viewport,
 } from "@babylonjs/core";
 import { documentIsBackgrounded, waitForNextFrame as nextFrame } from "./FrameBudget";
 import { waitForVertexColorTextures } from "./procedural/ProceduralCaptureMaterial";
+import { bakeTreeExposure, packExposureFace } from "./DirectionalExposure";
 
 export interface ImpostorAssets {
+  /** Eight directional visibility channels, packed into two 3-by-2 face atlases. */
+  exposureTextures?: Texture[];
   /** Raw RGBA atlases preserve hidden edge colors used by bilinear filtering. */
   textures: Texture[];
   /** Source canvases retained for the capture preview and validation tools. */
@@ -70,6 +74,8 @@ export const AXISYMMETRIC_IMPOSTOR_FACES: readonly CubeFace[] = [
 ];
 
 export interface ImpostorCaptureOptions {
+  /** Data pass: raw RGBA channels must bypass canvas alpha and color processing. */
+  captureRawFace?: (face: number, pixels: Uint8Array, width: number, height: number) => void;
   name: string;
   meshes: Mesh[];
   gridWidth: number;
@@ -127,6 +133,7 @@ export interface ImpostorParameter {
 }
 
 export interface ImpostorDefinition {
+  directionalExposure?: boolean;
   /** Stable identifier used for Babylon resources and logs. */
   name: string;
   /** Defaults to `name`; useful when resource names and public parameters differ. */
@@ -344,6 +351,7 @@ async function captureDefinition(
     // readiness checks. Explicitly wait for their optional foliage cutouts so
     // every atlas direction is captured with the same material state.
     await waitForVertexColorTextures(meshes);
+    if (definition.directionalExposure) await bakeTreeExposure(meshes);
     await scene.whenReadyAsync();
     let captureWidth = definition.captureWidth ?? definition.captureDiameter;
     let captureHeight = definition.captureHeight ?? definition.captureDiameter;
@@ -359,7 +367,7 @@ async function captureDefinition(
       )
       : sampling.resolution;
 
-    const assets = await captureImpostorAtlases(scene, {
+    const captureOptions: ImpostorCaptureOptions = {
       name: variant.key === DEFAULT_IMPOSTOR_VARIANT.key
         ? definition.name
         : `${definition.name}-${resourceKey(variant.key)}`,
@@ -378,7 +386,16 @@ async function captureDefinition(
       rotationalSymmetryOrder: definition.rotationalSymmetryOrder,
       upperHemisphereOnly: definition.upperHemisphereOnly,
       cooperative,
-    });
+    };
+    const assets = await captureImpostorAtlases(scene, captureOptions);
+    if (definition.directionalExposure) {
+      try {
+        assets.exposureTextures = await captureExposureAtlases(scene, captureOptions);
+      } catch (error) {
+        disposeImpostorAssets(assets);
+        throw error;
+      }
+    }
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
   } finally {
@@ -391,7 +408,7 @@ async function captureDefinition(
 }
 
 function disposeImpostorAssets(assets: ImpostorAssets): void {
-  const textures = new Set([...assets.textures, ...assets.lowResolutionTextures]);
+  const textures = new Set([...assets.textures, ...assets.lowResolutionTextures, ...(assets.exposureTextures ?? [])]);
   textures.forEach((texture) => texture.dispose());
   for (const canvas of assets.atlasCanvases) {
     canvas.width = 0;
@@ -498,7 +515,7 @@ export async function captureImpostorAtlases(
     false,
     false,
   );
-  target.clearColor = new Color4(0, 0, 0, 0);
+  target.clearColor = options.captureRawFace ? new Color4(1, 1, 1, 1) : new Color4(0, 0, 0, 0);
   target.renderList = meshes;
   target.activeCamera = camera;
   target.samples = 1;
@@ -580,7 +597,9 @@ export async function captureImpostorAtlases(
       const pixels = await target.readPixels();
       if (!pixels) throw new Error(`${name} GPU readback failed.`);
       if (cooperative) await nextFrame();
-      context.putImageData(
+      if (options.captureRawFace) {
+        options.captureRawFace(faceIndex, new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), atlasWidth, atlasHeight);
+      } else context.putImageData(
         await binaryImage(pixels, atlasWidth, atlasHeight, context, cooperative),
         0,
         0,
@@ -595,7 +614,7 @@ export async function captureImpostorAtlases(
     camera.dispose();
   }
 
-  return createImpostorTextures(scene, name, canvases, {
+  const metadata = {
     rotationallySymmetric,
     rotationalSymmetryOrder,
     upperHemisphereOnly,
@@ -613,7 +632,44 @@ export async function captureImpostorAtlases(
     captureDiameter,
     captureWidth,
     captureHeight,
-  }, cooperative);
+  };
+  if (options.captureRawFace) {
+    return { ...metadata, gridSize: gridWidth, textures: [], lowResolutionTextures: [], atlasCanvases: [] };
+  }
+  return createImpostorTextures(scene, name, canvases, metadata, cooperative);
+}
+
+async function captureExposureAtlases(scene: Scene, options: ImpostorCaptureOptions): Promise<Texture[]> {
+  const width = options.gridWidth * (options.resolutionWidth ?? options.resolution);
+  const height = options.gridHeight * (options.resolutionHeight ?? options.resolution);
+  const maxSize = scene.getEngine().getCaps().maxTextureSize;
+  if (width * 3 > maxSize || height * 2 > maxSize) throw new Error("Directional exposure atlas exceeds GPU texture size.");
+  const materials = new Set(options.meshes.map((mesh) => mesh.material).filter((material): material is ShaderMaterial => material instanceof ShaderMaterial));
+  const textures: Texture[] = [];
+  try {
+    for (let band = 1; band <= 2; band++) {
+      const data = new Uint8Array(width * 3 * height * 2 * 4).fill(255);
+      materials.forEach((material) => material.setFloat("exposureCaptureBand", band));
+      await captureImpostorAtlases(scene, {
+        ...options,
+        name: `${options.name}-exposure-${band}`,
+        captureRawFace: (face, pixels, faceWidth, faceHeight) => {
+          packExposureFace(data, pixels, face, faceWidth, faceHeight);
+        },
+      });
+      const texture = new RawTexture(data, width * 3, height * 2, Constants.TEXTUREFORMAT_RGBA, scene, false, false, Texture.BILINEAR_SAMPLINGMODE);
+      texture.name = `${options.name}-exposure-${band}`;
+      texture.gammaSpace = false;
+      texture.wrapU = texture.wrapV = Texture.CLAMP_ADDRESSMODE;
+      textures.push(texture);
+    }
+    return textures;
+  } catch (error) {
+    textures.forEach((texture) => texture.dispose());
+    throw error;
+  } finally {
+    materials.forEach((material) => material.setFloat("exposureCaptureBand", 0));
+  }
 }
 
 async function createImpostorTextures(

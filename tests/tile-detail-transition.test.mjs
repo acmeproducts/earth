@@ -8,7 +8,7 @@ const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), 
 test("keeps far-tree impostors visible through the native terrain upgrade", () => {
   assert.match(
     game,
-    /const carriedFarTreeField = previous\?\.farTreeField;[\s\S]*?if \(previous\) \{[\s\S]*?previous\.farTreeField = undefined;/,
+    /const carriedFarTreeField = retainScenery \? previous\?\.farTreeField : undefined;[\s\S]*?if \(retainScenery\) \{[\s\S]*?previous\.farTreeField = undefined;/,
   );
   assert.match(game, /farTreeField: carriedFarTreeField,/);
 });
@@ -37,7 +37,7 @@ test("renders forced far-tree impostors with detailed dithered coverage", () => 
 });
 
 test("keeps far building massing visible through the native terrain upgrade", () => {
-  assert.match(game, /const carriedFarBuildings = previous\?\.farBuildings;/);
+  assert.match(game, /const carriedFarBuildings = retainScenery \? previous\?\.farBuildings : undefined;/);
   assert.match(game, /farBuildings: carriedFarBuildings,/);
   assert.match(
     game,

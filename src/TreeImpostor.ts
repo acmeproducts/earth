@@ -20,6 +20,7 @@ import {
   ImpostorVariant,
 } from "./Impostor";
 import type { TreeSeasonAppearance } from "./TreeSeason";
+import { bakeTreeExposure } from "./DirectionalExposure";
 
 export interface TreeImpostorVariant extends ImpostorVariant {
   season?: TreeSeasonAppearance;
@@ -32,6 +33,7 @@ function createTreeProvider(species: TreeSpecies) {
   const tree = TREE_SPECIES[species];
   return createImpostorAssetProvider({
     name: `${species}TreeImpostor`,
+    directionalExposure: true,
     queryPrefix: species === "birch" ? "tree-impostor" : `${species}-tree-impostor`,
     createSource: (scene, variant) => {
       const treeVariant = variant as TreeImpostorVariant;
@@ -110,6 +112,16 @@ export async function createTreeModels(
   });
   const renderScale = renderHeight / treeDefinition.sourceHeight;
   const meshes = [parts.log, parts.branches];
+  meshes.forEach((mesh) => { mesh.isVisible = false; });
+  try {
+    await bakeTreeExposure(meshes);
+  } catch (error) {
+    const materials = new Set(meshes.map((mesh) => mesh.material));
+    meshes.forEach((mesh) => mesh.dispose(false, false));
+    materials.forEach((material) => material?.dispose(true, false));
+    throw error;
+  }
+  meshes.forEach((mesh) => { mesh.isVisible = true; });
   for (const mesh of meshes) {
     scaleTreeMesh(mesh, renderScale, renderHeight / 2, renderHeight);
   }

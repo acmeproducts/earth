@@ -36,6 +36,8 @@ export const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
 export interface StreamedTile {
   id: WorldTileId;
   key: string;
+  /** Revision of the settings baked into this tile's geometry. */
+  sceneryRevision: number;
   terrainData: TerrainData;
   landCover?: WorldCover;
   preCarvingElevations: Float32Array;

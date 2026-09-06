@@ -1,4 +1,5 @@
 import type { GameConnection } from "./GameConnection";
+import { LocalGameConnection } from "./LocalGameConnection";
 import type {
   GameAction,
   GameEvent,
@@ -94,14 +95,26 @@ export interface BrowserGameConnection {
 }
 
 export function createBrowserGameConnection(): BrowserGameConnection {
-  const configuredUrl = new URLSearchParams(window.location.search).get("game-backend");
+  const query = new URLSearchParams(window.location.search);
+  const configuredUrl = query.get("game-backend");
   const url = configuredUrl ?? `ws://${window.location.hostname || "localhost"}:3001/game`;
-  const connection = new WebSocketGameConnection(url);
+  let storage: Storage | undefined;
+  try { storage = window.localStorage; } catch { /* Storage can be disabled. */ }
+  const connection = requestedPersistence(query) === "server"
+    ? new WebSocketGameConnection(url)
+    : new LocalGameConnection(storage);
   return {
     connection,
     actorId: loadOrCreateTabActorId(),
     sessionId: createId(),
   };
+}
+
+/** Explicit local mode also overrides a previously configured backend URL. */
+export function requestedPersistence(query: URLSearchParams): "local" | "server" {
+  const mode = query.get("persistence");
+  if (mode === "local" || mode === "server") return mode;
+  return query.has("game-backend") ? "server" : "local";
 }
 
 function loadOrCreateTabActorId(): string {

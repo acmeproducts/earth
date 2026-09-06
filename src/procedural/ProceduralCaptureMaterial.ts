@@ -1,3 +1,4 @@
+import { bindDirectionalExposure, directionalExposureDeclaration, registerExposureCutout } from "../DirectionalExposure";
 import {
   Color3,
   DirectionalLight,
@@ -380,6 +381,14 @@ export function createVertexColorCaptureMaterial(
         #endif
         uniform mat4 viewProjection;
         uniform float modelHeight;
+        #ifdef TREE_EXPOSURE
+        attribute vec4 sunExposureLow;
+        attribute vec4 sunExposureHigh;
+        uniform vec3 sunDirection;
+        varying vec4 vSunExposureLow;
+        varying vec4 vSunExposureHigh;
+        varying vec3 vExposureSunDirection;
+        #endif
         ${vegetationShadowVertexDeclaration}
         ${cloudShadowVertexDeclaration}
         ${windPhaseVertexDeclaration}
@@ -400,6 +409,11 @@ export function createVertexColorCaptureMaterial(
             normalize(finalWorld[2].xyz)
           );
           vColor = color;
+          #ifdef TREE_EXPOSURE
+          vSunExposureLow = sunExposureLow;
+          vSunExposureHigh = sunExposureHigh;
+          vExposureSunDirection = vec3(dot(sunDirection, rotation[0]), dot(sunDirection, rotation[1]), dot(sunDirection, rotation[2]));
+          #endif
           vUv = uv;
           vWorldNormal = normalize(rotation * normal);
           vObjectPosition = position / max(modelHeight, 0.0001);
@@ -453,6 +467,13 @@ export function createVertexColorCaptureMaterial(
         uniform vec3 distanceGroundColor;
         uniform sampler2D leafTexture;
         uniform sampler2D barkTexture;
+        uniform float exposureCaptureBand;
+        #ifdef TREE_EXPOSURE
+        varying vec4 vSunExposureLow;
+        varying vec4 vSunExposureHigh;
+        varying vec3 vExposureSunDirection;
+        #endif
+        ${directionalExposureDeclaration}
         ${vegetationShadowFragmentDeclaration}
         ${cloudShadowFragmentDeclaration}
         float bayer4(vec2 pixel) {
@@ -522,6 +543,16 @@ export function createVertexColorCaptureMaterial(
           // view. Give foliage a stable canopy normal; retain shaped normals
           // for bark and cut branch ends.
           float foliageMask = step(0.0, vUv.x) * (1.0 - step(1.5, vUv.x));
+          float exposureScale = 1.0;
+          #ifdef TREE_EXPOSURE
+          if (exposureCaptureBand > 0.5) {
+            gl_FragColor = mix(vec4(0.7884615385), exposureCaptureBand < 1.5 ? vSunExposureLow : vSunExposureHigh, foliageMask);
+            return;
+          }
+          exposureScale = mix(1.0, exposureSunlightScale(directionalExposure(
+            vSunExposureLow, vSunExposureHigh, normalize(vExposureSunDirection)
+          )), foliageMask);
+          #endif
           normal = normalize(mix(
             normal,
             vec3(0.0, 1.0, 0.0),
@@ -533,7 +564,7 @@ export function createVertexColorCaptureMaterial(
           float direct = max(0.0, (dot(normal, sunDirection) + 0.42) / 1.42);
           float shadowVisibility = vegetationShadowVisibility();
           vec3 lighting = clamp(
-            ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility,
+            ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility * exposureScale,
             vec3(0.0),
             vec3(1.25)
           );
@@ -576,6 +607,7 @@ export function createVertexColorCaptureMaterial(
         "skyColor",
         "groundColor",
         "lightingEnabled",
+        "exposureCaptureBand",
         "modelHeight",
         "leafTextureEnabled",
         "barkTextureEnabled",
@@ -617,6 +649,9 @@ export function createVertexColorCaptureMaterial(
   material.setTexture("leafTexture", fallbackTexture);
   material.setTexture("barkTexture", fallbackTexture);
   material.setFloat("lightingEnabled", liveLighting ? 1 : 0);
+  material.setFloat("exposureCaptureBand", 0);
+  bindDirectionalExposure(material);
+  registerExposureCutout(material, leafTextureUrl);
   material.setFloat("modelHeight", 1);
   material.setFloat("leafTextureEnabled", 0);
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
