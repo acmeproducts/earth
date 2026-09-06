@@ -6,10 +6,12 @@ import {
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
-  ImpostorAssetLease,
-  ImpostorVariant,
+  type ImpostorAssetLease,
+  type ImpostorVariant,
 } from "./Impostor";
 import { createSeededRandom } from "./Random";
+import { bakeTreeExposure } from "./DirectionalExposure";
+import { TreeModelGeometryCache } from "./TreeModelGeometryCache";
 
 const SOURCE_HEIGHT = 2.2;
 const CAPTURE_DIAMETER = 4.5;
@@ -45,6 +47,7 @@ const bushImpostors = createImpostorAssetProvider({
   faces: IMPOSTOR_CUBE_FACES,
   rotationallySymmetric: false,
   upperHemisphereOnly: true,
+  directionalExposure: true,
   sampling: {
     horizontalSamples: { default: 5, minimum: 1, maximum: 16 },
     verticalSamples: { default: 5, minimum: 1, maximum: 10 },
@@ -201,6 +204,8 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   data.indices = indices;
   data.normals = normals;
   data.colors = colors;
+  // Solid leaf geometry needs no texture, but UVs mark it as foliage for exposure.
+  data.uvs = new Float32Array(positions.length / 3 * 2);
 
   const bush = new Mesh("bushImpostorProceduralSource", scene);
   data.applyToMesh(bush);
@@ -214,9 +219,33 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   return bush;
 }
 
-/** Builds the original procedural geometry at the requested rendered height. */
-export function createBushModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
-  const bush = createBushSource(scene, true, seed);
+const bushModelCaches = new WeakMap<Scene, TreeModelGeometryCache>();
+
+/** Builds the original procedural geometry with cached sunlight exposure at the requested height. */
+export async function createBushModel(scene: Scene, renderHeight: number, seed?: number): Promise<Mesh> {
+  let cache = bushModelCaches.get(scene);
+  if (!cache) {
+    cache = new TreeModelGeometryCache();
+    bushModelCaches.set(scene, cache);
+    scene.onDisposeObservable.addOnce(() => bushModelCaches.delete(scene));
+  }
+  const [bush] = await cache.create(String(seed ?? 0x42555348), scene, async () => {
+    const source = createBushSource(scene, true, seed);
+    source.isVisible = false;
+    try {
+      await bakeTreeExposure([source]);
+    } catch (error) {
+      const material = source.material;
+      source.dispose(false, false);
+      material?.dispose(true, false);
+      throw error;
+    }
+    return [source];
+  });
+  const material = createVertexColorCaptureMaterial(scene, "bushModelMaterial", true);
+  material.options.defines.push("#define TREE_EXPOSURE");
+  material.options.attributes.push("sunExposureLow", "sunExposureHigh");
+  bush.material = material;
   bush.name = "bushModels";
   const positions = bush.getVerticesData(VertexBuffer.PositionKind);
   if (!positions) throw new Error("Bush model has no position data.");

@@ -857,8 +857,8 @@ function createConiferTree(
     : new Color3(0.25, 0.14, 0.07);
   const barkCut = new Color3(0.38, 0.25, 0.12);
   const needles = species === "pine"
-    ? [new Color3(0.11, 0.29, 0.12), new Color3(0.16, 0.37, 0.16), new Color3(0.2, 0.42, 0.18)]
-    : [new Color3(0.055, 0.2, 0.12), new Color3(0.075, 0.27, 0.16), new Color3(0.1, 0.32, 0.18)];
+    ? [new Color3(0.132, 0.348, 0.144), new Color3(0.192, 0.444, 0.192), new Color3(0.24, 0.504, 0.216)]
+    : [new Color3(0.066, 0.24, 0.144), new Color3(0.09, 0.324, 0.192), new Color3(0.12, 0.384, 0.216)];
 
   const trunkRadiusAt = (index: number): number => {
     const t = index / trunkSegments;

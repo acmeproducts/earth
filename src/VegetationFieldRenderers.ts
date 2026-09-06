@@ -9,7 +9,7 @@ interface VegetationFieldRendererOptions {
   startDisabled?: boolean;
   depth?: ImpostorDepthOptions;
   loadAssets: () => Promise<ImpostorAssets | ImpostorAssetLease>;
-  createModel: () => Mesh;
+  createModel: () => Mesh | Promise<Mesh>;
 }
 
 export interface VegetationFieldRenderers {
@@ -39,7 +39,7 @@ export async function createVegetationFieldRenderers(
       options.impostorName,
       options.depth,
     );
-    const model = options.createModel();
+    const model = await options.createModel();
     model.parent = root;
     model.isPickable = false;
 
