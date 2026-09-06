@@ -135,6 +135,9 @@ test("remote players render as red geographic orbs and the local player stays hi
 });
 
 test("keyboard location shortcuts reload a clean scene", () => {
+  assert.match(game, /private async reloadAtLocation[\s\S]*?this\.reloadingLocation = true;[\s\S]*?worldLocation\.requestDestination\(target\)/);
+  assert.match(game, /private updateTerrainStreaming\(\): void \{\s*if \(this\.reloadingLocation\) return;/);
+  assert.match(game, /private publishLocalPlayerPose\(force = false\): void \{\s*if \(this\.reloadingLocation\) return;/);
   assert.match(
     game,
     /private async reloadAtLocation\(target: WorldLocation\): Promise<void>[\s\S]*?this\.worldLocation\.update\(target\);[\s\S]*?playerPresence\.publishDestination[\s\S]*?window\.location\.reload\(\)/,

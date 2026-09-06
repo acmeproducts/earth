@@ -13,6 +13,32 @@ const basePose = {
   movementMode: "walk",
 };
 
+test("an explicit shortcut overrides a stale saved pose on reload", async () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const presence = new PlayerPresence(scene, {
+    connection: new FakeConnection({ worldId: "earth", players: [player("alice", basePose)] }),
+    worldId: "earth",
+    actorId: "alice",
+    sessionId: "session-a",
+  });
+  try {
+    const destination = { lat: 59.8888085995981, lon: 10.593090176648504 };
+    const session = await presence.connect({ lat: 1, lon: 2 }, destination);
+    assert.deepEqual(session.location, destination);
+    assert.deepEqual(session.restoredPose, {
+      ...basePose,
+      latitude: destination.lat,
+      longitude: destination.lon,
+      elevationMeters: 0,
+    });
+  } finally {
+    presence.dispose();
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
 test("player presence owns remote marker creation, updates, and removal", async () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

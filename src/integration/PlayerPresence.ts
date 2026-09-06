@@ -75,7 +75,10 @@ export class PlayerPresence {
     this.sessionId = selected.sessionId;
   }
 
-  async connect(fallbackLocation: WorldLocationLike): Promise<PlayerPresenceSession> {
+  async connect(
+    fallbackLocation: WorldLocationLike,
+    destination?: WorldLocationLike,
+  ): Promise<PlayerPresenceSession> {
     if (this.connected || this.unsubscribe) {
       throw new Error("Player presence is already connected.");
     }
@@ -99,6 +102,17 @@ export class PlayerPresence {
     const restoredPose = snapshot.players.find(
       (player) => player.actorId === this.actorId,
     )?.pose;
+    if (destination) {
+      return {
+        location: { ...destination },
+        restoredPose: restoredPose ? {
+          ...restoredPose,
+          latitude: destination.lat,
+          longitude: destination.lon,
+          elevationMeters: 0,
+        } : undefined,
+      };
+    }
     return {
       location: restoredPose
         ? { lat: restoredPose.latitude, lon: restoredPose.longitude }

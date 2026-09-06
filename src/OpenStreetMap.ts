@@ -8,6 +8,7 @@ import {
   PolygonMeshBuilder,
   RawTexture,
   Scene,
+  ShaderMaterial,
   StandardMaterial,
   Texture,
   TransformNode,
@@ -618,6 +619,13 @@ export class OpenStreetMap {
   /** Disposes a streamed layer without taking down its scene-owned sky map. */
   static disposeLayer(root: TransformNode): void {
     for (const mesh of root.getChildMeshes(false)) {
+      // Hedge renderers own their materials and atlas leases. Dispose their
+      // meshes without textures before recursive map cleanup can destroy the
+      // shadow/cloud maps and atlases still used by other vegetation fields.
+      if (mesh.material instanceof ShaderMaterial) {
+        mesh.dispose(false, false);
+        continue;
+      }
       const materials = mesh.material instanceof MultiMaterial
         ? mesh.material.subMaterials
         : [mesh.material];

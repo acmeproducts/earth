@@ -5,6 +5,7 @@ import {
   Material,
   MultiMaterial,
   NullEngine,
+  Ray,
   Scene,
   TransformNode,
   Vector3,
@@ -127,6 +128,49 @@ test("inferred roofs rise above the mapped massing without clipping its cap", ()
   assert.ok(detailedBounds.width >= farBounds.width + 0.6);
   assert.ok(detailedBounds.depth >= farBounds.depth + 0.6);
 
+  scene.dispose();
+  engine.dispose();
+});
+
+test("pitched roofs seal the wall clearance and the underside of every overhang", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  for (const metersPerUnit of [1, 2]) {
+    for (const id of [42, 83, 97]) {
+      const scaledOptions = { ...options, metersPerUnit };
+      const building = plan(id, { render_height: 12, roof_shape: "gabled" });
+      const mesh = ProceduralBuildingRenderer.createDetailed(scene, building, terrain, scaledOptions);
+      const far = ProceduralBuildingRenderer.createFar(scene, building, terrain, scaledOptions);
+      assert.ok(mesh && far);
+      mesh.computeWorldMatrix(true);
+      const wallY = meshBounds(far).maximumY;
+      const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+      const roofXs = [], roofZs = [];
+      for (let vertex = 0; vertex < positions.length; vertex += 3) {
+        if (positions[vertex + 1] + mesh.position.y < wallY + 0.199 / metersPerUnit) continue;
+        roofXs.push(positions[vertex] + mesh.position.x);
+        roofZs.push(positions[vertex + 2] + mesh.position.z);
+      }
+      const halfWidth = Math.max(...roofXs);
+      const halfDepth = Math.max(...roofZs);
+      for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const edgeX = x * (halfWidth - 0.01 / metersPerUnit);
+        const edgeZ = z * (halfDepth - 0.01 / metersPerUnit);
+        const underside = new Ray(
+          new Vector3(edgeX, wallY - 0.02 / metersPerUnit, edgeZ),
+          Vector3.Up(), 0.04 / metersPerUnit,
+        );
+        assert.ok(underside.intersectsMesh(mesh).hit, `sealed underside: seed ${id}, side ${x},${z}`);
+        const edge = new Ray(
+          new Vector3(edgeX + x, wallY + 0.19 / metersPerUnit, edgeZ + z),
+          new Vector3(-x, 0, -z), 2,
+        );
+        assert.ok(edge.intersectsMesh(mesh).hit, `sealed edge: seed ${id}, side ${x},${z}`);
+      }
+      mesh.dispose();
+      far.dispose();
+    }
+  }
   scene.dispose();
   engine.dispose();
 });

@@ -53,6 +53,7 @@ export interface WorldLocation {
 
 const WEB_MERCATOR_MAX_SINE = Math.sin(WEB_MERCATOR_MAX_LATITUDE * Math.PI / 180);
 const LOCATION_STORAGE_KEY = "earth.location.v1";
+const DESTINATION_STORAGE_KEY = "earth.destination.v1";
 
 type LocationStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -60,10 +61,43 @@ type LocationStorage = Pick<Storage, "getItem" | "setItem">;
 export class WorldLocationStore {
   private current: WorldLocation;
   private readonly storage?: LocationStorage;
+  private readonly navigationStorage?: LocationStorage;
+  private destination?: WorldLocation;
 
-  constructor(fallback: WorldLocation, storage?: LocationStorage) {
+  constructor(fallback: WorldLocation, storage?: LocationStorage, navigationStorage?: LocationStorage) {
     this.storage = storage;
+    this.navigationStorage = navigationStorage;
     this.current = loadWorldLocation(fallback, storage);
+    try {
+      const candidate = JSON.parse(navigationStorage?.getItem(DESTINATION_STORAGE_KEY) ?? "null");
+      if (candidate && isValidWorldLocation(candidate)) this.destination = { ...candidate };
+    } catch {
+      // Ignore inaccessible or malformed pending navigation.
+    }
+  }
+
+  get pendingDestination(): Readonly<WorldLocation> | undefined {
+    return this.destination;
+  }
+
+  /** A tab-local navigation request takes priority over previously saved movement. */
+  requestDestination(location: WorldLocation): void {
+    if (!isValidWorldLocation(location)) return;
+    this.destination = { ...location };
+    try {
+      this.navigationStorage?.setItem(DESTINATION_STORAGE_KEY, JSON.stringify(this.destination));
+    } catch {
+      // Pose persistence remains the fallback when session storage is unavailable.
+    }
+  }
+
+  completeDestination(): void {
+    this.destination = undefined;
+    try {
+      this.navigationStorage?.setItem(DESTINATION_STORAGE_KEY, "null");
+    } catch {
+      // Storage may be unavailable.
+    }
   }
 
   get value(): Readonly<WorldLocation> {
@@ -83,12 +117,18 @@ export class WorldLocationStore {
 
 export function createBrowserWorldLocationStore(fallback: WorldLocation): WorldLocationStore {
   let storage: Storage | undefined;
+  let navigationStorage: Storage | undefined;
   try {
     storage = window.localStorage;
   } catch {
     storage = undefined;
   }
-  return new WorldLocationStore(fallback, storage);
+  try {
+    navigationStorage = window.sessionStorage;
+  } catch {
+    navigationStorage = undefined;
+  }
+  return new WorldLocationStore(fallback, storage, navigationStorage);
 }
 
 function loadWorldLocation(

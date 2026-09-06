@@ -1992,6 +1992,20 @@ function createPitchedRoof(
     }
   }
 
+  // Close the clearance above the walls and the exposed overhang. The trim
+  // varies in height and width, so it cannot reliably seal the roof by itself.
+  const undersideStart = vertices.length;
+  const undersideY = (eaveElevation - BUILDING_ROOF_EAVE_CLEARANCE_METERS) /
+    options.metersPerUnit;
+  for (const point of eaves) {
+    vertices.push({ x: point.x, y: undersideY, z: point.z });
+  }
+  for (let index = 0; index < eaves.length; index++) {
+    const next = (index + 1) % eaves.length;
+    addRoofFace(indices, [undersideStart + index, undersideStart + next, next, index]);
+  }
+  addRoofFace(indices, eaves.map((_, index) => undersideStart + index).reverse());
+
   const positions = vertices.flatMap((vertex) => [vertex.x, vertex.y, vertex.z]);
   const normals = new Array<number>(positions.length).fill(0);
   VertexData.ComputeNormals(positions, indices, normals);

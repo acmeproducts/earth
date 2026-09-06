@@ -49,3 +49,30 @@ test("ignores invalid runtime locations", () => {
   assert.deepEqual(store.value, fallback);
   assert.equal(storage.value, null);
 });
+
+test("a pending shortcut survives stale movement saves and is cleared after arrival", () => {
+  const storage = new MemoryStorage();
+  const tabStorage = new MemoryStorage();
+  const target = { lat: 59.8888085995981, lon: 10.593090176648504 };
+  const outgoing = new WorldLocationStore(fallback, storage, tabStorage);
+  outgoing.requestDestination(target);
+  outgoing.update(fallback);
+
+  const reloaded = new WorldLocationStore(fallback, storage, tabStorage);
+  assert.deepEqual(reloaded.pendingDestination, target);
+  // A different tab sharing local storage must not inherit this navigation.
+  assert.equal(new WorldLocationStore(fallback, storage, new MemoryStorage()).pendingDestination, undefined);
+  reloaded.update(target);
+  reloaded.completeDestination();
+  const nextReload = new WorldLocationStore(fallback, storage, tabStorage);
+  assert.equal(nextReload.pendingDestination, undefined);
+  assert.deepEqual(nextReload.value, target);
+});
+
+test("invalid pending navigation is ignored", () => {
+  const tabStorage = new MemoryStorage();
+  for (const value of ["bad json", "null", '{"lat":90,"lon":10}']) {
+    tabStorage.value = value;
+    assert.equal(new WorldLocationStore(fallback, undefined, tabStorage).pendingDestination, undefined);
+  }
+});

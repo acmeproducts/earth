@@ -182,6 +182,7 @@ export class Game {
   private readonly sceneSettings: SceneSettingsStore;
   private readonly clockSettings: ClockSettingsStore;
   private readonly worldLocation: WorldLocationStore;
+  private reloadingLocation = false;
   private lastTerrainStreamingCheckMilliseconds = 0;
   private solarLighting?: SolarLighting;
   private cloudLayer?: CloudLayer;
@@ -330,7 +331,10 @@ export class Game {
       },
     });
 
-    const presenceSession = await this.playerPresence.connect(this.worldLocation.value);
+    const presenceSession = await this.playerPresence.connect(
+      this.worldLocation.value,
+      this.worldLocation.pendingDestination,
+    );
     const location = presenceSession.location;
     this.solarLighting = new SolarLighting(
       this.scene,
@@ -347,6 +351,7 @@ export class Game {
     await this.startWorld(location, onProgress);
     if (presenceSession.restoredPose) this.playerControls.applyRestoredPose(presenceSession.restoredPose);
     this.publishLocalPlayerPose(true);
+    this.worldLocation.completeDestination();
     await reportInitializationProgress(onProgress, "Setting up controls", 98);
     this.sceneControls = new SceneControls({
       settings: this.sceneSettings.value,
@@ -947,7 +952,7 @@ export class Game {
     );
     if (generation !== this.streamingGeneration) {
       OpenStreetMap.disposeLayer(mapFeatures.root);
-      plotBoundaryLayer.root.dispose(false, true);
+      OpenStreetMap.disposeLayer(plotBoundaryLayer.root);
       streetLampLayer.root.dispose(false, true);
       return;
     }
@@ -1864,6 +1869,9 @@ export class Game {
 
   /** Persists a keyboard-selected destination, then rebuilds all scene-owned state. */
   private async reloadAtLocation(target: WorldLocation): Promise<void> {
+    if (this.reloadingLocation) return;
+    this.reloadingLocation = true;
+    this.worldLocation.requestDestination(target);
     this.worldLocation.update(target);
     const camera = this.flyCamera;
     if (camera) {
@@ -1977,6 +1985,7 @@ export class Game {
   }
 
   private updateTerrainStreaming(): void {
+    if (this.reloadingLocation) return;
     const now = performance.now();
     if (now - this.lastTerrainStreamingCheckMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) {
       return;
@@ -2112,6 +2121,7 @@ export class Game {
 
   /** Hands the locally predicted camera transform to the presence subsystem. */
   private publishLocalPlayerPose(force = false): void {
+    if (this.reloadingLocation) return;
     const camera = this.flyCamera;
     if (!camera) return;
     const transform: LocalPlayerTransform = {
