@@ -11,17 +11,7 @@ import type { VegetationFieldResult } from "./VegetationField";
 import type { WorldTileId } from "./WorldGrid";
 import type { WorldCover } from "./WorldCover";
 
-export type VegetationFieldKind =
-  | "treeField"
-  | "saplingField"
-  | "grassField"
-  | "tallPlantField"
-  | "wheatField"
-  | "rockyBeachField"
-  | "bushField"
-  | "fernField";
-
-export const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
+export const VEGETATION_FIELD_KINDS = [
   "treeField",
   "saplingField",
   "grassField",
@@ -30,10 +20,12 @@ export const VEGETATION_FIELD_KINDS: readonly VegetationFieldKind[] = [
   "rockyBeachField",
   "bushField",
   "fernField",
-];
+] as const;
+
+export type VegetationFieldKind = typeof VEGETATION_FIELD_KINDS[number];
 
 /** One streamed world tile and every scene resource it owns. */
-export interface StreamedTile {
+export interface StreamedTile extends Partial<Record<VegetationFieldKind, VegetationFieldResult>> {
   id: WorldTileId;
   key: string;
   /** Revision of the settings baked into this tile's geometry. */
@@ -50,14 +42,6 @@ export interface StreamedTile {
   offsetX: number;
   offsetZ: number;
   nativeTerrain: boolean;
-  treeField?: VegetationFieldResult;
-  saplingField?: VegetationFieldResult;
-  grassField?: VegetationFieldResult;
-  tallPlantField?: VegetationFieldResult;
-  wheatField?: VegetationFieldResult;
-  rockyBeachField?: VegetationFieldResult;
-  bushField?: VegetationFieldResult;
-  fernField?: VegetationFieldResult;
   rockField?: RockFieldResult;
   mapFeatures?: TransformNode;
   barrierField?: VegetationFieldResult;

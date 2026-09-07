@@ -19,12 +19,11 @@ import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
-  addProceduralVariantPlacement,
   createPlacementGrid,
   packInstanceMatrices,
-  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
+import { proceduralVariantAtLocation, type ProceduralVariant } from "./procedural/ProceduralRegions";
 import { windShearFraction } from "./Wind";
 import { LandCoverClass } from "./WorldCover";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
@@ -91,7 +90,7 @@ export async function createFernField(
   );
   const maximumHalfWidth = fernRenderedCaptureSize(renderHeight) * 0.62;
   const matrices: Matrix[] = [];
-  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
+  let variant: ProceduralVariant | undefined;
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
@@ -151,17 +150,15 @@ export async function createFernField(
   // Ferns are small undergrowth and do not benefit from a separate regional
   // silhouette. Keep one renderer per terrain tile instead of one impostor
   // mesh for every regional bucket touched by the tile.
-  const firstBucket = variantBuckets.values().next().value as
-    | ProceduralPlacementBucket
-    | undefined;
-  if (firstBucket) {
+  if (variant) {
+    const selectedVariant = variant;
     const { root: variantRoot, impostor: fern, model: fernModel } =
       await createVegetationFieldRenderers(scene, {
         rootName: "fernField-renderer",
         impostorName: "fernImpostors",
         renderHeight,
-        loadAssets: () => acquireFernImpostorAssets(scene, firstBucket.variant),
-        createModel: () => createFernModel(scene, renderHeight, firstBucket.variant.seed),
+        loadAssets: () => acquireFernImpostorAssets(scene, selectedVariant),
+        createModel: () => createFernModel(scene, renderHeight, selectedVariant.seed),
       });
     variantRoot.parent = root;
     configureFernRenderers(fern, fernModel, meshWidth, meshDepth);
@@ -206,16 +203,12 @@ export async function createFernField(
         z,
       ),
     );
-    const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
     matrices.push(matrix);
-    addProceduralVariantPlacement(
-      variantBuckets,
-      "ferns",
-      lon,
-      lat,
-      modelVariantSeed,
-      matrix,
-    );
+    // All ferns use the variant of the first accepted placement.
+    if (!variant) {
+      const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+      variant = proceduralVariantAtLocation("ferns", lon, lat, modelVariantSeed);
+    }
   }
 }
 

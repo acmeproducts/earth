@@ -1,3 +1,5 @@
+import { smoothstep } from "./MathUtils";
+
 /** Blend the neutral terrain grain into wet sand, dry sand, then inland cover. */
 export function beachSurfaceColor(
   inland: readonly [number, number, number],
@@ -15,9 +17,4 @@ export function beachSurfaceColor(
     const target = wet[channel] + (sand[channel] - wet[channel]) * dry;
     return value + (target - value) * amount;
   }) as [number, number, number];
-}
-
-function smoothstep(start: number, end: number, value: number): number {
-  const t = Math.max(0, Math.min(1, (value - start) / (end - start)));
-  return t * t * (3 - 2 * t);
 }

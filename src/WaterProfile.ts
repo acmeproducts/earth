@@ -1,3 +1,5 @@
+import { clamp01, smoothstep } from "./MathUtils";
+
 export type WaterSurfaceKind = 'ocean' | 'lake';
 
 export interface WaterProfile {
@@ -33,16 +35,11 @@ export function maximumWaterLift(profile: WaterProfile): number {
 
 /** Reference wave envelope for verification; shoreHeight is bed height in metres. */
 export function sampleWaterMotion(seconds: number, wind: number, profile: WaterProfile, shoreHeight = -100) {
-  const strength = Math.min(1, Math.max(0, wind));
+  const strength = clamp01(wind);
   const phase = seconds * Math.PI * 2 / profile.periodSeconds;
   const d = shoreHeight * 8;
   const band = smoothstep(-12, -7, d) * (1 - smoothstep(1.6, 3.2, d));
   const heave = Math.sin(phase) * profile.heaveMeters * strength;
   const crest = Math.pow(Math.max(0, Math.sin(phase - d * 1.15)), 3) * band;
   return { heave, crest, height: heave + crest * profile.crestMeters * strength };
-}
-
-function smoothstep(a: number, b: number, value: number): number {
-  const t = Math.max(0, Math.min(1, (value - a) / (b - a)));
-  return t * t * (3 - 2 * t);
 }
