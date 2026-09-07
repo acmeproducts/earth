@@ -404,6 +404,75 @@ test("reuses one building pad elevation across independently processed tiles", a
   assert.equal(second.elevations[12], 10);
 });
 
+test("neighboring building pads cannot raise terrain through a lower floor", async () => {
+  for (const metersPerUnit of [1, 5]) {
+    for (const reverse of [false, true]) {
+      const rectangle = (minX, maxX) => [
+        { x: minX, z: -1 }, { x: maxX, z: -1 },
+        { x: maxX, z: 1 }, { x: minX, z: 1 },
+      ].map(({ x, z }) => ({ x: x / metersPerUnit, z: z / metersPerUnit }));
+      const buildings = [
+        { id: "lower", outline: rectangle(-2, 0) },
+        { id: "higher", outline: rectangle(1, 3) },
+      ];
+      if (reverse) buildings.reverse();
+      const opts = {
+        meshWidth: 12 / metersPerUnit, meshDepth: 12 / metersPerUnit, metersPerUnit,
+        sharedBuildingElevations: new Map([["lower", 10], ["higher", 20]]),
+      };
+      const terrain = gradingTerrain(13, 15);
+      await conformTerrainToPlannedFeatures(terrain, planRoadsAndBuildings([], buildings, opts), opts);
+      for (let row = 5; row <= 7; row++) {
+        for (let column = 4; column <= 6; column++) {
+          assert.equal(terrain.elevations[row * 13 + column], 10);
+        }
+      }
+    }
+  }
+});
+
+test("road grading cannot raise footprint support samples through a building", async () => {
+  const opts = { ...options, sharedBuildingElevations: new Map([["house", 10]]) };
+  const terrain = gradingTerrain(13, 30);
+  const plan = planRoadsAndBuildings([
+    { id: "street", paths: [[{ x: -5, z: 0 }, { x: 5, z: 0 }]], appearance },
+  ], [{ id: "house", outline: [
+    { x: -1, z: 0.8 }, { x: 1, z: 0.8 }, { x: 1, z: 2 }, { x: -1, z: 2 },
+  ] }], opts);
+  await conformTerrainToPlannedFeatures(terrain, plan, opts);
+  for (let row = 4; row <= 6; row++) {
+    for (let column = 5; column <= 7; column++) {
+      assert.equal(terrain.elevations[row * 13 + column], 10);
+    }
+  }
+});
+
+test("a small footprint protects the diagonally opposite raster cell corner", async () => {
+  const opts = { ...options, sharedBuildingElevations: new Map([["small", 10]]) };
+  const terrain = gradingTerrain(7, 100);
+  const plan = planRoadsAndBuildings([], [{ id: "small", outline: [
+    { x: 0.01, z: 0.01 }, { x: 0.1, z: 0.01 },
+    { x: 0.1, z: 0.1 }, { x: 0.01, z: 0.1 },
+  ] }], opts);
+  await conformTerrainToPlannedFeatures(terrain, plan, opts);
+  for (const row of [2, 3]) {
+    for (const column of [3, 4]) {
+      assert.equal(terrain.elevations[row * 7 + column], 10,
+        "all vertices of the triangles beneath the footprint must be below its floor");
+    }
+  }
+});
+
+function gradingTerrain(size, elevation) {
+  return {
+    elevations: new Float32Array(size * size).fill(elevation),
+    minElevation: elevation, maxElevation: elevation, width: size, height: size,
+    worldTile: { level: 16, x: 1, y: 1 }, generationSeed: 1,
+    groundWidthMeters: 12, groundHeightMeters: 12,
+    bounds: { lonWest: 0, lonEast: 1, latNorth: 1, latSouth: 0 },
+  };
+}
+
 function pointInPolygon(x, z, points) {
   let inside = false;
   for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {

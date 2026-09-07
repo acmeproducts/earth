@@ -55,7 +55,9 @@ export async function conformTerrainToPlannedFeatures(
   );
   const rasterMargin = sampleSpacing * Math.SQRT2;
   const roadBlendWidth = Math.max(1.5 * sampleSpacing, 2 / options.metersPerUnit);
-  const buildingFlatMargin = Math.max(sampleSpacing * 1.25, 1 / options.metersPerUnit);
+  // Every corner of a raster cell intersecting a footprint must be protected,
+  // including the diagonally opposite corner of a cell containing a small house.
+  const buildingFlatMargin = Math.max(rasterMargin, 1 / options.metersPerUnit);
   const buildingBlendWidth = Math.max(sampleSpacing * 1.5, 3 / options.metersPerUnit);
 
   const roads: RoadGrade[] = plan.roads
@@ -116,18 +118,15 @@ export async function conformTerrainToPlannedFeatures(
       );
       if (!roadTarget && !buildingTarget) continue;
 
-      // A carriageway owns shared road/building apron samples. Because both
-      // targets were derived from the same untouched raster, this decision is
-      // stable and cannot re-introduce height in a later stamping pass.
-      const selected = roadTarget?.inside && !buildingTarget?.inside
+      // Footprint support samples must stay below every floor they support.
+      // Road grades and neighboring pads may otherwise push terrain indoors.
+      const selected = buildingTarget?.weight === 1
+        ? buildingTarget
+        : roadTarget?.inside
         ? roadTarget
-        : buildingTarget?.inside && !roadTarget?.inside
+        : buildingTarget && (!roadTarget || buildingTarget.weight > roadTarget.weight)
           ? buildingTarget
-          : roadTarget?.inside && buildingTarget?.inside
-            ? roadTarget
-            : buildingTarget && (!roadTarget || buildingTarget.weight > roadTarget.weight)
-              ? buildingTarget
-              : roadTarget!;
+          : roadTarget!;
       const index = row * terrain.width + column;
       const delta = selected.elevation - original[index];
       const earthwork = selected === roadTarget
@@ -180,6 +179,7 @@ function strongestBuildingTarget(
   let totalWeight = 0;
   let strongest = 0;
   let insideAny = false;
+  let protectedElevation = Infinity;
   const outer = flatMargin + blendWidth;
   for (const grade of buildings) {
     const inside = pointInRing(sample, grade.site.outline);
@@ -188,10 +188,18 @@ function strongestBuildingTarget(
       : distanceToRing(sample, grade.site.outline);
     if (distance >= outer) continue;
     const weight = distance <= flatMargin ? 1 : 1 - smoothstep(flatMargin, outer, distance);
+    if (distance <= flatMargin) {
+      protectedElevation = Math.min(protectedElevation, grade.elevation);
+    }
     weightedElevation += grade.elevation * weight;
     totalWeight += weight;
     strongest = Math.max(strongest, weight);
     insideAny ||= inside;
+  }
+  // Where pads overlap, the lower floor is the hard ceiling. Averaging their
+  // heights would bury that floor even when both pads have full influence.
+  if (protectedElevation < Infinity) {
+    return { elevation: protectedElevation, weight: 1, inside: insideAny };
   }
   return totalWeight > 0
     ? { elevation: weightedElevation / totalWeight, weight: strongest, inside: insideAny }
