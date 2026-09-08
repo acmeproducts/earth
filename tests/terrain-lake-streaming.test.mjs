@@ -46,6 +46,17 @@ test("keeps lake surfaces when only scenery detail is demoted", () => {
   assert.doesNotMatch(demotion, /lakeSurfaces/);
 });
 
+test("bounds cooldown retention while the camera keeps crossing tiles", () => {
+  const eviction = game.slice(
+    game.indexOf("private evictCooledTiles"),
+    game.indexOf("private setupDebugControls"),
+  );
+  assert.match(eviction, /maximumRetainedTiles/);
+  assert.match(eviction, /this\.tiles\.size > maximumRetainedTiles/);
+  assert.match(eviction, /lastNeededMilliseconds - right\.lastNeededMilliseconds/);
+  assert.match(eviction, /disposeStreamedTile\(record\)/);
+});
+
 test("renders each connected lake as one polygon mesh with attached holes", () => {
   assert.match(surface, /for \(let index = 0; index < polygons\.length; index\+\+\)/);
   assert.match(surface, /const builder = new PolygonMeshBuilder/);

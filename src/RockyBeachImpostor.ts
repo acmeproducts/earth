@@ -159,7 +159,7 @@ export function createRockyBeachModel(scene: Scene, renderHeight: number, seed?:
     positions[index + 2] *= scale;
   }
   rocks.setVerticesData(VertexBuffer.PositionKind, positions);
-  rocks.refreshBoundingInfo();
+  rocks.refreshBoundingInfo({ updatePositionsArray: false });
   if (rocks.material instanceof ShaderMaterial) {
     rocks.material.setFloat("modelHeight", renderHeight);
   }

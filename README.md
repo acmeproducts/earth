@@ -1,47 +1,53 @@
-# Babylon.js Earth
+# Earth
 
-A 3D Earth visualization built with Babylon.js, TypeScript, and Webpack.
+A walkable, streamed 3D Earth built with Babylon.js and real-world geographic data.
+Fly across terrain, drop to ground level, and explore a changing procedural landscape
+of roads, buildings, water, vegetation, weather, seasons, stars, and a fictional moon.
 
-![Babylon.js](https://img.shields.io/badge/Babylon.js-7.0-blue)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)
-![Webpack](https://img.shields.io/badge/Webpack-5.89-blue)
+![Babylon.js 7](https://img.shields.io/badge/Babylon.js-7-1b7f8c)
+![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178c6)
+![Webpack 5](https://img.shields.io/badge/Webpack-5-8dd6f9)
+![License: MIT](https://img.shields.io/badge/license-MIT-397354)
 
-## Features
+## Highlights
 
-- 🌍 Interactive 3D Earth with atmosphere effect
-- 🌙 Orbiting moon with animation
-- ✨ Dynamic starfield background
-- 🎥 Auto-rotating camera with manual control
-- 📦 Production-ready Webpack build
-- 🚀 GitHub Actions CI/CD with GitHub Pages deployment
+- Streams elevation, ESA WorldCover, and OpenStreetMap data around the player.
+- Builds procedural terrain, coastlines, lakes, roads, buildings, interiors, and street furniture.
+- Populates biomes with regional trees, grass, flowers, bushes, ferns, crops, and rocks.
+- Simulates solar lighting, seasons, snow, wind, clouds and shadows, stars, and moonlight.
+- Supports free flight and a collision-aware walking mode with persistent position and settings.
+- Includes scalable detail windows, vegetation impostors, WebGL/WebGPU options, and performance diagnostics.
+- Runs locally in the browser or against the optional WebSocket and SQLite game server.
 
-## Getting Started
+## Quick Start
 
-### Prerequisites
+### Requirements
 
-- Node.js 22.5+ for the local SQLite backend
-- pnpm (`npm install -g pnpm`)
-
-### Installation
+- Node.js 22.5 or newer (required by the optional SQLite server)
+- Corepack, included with supported Node.js releases
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
+git clone git@github.com:magnificus/earth.git
 cd earth
-
-# Install dependencies
-pnpm install
+corepack enable
+yarn install
+yarn dev
 ```
 
-### Development
+Open [http://localhost:3000](http://localhost:3000). Press `Escape` to open
+settings, search for a place, enter latitude and longitude, or jump to a random
+land location.
 
-Start the development server with hot reload:
+### Places to Try
 
-```bash
-pnpm dev
-```
+| Place | Latitude | Longitude |
+| --- | ---: | ---: |
+| Gaustatoppen, Norway | 59.853732 | 8.649698 |
+| Lower Manhattan, USA | 40.705627 | -74.013291 |
+| Edsåsdalen, Sweden | 63.317407 | 13.074744 |
+| Coastal Bangladesh | 22.046490 | 90.678418 |
 
-The app will open at [http://localhost:3000](http://localhost:3000)
+### Graphics and Persistence
 
 Press Escape and open Graphics to choose antialiasing: MSAA 4x (default), FXAA,
 TAA (experimental), or Off. Changes apply immediately and are saved locally.
@@ -57,7 +63,7 @@ Use `?persistence=local` to explicitly select this mode.
 To use the game server instead, open `?persistence=server` and start the backend:
 
 ```bash
-pnpm game:dev
+yarn game:dev
 ```
 
 In server mode, player state is persisted in `data/earth.sqlite` by the backend.
@@ -71,7 +77,7 @@ Scene and clock preferences continue to use browser storage in either mode.
 Create an optimized production build:
 
 ```bash
-npm run build
+yarn build
 ```
 
 The output will be in the `dist/` directory.
@@ -341,55 +347,61 @@ gallery to `data/captured-building-layouts`.
 
 ```
 earth/
-├── .github/
-│   └── workflows/
-│       └── build-deploy.yml    # GitHub Actions CI/CD
-├── src/
-│   ├── index.html              # HTML template
-│   ├── index.ts                # Entry point
-│   └── Game.ts                 # Main Babylon.js game class
-├── public/                     # Static assets (copied to dist)
+├── assets/                     # Source textures and README media
+├── scripts/                    # Catalog and diagnostic generators
+├── server/                     # Optional WebSocket/SQLite game server
+├── src/                        # Scene, simulation, and rendering code
+│   ├── integration/            # Local and server-backed player state
+│   ├── procedural/             # Buildings, trees, and actor distribution
+│   ├── index.html              # Application shell
+│   ├── index.ts                # Browser entry point
+│   └── Game.ts                 # World lifecycle and tile streaming
+├── tests/                      # Node test suite and browser drivers
 ├── package.json
-├── tsconfig.json               # TypeScript configuration
-├── webpack.config.js           # Webpack configuration
-└── README.md
+├── tsconfig.json
+└── webpack.config.js
 ```
 
 ## Controls
 
-- **G**: Switch between fly and walker modes
-- **W/A/S/D**: Move forward, left, backward, and right
-- **Q/E**: Fly down and up (fly mode only)
-- **Space**: Jump (walker mode only)
-- **Mouse + Drag**: Look around
-- **Mouse Wheel**: Increase or decrease fly speed (fly mode only)
+- `Click`: Capture the pointer and look with the mouse
+- `Escape`: Release the pointer and open settings
+- `W` / `A` / `S` / `D`: Move
+- `Q` / `E`: Fly down or up
+- `G`: Switch between fly and walker modes
+- `Space`: Jump in walker mode
+- `Mouse wheel`: Change fly speed
+- `V`: Cycle vegetation rendering modes
+- `F`: Toggle expanded performance diagnostics
+- `R`: Download a render report
 
 Walker mode uses a 1.8 m player height, terrain collision, and gravity.
 
 ## Deployment
 
-This project includes automated deployment to GitHub Pages:
-
-1. Push to `main` or `master` branch
-2. GitHub Actions will automatically build and deploy
-3. Your site will be available at `https://<username>.github.io/<repo-name>`
+GitHub Actions builds every push and pull request to `main` or `master` and
+uploads `dist/` as a workflow artifact. Hosting is intentionally separate from
+the build workflow.
 
 ### Manual Deployment
 
 To deploy manually to any static hosting:
 
 ```bash
-pnpm build
-# Upload the contents of dist/ to your hosting provider
+yarn build
+# Upload the contents of dist/ to your static host.
 ```
 
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
-| `pnpm dev` | Start development server |
-| `pnpm build` | Create production build |
-| `pnpm clean` | Remove dist folder |
+| `yarn dev` | Start the Webpack development server |
+| `yarn game:dev` | Start the local WebSocket/SQLite server |
+| `yarn build` | Create an optimized production build |
+| `yarn test` | Run the Node test suite |
+| `yarn typecheck` | Type-check without emitting files |
+| `yarn clean` | Remove `dist/` |
 
 ## Customization
 
@@ -398,12 +410,17 @@ pnpm build
 The normal terrain appearance is isolated in `src/TerrainMaterial.ts`. Its
 procedural detail texture is tinted with softly blended ESA WorldCover surface
 colors so vegetated ground visually supports the grass, bush, and tree layers.
-Place texture images in the `public/` folder and assign them in that factory:
+Place texture images under `assets/`, resolve them through Webpack, and assign
+them in that factory:
 
 ```typescript
 import { Texture } from '@babylonjs/core';
 
-material.diffuseTexture = new Texture('/terrain-texture.jpg', scene);
+const terrainTextureUrl = new URL(
+  '../assets/terrain-texture.jpg',
+  import.meta.url,
+).toString();
+material.diffuseTexture = new Texture(terrainTextureUrl, scene);
 ```
 
 Detailed tiles refine ESA WorldCover 2021 with globally available OpenStreetMap

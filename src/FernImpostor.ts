@@ -148,7 +148,7 @@ export function createFernModel(scene: Scene, renderHeight: number, seed?: numbe
     positions[index + 2] *= scale;
   }
   fern.setVerticesData(VertexBuffer.PositionKind, positions);
-  fern.refreshBoundingInfo();
+  fern.refreshBoundingInfo({ updatePositionsArray: false });
   setVertexColorModelHeight(fern, renderHeight);
   return fern;
 }

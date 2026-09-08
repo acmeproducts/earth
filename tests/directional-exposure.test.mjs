@@ -1,10 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { Vector3 } from "@babylonjs/core";
 import {
   bakeExposureGeometry, EXPOSURE_DIRECTIONS,
   packExposureFace,
 } from "../src/DirectionalExposure.ts";
+
+const impostorSource = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
+
+test("raw exposure captures skip atlas canvases and release runtime canvases early", () => {
+  assert.match(impostorSource, /options\.captureRawFace \? \[\] : faces\.map/);
+  const capture = impostorSource.slice(
+    impostorSource.indexOf("const assets = await captureImpostorAtlases"),
+    impostorSource.indexOf("console.log(`${definition.name}: capture complete"),
+  );
+  assert.ok(
+    capture.indexOf("releaseAtlasCanvases(assets)") <
+      capture.indexOf("captureExposureAtlases(scene, captureOptions)"),
+  );
+});
 
 function card(center, size, sun, cutout) {
   const right = Vector3.Cross(Vector3.Up(), sun).normalize().scale(size);

@@ -1,6 +1,7 @@
 import type { TerrainData } from "./TerrainData";
+import type { SharedValueMap } from "./OwnedValueCache";
 
-export type TerrainEdgeElevationCache = Map<string, number>;
+export type TerrainEdgeElevationCache = SharedValueMap<string, number>;
 
 export interface TerrainSkirtGeometry {
   positions: Float32Array;

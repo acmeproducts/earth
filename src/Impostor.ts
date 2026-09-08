@@ -51,6 +51,8 @@ const BACKGROUND_CAPTURE_VIEWS_PER_SLICE = 16;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
+/** Exposure is broad lighting; half resolution preserves it with 75% fewer pixels. */
+const EXPOSURE_ATLAS_SCALE = 0.5;
 /** Any meaningful source coverage becomes a solid distant texel. */
 const LOW_RESOLUTION_ALPHA_THRESHOLD = 8;
 
@@ -396,6 +398,7 @@ async function captureDefinition(
       cooperative,
     };
     const assets = await captureImpostorAtlases(scene, captureOptions);
+    if (!retainAtlasCanvases) releaseAtlasCanvases(assets);
     if (definition.directionalExposure) {
       try {
         assets.exposureTextures = await captureExposureAtlases(scene, captureOptions);
@@ -403,15 +406,6 @@ async function captureDefinition(
         disposeImpostorAssets(assets);
         throw error;
       }
-    }
-    if (!retainAtlasCanvases) {
-      // Streaming only uses the uploaded textures. The demo/export path keeps
-      // its canvases, but runtime variants must not retain a second atlas copy.
-      for (const canvas of assets.atlasCanvases) {
-        canvas.width = 0;
-        canvas.height = 0;
-      }
-      assets.atlasCanvases = [];
     }
     console.log(`${definition.name}: capture complete; procedural source disposed`);
     return assets;
@@ -427,10 +421,15 @@ async function captureDefinition(
 function disposeImpostorAssets(assets: ImpostorAssets): void {
   const textures = new Set([...assets.textures, ...assets.lowResolutionTextures, ...(assets.exposureTextures ?? [])]);
   textures.forEach((texture) => texture.dispose());
+  releaseAtlasCanvases(assets);
+}
+
+function releaseAtlasCanvases(assets: Pick<ImpostorAssets, "atlasCanvases">): void {
   for (const canvas of assets.atlasCanvases) {
     canvas.width = 0;
     canvas.height = 0;
   }
+  assets.atlasCanvases = [];
 }
 
 function resourceKey(key: string): string {
@@ -442,7 +441,7 @@ function sourceDimensions(meshes: readonly Mesh[]): Vector3 {
   let maximum = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
   for (const mesh of meshes) {
     mesh.computeWorldMatrix(true);
-    mesh.refreshBoundingInfo();
+  mesh.refreshBoundingInfo({ updatePositionsArray: false });
     const bounds = mesh.getBoundingInfo().boundingBox;
     minimum = Vector3.Minimize(minimum, bounds.minimumWorld);
     maximum = Vector3.Maximize(maximum, bounds.maximumWorld);
@@ -510,7 +509,9 @@ export async function captureImpostorAtlases(
     `at ${resolutionWidth}x${resolutionHeight}`,
   );
 
-  const canvases = faces.map(() => {
+  // Raw exposure passes pack GPU readbacks directly and never consume a 2D
+  // canvas. Avoid allocating six atlas-sized backing stores for each band.
+  const canvases = options.captureRawFace ? [] : faces.map(() => {
     const canvas = document.createElement("canvas");
     canvas.width = atlasWidth;
     canvas.height = atlasHeight;
@@ -561,7 +562,7 @@ export async function captureImpostorAtlases(
     }
     for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
       const face = faces[faceIndex];
-      const context = canvases[faceIndex].getContext("2d", { alpha: true })!;
+      const context = canvases[faceIndex]?.getContext("2d", { alpha: true });
       const verticalSpan = Math.abs(face.normal.y) > 0.5 ? captureWidth : captureHeight;
       camera.orthoTop = verticalSpan / 2;
       camera.orthoBottom = -verticalSpan / 2;
@@ -616,8 +617,8 @@ export async function captureImpostorAtlases(
       if (cooperative) await nextFrame();
       if (options.captureRawFace) {
         options.captureRawFace(faceIndex, new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), atlasWidth, atlasHeight);
-      } else context.putImageData(
-        await binaryImage(pixels, atlasWidth, atlasHeight, context, cooperative),
+      } else context!.putImageData(
+        await binaryImage(pixels, atlasWidth, atlasHeight, context!, cooperative),
         0,
         0,
       );
@@ -667,8 +668,14 @@ export async function captureImpostorAtlases(
 }
 
 async function captureExposureAtlases(scene: Scene, options: ImpostorCaptureOptions): Promise<Texture[]> {
-  const width = options.gridWidth * (options.resolutionWidth ?? options.resolution);
-  const height = options.gridHeight * (options.resolutionHeight ?? options.resolution);
+  const resolutionWidth = Math.max(1, Math.round(
+    (options.resolutionWidth ?? options.resolution) * EXPOSURE_ATLAS_SCALE,
+  ));
+  const resolutionHeight = Math.max(1, Math.round(
+    (options.resolutionHeight ?? options.resolution) * EXPOSURE_ATLAS_SCALE,
+  ));
+  const width = options.gridWidth * resolutionWidth;
+  const height = options.gridHeight * resolutionHeight;
   const maxSize = scene.getEngine().getCaps().maxTextureSize;
   if (width * 3 > maxSize || height * 2 > maxSize) throw new Error("Directional exposure atlas exceeds GPU texture size.");
   const materials = new Set(options.meshes.map((mesh) => mesh.material).filter((material): material is ShaderMaterial => material instanceof ShaderMaterial));
@@ -680,6 +687,9 @@ async function captureExposureAtlases(scene: Scene, options: ImpostorCaptureOpti
       await captureImpostorAtlases(scene, {
         ...options,
         name: `${options.name}-exposure-${band}`,
+        resolution: resolutionHeight,
+        resolutionWidth,
+        resolutionHeight,
         captureRawFace: (face, pixels, faceWidth, faceHeight) => {
           packExposureFace(data, pixels, face, faceWidth, faceHeight);
         },

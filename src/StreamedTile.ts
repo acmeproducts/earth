@@ -53,6 +53,9 @@ export interface StreamedTile extends Partial<Record<VegetationFieldKind, Vegeta
   lastNeededMilliseconds: number;
   detailLastNeededMilliseconds: number;
   lodResolved: boolean;
+  sharedElevationOwner: object;
+  /** Releases edge/feature values once no streamed tile needs them. */
+  releaseSharedElevations: () => void;
 }
 
 /** Map features fade through per-mesh visibility; 1 restores the opaque path. */
@@ -94,6 +97,7 @@ export function disposeTileDetail(record: StreamedTile): void {
 }
 
 export function disposeStreamedTile(record: StreamedTile): void {
+  record.releaseSharedElevations();
   disposeTileDetail(record);
   record.farTreeField?.root.dispose(false, false);
   record.farTreeField = undefined;

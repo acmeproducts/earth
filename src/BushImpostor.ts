@@ -314,7 +314,7 @@ export async function createBushModel(scene: Scene, renderHeight: number, seed?:
     positions[index + 2] *= scale;
   }
   bush.setVerticesData(VertexBuffer.PositionKind, positions);
-  bush.refreshBoundingInfo();
+  bush.refreshBoundingInfo({ updatePositionsArray: false });
   setVertexColorModelHeight(bush, renderHeight);
   return bush;
 }

@@ -475,6 +475,6 @@ function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
   rock.setVerticesData(VertexBuffer.ColorKind, colors);
   rock.useVertexColors = true;
   rock.hasVertexAlpha = false;
-  rock.refreshBoundingInfo();
+  rock.refreshBoundingInfo({ updatePositionsArray: false });
   return rock;
 }

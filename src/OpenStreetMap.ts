@@ -1,4 +1,5 @@
 import { ResourceCache } from "./ResourceCache";
+import type { SharedValueMap } from "./OwnedValueCache";
 import {
   Color3,
   Material,
@@ -91,7 +92,10 @@ const BRIDGE_DECK_THICKNESS_METERS = 0.32;
 const BRIDGE_EDGE_WIDTH_METERS = 0.45;
 const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
 const BRIDGE_WATER_CLEARANCE_METERS = 3;
-const WATERWAY_SURFACE_CLEARANCE_METERS = 0.08;
+// Planned roads use depth bias as decals, so waterways only need enough height
+// to clear the exact terrain surface. Keeping this below the carriageway's
+// physical clearance also gives roads deterministic precedence at crossings.
+const WATERWAY_SURFACE_CLEARANCE_METERS = 0.02;
 const ROAD_TEXTURE_SIZE = 128;
 /** Non-repeating per-pixel grain, distinct from the seamless octaves. */
 const ROAD_GRAIN_SEED = 0x726f6164;
@@ -122,7 +126,7 @@ interface MapLayerOptions {
   /** Shared geometry plan prepared before terrain construction. */
   planning?: RoadAndBuildingPlan;
   /** Stable pad height shared by every tile touched by one building. */
-  sharedBuildingElevations?: Map<string, number>;
+  sharedBuildingElevations?: SharedValueMap<string, number>;
   /** The rendered ground, so terrain-conforming decals cannot sink into it. */
   terrainSurface?: TerrainSurface;
 }
@@ -1295,8 +1299,8 @@ function createWaterwayMeshes(
   halfWidth: number,
 ): Mesh[] {
   if (points.length < 2) return [];
-  const left: Vector3[] = [];
-  const right: Vector3[] = [];
+  const left: Array<{ x: number; z: number }> = [];
+  const right: Array<{ x: number; z: number }> = [];
   for (let index = 0; index < points.length; index++) {
     const previous = points[Math.max(0, index - 1)];
     const next = points[Math.min(points.length - 1, index + 1)];
@@ -1305,19 +1309,62 @@ function createWaterwayMeshes(
     const length = Math.hypot(dx, dz) || 1;
     const offsetX = (-dz / length) * halfWidth;
     const offsetZ = (dx / length) * halfWidth;
-    const elevation = Math.min(
-      sampleElevation(terrain, points[index].x + offsetX, points[index].z + offsetZ, options.meshWidth, options.meshDepth),
-      sampleElevation(terrain, points[index].x - offsetX, points[index].z - offsetZ, options.meshWidth, options.meshDepth),
-    );
-    const y = (elevation + WATERWAY_SURFACE_CLEARANCE_METERS) / options.metersPerUnit;
-    left.push(new Vector3(points[index].x + offsetX, y, points[index].z + offsetZ));
-    right.push(new Vector3(points[index].x - offsetX, y, points[index].z - offsetZ));
+    left.push({ x: points[index].x + offsetX, z: points[index].z + offsetZ });
+    right.push({ x: points[index].x - offsetX, z: points[index].z - offsetZ });
   }
-  return [stageMapMesh(MeshBuilder.CreateRibbon(
-    "waterway",
-    { pathArray: [left, right], uvs: roadUvs(left, right, options.metersPerUnit, "paved") },
-    scene,
-  ))];
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const uvs: number[] = [];
+  const clearance = WATERWAY_SURFACE_CLEARANCE_METERS / options.metersPerUnit;
+  const groundHeight = (point: { x: number; z: number }) => sampleElevation(
+    terrain,
+    point.x,
+    point.z,
+    options.meshWidth,
+    options.meshDepth,
+  ) / options.metersPerUnit;
+  for (let index = 0; index < points.length - 1; index++) {
+    let outline = [left[index], left[index + 1], right[index + 1], right[index]];
+    if (signedArea(outline) < 0) outline = [...outline].reverse();
+    // A bilinear height sample is not the surface that Babylon actually draws.
+    // Split every strip segment along the ground triangles and copy their exact
+    // planes, just as planned road decals do, so neither bank can sink through.
+    const rings = conformDecalPolygon(
+      outline,
+      groundHeight,
+      clearance,
+      options.terrainSurface,
+      true,
+    );
+    for (const ring of rings) {
+      const vertexOffset = positions.length / 3;
+      for (const point of ring) {
+        positions.push(point.x, point.y, point.z);
+        uvs.push(point.x * options.metersPerUnit, point.z * options.metersPerUnit);
+      }
+      const localIndices = earcut(ring.flatMap((point) => [point.x, point.z]));
+      for (let triangle = 0; triangle < localIndices.length; triangle += 3) {
+        indices.push(
+          vertexOffset + localIndices[triangle],
+          vertexOffset + localIndices[triangle + 1],
+          vertexOffset + localIndices[triangle + 2],
+        );
+      }
+    }
+  }
+  if (positions.length === 0) return [];
+  const normals: number[] = [];
+  VertexData.ComputeNormals(positions, indices, normals);
+  const vertexData = new VertexData();
+  vertexData.positions = positions;
+  vertexData.indices = indices;
+  vertexData.normals = normals;
+  vertexData.uvs = uvs;
+  const mesh = new Mesh("waterway", scene);
+  vertexData.applyToMesh(mesh, false);
+  mesh.isPickable = false;
+  return [stageMapMesh(mesh)];
 }
 
 function waterwayWidthMeters(value: unknown): number | undefined {
@@ -1410,6 +1457,7 @@ function mergeWaterways(
     height: options.meshDepth,
     metersPerUnit: options.metersPerUnit,
     skyReflection: options.skyReflection,
+    kind: "river",
   });
   prepareWaterSurfaceMesh(result);
   result.isPickable = false;

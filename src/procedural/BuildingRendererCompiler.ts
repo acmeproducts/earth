@@ -17,6 +17,7 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
+import { compactMeshBuffers } from "../CompactMeshBuffers";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
 import { averagePoint, clipToBounds, pointInRing, signedArea } from "../PlanarGeometry";
@@ -174,6 +175,7 @@ export class ProceduralBuildingRenderer {
       if (rooftop) parts.push(rooftop);
     }
 
+    parts.forEach(compactMeshBuffers);
     const merged = Mesh.MergeMeshes(parts, false, true);
     if (!merged) {
       for (const part of parts) part.dispose(false, true);
@@ -250,6 +252,7 @@ export class ProceduralBuildingRenderer {
 
   static merge(meshes: Mesh[], name: string, parent: TransformNode): Mesh | undefined {
     if (meshes.length === 0) return undefined;
+    meshes.forEach(compactMeshBuffers);
     const buildingIds = meshes
       .map((mesh) => mesh.metadata?.buildingId)
       .filter((id): id is string => typeof id === "string");
@@ -270,6 +273,7 @@ export class ProceduralBuildingRenderer {
     result.name = name;
     result.material = material;
     result.parent = parent;
+    result.setEnabled(true);
     result.checkCollisions = name === "buildings" || name === "detailedBuildings";
     retainCurrentBuildingLayoutCaptures(buildingIds, result);
     if (Number.isFinite(metersPerUnit)) {
@@ -366,6 +370,7 @@ function createInteriorMesh(
     appearance,
     "interior",
   );
+  interior.parts.forEach(compactMeshBuffers);
   const merged = Mesh.MergeMeshes(interior.parts, false, true);
   if (!merged) {
     for (const part of interior.parts) part.dispose(false, true);
@@ -660,7 +665,7 @@ function createEnterableBuilding(
             BUILDING_WINDOW_CLOSE_ALPHA, -windowStyle.recessMeters);
           addWindowMullions(
             windows, start, end, edgeLengthMeters, bayStart + apertureOffset,
-            storyBottom + sillHeight, windowStyle, options, appearance.trim,
+            storyBottom + sillHeight, windowStyle, options,
           );
           windowCount++;
         } else {
@@ -1261,14 +1266,16 @@ function addWindowMullions(
   bottomElevation: number,
   style: BuildingWindowStyle,
   options: BuildingRenderOptions,
-  color: Color3,
 ): void {
+  const color = new Color3(0.56, 0.58, 0.6);
+  // Reserved alpha marker routes opaque bars to their metal material after merging.
+  const metalMarker = 0.5;
   const frameDepth = -style.recessMeters + 0.012;
   for (const fraction of style.verticalBars) {
     addWindowQuad(
       geometry, edgeStart, edgeEnd, edgeLengthMeters,
       windowOffsetMeters + style.widthMeters * fraction - style.frameWidthMeters / 2,
-      style.frameWidthMeters, bottomElevation, style.heightMeters, options, color, 1, frameDepth,
+      style.frameWidthMeters, bottomElevation, style.heightMeters, options, color, metalMarker, frameDepth,
     );
   }
   for (const fraction of style.horizontalBars) {
@@ -1276,7 +1283,7 @@ function addWindowMullions(
       geometry, edgeStart, edgeEnd, edgeLengthMeters, windowOffsetMeters,
       style.widthMeters,
       bottomElevation + style.heightMeters * fraction - style.frameWidthMeters / 2,
-      style.frameWidthMeters, options, color, 1, frameDepth,
+      style.frameWidthMeters, options, color, metalMarker, frameDepth,
     );
   }
 }
@@ -1673,23 +1680,34 @@ function configureBuildingSurfaceMaterials(
   const indices = mesh.getIndices();
   if (!positions || !colors || !indices) return [];
   const windowVertices: number[] = [];
+  const metalVertices = new Set<number>();
   const reflectiveVertices = new Set<number>();
   for (let vertex = 0; vertex < colors.length / 4; vertex++) {
     const marker = colors[vertex * 4 + 3];
     if (marker < 0.5) windowVertices.push(vertex);
+    else if (marker === 0.5) {
+      metalVertices.add(vertex);
+      colors[vertex * 4 + 3] = 1;
+    }
     else if (marker < 0.99) {
       reflectiveVertices.add(vertex);
       colors[vertex * 4 + 3] = 1;
     }
   }
-  if (windowVertices.length === 0 && reflectiveVertices.size === 0) {
+  if (windowVertices.length === 0 && reflectiveVertices.size === 0 && metalVertices.size === 0) {
     return [{ indexStart: 0, indexCount: indices.length }];
   }
 
   const solidIndices: number[] = [];
   const windowIndices: number[] = [];
   const reflectiveIndices: number[] = [];
+  const metalIndices: number[] = [];
   for (let index = 0; index < indices.length; index += 3) {
+    if (metalVertices.has(indices[index]) && metalVertices.has(indices[index + 1]) &&
+        metalVertices.has(indices[index + 2])) {
+      metalIndices.push(indices[index], indices[index + 1], indices[index + 2]);
+      continue;
+    }
     const target = reflectiveVertices.has(indices[index]) &&
         reflectiveVertices.has(indices[index + 1]) &&
         reflectiveVertices.has(indices[index + 2])
@@ -1701,7 +1719,7 @@ function configureBuildingSurfaceMaterials(
         : solidIndices;
     target.push(indices[index], indices[index + 1], indices[index + 2]);
   }
-  mesh.setIndices([...solidIndices, ...windowIndices, ...reflectiveIndices], undefined, true);
+  mesh.setIndices([...solidIndices, ...windowIndices, ...reflectiveIndices, ...metalIndices], undefined, true);
   mesh.setVerticesData(VertexBuffer.ColorKind, colors, true);
   mesh.releaseSubMeshes();
 
@@ -1724,7 +1742,10 @@ function configureBuildingSurfaceMaterials(
   materials.subMaterials = [];
   let indexOffset = 0;
   const addSurface = (surfaceIndices: number[], material: StandardMaterial | PBRMaterial): void => {
-    if (surfaceIndices.length === 0) return;
+    if (surfaceIndices.length === 0) {
+      material.dispose(false, false);
+      return;
+    }
     const materialIndex = materials.subMaterials.length;
     materials.subMaterials.push(material);
     SubMesh.CreateFromIndices(materialIndex, indexOffset, surfaceIndices.length, mesh);
@@ -1733,6 +1754,16 @@ function configureBuildingSurfaceMaterials(
   addSurface(solidIndices, solidMaterial);
   addSurface(windowIndices, glassMaterial);
   addSurface(reflectiveIndices, reflectiveMaterial);
+  if (metalIndices.length > 0) {
+    const metalMaterial = new PBRMaterial(`${mesh.name}WindowMetalMaterial`, mesh.getScene());
+    metalMaterial.metallic = 0.85;
+    metalMaterial.roughness = 0.32;
+    metalMaterial.environmentIntensity = 0.85;
+    metalMaterial.reflectionTexture = skyReflection ?? null;
+    metalMaterial.backFaceCulling = false;
+    metalMaterial.transparencyMode = Material.MATERIAL_OPAQUE;
+    addSurface(metalIndices, metalMaterial);
+  }
   mesh.material = materials;
 
   // Include window triangles in the depth pass. The dedicated caster uses an
@@ -1843,6 +1874,9 @@ function configureLazyInteriors(
   // Queue the residency work after the frame so the next frame sees a stable
   // set of meshes across every render pass.
   const afterRenderObserver = scene.onAfterRenderObservable.add(() => {
+    // Streamed chunks are staged at the origin before their tile offset commits.
+    // Disabled chunks must not load interiors using that temporary position.
+    if (!exterior.isEnabled()) return;
     const now = performance.now();
     if (now - lastCheckMilliseconds < BUILDING_INTERIOR_CHECK_INTERVAL_MS) return;
     lastCheckMilliseconds = now;

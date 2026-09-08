@@ -3,6 +3,8 @@
 // PowerShell pixel/context-restoration check:
 // $env:EARTH_FIXTURE='tests/fixtures/render-resource-pixels.ts'; yarn node tests/drive-render-corruption.mjs
 // EARTH_FAST_CAPTURE=1 reduces atlas quality for quicker full-world stress runs.
+// Full-quality spawn/warm-up/continuous-movement memory reproduction (PowerShell):
+// $env:EARTH_MEMORY_REPRO='1'; yarn node tests/drive-render-corruption.mjs
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -48,6 +50,8 @@ const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
 ], { stdio: 'ignore', windowsHide: true });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const logs = [];
+const memoryRepro = process.env.EARTH_MEMORY_REPRO === '1';
+const samples = [];
 let socket;
 try {
   let target;
@@ -80,19 +84,75 @@ try {
     return r.result?.value;
   };
   await send('Runtime.enable'); await send('Log.enable'); await send('Page.enable');
+  if (process.env.EARTH_PROFILE === '1') {
+    await send('HeapProfiler.startSampling', { samplingInterval: 1048576 });
+  }
+  if (process.env.EARTH_PROFILE === '1' || process.env.EARTH_TRACE_GL === '1') {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      for (const type of [WebGLRenderingContext, WebGL2RenderingContext]) {
+        const original=type.prototype.getProgramParameter;
+        type.prototype.getProgramParameter=function(program,parameter) {
+          if(!program || !this.isProgram(program))console.error('STALE PROGRAM',new Error().stack);
+          return original.call(this,program,parameter);
+        };
+      }
+    ` });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('earth.location.v1', JSON.stringify({lat:59.905,lon:10.735}));` });
-  const captureQuery=process.env.EARTH_FAST_CAPTURE ? ['tree-impostor','grass-impostor','bush-impostor','fern-impostor','tall-plant-impostor','wheat-impostor','rocky-beach-impostor']
+  const captureQuery=process.env.EARTH_FAST_CAPTURE && !memoryRepro ? ['tree-impostor','grass-impostor','bush-impostor','fern-impostor','tall-plant-impostor','wheat-impostor','rocky-beach-impostor']
     .map(prefix=>`&${prefix}-x-samples=2&${prefix}-y-samples=2&${prefix}-resolution=48`).join('') : '';
-  await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?terrain-size=3&detail-size=1&clock=manual&date=2026-09-05&time=14${captureQuery}${process.env.EARTH_QUERY ?? ''}` });
-  const iterations=Number(process.env.EARTH_ITERATIONS ?? 180);
+  const windowQuery = memoryRepro ? 'terrain-size=17&detail-size=3' : 'terrain-size=3&detail-size=1';
+  await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${windowQuery}&clock=manual&date=2026-09-05&time=14${captureQuery}${process.env.EARTH_QUERY ?? ''}` });
+  const iterations=Number(process.env.EARTH_ITERATIONS ?? (memoryRepro ? 240 : 180));
   let readyIterations=0;
   for (let i = 0; i < iterations; i++) {
     const state = await evaluate(`(()=>{const g=window.performanceGame;return {ready:window.performanceReady,error:window.performanceError,step:window.performanceProgress,done:window.pixelComplete,pixelError:window.pixelError,results:window.pixelResults,tiles:g?.tiles?.size,builds:g?.activeTileBuilds?.size,frame:g?.scene.getFrameId(),textures:g?.scene.textures.length};})()`);
+    if (memoryRepro) {
+      const heap = await send('Runtime.getHeapUsage');
+      const resources = await evaluate(`(()=>{const g=window.performanceGame;return g ? {
+        meshes:g.scene.meshes.length,geometries:g.scene.geometries.length,
+        details:[...g.tiles.values()].filter(t=>t.detailed).length,
+        active:[...g.activeTileBuilds.keys()],position:g.flyCamera?.position.asArray(),
+        roots:g.scene.transformNodes.length,
+        materials:g.scene.materials.length,
+        interiors:g.scene.meshes.filter(m=>m.name==='buildingInteriors').length,
+        stagedInteriors:g.scene.meshes.filter(m=>m.name==='buildingInteriors' && !m.isEnabled()).length,
+        camera:g.scene.activeCamera?.name
+      }:{};})()`);
+      samples.push({time:Date.now(),...state,...resources,...heap});
+      writeFileSync(join(output,'memory.json'),JSON.stringify(samples));
+      if(resources.stagedInteriors>0)throw new Error('Disabled staged tiles allocated building interiors');
+      if(i%10===0) console.log('Memory:',JSON.stringify(samples.at(-1)));
+    }
     if (i % 10 === 0) { console.log('State:', JSON.stringify(state)); writeFileSync(join(output, 'logs.json'), JSON.stringify(logs)); }
+    if (process.env.EARTH_PROFILE === '1' && i % 30 === 0) {
+      writeFileSync(join(output,'heap-profile.json'),JSON.stringify(await send('HeapProfiler.getSamplingProfile')));
+    }
     if (state.error || state.pixelError) throw new Error(state.error ?? state.pixelError);
     if (state.done) { console.log('Results:', JSON.stringify(state.results)); break; }
     if (state.ready) {
       readyIterations++;
+      if (memoryRepro) {
+        if (readyIterations === 60) await evaluate(`(()=>{
+          const g=window.performanceGame;
+          const origin=g.flyCamera.position.clone();
+          g.flyCamera.detachControl();
+          g.flyCamera.rotation.x=0.08;
+          let last=performance.now(),elapsed=0;
+          g.scene.onBeforeRenderObservable.add(()=>{
+            const now=performance.now(); elapsed+=Math.min((now-last)/1000,0.1);last=now;
+            const tile=g.tiles.values().next().value;
+            if(!tile)return;
+            const angle=elapsed/35;
+            g.flyCamera.position.x=origin.x+Math.sin(angle)*tile.meshWidth*3;
+            g.flyCamera.position.z=origin.z+(1-Math.cos(angle))*tile.meshDepth*3;
+            g.flyCamera.rotation.y=Math.PI/2-angle;
+            const ground=g.getGroundEyeHeight(g.flyCamera.position.x,g.flyCamera.position.z);
+            if(Number.isFinite(ground))g.flyCamera.position.y=ground+0.1;
+          });
+          return true;
+        })()`);
+      } else {
       await evaluate(`(()=>{
         const g=window.performanceGame;
         if(window.route===undefined){window.route=0;window.reproOrigin=g.flyCamera.position.clone();g.flyCamera.detachControl();g.flyCamera.rotation.x=0.08;}
@@ -106,6 +166,7 @@ try {
         if(!g.flyCamera.position.asArray().every(Number.isFinite))throw new Error('Invalid reproduction camera');
         window.route++;
       })()`);
+      }
     }
     if (i % 30 === 0) { const shot = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(output, `frame-${i}.png`), Buffer.from(shot.data, 'base64')); }
     if (i === iterations-1) {
@@ -120,5 +181,6 @@ try {
   }
 } finally {
   writeFileSync(join(output, 'logs.json'), JSON.stringify(logs, null, 2));
+  if(memoryRepro)writeFileSync(join(output,'memory.json'),JSON.stringify(samples));
   socket?.close(); chrome.kill(); server.close();
 }

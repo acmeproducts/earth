@@ -800,7 +800,7 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
     const rachis = curvePath(crownOrigin, end, new Vector3(0, 0.19 + random() * 0.11, 0), 6);
     const frondSpine = new Color3(0.2, 0.36, 0.065);
     addLimbAlongPath(branchBuffers, rachis, 0.022, 0.0035, 5, 0.9, frondSpine, frondSpine);
-    const leafletCount = 13;
+    const leafletCount = 32;
     for (let leaflet = 1; leaflet <= leafletCount; leaflet++) {
       const along = leaflet / (leafletCount + 1);
       const anchor = pointAlongPath(rachis, along);
@@ -813,20 +813,20 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
           direction.x * side + direction.z * sweep,
         ).normalize();
         const middleFullness = Math.pow(Math.sin(Math.PI * along), 0.38);
-        const halfLength = (0.12 + middleFullness * 0.075) * (0.94 + random() * 0.12);
+        const halfLength = (0.14 + middleFullness * 0.09) * (0.94 + random() * 0.12);
         // The palm image is one unusually slender leaflet. Preserve its measured
         // proportions instead of stretching it across the broad generic cards.
         const halfWidth = halfLength * palmLeafAspect;
         addLeaf(
           branchBuffers,
-          anchor.add(lateral.scale(halfLength * 0.22)),
+          anchor,
           lateral,
           halfWidth,
           halfLength,
           random,
           frondColors[(frond + leaflet) % frondColors.length],
           0.86 + random() * 0.17,
-          { upwardBias: 0.06, directionJitter: 0.07, rollCenter: Math.PI / 2, rollSpread: 0.34 },
+          { upwardBias: 0.06, directionJitter: 0.07, rollCenter: Math.PI / 2, rollSpread: 0.34, anchorAtBase: true },
         );
       }
     }
@@ -1494,6 +1494,7 @@ function addLeaf(
     directionJitter?: number;
     rollCenter?: number;
     rollSpread?: number;
+    anchorAtBase?: boolean;
   } = {},
 ): void {
   const {
@@ -1501,6 +1502,7 @@ function addLeaf(
     directionJitter = 0.22,
     rollCenter,
     rollSpread = Math.PI * 2,
+    anchorAtBase = false,
   } = orientation;
   const directionalGrowth = growthDirection.lengthSquared() > 0.001
     ? growthDirection.normalize()
@@ -1517,6 +1519,8 @@ function addLeaf(
     : rollCenter + (random() - 0.5) * rollSpread;
   const normal = tangent.scale(Math.cos(roll)).add(bitangent.scale(Math.sin(roll))).normalize();
   const leafRight = Vector3.Cross(normal, leafUp).normalize();
+  // Offset along the final leaf axis so orientation jitter keeps the base attached.
+  if (anchorAtBase) center = center.add(leafUp.scale(halfLength));
 
   const vertexStart = buffers.positions.length / 3;
   const points = [

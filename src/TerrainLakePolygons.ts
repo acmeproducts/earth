@@ -1,4 +1,5 @@
 import type { TerrainData } from "./TerrainData";
+import type { SharedValueMap } from "./OwnedValueCache";
 import { smoothstep } from "./MathUtils";
 import { distanceToRing, pointInRing, signedArea } from "./PlanarGeometry";
 
@@ -30,7 +31,7 @@ export interface TerrainLakePolygonOptions {
   /** Tile-clipped rings returned for water rendering after padded rings shape terrain. */
   surfaceSources?: readonly TerrainLakeSource[];
   /** Makes every streamed piece of one OSM lake reuse exactly one level. */
-  sharedLakeElevations?: Map<string, number>;
+  sharedLakeElevations?: SharedValueMap<string, number>;
   /** Enables small-water plausibility checks using the renderer's vertical offset. */
   smallWaterSurfaceClearanceMeters?: number;
 }

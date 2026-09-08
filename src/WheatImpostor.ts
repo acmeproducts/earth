@@ -158,7 +158,7 @@ export function createWheatModel(scene: Scene, renderHeight: number, seed?: numb
     positions[i + 2] *= renderHeight / SOURCE_HEIGHT;
   }
   if (positions) wheat.setVerticesData("position", positions);
-  wheat.refreshBoundingInfo();
+  wheat.refreshBoundingInfo({ updatePositionsArray: false });
   if (wheat.material instanceof ShaderMaterial) wheat.material.setFloat("modelHeight", renderHeight);
   return wheat;
 }

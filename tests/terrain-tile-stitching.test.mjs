@@ -208,10 +208,10 @@ test("overlap strips stay beneath sloping terrain, including diagonal corners", 
 test("caches shared edges only after lake and map deformation", () => {
   const lakeStamp = game.indexOf("conformTerrainToLakePolygons(");
   const featureStamp = game.indexOf("OpenStreetMap.conformTerrainToPlan");
-  const finalStitch = game.indexOf("stitchTerrainEdges(terrainData");
+  const finalStitch = game.indexOf("stitchTerrainEdges(");
   assert.ok(lakeStamp >= 0);
   assert.ok(featureStamp > lakeStamp);
   assert.ok(finalStitch > featureStamp);
-  assert.equal((game.match(/stitchTerrainEdges\(terrainData/g) ?? []).length, 1);
-  assert.match(game, /sharedLakeElevations: this\.lakeElevations/);
+  assert.equal((game.match(/stitchTerrainEdges\(/g) ?? []).length, 1);
+  assert.match(game, /sharedLakeElevations: this\.lakeElevations\.forOwner/);
 });

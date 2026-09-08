@@ -16,13 +16,14 @@ import type {
   RoadAndBuildingPlan,
 } from "./RoadAndBuildingPlanner";
 import type { TerrainData } from "./TerrainData";
+import type { SharedValueMap } from "./OwnedValueCache";
 
 export interface PlannedFeatureTerrainOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
   /** Stable pad height shared by every tile touched by one building. */
-  sharedBuildingElevations?: Map<string, number>;
+  sharedBuildingElevations?: SharedValueMap<string, number>;
 }
 
 interface RoadGrade {

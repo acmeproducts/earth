@@ -119,6 +119,9 @@ test("renders permanent mapped waterways as terrain-following water ribbons", ()
   assert.match(openStreetMap, /truthy\(feature\.properties\.intermittent\)/);
   assert.match(openStreetMap, /createWaterway\(scene, line, terrain, options, widthMeters\)/);
   assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
+  assert.match(openStreetMap, /conformDecalPolygon\([\s\S]*?options\.terrainSurface,[\s\S]*?true,/);
+  assert.match(openStreetMap, /kind: "river"/);
+  assert.doesNotMatch(openStreetMap, /const elevation = Math\.min\([\s\S]*?sampleElevation/);
 });
 
 test("retains authoritative mapped lake rings for the terrain-water pipeline", () => {
