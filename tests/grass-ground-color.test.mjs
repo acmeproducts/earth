@@ -25,7 +25,8 @@ test("WorldCover exposes a continuous tint across source raster cells", () => {
   );
   assert.match(worldCoverSource, /sampleSurfaceColor\(/);
   assert.match(worldCoverSource, /pixelX[\s\S]*?- 0\.5/);
-  assert.match(worldCoverSource, /top \* \(1 - fy\) \+ bottom \* fy/);
+  assert.match(worldCoverSource, /tintBoundaryNoise\.sample/);
+  assert.match(worldCoverSource, /wx\[column\] \* wy\[row\]/);
 });
 
 test("grass applies the tint consistently to models and impostors", () => {

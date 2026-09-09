@@ -11,6 +11,11 @@ function box(x, z, width, depth) {
 const water = box(0, 0, 10, 10);
 const reject = (buildings, body = water) => createWaterBuildingOverlapFilter(buildings, 20)(body);
 
+test("stricter city filtering catches partial building conflicts while tolerating edge errors", () => {
+  assert.equal(createWaterBuildingOverlapFilter([box(8, 0, 10, 10)], 20, 0.15)(water), true);
+  assert.equal(createWaterBuildingOverlapFilter([box(9, 0, 10, 10)], 20, 0.15)(water), false);
+});
+
 test("rejects water completely inside a house or substantially overlapping it", () => {
   assert.equal(reject([box(-1, -1, 12, 12)]), true);
   assert.equal(reject([box(5, 0, 10, 10)]), true);

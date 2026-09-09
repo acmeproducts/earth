@@ -4,6 +4,9 @@ import type { TileBounds } from "./WorldGrid";
 import { shapeCoastlineElevations } from "./Coastline";
 import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
 import * as Lerc from "lerc";
+import { SimplexNoise2D } from "./SimplexNoise";
+
+const tintBoundaryNoise = new SimplexNoise2D(0x47524153);
 
 export enum LandCoverClass {
   TreeCover = 10,
@@ -112,7 +115,7 @@ export class WorldCover {
   }
 
   /**
-   * Blends the four nearest source pixels into a continuous surface tint.
+   * Blends neighboring pixels with a soft cubic filter and gently warped edges.
    * Classification remains discrete for placement and collision decisions,
    * but visual layers can cross a land-cover boundary without exposing the
    * source raster grid.
@@ -123,8 +126,13 @@ export class WorldCover {
   ): readonly [number, number, number] {
     // Pixel coordinates refer to cell corners; subtracting half a pixel makes
     // the integer sample positions land on the source pixels' centres.
-    const pixelX = (longitude - WorldCover.ORIGIN_X) / this.resolution - 0.5;
-    const pixelY = (WorldCover.ORIGIN_Y - latitude) / this.resolution - 0.5;
+    const sourceX = (longitude - WorldCover.ORIGIN_X) / this.resolution;
+    const sourceY = (WorldCover.ORIGIN_Y - latitude) / this.resolution;
+    // Anchor the warp to the source grid so adjacent terrain tiles agree.
+    const pixelX = sourceX - 0.5 +
+      tintBoundaryNoise.sample(sourceX / 6, sourceY / 6) * 0.65;
+    const pixelY = sourceY - 0.5 +
+      tintBoundaryNoise.sample(sourceX / 6 + 73, sourceY / 6 - 41) * 0.65;
     const x0 = Math.floor(pixelX);
     const y0 = Math.floor(pixelY);
     const fx = pixelX - x0;
@@ -132,16 +140,27 @@ export class WorldCover {
     const fallback = this.sample(longitude, latitude);
     const colorAt = (x: number, y: number): readonly [number, number, number] =>
       landCoverSurfaceColor(this.classAtPixel(x, y, fallback));
-    const topLeft = colorAt(x0, y0);
-    const topRight = colorAt(x0 + 1, y0);
-    const bottomLeft = colorAt(x0, y0 + 1);
-    const bottomRight = colorAt(x0 + 1, y0 + 1);
-
-    return [0, 1, 2].map((channel) => {
-      const top = topLeft[channel] * (1 - fx) + topRight[channel] * fx;
-      const bottom = bottomLeft[channel] * (1 - fx) + bottomRight[channel] * fx;
-      return top * (1 - fy) + bottom * fy;
-    }) as [number, number, number];
+    // Positive B-spline weights soften the gradient without overshooting the
+    // palette or leaving a crease at each source pixel centre.
+    const weights = (t: number): readonly number[] => [
+      (1 - t) ** 3 / 6,
+      (3 * t ** 3 - 6 * t * t + 4) / 6,
+      (-3 * t ** 3 + 3 * t * t + 3 * t + 1) / 6,
+      t ** 3 / 6,
+    ];
+    const wx = weights(fx);
+    const wy = weights(fy);
+    const color: [number, number, number] = [0, 0, 0];
+    for (let row = 0; row < 4; row++) {
+      for (let column = 0; column < 4; column++) {
+        const sample = colorAt(x0 + column - 1, y0 + row - 1);
+        const weight = wx[column] * wy[row];
+        for (let channel = 0; channel < 3; channel++) {
+          color[channel] += sample[channel] * weight;
+        }
+      }
+    }
+    return color;
   }
 
   async constrainElevations(

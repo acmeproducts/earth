@@ -25,10 +25,11 @@ test("building interiors distinguish available retail and office tags without in
 
 test("building use tags reach the streamed interior compiler, including open floors", () => {
   const geometry = [];
-  for (const buildingClass of ["retail", "office", "apartments", "hotel", "school", "clinic", "warehouse", "industrial", "garages"]) {
+  for (const buildingClass of ["retail", "office", "apartments", "hotel", "school", "clinic", "warehouse", "industrial", "garages", "mixed"]) {
     const engine = new NullEngine(), scene = new Scene(engine);
     try {
-      const building = planBuilding({ id: "same-building", properties: { class: buildingClass, render_height: 6.2, levels: 2 },
+      const building = planBuilding({ id: "same-building", properties: { class: buildingClass === "mixed" ? "apartments" : buildingClass, render_height: 6.2, levels: 2 },
+        inferredUse: buildingClass === "mixed" ? { use: "shop", source: "poi", groundFloorOnly: true } : undefined,
         polygon: { outer: [[0.35, 0.42], [0.65, 0.42], [0.65, 0.58], [0.35, 0.58], [0.35, 0.42]], holes: [] } });
       const terrain = { elevations: new Float32Array([10, 10, 10, 10]), minElevation: 10, maxElevation: 10,
         width: 2, height: 2, worldTile: { level: 14, x: 0, y: 0 }, generationSeed: 1,
@@ -51,4 +52,14 @@ test("building use tags reach the streamed interior compiler, including open flo
     assert.notDeepEqual(geometry[i], geometry[1]);
     assert.notDeepEqual(geometry[i], geometry[i - 1]);
   }
+  assert.notDeepEqual(geometry[9], geometry[2], "ground-floor shops change residential geometry");
+  const upperFloor = (positions) => {
+    const result = [];
+    for (let i = 0; i < positions.length; i += 3) {
+      if (positions[i + 1] > 13.3) result.push(...positions.slice(i, i + 3));
+    }
+    return result;
+  };
+  assert.ok(upperFloor(geometry[2]).length > 0);
+  assert.deepEqual(upperFloor(geometry[9]), upperFloor(geometry[2]), "upper apartments stay residential");
 });

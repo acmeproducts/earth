@@ -9,10 +9,11 @@ interface Footprint {
   holes: ReadonlyArray<readonly PlanarPoint[]>;
 }
 
-/** Reject water when buildings occupy at least a quarter of its actual area. */
+/** Reject water when solid footprints occupy a substantial share of its actual area. */
 export function createWaterBuildingOverlapFilter(
   buildings: readonly Footprint[],
   cellSize: number,
+  minimumOverlapFraction = 0.25,
 ): (water: Footprint) => boolean {
   const index = new PlanarCellIndex<Footprint>(cellSize);
   const triangles = new Map<Footprint, PlanarPoint[][]>();
@@ -37,7 +38,7 @@ export function createWaterBuildingOverlapFilter(
           ? subtractConvex(piece, cutter) : [piece]);
       }
       const remainingArea = remaining.reduce((sum, ring) => sum + polygonArea(ring), 0);
-      if (remainingArea <= area * 0.75 + area * 1e-9) return true;
+      if (remainingArea <= area * (1 - minimumOverlapFraction) + area * 1e-9) return true;
     }
     return false;
   };

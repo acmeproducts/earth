@@ -12,6 +12,7 @@ export interface BuildingSource {
   id: string;
   polygon: BuildingPolygon;
   properties: Readonly<Record<string, unknown>>;
+  inferredUse?: { use: BuildingInteriorUse; source: "poi" | "landuse"; groundFloorOnly?: boolean };
 }
 
 export type BuildingDetailLevel = "far" | "detailed";
@@ -50,6 +51,8 @@ export interface BuildingPlan {
   footprint: BuildingPolygon;
   buildingClass: BuildingClass;
   interiorUse?: BuildingInteriorUse;
+  groundFloorUse?: BuildingInteriorUse;
+  interiorUseSource?: "tags" | "poi" | "landuse";
   heightMeters: number;
   minimumHeightMeters: number;
   levels?: number;
@@ -65,6 +68,10 @@ export interface BuildingPlan {
 const DEFAULT_BUILDING_HEIGHT_METERS = 3.1;
 
 export function planBuilding(source: BuildingSource): BuildingPlan {
+  const taggedUse = buildingInteriorUse(source.properties);
+  const inference = source.inferredUse;
+  const interiorUse = taggedUse ?? (inference?.groundFloorOnly ? undefined : inference?.use);
+  const mappedClass = normalizeBuildingClass(source.properties.class ?? source.properties.building);
   const heightMeters = positiveNumber(source.properties.render_height) ??
     DEFAULT_BUILDING_HEIGHT_METERS;
   const minimumHeightMeters = Math.min(
@@ -75,8 +82,11 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
   return {
     id: source.id,
     footprint: source.polygon,
-    buildingClass: normalizeBuildingClass(source.properties.class ?? source.properties.building),
-    interiorUse: buildingInteriorUse(source.properties),
+    buildingClass: mappedClass === "generic" && interiorUse
+      ? normalizeBuildingClass(interiorUse === "shop" ? "retail" : interiorUse) : mappedClass,
+    interiorUse,
+    groundFloorUse: inference?.groundFloorOnly ? inference.use : undefined,
+    interiorUseSource: taggedUse ? "tags" : inference?.source,
     heightMeters,
     minimumHeightMeters,
     levels: positiveNumber(source.properties.levels),
@@ -98,8 +108,8 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
 }
 
 /** Use the tags supplied by the tile; no POI-to-building association is assumed. */
-function buildingInteriorUse(properties: BuildingSource["properties"]): BuildingPlan["interiorUse"] {
-  const values = [properties.class, properties.building, properties["building:use"]].map(textProperty);
+export function buildingInteriorUse(properties: BuildingSource["properties"]): BuildingPlan["interiorUse"] {
+  const values = [properties["building:use"], properties.building, properties.subclass, properties.class].map(textProperty);
   const shop = textProperty(properties.shop), office = textProperty(properties.office);
   if (values.includes("hotel") || textProperty(properties.tourism) === "hotel") return "hotel";
   const amenity = textProperty(properties.amenity);

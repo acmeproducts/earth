@@ -1,6 +1,7 @@
 import { Mesh, VertexData } from '@babylonjs/core';
 import type { TransformNode } from '@babylonjs/core';
 import { createShorelineGeometry } from './ShorelineGeometry';
+import { clipShorelineToWater, type WaterBoundary } from './ShorelineWaterBoundary';
 import {
   bindWaterMaterial, createWaterSurfaceMaterial, OCEAN_ELEVATION, prepareWaterSurfaceMesh,
 } from './Water';
@@ -18,12 +19,14 @@ export async function attachShoreline(
     elevation?: number;
     parent?: TransformNode;
     includesPoint?: (x: number, z: number) => boolean;
+    waterBoundary?: WaterBoundary;
   } = {},
 ): Promise<Mesh | null> {
   const kind = options.kind ?? 'ocean';
-  const geometry = await createShorelineGeometry(
+  let geometry = await createShorelineGeometry(
     positions, indices, metersPerUnit, options.elevation ?? OCEAN_ELEVATION, yieldControl, options.includesPoint,
   );
+  if (options.waterBoundary) geometry = clipShorelineToWater(geometry, options.waterBoundary);
   if (!geometry.indices.length) return null;
   const scene = ground.getScene();
   const mesh = new Mesh(`${ground.name} shoreline`, scene);

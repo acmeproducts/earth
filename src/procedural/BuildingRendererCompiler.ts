@@ -533,6 +533,7 @@ function createEnterableBuilding(
       const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
       for (let floor = 0; floor < floorCount; floor++) {
         // One ground-floor suite serves as reception; upper floors retain their rooms.
+        const floorUse = floor === 0 ? plan.groundFloorUse ?? interiorUse : interiorUse;
         const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
           (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
         const entrance = entranceOpenings[0]?.start;
@@ -541,14 +542,14 @@ function createEnterableBuilding(
           return gap(apartment) < gap(apartments[best]) ? index : best;
         }, 0) : 0;
         const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
-          hasReception && index === receptionIndex ? {
+          (floor === 0 && plan.groundFloorUse) || (hasReception && index === receptionIndex) ? {
             ...apartment,
             rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
             openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
           } : apartment) };
         const furniture = floorInterior.apartments.flatMap((apartment, index) =>
           planInteriorFurniture(apartment, plan.detailSeed + floor * 7919 + index * 101,
-            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : interiorUse));
+            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : floorUse));
         addPlannedInteriorWalls(
           parts,
           scene,

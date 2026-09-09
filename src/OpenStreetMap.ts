@@ -1,4 +1,5 @@
 import { ResourceCache } from "./ResourceCache";
+import { inferBuildingUse, type BuildingUseContext } from "./BuildingUseInference";
 import {
   Color3,
   Material,
@@ -70,6 +71,8 @@ import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "./TerrainLakePolygons";
 import { createWaterBuildingOverlapFilter } from "./WaterBuildingOverlap";
+import { createWaterRoadOverlapFilter } from "./WaterRoadOverlap";
+import { isSurfaceWaterFeature } from "./WaterFeatureVisibility";
 
 export interface MapTile {
   x: number;
@@ -336,7 +339,7 @@ export class OpenStreetMap {
       }
       await yieldControl?.();
       forEachFeature(tile, "waterway", (feature) => {
-        if (truthy(feature.properties.intermittent)) return;
+        if (!isSurfaceWaterFeature(feature.properties)) return;
         const widthMeters = waterwayWidthMeters(feature.properties.class);
         if (widthMeters === undefined) return;
         for (const line of lines(feature, tile)) {
@@ -448,25 +451,36 @@ export class OpenStreetMap {
     };
     const project = ([lon, lat]: LonLat) =>
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+    const cellSize = Math.max(options.meshWidth, options.meshDepth) / 8;
     const overlapsBuildings = createWaterBuildingOverlapFilter(
       tiles.flatMap((tile) => buildingSources(tile).map(({ polygon }) => ({
         outline: polygon.outer.map(project),
         holes: polygon.holes.map((hole) => hole.map(project)),
       }))),
-      Math.max(options.meshWidth, options.meshDepth) / 8,
+      cellSize,
+      0.15,
+    );
+    const overlapsRoads = createWaterRoadOverlapFilter(
+      tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
+        const appearance = planRoad(source.properties);
+        return appearance ? [{ paths: source.paths.map((path) => path.map(project)), appearance }] : [];
+      })),
+      terrain.groundWidthMeters / options.meshWidth,
+      cellSize,
     );
     for (const tile of tiles) {
       forEachFeature(tile, "water", (feature, featureIndex) => {
-        if (feature.properties.class === "ocean" || truthy(feature.properties.intermittent)) return;
+        if (feature.properties.class === "ocean" || !isSurfaceWaterFeature(feature.properties)) return;
         const waterPolygons = polygonRings(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
           const rings = waterPolygons[polygonIndex];
           // Test the full provider polygon, before application-tile clipping.
-          if (overlapsBuildings({
+          const water = {
             outline: withoutClosingPoint(rings[0]).map(project),
             holes: rings.slice(1).map((ring) => withoutClosingPoint(ring).map(project)),
-          })) continue;
-          const outline = clipToBounds(withoutClosingPoint(rings[0]).map(project), clipBounds);
+          };
+          if (overlapsBuildings(water) || overlapsRoads(water)) continue;
+          const outline = clipToBounds(water.outline, clipBounds);
           if (outline.length < 3) continue;
           const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
           const holes = rings.slice(1)
@@ -709,6 +723,20 @@ function buildingSources(tile: MapTile): readonly BuildingSource[] {
   const cached = buildingSourceCache.get(tile.data);
   if (cached) return cached;
   const sources: BuildingSource[] = [];
+  const points: BuildingUseContext["points"][number][] = [];
+  const areas: BuildingUseContext["areas"][number][] = [];
+  forEachFeature(tile, "poi", (feature) => {
+    const geometry = feature.toGeoJSON(tile.x, tile.y, tile.zoom).geometry;
+    const positions = geometry.type === "Point" ? [geometry.coordinates]
+      : geometry.type === "MultiPoint" ? geometry.coordinates : [];
+    for (const position of positions) points.push({ position: position as LonLat, properties: feature.properties });
+  });
+  forEachFeature(tile, "landuse", (feature) => {
+    for (const rings of polygonRings(feature, tile)) {
+      if (rings.length) areas.push({ polygon: { outer: rings[0], holes: rings.slice(1) }, properties: feature.properties });
+    }
+  });
+  const context: BuildingUseContext = { points, areas };
   forEachFeature(tile, "building", (feature, featureIndex) => {
     if (truthy(feature.properties.hide_3d)) return;
     const geometry = feature.toGeoJSON(tile.x, tile.y, tile.zoom).geometry;
@@ -720,11 +748,11 @@ function buildingSources(tile: MapTile): readonly BuildingSource[] {
     for (let polygonIndex = 0; polygonIndex < sourcePolygons.length; polygonIndex++) {
       const rings = sourcePolygons[polygonIndex] as LonLat[][];
       if (rings.length === 0) continue;
-      sources.push({
+      sources.push(inferBuildingUse({
         id: featureSourceId("building", feature, tile, featureIndex, polygonIndex),
         polygon: { outer: rings[0], holes: rings.slice(1) },
         properties: { ...feature.properties },
-      });
+      }, context));
     }
   });
   buildingSourceCache.set(tile.data, sources);

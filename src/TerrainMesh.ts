@@ -131,7 +131,8 @@ export async function createTerrainMesh(
           meshDepth,
         );
         const coverClass = landCover.sample(lon, lat);
-        const color = landCoverSurfaceColor(coverClass);
+        const color = landCover.sampleSurfaceColor?.(lon, lat) ??
+          landCoverSurfaceColor(coverClass);
         const colorIndex = vertexIndex * 4;
         surfaceColors[colorIndex] = color[0];
         surfaceColors[colorIndex + 1] = color[1];

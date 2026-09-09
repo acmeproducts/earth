@@ -87,6 +87,7 @@ export async function createTerrainLakeLayer(
       const shore = await attachShoreline(options.terrain, bedPositions, bedIndices,
         options.metersPerUnit, yieldControl, {
           kind: 'lake', elevation: mesh.position.y, parent: root,
+          waterBoundary: polygon,
           // Restrict equal-height contours to this lake and its bank. Holes
           // contribute their own shores, while distant same-height land does not.
           includesPoint: (x, z) => {

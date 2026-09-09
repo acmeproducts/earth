@@ -428,6 +428,15 @@ exterior door creates an entrance-lobby branch to the hallway; the stair moves
 beside that lobby instead of occupying the doorway. Apartment entrance doors
 are generated on each shared apartment–hallway boundary.
 
+Building interiors use explicit building tags first, including provider subclasses.
+For unclassified buildings, `BuildingUseInference.ts` uses recognized POIs inside
+the footprint, then enclosing land-use polygons. Courtyards are excluded and
+conflicting categories remain unresolved. Residential buildings with a mapped
+shop, office, or clinic inside receive that use on the ground floor and retain
+apartments above. Predictions are recorded on `BuildingPlan.interiorUseSource`;
+`groundFloorUse` records mixed use. Context comes from the same provider tile's
+`poi` and `landuse` layers, so missing data still leaves the residential fallback.
+
 `ApartmentLayoutPlanner.ts` recursively bisects an apartment into equally sized
 rooms with orthogonal walls. It stops before either resulting room would be
 smaller than 10 m² and tries the other axis when a proposed wall intersects a

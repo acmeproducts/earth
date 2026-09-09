@@ -116,7 +116,7 @@ test("profiles bridges independently and closes shared road endpoints", () => {
 
 test("renders permanent mapped waterways as terrain-following water ribbons", () => {
   assert.match(openStreetMap, /forEachFeature\(tile, "waterway"/);
-  assert.match(openStreetMap, /truthy\(feature\.properties\.intermittent\)/);
+  assert.match(openStreetMap, /!isSurfaceWaterFeature\(feature\.properties\)/);
   assert.match(openStreetMap, /createWaterway\(scene, line, terrain, options, widthMeters\)/);
   assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
 });
