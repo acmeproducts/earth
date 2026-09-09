@@ -18,10 +18,10 @@ import {
   IMPOSTOR_CUBE_FACES,
 } from "./Impostor";
 import {
-  createProceduralTree,
   measureFoliageTextures,
-  PROCEDURAL_TREE_CAPTURE_DIAMETER,
   PROCEDURAL_TREE_SOURCE_HEIGHT,
+  TREE_SPECIES,
+  type TreeSpecies,
 } from "./procedural/ProceduralTree";
 
 interface CaptureSettings {
@@ -133,14 +133,18 @@ export class TreeImpostorDemo {
     onProgress?.("Generating source tree", 25);
     this.setStatus("Generating source tree...");
     await measureFoliageTextures();
-    const source = createProceduralTree(this.scene, { name: "treeCaptureSource" });
+    // `?tree-impostor=<species>` previews any species; a bare flag keeps birch.
+    const requested = new URLSearchParams(window.location.search).get("tree-impostor") ?? "";
+    const species: TreeSpecies = requested in TREE_SPECIES ? requested as TreeSpecies : "birch";
+    const definition = TREE_SPECIES[species];
+    const source = definition.create(this.scene, { name: "treeCaptureSource" });
     const sourceRoot = new TransformNode("treeCaptureSourceRoot", this.scene);
     source.log.parent = sourceRoot;
     source.branches.parent = sourceRoot;
     this.sourceRoot = sourceRoot;
     this.sourceMeshes = [source.log, source.branches];
     this.center = Vector3.Zero();
-    this.diameter = PROCEDURAL_TREE_CAPTURE_DIAMETER;
+    this.diameter = definition.captureDiameter;
     await this.scene.whenReadyAsync();
     onProgress?.("Preparing preview", 80);
     this.camera.target.copyFrom(this.center);

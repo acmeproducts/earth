@@ -12,8 +12,33 @@ test("builds deterministic bare and mossy thin-instanced rock variants", () => {
   assert.match(source, /mossy \? "mossy" : "bare"/);
   assert.match(source, /thinInstanceSetBuffer/);
   assert.match(source, /VertexBuffer\.ColorKind/);
-  assert.match(source, /subdivisions: 2, flat: false/);
+  assert.match(source, /subdivisions: angular \? 4 : 2, flat: angular/);
   assert.match(source, /VertexData\.ComputeNormals\(positions, indices, normals\)/);
+  // updateVerticesData is a no-op on the builder's non-updatable buffers.
+  assert.match(source, /rock\.setVerticesData\(VertexBuffer\.NormalKind, normals\)/);
+  assert.doesNotMatch(source, /updateVerticesData/);
+});
+
+test("mixes in blocky fractured stones and a rare tail of large boulders", () => {
+  assert.match(source, /const ROCK_VARIANTS = 5/);
+  assert.match(source, /const ROUNDED_VARIANTS = 3/);
+  assert.match(source, /const angular = variant >= ROUNDED_VARIANTS/);
+  assert.match(source, /angular \? clipToFracturePlanes\(positions, random\) : \[\]/);
+  assert.match(source, /^\s+smoothNormalsOffFacets\(positions, indices, normals, facets\);/m);
+  assert.match(source, /random\(\) < ANGULAR_CHANCE/);
+  assert.match(source, /random\(\) < BOULDER_CHANCE\s*\?\s*2\.2 \+/);
+  assert.match(source, /random\(\) < SHORE_BOULDER_CHANCE\s*\?\s*1\.6 \+/);
+  assert.equal((source.match(/^\s+\[0\.\d+, 0\.\d+, 0\.\d+\],$/gm) ?? []).length >= 5, true);
+});
+
+test("shades rocks with encoded normal maps rather than raw noise", () => {
+  // A NoiseProceduralTexture in a bump slot decodes to normals that lean and
+  // flip into the surface wherever the texel is darker than mid-grey.
+  assert.doesNotMatch(source, /NoiseProceduralTexture/);
+  assert.match(source, /getRockTextureData\(\)/);
+  assert.match(source, /material\.bumpTexture = relief/);
+  assert.match(source, /material\.detailMap\.texture = createRockTexture\(/);
+  assert.match(source, /gammaSpace = false/);
 });
 
 test("shore rocks form long dense chains aligned to the water boundary", () => {

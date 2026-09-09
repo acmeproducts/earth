@@ -108,6 +108,7 @@ const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   birch: 1,
   eucalyptus: 1.14,
   fir: 0.93,
+  kapok: 1.3,
   mangrove: 0.88,
   maple: 1.02,
   oak: 1.08,
@@ -115,6 +116,14 @@ const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
   pine: 1.16,
   spruce: 0.86,
 };
+/**
+ * Rainforest closes its canopy and grows it higher than any other biome. The
+ * species mix alone cannot show that, so occupancy and height scale with the
+ * local rainforest share; both apply to saplings too, which is what stacks the
+ * understory beneath the emergents.
+ */
+const RAINFOREST_OCCUPANCY_BOOST = 0.55;
+const RAINFOREST_HEIGHT_BOOST = 0.3;
 
 export interface ImpostorPrototype {
   root: TransformNode;
@@ -818,15 +827,18 @@ export async function createTreeField(
           const interiorWeight = depth * depth * (3 - 2 * depth);
           const worldX = x + positionOffset.x;
           const worldZ = z + positionOffset.z;
+          const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+          const treeDistribution = treeDistributionAt(location.lon, location.lat);
+          const rainforest = treeDistribution.biomes
+            .find(({ biome }) => biome === "tropical-rainforest")?.ratio ?? 0;
           const localOccupancy = Math.min(
             1,
             (edgeOccupancy + (occupancy - edgeOccupancy) * interiorWeight) *
+              (1 + RAINFOREST_OCCUPANCY_BOOST * rainforest) *
               Math.max(0, densityScale?.(worldX, worldZ) ?? 1),
           );
           if (random() > localOccupancy) continue;
 
-          const location = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
-          const treeDistribution = treeDistributionAt(location.lon, location.lat);
           // Geographic meters anchor the grove noise to the world rather than
           // to this tile's local frame, keeping groves seamless across tiles.
           const ground = groundMetersAt(location.lon, location.lat);
@@ -840,7 +852,8 @@ export async function createTreeField(
           );
           if (!species) continue;
           const speciesScale = TREE_SPECIES_SCALE[species];
-          const heightScale = (0.75 + random() * 0.5) * speciesScale;
+          const heightScale = (0.75 + random() * 0.5) * speciesScale
+            * (1 + RAINFOREST_HEIGHT_BOOST * rainforest);
           const widthScale = (0.75 + random() * 0.35) * speciesScale;
           const yaw = (random() - 0.5) * Math.PI * 2;
           const pitch = (random() - 0.5) * 0.08;

@@ -188,5 +188,5 @@ function scaleSourceToHeight(mesh: Mesh, renderHeight: number, sourceHeight: num
     positions[index + 2] *= scale;
   }
   mesh.setVerticesData(VertexBuffer.PositionKind, positions);
-  mesh.refreshBoundingInfo();
+  mesh.refreshBoundingInfo({ updatePositionsArray: false });
 }

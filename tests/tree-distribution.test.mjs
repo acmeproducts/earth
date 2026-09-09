@@ -72,3 +72,14 @@ function distributionDistance(a, b) {
   const species = new Set([...left.keys(), ...right.keys()]);
   return [...species].reduce((sum, name) => sum + Math.abs((left.get(name) ?? 0) - (right.get(name) ?? 0)), 0);
 }
+
+test("makes the liana-hung kapok the dominant rainforest tree and exposes rainforest influence", async () => {
+  const { rainforestInfluenceAt } = await import("../src/TreeDistribution.ts");
+  const amazon = treeDistributionAt(-63, -4);
+  const dominant = amazon.trees.reduce((a, b) => a.ratio > b.ratio ? a : b);
+  assert.equal(dominant.species, "kapok");
+  assert.ok(amazon.trees.every((tree) => tree.species !== "beech" && tree.species !== "eucalyptus"));
+  assert.ok(rainforestInfluenceAt(-63, -4) > 0.9);
+  assert.equal(rainforestInfluenceAt(10, 50), 0);
+  assert.ok(treeDistributionAt(10, 50).trees.every((tree) => tree.species !== "kapok"));
+});

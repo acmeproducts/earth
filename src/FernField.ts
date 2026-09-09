@@ -10,6 +10,7 @@ import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import { createSeededRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
+import { rainforestInfluenceAt } from "./TreeDistribution";
 import {
   combineVegetationFieldResults,
   createVegetationFieldResult,
@@ -48,6 +49,14 @@ const HABITAT: HabitatFieldSpec = {
   barrenShare: 0.15,
   richestCoverage: 0.95,
 };
+/**
+ * Rainforest floors are ferny everywhere rather than in patches, and the ferns
+ * are far larger. These scale with the local rainforest share, so the layer
+ * elsewhere keeps the calibration above.
+ */
+const RAINFOREST_STAND_FILL = 0.65;
+const RAINFOREST_OCCUPANCY_BOOST = 0.9;
+const RAINFOREST_VIGOR_BOOST = 0.55;
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
   [LandCoverClass.TreeCover]: 0.24,
   [LandCoverClass.Shrubland]: 0.035,
@@ -103,13 +112,20 @@ export async function createFernField(
         // Anchored to the location rather than to this tile's local frame, so
         // a patch crosses a tile boundary intact instead of the whole pattern
         // restarting once per tile.
-        const stand = habitat.sample(lon, lat);
+        // Under a closed tropical canopy the floor is fern almost everywhere,
+        // so the damp-patch habitat fills toward solid cover and the plants
+        // themselves grow toward tree-fern size.
+        const rainforest = rainforestInfluenceAt(lon, lat);
+        const stand = habitat.sample(lon, lat) * (1 - rainforest * RAINFOREST_STAND_FILL)
+          + rainforest * RAINFOREST_STAND_FILL;
         if (stand <= 0) continue;
         const occupancy = Math.min(
           1,
-          coverOccupancy * stand * Math.max(0, densityScale?.(x, z) ?? 1),
+          coverOccupancy * (1 + RAINFOREST_OCCUPANCY_BOOST * rainforest) * stand
+            * Math.max(0, densityScale?.(x, z) ?? 1),
         );
         if (random() > occupancy) continue;
+        const vigor = 1 + RAINFOREST_VIGOR_BOOST * rainforest;
         if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
@@ -126,7 +142,7 @@ export async function createFernField(
           random() * (FERN_CLUSTER_MAX_COUNT - FERN_CLUSTER_MIN_COUNT + 1),
         );
         const clusterRotation = random() * Math.PI * 2;
-        addFern(x, z, 1);
+        addFern(x, z, vigor);
         for (let member = 1; member < clusterCount; member++) {
           // Ferns grow in clumps, not in a regular wheel. A square-rooted
           // radius keeps most fronds near the parent while leaving a few
@@ -137,7 +153,7 @@ export async function createFernField(
           addFern(
             x + Math.cos(angle) * distance,
             z + Math.sin(angle) * distance,
-            0.76 + random() * 0.28,
+            (0.76 + random() * 0.28) * vigor,
           );
         }
       }

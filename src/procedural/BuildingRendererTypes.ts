@@ -4,6 +4,7 @@ import type { BuildingLayout } from "../BuildingLayoutPlanner";
 import type { ApartmentLayout } from "../ApartmentLayoutPlanner";
 import type { Opening2D, Point2D } from "../FloorPlan";
 import type { BuildingSurface } from "./BuildingMaterial";
+import type { SharedValueMap } from "../OwnedValueCache";
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -14,7 +15,7 @@ export interface BuildingRenderOptions {
   /** Render the complete source polygon when its streamed tile owns it. */
   renderWholeBuildingFootprints?: boolean;
   /** Stable terrain-pad heights keyed by source building ID. */
-  sharedBuildingElevations?: ReadonlyMap<string, number>;
+  sharedBuildingElevations?: Pick<SharedValueMap<string, number>, "get">;
   /** Other footprints in the current map batch, used to detect party walls. */
   neighboringBuildingFootprints?: readonly BuildingPolygon[];
 }

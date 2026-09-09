@@ -30,6 +30,7 @@ export type TreeSpecies =
   | "birch"
   | "eucalyptus"
   | "fir"
+  | "kapok"
   | "mangrove"
   | "maple"
   | "oak"
@@ -38,7 +39,7 @@ export type TreeSpecies =
   | "spruce";
 
 export const TREE_SPECIES_LIST: readonly TreeSpecies[] = [
-  "acacia", "beech", "birch", "eucalyptus", "fir", "mangrove",
+  "acacia", "beech", "birch", "eucalyptus", "fir", "kapok", "mangrove",
   "maple", "oak", "palm", "pine", "spruce",
 ];
 
@@ -148,6 +149,7 @@ export const TREE_LOW_LIGHT_BRIGHTNESS: Readonly<Record<TreeSpecies, number>> = 
   birch: 0.82,
   eucalyptus: 0.96,
   fir: 1.28,
+  kapok: 0.94,
   mangrove: 0.98,
   maple: 0.9,
   oak: 0.92,
@@ -246,12 +248,22 @@ export class PalmTree extends ProceduralTree {
   }
 }
 
+export class KapokTree extends ProceduralTree {
+  readonly species = "kapok" as const;
+  readonly sourceHeight = PROCEDURAL_TREE_SOURCE_HEIGHT;
+  readonly captureDiameter = 3.6;
+  create(scene: Scene, options: ProceduralTreeOptions = {}): ProceduralTreeParts {
+    return createKapokTree(scene, options);
+  }
+}
+
 export const TREE_SPECIES: Readonly<Record<TreeSpecies, ProceduralTree>> = {
   acacia: new AcaciaTree(),
   beech: new BeechTree(),
   birch: new BirchTree(),
   eucalyptus: new EucalyptusTree(),
   fir: new FirTree(),
+  kapok: new KapokTree(),
   mangrove: new MangroveTree(),
   maple: new MapleTree(),
   oak: new OakTree(),
@@ -800,7 +812,7 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
     const rachis = curvePath(crownOrigin, end, new Vector3(0, 0.19 + random() * 0.11, 0), 6);
     const frondSpine = new Color3(0.2, 0.36, 0.065);
     addLimbAlongPath(branchBuffers, rachis, 0.022, 0.0035, 5, 0.9, frondSpine, frondSpine);
-    const leafletCount = 13;
+    const leafletCount = 32;
     for (let leaflet = 1; leaflet <= leafletCount; leaflet++) {
       const along = leaflet / (leafletCount + 1);
       const anchor = pointAlongPath(rachis, along);
@@ -813,20 +825,20 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
           direction.x * side + direction.z * sweep,
         ).normalize();
         const middleFullness = Math.pow(Math.sin(Math.PI * along), 0.38);
-        const halfLength = (0.12 + middleFullness * 0.075) * (0.94 + random() * 0.12);
+        const halfLength = (0.14 + middleFullness * 0.09) * (0.94 + random() * 0.12);
         // The palm image is one unusually slender leaflet. Preserve its measured
         // proportions instead of stretching it across the broad generic cards.
         const halfWidth = halfLength * palmLeafAspect;
         addLeaf(
           branchBuffers,
-          anchor.add(lateral.scale(halfLength * 0.22)),
+          anchor,
           lateral,
           halfWidth,
           halfLength,
           random,
           frondColors[(frond + leaflet) % frondColors.length],
           0.86 + random() * 0.17,
-          { upwardBias: 0.06, directionJitter: 0.07, rollCenter: Math.PI / 2, rollSpread: 0.34 },
+          { upwardBias: 0.06, directionJitter: 0.07, rollCenter: Math.PI / 2, rollSpread: 0.34, anchorAtBase: true },
         );
       }
     }
@@ -834,6 +846,265 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
   applyRegionalTreeCharacter(logBuffers, seed);
   applyRegionalTreeCharacter(branchBuffers, seed);
   return createTreeParts(scene, name, "palm", logBuffers, branchBuffers, liveLighting, options.season);
+}
+
+/**
+ * Builds a rainforest emergent: a tall, barely tapering bole on plank
+ * buttresses, a high umbrella crown of large leaves, and lianas hanging from
+ * the limbs. The vines are part of the tree rather than a separate layer, so
+ * they ride into the impostor atlas for free and survive at every distance.
+ * A jungle without hanging growth is just a tall forest.
+ */
+function createKapokTree(scene: Scene, options: ProceduralTreeOptions): ProceduralTreeParts {
+  const {
+    seed = 0x4b41504f,
+    name = "kapokImpostorProceduralSource",
+    liveLighting = false,
+  } = options;
+  const random = createSeededRandom(seed);
+  const logBuffers = emptyGeometryBuffers();
+  const branchBuffers = emptyGeometryBuffers();
+  const baseY = -PROCEDURAL_TREE_SOURCE_HEIGHT / 2;
+  const crownTop = PROCEDURAL_TREE_SOURCE_HEIGHT / 2 - 0.04;
+  const bark = new Color3(0.4, 0.38, 0.3);
+  const barkCut = scaleColor(bark, 0.7);
+  const vineBark = new Color3(0.3, 0.25, 0.16);
+  const foliage = [
+    new Color3(0.12, 0.35, 0.09),
+    new Color3(0.19, 0.45, 0.12),
+    new Color3(0.28, 0.52, 0.15),
+  ];
+  const vineFoliage = [new Color3(0.14, 0.38, 0.11), new Color3(0.22, 0.46, 0.14)];
+  const crownRadius = 1.2;
+
+  // The bole hardly tapers below the crown; its width at the ground is carried
+  // by the buttresses, not by a swelling butt.
+  const trunkHeight = PROCEDURAL_TREE_SOURCE_HEIGHT * 0.68;
+  const trunkSegments = 12;
+  const trunkRadius = 0.15;
+  const trunkRadiusAt = (index: number): number => {
+    const t = index / trunkSegments;
+    return lerp(trunkRadius, 0.07, Math.pow(t, 1.6)) * (1 + Math.pow(1 - t, 5) * 0.3);
+  };
+  const trunkPoints: Vector3[] = [];
+  for (let segment = 0; segment <= trunkSegments; segment++) {
+    const t = segment / trunkSegments;
+    trunkPoints.push(new Vector3(
+      Math.sin(t * 2.6) * 0.03,
+      baseY + trunkHeight * t,
+      Math.sin(t * 1.9 + 0.7) * 0.025,
+    ));
+  }
+  for (let segment = 0; segment < trunkSegments; segment++) {
+    addBranchSegment(
+      logBuffers,
+      trunkPoints[segment],
+      trunkPoints[segment + 1],
+      trunkRadiusAt(segment),
+      trunkRadiusAt(segment + 1),
+      10,
+      segment / trunkSegments,
+      false,
+      bark,
+      barkCut,
+    );
+  }
+
+  // Plank buttresses climb well up the bole before running out along the
+  // ground. Low flares alone would read as any other broadleaf.
+  const buttressCount = 5;
+  for (let buttress = 0; buttress < buttressCount; buttress++) {
+    const angle = buttress * Math.PI * 2 / buttressCount + (random() - 0.5) * 0.6;
+    const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const rise = 0.42 + random() * 0.3;
+    const reach = 0.36 + random() * 0.18;
+    const start = trunkPoints[0].add(direction.scale(trunkRadius * 0.75))
+      .add(new Vector3(0, rise, 0));
+    const end = trunkPoints[0].add(direction.scale(reach)).add(new Vector3(0, 0.01, 0));
+    const plank = curvePath(start, end, direction.scale(reach * 0.12).add(new Vector3(0, -rise * 0.18, 0)), 4);
+    addLimbAlongPath(logBuffers, plank, trunkRadius * 0.6, trunkRadius * 0.14, 6, 0.02, bark, barkCut);
+  }
+  addTrunkKnots(logBuffers, trunkPoints, trunkRadiusAt, [4, 7], bark, barkCut, random);
+
+  // Epiphyte tufts cling to the upper bole where the light reaches.
+  for (let tuft = 0; tuft < 4; tuft++) {
+    const level = 6 + Math.floor(random() * 5);
+    const angle = random() * Math.PI * 2;
+    const outward = new Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const anchor = trunkPoints[level].add(outward.scale(trunkRadiusAt(level) * 0.9));
+    for (let leaf = 0; leaf < 7; leaf++) {
+      addLeaf(
+        branchBuffers,
+        anchor,
+        outward.add(randomUnitVector(random).scale(0.5)).add(Vector3.Up().scale(0.6)),
+        0.028,
+        0.075,
+        random,
+        vineFoliage[leaf % vineFoliage.length],
+        0.8 + random() * 0.24,
+        { upwardBias: 0.5, directionJitter: 0.18, anchorAtBase: true },
+      );
+    }
+  }
+
+  // The crown is an umbrella: a few short leaders, then limbs that run out
+  // almost flat so the canopy sits as a wide plate on top of the bole.
+  const crownBase = trunkPoints[trunkSegments];
+  const forkRadius = trunkRadiusAt(trunkSegments);
+  const leaderCount = 4;
+  const leaderPaths: Vector3[][] = [];
+  for (let leader = 0; leader < leaderCount; leader++) {
+    const angle = leader * Math.PI * 2 / leaderCount + random() * 0.7;
+    const reach = crownRadius * 0.34 * (0.75 + random() * 0.5);
+    const rise = (crownTop - crownBase.y) * 0.62 * (0.8 + random() * 0.3);
+    const tip = crownBase.add(new Vector3(Math.cos(angle) * reach, rise, Math.sin(angle) * reach));
+    const path = curvePath(
+      crownBase,
+      tip,
+      new Vector3(Math.cos(angle) * reach * -0.3, rise * 0.12, Math.sin(angle) * reach * -0.3),
+      4,
+    );
+    addLimbAlongPath(branchBuffers, path, forkRadius * (0.85 - leader * 0.08), 0.024, 8, 0.68, bark, barkCut);
+    leaderPaths.push(path);
+  }
+
+  const tips: Vector3[] = leaderPaths.map((path) => path[path.length - 1]);
+  const lianaAnchors: Vector3[] = [];
+  const limbCount = 14;
+  for (let limb = 0; limb < limbCount; limb++) {
+    const ring = limb / limbCount;
+    const leaderPath = leaderPaths[limb % leaderPaths.length];
+    const start = pointAlongPath(leaderPath, 0.3 + (limb * 0.41 + random() * 0.14) % 0.66);
+    const angle = limb * Math.PI * (3 - Math.sqrt(5)) + random() * 0.3;
+    const horizontal = new Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const startOffset = Math.hypot(start.x, start.z);
+    const length = Math.max(
+      crownRadius * 0.25,
+      crownRadius * (0.8 + ring * 0.2) * (0.74 + random() * 0.24) - startOffset * 0.85,
+    );
+    const vertical = 0.04 + random() * 0.2;
+    const end = start.add(horizontal.scale(length)).add(new Vector3(0, vertical, 0));
+    const limbPath = curvePath(
+      start,
+      end,
+      new Vector3(0, length * 0.16, 0).add(horizontal.scale(length * -0.08)),
+      4,
+    );
+    const limbRadius = lerp(forkRadius * 0.5, 0.022, ring);
+    addLimbAlongPath(branchBuffers, limbPath, limbRadius, 0.011, 6, 0.74, bark, barkCut);
+    tips.push(end);
+    lianaAnchors.push(pointAlongPath(limbPath, 0.35 + random() * 0.45));
+
+    for (const side of [-1, 1]) {
+      const twigAngle = angle + side * (0.45 + random() * 0.35);
+      const twigDirection = new Vector3(Math.cos(twigAngle), 0, Math.sin(twigAngle));
+      const twigStart = pointAlongPath(limbPath, 0.5 + random() * 0.24);
+      const twigLength = length * (0.3 + random() * 0.16);
+      const twigEnd = twigStart.add(twigDirection.scale(twigLength))
+        .add(new Vector3(0, 0.02 + random() * 0.12, 0));
+      const twigPath = curvePath(twigStart, twigEnd, new Vector3(0, twigLength * 0.14, 0), 2);
+      addLimbAlongPath(branchBuffers, twigPath, limbRadius * 0.44, 0.008, 5, 0.82, bark, barkCut);
+      tips.push(twigEnd);
+    }
+  }
+
+  // Large simple leaves, fewer and bigger than a temperate crown's.
+  const cards = foliageCardShape("kapok");
+  const cardBudget = Math.round(1100 * (cards?.density ?? 1));
+  const cardsPerTip = Math.max(4, Math.round(cardBudget / tips.length));
+  for (const tip of tips) {
+    const leafCount = cardsPerTip + Math.floor(random() * 4);
+    for (let leaf = 0; leaf < leafCount; leaf++) {
+      const offset = randomInUnitSphere(random);
+      const center = tip.add(new Vector3(
+        offset.x * crownRadius * 0.22,
+        offset.y * 0.16,
+        offset.z * crownRadius * 0.22,
+      ));
+      center.y = Math.min(crownTop, center.y);
+      const cardWidth = 0.08 * (0.82 + random() * 0.35);
+      const card = shapeFoliageCard(cardWidth, cardWidth * 0.95, cards?.aspect);
+      addLeaf(
+        branchBuffers,
+        center,
+        offset,
+        card.halfWidth,
+        card.halfLength,
+        random,
+        foliage[Math.floor(random() * foliage.length)],
+        0.8 + random() * 0.24,
+      );
+    }
+  }
+
+  // Lianas: most hang from a limb to the ground, bowing outward under their
+  // own weight; a few swag between limbs. Small leaves along each strand keep
+  // them reading as living vines rather than ropes.
+  const groundedLianas = 7;
+  for (let liana = 0; liana < lianaAnchors.length && liana < groundedLianas + 3; liana++) {
+    const start = lianaAnchors[liana];
+    const grounded = liana < groundedLianas;
+    const outward = new Vector3(start.x, 0, start.z);
+    if (outward.lengthSquared() < 1e-4) outward.set(1, 0, 0);
+    outward.normalize();
+    const endRadius = grounded
+      ? 0.3 + random() * 0.45
+      : Math.hypot(start.x, start.z) * (0.7 + random() * 0.3);
+    const endY = grounded ? baseY + 0.015 : baseY + 0.5 + random() * 0.9;
+    const swing = (random() - 0.5) * 0.5;
+    const end = new Vector3(
+      Math.cos(Math.atan2(outward.z, outward.x) + swing) * endRadius,
+      endY,
+      Math.sin(Math.atan2(outward.z, outward.x) + swing) * endRadius,
+    );
+    const bow = outward.scale(0.1 + random() * 0.16).add(new Vector3(0, -0.1, 0));
+    const strand = curvePath(start, end, bow, 8);
+    addLimbAlongPath(branchBuffers, strand, 0.016, 0.009, 4, 0.4, vineBark, scaleColor(vineBark, 0.75));
+    const leafStops = 4 + Math.floor(random() * 4);
+    for (let stop = 0; stop < leafStops; stop++) {
+      const along = 0.12 + (stop + random() * 0.6) / (leafStops + 0.6) * 0.86;
+      const anchor = pointAlongPath(strand, along);
+      for (const side of [-1, 1]) {
+        const lateral = new Vector3(-outward.z * side, -0.25 + random() * 0.3, outward.x * side)
+          .add(randomUnitVector(random).scale(0.3));
+        addLeaf(
+          branchBuffers,
+          anchor,
+          lateral,
+          0.03,
+          0.06,
+          random,
+          vineFoliage[(liana + stop + side) & 1],
+          0.78 + random() * 0.26,
+          { upwardBias: 0.1, directionJitter: 0.15, anchorAtBase: true },
+        );
+      }
+    }
+  }
+  for (let swag = 0; swag < 3 && tips.length > leaderCount + 4; swag++) {
+    const from = tips[leaderCount + Math.floor(random() * (tips.length - leaderCount))];
+    const to = tips[leaderCount + Math.floor(random() * (tips.length - leaderCount))];
+    if (Vector3.DistanceSquared(from, to) < 0.09) continue;
+    const drape = curvePath(from, to, new Vector3(0, -0.45 - random() * 0.35, 0), 7);
+    addLimbAlongPath(branchBuffers, drape, 0.012, 0.012, 4, 0.7, vineBark, scaleColor(vineBark, 0.75));
+    for (let stop = 1; stop < 6; stop++) {
+      addLeaf(
+        branchBuffers,
+        pointAlongPath(drape, stop / 6),
+        randomUnitVector(random),
+        0.028,
+        0.055,
+        random,
+        vineFoliage[stop & 1],
+        0.8 + random() * 0.22,
+        { upwardBias: 0.15, anchorAtBase: true },
+      );
+    }
+  }
+
+  applyRegionalTreeCharacter(logBuffers, seed);
+  applyRegionalTreeCharacter(branchBuffers, seed);
+  return createTreeParts(scene, name, "kapok", logBuffers, branchBuffers, liveLighting, options.season);
 }
 
 function createConiferTree(
@@ -1495,6 +1766,7 @@ function addLeaf(
     directionJitter?: number;
     rollCenter?: number;
     rollSpread?: number;
+    anchorAtBase?: boolean;
   } = {},
 ): void {
   const {
@@ -1502,6 +1774,7 @@ function addLeaf(
     directionJitter = 0.22,
     rollCenter,
     rollSpread = Math.PI * 2,
+    anchorAtBase = false,
   } = orientation;
   const directionalGrowth = growthDirection.lengthSquared() > 0.001
     ? growthDirection.normalize()
@@ -1518,6 +1791,8 @@ function addLeaf(
     : rollCenter + (random() - 0.5) * rollSpread;
   const normal = tangent.scale(Math.cos(roll)).add(bitangent.scale(Math.sin(roll))).normalize();
   const leafRight = Vector3.Cross(normal, leafUp).normalize();
+  // Offset along the final leaf axis so orientation jitter keeps the base attached.
+  if (anchorAtBase) center = center.add(leafUp.scale(halfLength));
 
   const vertexStart = buffers.positions.length / 3;
   const points = [

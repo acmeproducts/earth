@@ -175,7 +175,7 @@ function createDetailTextureData(size: number): Uint8Array {
  * flatten the extremes into plateaus that read as blotches. Higher gain means
  * more contrast.
  */
-function shapedField(
+export function shapedField(
   size: number,
   startFrequency: number,
   octaves: number,
@@ -203,8 +203,15 @@ function shapedField(
   return field;
 }
 
-/** Encodes a tiling height field as an RGBA tangent-space normal map. */
-function encodeNormalMap(
+/**
+ * Encodes a tiling height field as an RGBA tangent-space normal map.
+ *
+ * This is the only way a procedural texture may reach a `bumpTexture` slot:
+ * Babylon decodes whatever it is given as `rgb * 2 - 1`, so a grayscale field
+ * fed in directly yields normals that lean diagonally and flip into the surface
+ * wherever the texel is darker than mid-grey.
+ */
+export function encodeNormalMap(
   heights: Float32Array,
   size: number,
   slopeScale: number,
@@ -229,6 +236,6 @@ function encodeNormalMap(
   return normal;
 }
 
-function toByte(value: number): number {
+export function toByte(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
 }

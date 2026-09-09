@@ -514,7 +514,7 @@ export function createPlantModel(
     positions[index + 2] *= scale;
   }
   plants.setVerticesData(VertexBuffer.PositionKind, positions);
-  plants.refreshBoundingInfo();
+  plants.refreshBoundingInfo({ updatePositionsArray: false });
   setVertexColorModelHeight(plants, renderHeight);
   return plants;
 }

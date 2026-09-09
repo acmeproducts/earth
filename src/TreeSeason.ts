@@ -37,7 +37,7 @@ export function hasWinterGroundCover(
 }
 
 const EVERGREEN_SPECIES = new Set<TreeSpecies>([
-  "acacia", "eucalyptus", "fir", "mangrove", "palm", "pine", "spruce",
+  "acacia", "eucalyptus", "fir", "kapok", "mangrove", "palm", "pine", "spruce",
 ]);
 
 const SUMMER: TreeSeasonAppearance = {

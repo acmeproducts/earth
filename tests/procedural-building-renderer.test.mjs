@@ -42,6 +42,28 @@ function plan(id, properties = {}) {
   return planBuilding({ id: `building/14/${id}/0`, polygon: footprint, properties });
 }
 
+test("repeated building disposal releases unused surface materials", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    // Creating geometry initializes Babylon's one scene-owned default material.
+    const defaultMaterial = scene.defaultMaterial;
+    for (let index = 0; index < 3; index++) {
+      const root = new TransformNode("tile", scene);
+      const mesh = ProceduralBuildingRenderer.createDetailed(
+        scene, plan(123, { render_height: 4.7 }), terrain, options,
+      );
+      ProceduralBuildingRenderer.merge([mesh], "buildings", root);
+      root.dispose(false, true);
+      assert.deepEqual(scene.materials, [defaultMaterial]);
+      assert.equal(scene.multiMaterials.length, 0);
+    }
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
 function meshBounds(mesh) {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
   const xs = [], ys = [], zs = [];
@@ -356,6 +378,34 @@ test("skillion roof metadata renders as a symmetric roof", () => {
   engine.dispose();
 });
 
+test("disabled tile staging never loads interiors at its temporary origin", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const root = new TransformNode("stagedTile", scene);
+    root.setEnabled(false);
+    const detailed = ProceduralBuildingRenderer.createDetailed(
+      scene, plan(123, { render_height: 9.3, levels: 3 }), terrain, options,
+    );
+    const merged = ProceduralBuildingRenderer.merge([detailed], "buildings", root);
+    const camera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+    scene.activeCamera = camera;
+    scene.onAfterRenderObservable.notifyObservers(scene);
+    assert.equal(merged.metadata.loadedInteriorCount, 0);
+    assert.equal(scene.getMeshByName("buildingInteriors"), null);
+    root.position.x = 1000;
+    root.computeWorldMatrix(true);
+    root.setEnabled(true);
+    camera.position.x = 1000;
+    camera.getViewMatrix(true);
+    scene.onAfterRenderObservable.notifyObservers(scene);
+    assert.equal(merged.metadata.loadedInteriorCount, 1);
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
 test("detailed buildings defer interiors until the camera is very close", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
@@ -395,9 +445,13 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   );
   assert.equal(scene.getMeshByName("buildingInteriors"), null);
   assert.ok(merged.material instanceof MultiMaterial);
-  assert.equal(merged.subMeshes.length, 2);
+  assert.equal(merged.subMeshes.length, 3);
   assert.equal(merged.material.subMaterials[0].transparencyMode, Material.MATERIAL_OPAQUE);
   assert.equal(merged.material.subMaterials[1].transparencyMode, Material.MATERIAL_ALPHABLEND);
+  const windowMetal = merged.material.subMaterials[2];
+  assert.equal(windowMetal.transparencyMode, Material.MATERIAL_OPAQUE);
+  assert.equal(windowMetal.metallic, 0.85);
+  assert.equal(windowMetal.roughness, 0.32);
   const shadowCaster = scene.getMeshByName("buildingShadows");
   assert.ok(shadowCaster);
   assert.equal(shadowCaster.geometry, merged.geometry);

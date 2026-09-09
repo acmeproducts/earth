@@ -143,7 +143,7 @@ try {
         if (!plugin) continue;
         plugin.bindForSubMesh = buffer => {
           buffer.updateFloat4('waterState', plugin.profile.periodSeconds * ${[0.25, 0.75, 1.0][frame]}, 1, plugin.metersPerUnit, Math.PI * 2 / plugin.profile.periodSeconds);
-          buffer.updateFloat4('waterShape', plugin.profile.heaveMeters, plugin.profile.crestMeters, plugin.profile.foamStrength, 0);
+          buffer.updateFloat4('waterShape', plugin.profile.heaveMeters, plugin.profile.crestMeters, plugin.profile.foamStrength, plugin.profile.troughMeters);
         };
       }
       scene.render();

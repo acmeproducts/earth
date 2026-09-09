@@ -33,7 +33,7 @@ export class WaterMotionPlugin extends MaterialPluginBase {
       Math.min(1, Math.max(0, frame.wind.strength)), this.metersPerUnit,
       Math.PI * 2 / this.profile.periodSeconds);
     buffer.updateFloat4('waterShape', this.profile.heaveMeters, this.profile.crestMeters,
-      this.profile.foamStrength, 0);
+      this.profile.foamStrength, this.profile.troughMeters);
   }
 
   getCustomCode(type: string, language = ShaderLanguage.GLSL): Record<string, string> | null {
@@ -64,7 +64,9 @@ export class WaterMotionPlugin extends MaterialPluginBase {
           variable('waterBand', `smoothstep(-12.0, -7.0, waterD) * (1.0 - smoothstep(1.6, 3.2, waterD)) * ${shore}.y`),
           variable('waterFade', `1.0 - smoothstep(180.0, 350.0, length(${eye}.xyz - waterWorld.xyz) * ${state}.z)`),
           variable('waterCrest', 'pow(max(0.0, sin(waterPhase - waterD * 1.15)), 3.0) * waterBand * waterFade'),
-          variable('waterLift', `(sin(waterPhase) * ${shape}.x + waterCrest * ${shape}.y) * ${state}.y`),
+          variable('waterCycle', 'sin(waterPhase)'),
+          variable('waterHeave', `waterCycle * mix(${shape}.w, ${shape}.x, step(0.0, waterCycle))`),
+          variable('waterLift', `(waterHeave + waterCrest * ${shape}.y) * ${state}.y`),
           `positionUpdated.y += (waterLift + ${shore}.y * 0.001) / ${state}.z;`,
           `${output}vWaterWave = ${vec(4)}(${shore}.x, waterLift, waterCrest, ${shore}.y * waterFade);`,
           // Texture coordinates are physical metres and identical on ocean,

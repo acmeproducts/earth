@@ -58,6 +58,7 @@ import {
 } from "./Geo";
 import type { SceneGeographicFrame } from "./Geo";
 import { OpenStreetMap } from "./OpenStreetMap";
+import { OwnedValueCache } from "./OwnedValueCache";
 import type { MapTile } from "./OpenStreetMap";
 import { OpenStreetMapBarriers } from "./OpenStreetMapBarriers";
 import { StreetLamps } from "./StreetLamps";
@@ -157,6 +158,8 @@ const FOG_START_FRACTION = 0.6;
 /** Built tiles cool down for this long after leaving the radius before disposal. */
 const TILE_COOLDOWN_MS = 30_000;
 const DETAIL_COOLDOWN_MS = 10_000;
+/** One departing row/column may cool down; older off-window tiles are evicted. */
+const RETAINED_TILE_EDGE_SLACK = 2;
 /** Terrain resolution for tiles beyond the detail rings. */
 const FAR_TILE_SUBDIVISIONS = 32;
 /**
@@ -176,9 +179,9 @@ export class Game {
   private water?: Mesh;
   private readonly tiles = new Map<string, StreamedTile>();
   private readonly activeTileBuilds = new Map<string, number>();
-  private readonly terrainEdgeElevations = new Map<string, number>();
-  private readonly lakeElevations = new Map<string, number>();
-  private readonly buildingElevations = new Map<string, number>();
+  private readonly terrainEdgeElevations = new OwnedValueCache<string, number>();
+  private readonly lakeElevations = new OwnedValueCache<string, number>();
+  private readonly buildingElevations = new OwnedValueCache<string, number>();
   private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
   /** Streaming CPU work yields when it has consumed its frame slice. */
@@ -457,7 +460,8 @@ export class Game {
     const trace = new StreamingTrace(`tile=${key} detail=${wantDetail}`);
     try {
       let record = this.tiles.get(key);
-      if (!record || (wantDetail && !record.nativeTerrain)) {
+      if (!record || (wantDetail && !record.nativeTerrain) ||
+          (!wantDetail && record.nativeTerrain && !record.detailed)) {
         trace.stage("terrain");
         record = await this.buildTileTerrain(id, wantDetail, generation, onProgress, trace);
       }
@@ -511,6 +515,9 @@ export class Game {
     trace?: StreamingTrace,
   ): Promise<StreamedTile | undefined> {
     const key = worldTileKey(id);
+    const sharedElevationOwner = {};
+    let retainSharedElevations = false;
+    try {
     const previous = this.tiles.get(key);
     const area = worldTileArea(id, this.worldSeed);
     const yieldControl = onProgress ? undefined : this.streamingYielder;
@@ -620,7 +627,7 @@ export class Game {
         meshWidth,
         meshDepth,
         metersPerUnit,
-        sharedLakeElevations: this.lakeElevations,
+        sharedLakeElevations: this.lakeElevations.forOwner(sharedElevationOwner),
         smallWaterSurfaceClearanceMeters: LAKE_SURFACE_CLEARANCE_METERS,
         surfaceSources: surfaceLakeSources,
       },
@@ -644,7 +651,7 @@ export class Game {
           meshWidth,
           meshDepth,
           metersPerUnit,
-          sharedBuildingElevations: this.buildingElevations,
+          sharedBuildingElevations: this.buildingElevations.forOwner(sharedElevationOwner),
         },
         yieldControl,
       );
@@ -654,7 +661,10 @@ export class Game {
     // Cache only finalized terrain. Newly attached tiles now adopt lake,
     // building, and road deformation from an already-visible neighbor instead
     // of restoring the pre-lake WorldCover edge that caused tile chasms.
-    stitchTerrainEdges(terrainData, this.terrainEdgeElevations);
+    stitchTerrainEdges(
+      terrainData,
+      this.terrainEdgeElevations.forOwner(sharedElevationOwner),
+    );
 
     const subdivisions = Math.max(
       1,
@@ -748,11 +758,25 @@ export class Game {
       lastNeededMilliseconds: now,
       detailLastNeededMilliseconds: now,
       lodResolved: false,
+      sharedElevationOwner,
+      releaseSharedElevations: () => {
+        this.terrainEdgeElevations.release(sharedElevationOwner);
+        this.lakeElevations.release(sharedElevationOwner);
+        this.buildingElevations.release(sharedElevationOwner);
+      },
     };
+    retainSharedElevations = true;
     this.tiles.set(key, record);
     if (previous) disposeStreamedTile(previous);
     this.playerControls?.ensureAboveGround();
     return record;
+    } finally {
+      if (!retainSharedElevations) {
+        this.terrainEdgeElevations.release(sharedElevationOwner);
+        this.lakeElevations.release(sharedElevationOwner);
+        this.buildingElevations.release(sharedElevationOwner);
+      }
+    }
   }
 
   private async buildTileDetail(
@@ -784,7 +808,9 @@ export class Game {
       showRoofs: this.sceneSettings.value.showRoofs,
       startDisabled,
       planning: record.roadAndBuildingPlan,
-      sharedBuildingElevations: this.buildingElevations,
+      sharedBuildingElevations: this.buildingElevations.forOwner(
+        record.sharedElevationOwner,
+      ),
       terrainSurface: TerrainSurface.fromGroundMesh(
         record.terrain,
         record.meshWidth,
@@ -1573,6 +1599,28 @@ export class Game {
         detailChanged = true;
       }
     }
+    const tilesAcross = this.terrainTileRadius * 2 + 1;
+    const maximumRetainedTiles = tilesAcross * tilesAcross +
+      RETAINED_TILE_EDGE_SLACK * tilesAcross;
+    if (this.tiles.size > maximumRetainedTiles) {
+      const stale = [...this.tiles.values()]
+        .filter((record) => !this.activeTileBuilds.has(record.key))
+        .filter((record) => {
+          const rawDx = record.id.x - center.x;
+          const dx = rawDx > scale / 2
+            ? rawDx - scale
+            : rawDx < -scale / 2 ? rawDx + scale : rawDx;
+          return Math.max(Math.abs(dx), Math.abs(record.id.y - center.y)) >
+            this.terrainTileRadius;
+        })
+        .sort((left, right) => left.lastNeededMilliseconds - right.lastNeededMilliseconds);
+      while (this.tiles.size > maximumRetainedTiles && stale.length > 0) {
+        const record = stale.shift()!;
+        this.tiles.delete(record.key);
+        detailChanged = detailChanged || record.detailed;
+        disposeStreamedTile(record);
+      }
+    }
     if (detailChanged) this.refreshShadowCasters();
   }
 
@@ -2095,7 +2143,12 @@ export class Game {
       this.sceneSettings.value.detailTilesAcross,
       center.level,
     );
-    const work: Array<{ id: WorldTileId; detail: boolean; distanceSquared: number }> = [];
+    const work: Array<{
+      id: WorldTileId;
+      detail: boolean;
+      demotion: boolean;
+      distanceSquared: number;
+    }> = [];
     for (let dy = -this.terrainTileRadius; dy <= this.terrainTileRadius; dy++) {
       const y = center.y + dy;
       if (y < 0 || y >= scale) continue;
@@ -2126,11 +2179,15 @@ export class Game {
           (!record.farTreeField || !record.farBuildings || !record.farRoads) &&
           (!record.detailed || wantsDemotion);
         if (needsTerrain || needsDetail || needsFarLayers) {
-          work.push({ id, detail: wantDetail, distanceSquared: dx * dx + dy * dy });
+          work.push({ id, detail: wantDetail, demotion: wantsDemotion,
+            distanceSquared: dx * dx + dy * dy });
         }
       }
     }
-    work.sort((a, b) => a.distanceSquared - b.distanceSquared);
+    // Release expired detail before allocating another tile's full models.
+    // Distance-only ordering starves demotions while the camera keeps moving.
+    work.sort((a, b) => Number(b.demotion) - Number(a.demotion) ||
+      a.distanceSquared - b.distanceSquared);
     for (const item of work) {
       // Keep the main-thread workload predictable: one tile builds at a time.
       if (this.activeTileBuilds.size > 0) break;
