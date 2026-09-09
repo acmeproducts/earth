@@ -41,7 +41,10 @@ test("undergrowth is restricted to plausible WorldCover classes", () => {
   assert.match(field, /const FERN_SPACING_METERS = 3\.8/);
   assert.match(field, /const FERN_CLUSTER_MIN_COUNT = 3/);
   assert.match(field, /const FERN_CLUSTER_MAX_COUNT = 5/);
-  assert.match(field, /addFern\(x, z, 1\)/);
+  // Cluster vigor only departs from 1 with the local rainforest share.
+  assert.match(field, /const vigor = 1 \+ RAINFOREST_VIGOR_BOOST \* rainforest/);
+  assert.match(field, /addFern\(x, z, vigor\)/);
+  assert.match(field, /rainforestInfluenceAt\(lon, lat\)/);
 });
 
 test("fern patches use the supplied foliage image on curved fronds", () => {

@@ -4,16 +4,18 @@ import {
   Mesh,
   MeshBuilder,
   Quaternion,
+  RawTexture,
   Scene,
   StandardMaterial,
+  Texture,
   TransformNode,
   Vector3,
   VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
-import { NoiseProceduralTexture } from "@babylonjs/core/Materials/Textures/Procedurals/noiseProceduralTexture";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
 import { createSeededRandom } from "./Random";
+import { getRockTextureData } from "./RockTextureData";
 import type { TerrainData } from "./TerrainData";
 import {
   createPlacementGrid,
@@ -35,7 +37,17 @@ export interface RockFieldResult {
   setSnowCovered(snowCovered: boolean): void;
 }
 
-const ROCK_VARIANTS = 3;
+/** Three rounded, weathered shapes followed by two blocky, fractured ones. */
+const ROCK_VARIANTS = 5;
+const ROUNDED_VARIANTS = 3;
+const ANGULAR_CHANCE = 0.35;
+/**
+ * Most stones are hand- to knee-sized, but a landscape with no boulder above
+ * two metres reads as gravel. The rare tail sits well outside the ordinary
+ * size curve so it registers as an event rather than a slightly larger stone.
+ */
+const BOULDER_CHANCE = 0.025;
+const SHORE_BOULDER_CHANCE = 0.03;
 const SHORE_PROBE_METERS = 7;
 /**
  * Shore boulders come in formations with clear stretches between them, on the
@@ -79,6 +91,8 @@ const ROCK_COLORS: ReadonlyArray<readonly [number, number, number]> = [
   [0.41, 0.41, 0.4],
   [0.36, 0.38, 0.38],
   [0.44, 0.43, 0.41],
+  [0.38, 0.37, 0.36],
+  [0.42, 0.4, 0.37],
 ];
 const MOSS_COLOR: readonly [number, number, number] = [0.25, 0.32, 0.13];
 
@@ -218,8 +232,12 @@ export async function createRockField(
         );
         if (random() > occupancy) continue;
 
-        // Mostly hand-sized stones, with a long tail into isolated boulders.
-        addRock(placement, x, z, 0.22 + Math.pow(random(), 2.1) * 1.65);
+        // Mostly hand-sized stones, with a long tail into isolated boulders and
+        // the rare car-sized block.
+        const radiusMeters = random() < BOULDER_CHANCE
+          ? 2.2 + Math.pow(random(), 1.6) * 2.8
+          : 0.22 + Math.pow(random(), 2.1) * 1.65;
+        addRock(placement, x, z, radiusMeters);
       }
       await yieldControl?.();
     }
@@ -334,7 +352,9 @@ function addShoreFormation(
     const z = anchorZ + (
       shore.tangentZ * alongMeters - shore.waterZ * acrossMeters
     ) / metersPerUnit;
-    const radiusMeters = 0.18 + Math.pow(random(), 1.7) * 1.15;
+    const radiusMeters = random() < SHORE_BOULDER_CHANCE
+      ? 1.6 + Math.pow(random(), 1.6) * 1.9
+      : 0.18 + Math.pow(random(), 1.7) * 1.15;
     addRock(context, x, z, radiusMeters, 0.12);
   }
 }
@@ -390,7 +410,11 @@ function addRock(
   );
   const mossChance = Math.min(0.9, (MOSS_CHANCE[cover] ?? 0.12) + mossBonus);
   const mossy = random() < mossChance;
-  const variant = Math.min(ROCK_VARIANTS - 1, Math.floor(random() * ROCK_VARIANTS));
+  const variant = random() < ANGULAR_CHANCE
+    ? ROUNDED_VARIANTS +
+      Math.min(ROCK_VARIANTS - ROUNDED_VARIANTS - 1,
+        Math.floor(random() * (ROCK_VARIANTS - ROUNDED_VARIANTS)))
+    : Math.min(ROUNDED_VARIANTS - 1, Math.floor(random() * ROUNDED_VARIANTS));
   buckets[variant * 2 + (mossy ? 1 : 0)].push(Matrix.Compose(
     new Vector3(scaleX, scaleY, scaleZ),
     rotation,
@@ -406,30 +430,65 @@ function createRockMaterial(scene: Scene): StandardMaterial {
   material.specularColor = new Color3(0.055, 0.06, 0.05);
   material.specularPower = 18;
 
-  // One shared procedural texture gives every thin-instance bucket the same
-  // scale of stone grain without adding image assets or per-rock materials.
-  const grain = new NoiseProceduralTexture("rockGrain", 256, scene);
-  grain.octaves = 6;
-  grain.persistence = 0.64;
-  grain.brightness = 0.78;
-  grain.animationSpeedFactor = 0;
-  grain.uScale = 5.4;
-  grain.vScale = 5.4;
-  material.bumpTexture = grain;
-  material.bumpTexture.level = 0.36;
-  material.detailMap.texture = grain;
-  material.detailMap.diffuseBlendLevel = 0.24;
-  material.detailMap.bumpLevel = 0.3;
+  // Both slots decode their texels as tangent-space normals, so they must be
+  // fed encoded normal maps rather than raw noise. The pixel data is generated
+  // once per page; the GPU textures belong to this material because each tile
+  // disposes its rock field together with its textures.
+  const textures = getRockTextureData();
+  const relief = createRockTexture(textures.normal, textures.size, "rockRelief", 5.4, scene);
+  relief.level = 0.7;
+  material.bumpTexture = relief;
+  material.detailMap.texture = createRockTexture(
+    textures.detail,
+    textures.size,
+    "rockDetail",
+    13,
+    scene,
+  );
+  material.detailMap.diffuseBlendLevel = 0.3;
+  material.detailMap.bumpLevel = 0.45;
   material.detailMap.isEnabled = true;
   material.freeze();
   return material;
 }
 
-/** Builds an asymmetrically deformed, smoothly shaded stone with optional top moss. */
-function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
+function createRockTexture(
+  data: Uint8Array,
+  size: number,
+  name: string,
+  repeats: number,
+  scene: Scene,
+): Texture {
+  const texture = RawTexture.CreateRGBATexture(
+    data,
+    size,
+    size,
+    scene,
+    true,
+    false,
+    Texture.TRILINEAR_SAMPLINGMODE,
+  );
+  texture.name = name;
+  // Raw channel values; nothing here is a color to be linearized.
+  texture.gammaSpace = false;
+  texture.wrapU = Texture.WRAP_ADDRESSMODE;
+  texture.wrapV = Texture.WRAP_ADDRESSMODE;
+  texture.uScale = repeats;
+  texture.vScale = repeats;
+  return texture;
+}
+
+/**
+ * Builds an asymmetrically deformed stone with optional top moss. Rounded
+ * variants are smoothly shaded; angular variants are clipped against a handful
+ * of fracture planes and shaded per face so the resulting edges stay hard.
+ */
+export function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
+  const angular = variant >= ROUNDED_VARIANTS;
   const rock = MeshBuilder.CreateIcoSphere(
     `rock-${variant}-${mossy ? "mossy" : "bare"}`,
-    { radius: 1, subdivisions: 2, flat: false },
+    // Facets need enough triangles to lie wholly on one fracture plane.
+    { radius: 1, subdivisions: angular ? 4 : 2, flat: angular },
     scene,
   );
   const positions = rock.getVerticesData(VertexBuffer.PositionKind)!;
@@ -439,18 +498,27 @@ function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
   const stretchZ = 0.88 + random() * 0.22;
   const offsetX = (random() - 0.5) * 0.18;
   const offsetZ = (random() - 0.5) * 0.18;
+  // A blocky stone keeps its facets flat, so it takes only a whisper of the
+  // organic warp that gives the rounded ones their lumpiness.
+  const warpScale = angular ? 0.35 : 1;
   for (let index = 0; index < positions.length; index += 3) {
     const x = positions[index];
     const y = positions[index + 1];
     const z = positions[index + 2];
-    const angularWarp = 1 + 0.1 * Math.sin(x * 7.1 + z * 4.7 + variant * 2.3) +
-      0.055 * Math.sin(y * 9.3 - x * 3.8);
+    const angularWarp = 1 + warpScale * (
+      0.1 * Math.sin(x * 7.1 + z * 4.7 + variant * 2.3) +
+      0.055 * Math.sin(y * 9.3 - x * 3.8)
+    );
     positions[index] = (x * stretchX + offsetX * (1 - y * y)) * angularWarp;
-    positions[index + 1] = y * (0.9 + 0.08 * Math.sin(x * 5.4 + z * 6.2));
+    positions[index + 1] = y * (0.9 + 0.08 * warpScale * Math.sin(x * 5.4 + z * 6.2));
     positions[index + 2] = (z * stretchZ + offsetZ * (1 - y * y)) * angularWarp;
   }
+  const facets = angular ? clipToFracturePlanes(positions, random) : [];
   const normals = new Float32Array(positions.length);
   VertexData.ComputeNormals(positions, indices, normals);
+  // Babylon's icosphere duplicates vertices per face whatever `flat` says, so
+  // the recomputed normals are faceted until coincident vertices are averaged.
+  smoothNormalsOffFacets(positions, indices, normals, facets);
   const colors = new Float32Array((positions.length / 3) * 4);
   const stone = ROCK_COLORS[variant];
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
@@ -470,11 +538,112 @@ function createRockMesh(scene: Scene, variant: number, mossy: boolean): Mesh {
     colors[vertex * 4 + 2] = Math.max(0, color[2] * shade + mineralTint * 0.78);
     colors[vertex * 4 + 3] = 1;
   }
-  rock.updateVerticesData(VertexBuffer.PositionKind, positions);
-  rock.updateVerticesData(VertexBuffer.NormalKind, normals);
+  // The builder's buffers are not updatable, so an in-place update would be
+  // silently ignored and the stone would keep the undeformed sphere's normals.
+  // Replacing the buffers uploads the deformed geometry and its real normals.
+  rock.setVerticesData(VertexBuffer.PositionKind, positions);
+  rock.setVerticesData(VertexBuffer.NormalKind, normals);
   rock.setVerticesData(VertexBuffer.ColorKind, colors);
   rock.useVertexColors = true;
   rock.hasVertexAlpha = false;
   rock.refreshBoundingInfo({ updatePositionsArray: false });
   return rock;
+}
+
+/**
+ * Flattens the stone against several random half-spaces, the way a block
+ * fractures along joints. Every vertex outside a plane is projected onto it,
+ * so each plane leaves one flat facet bounded by hard creases. Duplicated
+ * flat-shaded vertices share positions and therefore move identically, which
+ * keeps the surface watertight. Returns the planes used.
+ */
+function clipToFracturePlanes(
+  positions: Float32Array | number[],
+  random: () => number,
+): FracturePlane[] {
+  const planes: FracturePlane[] = [];
+  const planeCount = 5 + Math.floor(random() * 3);
+  for (let plane = 0; plane < planeCount; plane++) {
+    // Uniform direction on the sphere, biased slightly away from the very top
+    // so most stones still present a broad, sittable upper face.
+    const azimuth = random() * Math.PI * 2;
+    const elevation = Math.asin(random() * 2 - 1) * 0.85;
+    const normalX = Math.cos(elevation) * Math.cos(azimuth);
+    const normalY = Math.sin(elevation);
+    const normalZ = Math.cos(elevation) * Math.sin(azimuth);
+    const distance = 0.55 + random() * 0.3;
+    planes.push({ normalX, normalY, normalZ, distance });
+    for (let index = 0; index < positions.length; index += 3) {
+      const excess = positions[index] * normalX +
+        positions[index + 1] * normalY +
+        positions[index + 2] * normalZ - distance;
+      if (excess <= 0) continue;
+      positions[index] -= normalX * excess;
+      positions[index + 1] -= normalY * excess;
+      positions[index + 2] -= normalZ * excess;
+    }
+  }
+  return planes;
+}
+
+interface FracturePlane {
+  normalX: number;
+  normalY: number;
+  normalZ: number;
+  distance: number;
+}
+
+/** How far off a fracture plane a projected vertex may drift and still count as on it. */
+const FACET_TOLERANCE = 1e-4;
+
+/**
+ * Per-face vertices give every triangle its own normal, which turns the
+ * rounded body of a stone into a low-poly gem. Triangles lying wholly on one
+ * fracture plane keep their face normal so the crease stays hard; every other
+ * vertex takes the average normal of all coincident vertices, restoring the
+ * smooth curvature between facets. With no planes this is plain smoothing.
+ */
+function smoothNormalsOffFacets(
+  positions: Float32Array | number[],
+  indices: Int32Array | Uint32Array | Uint16Array | number[],
+  normals: Float32Array,
+  planes: FracturePlane[],
+): void {
+  const vertexCount = positions.length / 3;
+  const sums = new Map<string, [number, number, number]>();
+  const keyOf = (vertex: number): string =>
+    `${positions[vertex * 3].toFixed(5)},${positions[vertex * 3 + 1].toFixed(5)},${
+      positions[vertex * 3 + 2].toFixed(5)}`;
+  const keys: string[] = [];
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const key = keyOf(vertex);
+    keys.push(key);
+    const sum = sums.get(key) ?? [0, 0, 0];
+    sum[0] += normals[vertex * 3];
+    sum[1] += normals[vertex * 3 + 1];
+    sum[2] += normals[vertex * 3 + 2];
+    sums.set(key, sum);
+  }
+  const liesOn = (vertex: number, plane: FracturePlane): boolean =>
+    Math.abs(
+      positions[vertex * 3] * plane.normalX +
+      positions[vertex * 3 + 1] * plane.normalY +
+      positions[vertex * 3 + 2] * plane.normalZ - plane.distance,
+    ) < FACET_TOLERANCE;
+  for (let face = 0; face < indices.length; face += 3) {
+    const a = indices[face];
+    const b = indices[face + 1];
+    const c = indices[face + 2];
+    const onOneFacet = planes.some(
+      (plane) => liesOn(a, plane) && liesOn(b, plane) && liesOn(c, plane),
+    );
+    if (onOneFacet) continue;
+    for (const vertex of [a, b, c]) {
+      const [x, y, z] = sums.get(keys[vertex])!;
+      const length = Math.hypot(x, y, z) || 1;
+      normals[vertex * 3] = x / length;
+      normals[vertex * 3 + 1] = y / length;
+      normals[vertex * 3 + 2] = z / length;
+    }
+  }
 }

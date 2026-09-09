@@ -41,6 +41,7 @@ export type TreeBarkStyle =
   | "birch"
   | "eucalyptus"
   | "fir"
+  | "kapok"
   | "mangrove"
   | "maple"
   | "oak"
@@ -75,6 +76,7 @@ const BARK_SEEDS: Record<TreeBarkStyle, number> = {
   birch: 0x42495243,
   eucalyptus: 0x45554341,
   fir: 0x46495221,
+  kapok: 0x4b41504f,
   mangrove: 0x4d414e47,
   maple: 0x4d41504c,
   oak: 0x4f414b21,
@@ -89,6 +91,7 @@ const BARK_BASE: Record<TreeBarkStyle, readonly [number, number, number]> = {
   birch: [229, 226, 216],
   eucalyptus: [174, 158, 128],
   fir: [151, 143, 128],
+  kapok: [164, 160, 142],
   mangrove: [139, 124, 99],
   maple: [160, 148, 127],
   oak: [151, 133, 105],
@@ -325,6 +328,18 @@ export function getTreeBarkTexture(scene: Scene, species: TreeBarkStyle): Dynami
         4 + random() * 8, "rgba(205,188,154,0.25)");
       strokeVertical(x - 3, random() * size, 30 + random() * 120, 3 + random() * 8,
         1 + random() * 2, "rgba(62,53,42,0.44)");
+    }
+  } else if (species === "kapok") {
+    // A smooth pale bole in constant damp: broad moss and lichen patches over
+    // the grey, with the small dark scars of shed thorns scattered between.
+    for (let patch = 0; patch < 70; patch++) {
+      barkChip(random() * size, random() * size, 22 + random() * 64, 14 + random() * 44,
+        random() < 0.62 ? "rgba(92,122,70,0.24)" : "rgba(176,182,152,0.22)",
+        "rgba(84,108,66,0.1)");
+    }
+    for (let scar = 0; scar < 80; scar++) {
+      strokeHorizontal(random() * size, random() * size, 3 + random() * 7,
+        (random() - 0.5) * 2, 1.5 + random() * 2, "rgba(58,50,40,0.42)");
     }
   } else if (species === "mangrove") {
     // Wet, rope-like ridges with pale horizontal lenticels.

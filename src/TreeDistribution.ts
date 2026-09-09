@@ -48,7 +48,7 @@ const BIOME_ORDER: readonly TreeBiome[] = [
 ];
 
 const SPECIES_ORDER: readonly WorldTreeSpecies[] = [
-  "acacia", "beech", "birch", "eucalyptus", "fir", "mangrove",
+  "acacia", "beech", "birch", "eucalyptus", "fir", "kapok", "mangrove",
   "maple", "oak", "palm", "pine", "spruce",
 ];
 
@@ -58,6 +58,7 @@ const ARCHETYPE: Readonly<Record<WorldTreeSpecies, TreeSpecies>> = {
   birch: "birch",
   eucalyptus: "eucalyptus",
   fir: "fir",
+  kapok: "kapok",
   mangrove: "mangrove",
   maple: "maple",
   oak: "oak",
@@ -67,8 +68,10 @@ const ARCHETYPE: Readonly<Record<WorldTreeSpecies, TreeSpecies>> = {
 };
 
 const BIOME_TREES: Readonly<Record<TreeBiome, Weights>> = {
-  "tropical-rainforest": { palm: 0.28, oak: 0.22, mangrove: 0.08, acacia: 0.12, eucalyptus: 0.1, beech: 0.2 },
-  "tropical-seasonal": { acacia: 0.34, palm: 0.2, oak: 0.16, eucalyptus: 0.3 },
+  // Kapok is the liana-hung emergent; the mid-latitude beech and eucalyptus
+  // silhouettes it replaced were what kept rainforest reading as a park.
+  "tropical-rainforest": { kapok: 0.42, palm: 0.26, oak: 0.16, mangrove: 0.08, acacia: 0.08 },
+  "tropical-seasonal": { acacia: 0.3, palm: 0.2, eucalyptus: 0.22, oak: 0.14, kapok: 0.14 },
   desert: { acacia: 0.58, palm: 0.3, pine: 0.12 },
   mediterranean: { oak: 0.4, pine: 0.38, eucalyptus: 0.12, acacia: 0.1 },
   "temperate-forest": { oak: 0.29, pine: 0.2, maple: 0.16, beech: 0.14, birch: 0.12, fir: 0.09 },
@@ -100,6 +103,15 @@ export function treeDistributionAt(longitude: number, latitude: number): TreeDis
     treeCoverPotential: coverPotential(biomeWeights, lon, latitude),
     trees: normalize(weights),
   };
+}
+
+/**
+ * Smooth 0..1 share of the rainforest biome at a location. Undergrowth layers
+ * use it to thicken and grow beneath a closed tropical canopy.
+ */
+export function rainforestInfluenceAt(longitude: number, latitude: number): number {
+  assertCoordinates(longitude, latitude);
+  return biomeInfluencesAt(wrapLongitude(longitude), latitude)["tropical-rainforest"];
 }
 
 /** Selects a species from a distribution using a caller-owned deterministic random value. */
