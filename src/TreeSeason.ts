@@ -11,6 +11,11 @@ export interface TreeSeasonAppearance {
   leafCoverage: number;
   /** Multiplier baked into each retained foliage vertex color. */
   foliageTint: readonly [number, number, number];
+  /** Green, gold and mature autumn tints, with a tree-specific balance. */
+  autumnPalette?: {
+    tints: readonly (readonly [number, number, number])[];
+    maturity: number;
+  };
 }
 
 /**
@@ -51,6 +56,7 @@ export function treeSeasonAt(
   date: Date | undefined,
   latitude: number,
   species: TreeSpecies,
+  autumnVariant = 1,
 ): TreeSeasonAppearance {
   if (!date || !Number.isFinite(date.getTime())) return SUMMER;
 
@@ -64,16 +70,41 @@ export function treeSeasonAt(
 
   const climateStrength = Math.abs(latitude) < 35 ? 0.55 : 1;
   const seasonal = deciduousAppearance(season, species);
+  const maturity = Math.max(0, Math.min(2, Math.floor(autumnVariant)));
+  const tintForClimate = (tint: readonly [number, number, number]): [number, number, number] => [
+    lerp(1, tint[0], climateStrength),
+    lerp(1, tint[1], climateStrength),
+    lerp(1, tint[2], climateStrength),
+  ];
   return {
-    key: `${climateStrength < 1 ? "mild-" : ""}${season}`,
+    key: `${climateStrength < 1 ? "mild-" : ""}${season}${season === "autumn" ? `-${maturity}` : ""}`,
     season,
-    leafCoverage: lerp(1, seasonal.leafCoverage, climateStrength),
+    leafCoverage: lerp(1, seasonal.leafCoverage + (season === "autumn" ? (1 - maturity) * 0.1 : 0), climateStrength),
+    ...(season === "autumn" ? {
+      autumnPalette: {
+        maturity,
+        tints: [
+          tintForClimate([1.05, 1, 0.75]),
+          tintForClimate([1.65, 1.12, 0.22]),
+          tintForClimate(species === "birch" ? [1.72, 0.94, 0.16] : seasonal.foliageTint),
+        ],
+      },
+    } : {}),
     foliageTint: [
       lerp(1, seasonal.foliageTint[0], climateStrength),
       lerp(1, seasonal.foliageTint[1], climateStrength),
       lerp(1, seasonal.foliageTint[2], climateStrength),
     ],
   };
+}
+
+/** One color per whole leaf card, shared by the model and atlas bake. */
+export function autumnLeafTint(season: TreeSeasonAppearance, sample: number): readonly [number, number, number] {
+  const palette = season.autumnPalette;
+  if (!palette) return season.foliageTint;
+  const greenShare = [0.48, 0.18, 0.04][palette.maturity];
+  const goldEnd = [0.9, 0.72, 0.38][palette.maturity];
+  return palette.tints[sample < greenShare ? 0 : sample < goldEnd ? 1 : 2];
 }
 
 function meteorologicalSeason(month: number, southernHemisphere: boolean): TreeSeason {

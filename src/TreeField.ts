@@ -36,7 +36,7 @@ import {
   VegetationFieldResult,
 } from "./VegetationField";
 import { LandCoverClass } from "./WorldCover";
-import { createSeededRandom } from "./Random";
+import { cellRandom, createSeededRandom } from "./Random";
 import {
   TREE_LOW_LIGHT_BRIGHTNESS,
   TREE_SPECIES,
@@ -855,7 +855,12 @@ export async function createTreeField(
             ),
           );
           matrices.push(matrix);
-          const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species);
+          // Three reusable autumn crowns, selected by world position without
+          // consuming placement randomness or allocating an atlas per tree.
+          const autumnVariant = Math.floor(cellRandom(
+            modelVariantSeed, Math.floor(ground.x), Math.floor(ground.y), 0x46414c4c,
+          ) * 3);
+          const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species, autumnVariant);
           const variant: TreeImpostorVariant = {
             ...tileRegion,
             key: `${tileRegion.key}/local/${tileLocalVariant}/season/${season.key}`,

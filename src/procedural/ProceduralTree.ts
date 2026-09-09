@@ -5,7 +5,7 @@ import {
 } from "./ProceduralCaptureMaterial";
 import { lerp } from "../MathUtils";
 import { createSeededRandom, hashString, unitFromSeed } from "../Random";
-import type { TreeSeasonAppearance } from "../TreeSeason";
+import { autumnLeafTint, type TreeSeasonAppearance } from "../TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 3.2;
@@ -1178,13 +1178,14 @@ function applySeasonalFoliage(
     // Geometry order is deterministic, so this keeps the same scattered leaves
     // in models and captures without consuming or perturbing the tree RNG.
     const retained = unitFromSeed(vertex ^ hashString(season.key)) < season.leafCoverage;
+    const tint = autumnLeafTint(season, unitFromSeed(vertex ^ hashString(season.key) ^ 0x4c454146));
     for (let corner = 0; corner < 4; corner++) {
       const index = vertex + corner;
       if (!retained) droppedVertices.add(index);
       const color = index * 4;
-      buffers.colors[color] = Math.min(1, buffers.colors[color] * season.foliageTint[0]);
-      buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * season.foliageTint[1]);
-      buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * season.foliageTint[2]);
+      buffers.colors[color] = Math.min(1, buffers.colors[color] * tint[0]);
+      buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * tint[1]);
+      buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * tint[2]);
     }
     vertex += 4;
   }
