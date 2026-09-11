@@ -34,13 +34,21 @@ export interface TerrainReliefBand {
   ridged: boolean;
 }
 
+/**
+ * Amplitudes are set so the relief still reads through a knee-high grass
+ * field: at walking height the ground is seen almost edge-on, so a band only
+ * registers once its slopes reach several degrees and its crests break the
+ * grass line.
+ */
 export const TERRAIN_RELIEF_BANDS: readonly TerrainReliefBand[] = [
-  // Hummocks and hollows the DEM is too coarse to carry.
-  { meters: 110, amplitudeMeters: 0.8, slopeGain: 0, ridged: false },
+  // Swells and hollows the DEM is too coarse to carry.
+  { meters: 110, amplitudeMeters: 1.5, slopeGain: 0, ridged: false },
   // Ledges, terracettes and broken ground; strongest on slopes.
-  { meters: 22, amplitudeMeters: 0.35, slopeGain: 1.5, ridged: true },
-  // Tussocks and root mounds; only native tiles have vertices for it.
-  { meters: 6.5, amplitudeMeters: 0.1, slopeGain: 0.5, ridged: false },
+  { meters: 22, amplitudeMeters: 0.7, slopeGain: 1.5, ridged: true },
+  // Hummocks and root mounds; only native tiles have vertices for these.
+  { meters: 6.5, amplitudeMeters: 0.35, slopeGain: 0.5, ridged: false },
+  // Tussocks and footfalls, at the limit of what the doubled raster resolves.
+  { meters: 4.5, amplitudeMeters: 0.2, slopeGain: 0.5, ridged: false },
 ];
 
 /** Bends the sample coordinates so the relief flows instead of reading as noise. */
@@ -70,7 +78,7 @@ const RELIEF_STRENGTH: Readonly<Record<number, number>> = {
   [LandCoverClass.BuiltUp]: 0.3,
   [LandCoverClass.Cropland]: 0.45,
   [LandCoverClass.SnowAndIce]: 0.55,
-  [LandCoverClass.Grassland]: 0.7,
+  [LandCoverClass.Grassland]: 0.85,
   [LandCoverClass.Shrubland]: 0.9,
   [LandCoverClass.MossAndLichen]: 0.9,
   [LandCoverClass.TreeCover]: 1,
