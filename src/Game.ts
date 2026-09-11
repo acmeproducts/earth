@@ -20,6 +20,7 @@ import type { TerrainData } from "./TerrainData";
 import { loadAntialiasing, saveAntialiasing } from "./Antialiasing";
 import type { AntialiasingMode } from "./Antialiasing";
 import { TerrainElevationSource } from "./TerrainElevationSource";
+import { applyTerrainDetail, upsampleTerrain } from "./TerrainDetail";
 import { stitchTerrainEdges } from "./TerrainStitching";
 import { createWaterPlane, disposeWaterPlane } from "./Water";
 import {
@@ -30,9 +31,15 @@ import {
 import {
   conformTerrainToLakePolygons,
   LAKE_TERRAIN_CONTEXT_METERS,
+  measureLakeSupport,
 } from "./TerrainLakePolygons";
 import type { TerrainLakePolygon } from "./TerrainLakePolygons";
 import { createTreeField } from "./TreeField";
+import {
+  resolveTreeTrunkCollisions,
+  type TreeTrunk,
+  type WalkerBody,
+} from "./TreeTrunkCollision";
 import { createGrassField, setGrassFieldDetailDistance } from "./GrassField";
 import { createBushField } from "./BushField";
 import { createSaplingField } from "./SaplingField";
@@ -163,6 +170,11 @@ const RETAINED_TILE_EDGE_SLACK = 2;
 /** Terrain resolution for tiles beyond the detail rings. */
 const FAR_TILE_SUBDIVISIONS = 32;
 /**
+ * Native tiles double the provider raster so procedural relief has vertices to
+ * live on: one vertex roughly every 1.2 to 2.4 m instead of 2.5 to 5 m.
+ */
+const NATIVE_TERRAIN_UPSAMPLE_FACTOR = 2;
+/**
  * Distant tree layers use wider spacing with raised occupancy, matching the
  * detail rings' trees per square meter at a quarter of the instance count.
  */
@@ -170,6 +182,8 @@ const FAR_TREE_SPACING_METERS = 5;
 const FAR_TREE_OCCUPANCY = 1;
 const FAR_TREE_EDGE_OCCUPANCY = 0.24;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
+/** No stem is wider than this, so tiles farther away cannot touch the walker. */
+const TREE_TRUNK_REACH_METERS = 2;
 export type InitializationProgress = (step: string, progress: number) => void;
 
 export class Game {
@@ -181,6 +195,8 @@ export class Game {
   private readonly activeTileBuilds = new Map<string, number>();
   private readonly terrainEdgeElevations = new OwnedValueCache<string, number>();
   private readonly lakeElevations = new OwnedValueCache<string, number>();
+  /** `?lake-debug` logs where rendered ground fails to carry a mapped lake outline. */
+  private readonly lakeDebug: boolean;
   private readonly buildingElevations = new OwnedValueCache<string, number>();
   private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
@@ -230,6 +246,7 @@ export class Game {
     this.canvas = canvas;
     this.engine = engine;
     const query = new URLSearchParams(window.location.search);
+    this.lakeDebug = query.has("lake-debug");
     const forceReverseDepth = ["1", "on", "true", "force"].includes(
       query.get("reverse-depth")?.toLowerCase() ?? "",
     );
@@ -344,6 +361,7 @@ export class Game {
         this.getGroundEyeHeight(x, z, referenceEyeHeight)
       ),
       isScenePositionLoaded: (x, z) => this.tileAtScenePosition(x, z) !== undefined,
+      resolveTreeTrunkCollisions: (body) => this.resolveTreeTrunkCollisions(body),
       isMenuOpen: () => this.sceneControls?.isOpen ?? false,
       onPointerLockExit: () => {
         if (!this.sceneControls?.isOpen) this.sceneControls?.setMenuOpen(true);
@@ -522,8 +540,19 @@ export class Game {
     const area = worldTileArea(id, this.worldSeed);
     const yieldControl = onProgress ? undefined : this.streamingYielder;
     trace?.stage("elevation fetch/resample");
-    const terrainData = await TerrainElevationSource.fetchWorldArea(area, yieldControl);
+    const sourceTerrain = await TerrainElevationSource.fetchWorldArea(area, yieldControl);
     if (generation !== this.streamingGeneration) return undefined;
+    // Native tiles carry relief finer than the provider raster, so they need
+    // the vertices to hold it. Far tiles only ever render a coarse subset.
+    const terrainData = native
+      ? upsampleTerrain(sourceTerrain, NATIVE_TERRAIN_UPSAMPLE_FACTOR)
+      : sourceTerrain;
+    const subdivisions = Math.max(
+      1,
+      native
+        ? terrainData.width - 1
+        : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
+    );
     await reportInitializationProgress(onProgress, "Loading land cover", 24);
     trace?.stage("land cover fetch");
     const landCover = previous?.landCover ??
@@ -531,6 +560,20 @@ export class Game {
         console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
         return undefined;
       });
+    if (generation !== this.streamingGeneration) return undefined;
+    trace?.stage("procedural relief");
+    await applyTerrainDetail(
+      terrainData,
+      {
+        meshVertexSpacingMeters: Math.max(
+          terrainData.groundWidthMeters,
+          terrainData.groundHeightMeters,
+        ) / subdivisions,
+        landCover,
+        worldSeed: this.worldSeed,
+      },
+      yieldControl,
+    );
     if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("land cover terrain shaping");
     const preCarvingElevations = terrainData.elevations.slice();
@@ -630,10 +673,16 @@ export class Game {
         sharedLakeElevations: this.lakeElevations.forOwner(sharedElevationOwner),
         smallWaterSurfaceClearanceMeters: LAKE_SURFACE_CLEARANCE_METERS,
         surfaceSources: surfaceLakeSources,
+        // Far tiles render this terrain with a coarser vertex grid; native
+        // tile edges are linearized to that same grid when stitching meshes.
+        renderedVertexSpacing: Math.max(meshWidth, meshDepth) /
+          Math.max(1, Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1)),
       },
       yieldControl,
     );
     if (generation !== this.streamingGeneration) return undefined;
+    const lakeSupportOptions = { meshWidth, meshDepth, metersPerUnit };
+    this.reportLakeSupport("lakes", key, native, terrainData, lakePolygons, lakeSupportOptions);
     if (native) {
       await reportInitializationProgress(onProgress, "Planning roads and building sites", 34);
     }
@@ -656,6 +705,7 @@ export class Game {
         yieldControl,
       );
       if (generation !== this.streamingGeneration) return undefined;
+      this.reportLakeSupport("plan", key, native, terrainData, lakePolygons, lakeSupportOptions);
     }
 
     // Cache only finalized terrain. Newly attached tiles now adopt lake,
@@ -665,13 +715,8 @@ export class Game {
       terrainData,
       this.terrainEdgeElevations.forOwner(sharedElevationOwner),
     );
+    this.reportLakeSupport("stitch", key, native, terrainData, lakePolygons, lakeSupportOptions);
 
-    const subdivisions = Math.max(
-      1,
-      native
-        ? terrainData.width - 1
-        : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
-    );
     await reportInitializationProgress(onProgress, "Building terrain mesh", 40);
     trace?.stage("terrain mesh and textures");
     const terrain = await this.createTerrainMesh(`terrain ${key}`, terrainData, {
@@ -776,6 +821,40 @@ export class Game {
         this.lakeElevations.release(sharedElevationOwner);
         this.buildingElevations.release(sharedElevationOwner);
       }
+    }
+  }
+
+  /** Logs lake outlines the rendered ground (native grid and far mesh) fails to carry. */
+  private reportLakeSupport(
+    stage: string,
+    key: string,
+    native: boolean,
+    terrainData: TerrainData,
+    polygons: readonly TerrainLakePolygon[],
+    options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+  ): void {
+    if (!this.lakeDebug || polygons.length === 0) return;
+    const fine = measureLakeSupport(terrainData, polygons, options);
+    const far = measureLakeSupport(terrainData, polygons, {
+      ...options,
+      meshSubdivisions: Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
+    });
+    const worst = (reports: typeof fine) => Math.max(0, ...reports.map((r) => r.maxGapMeters));
+    console.info(
+      `[lake-debug] tile=${key} native=${native} stage=${stage} lakes=${polygons.length} ` +
+      `shore=${fine.reduce((sum, r) => sum + r.perimeterMeters, 0).toFixed(0)}m ` +
+      `worst grid gap=${worst(fine).toFixed(2)}m far gap=${worst(far).toFixed(2)}m`,
+    );
+    for (let index = 0; index < polygons.length; index++) {
+      const grid = fine[index];
+      const coarse = far[index];
+      if (grid.maxGapMeters < 0.1 && coarse.maxGapMeters < 0.1) continue;
+      console.warn(
+        `[lake-debug] tile=${key} native=${native} stage=${stage} ${grid.sourceId} ` +
+        `level=${grid.elevationMeters.toFixed(2)} perimeter=${grid.perimeterMeters.toFixed(0)}m ` +
+        `grid: gap=${grid.maxGapMeters.toFixed(2)}m frac=${grid.unsupportedFraction.toFixed(3)} ` +
+        `far: gap=${coarse.maxGapMeters.toFixed(2)}m frac=${coarse.unsupportedFraction.toFixed(3)}`,
+      );
     }
   }
 
@@ -2266,6 +2345,51 @@ export class Game {
       movementMode: this.movementMode,
     };
     this.playerPresence.publishLocalTransform(transform, force);
+  }
+
+  /**
+   * Gathers the tree stems within reach of a walker's footprint from every
+   * tile it touches and pushes the body out of them. Detail tiles collide
+   * with their full tree and sapling layers; tiles still showing their distant
+   * stand-in collide with those trees instead, since that is what is visible.
+   */
+  private resolveTreeTrunkCollisions(body: WalkerBody): { x: number; z: number } | undefined {
+    const metersPerUnit = this.terrainMetersPerUnit;
+    if (!metersPerUnit) return undefined;
+    const reach = body.radius + TREE_TRUNK_REACH_METERS / metersPerUnit;
+    const corners: ReadonlyArray<readonly [number, number]> = [
+      [0, 0],
+      [-reach, -reach],
+      [reach, -reach],
+      [-reach, reach],
+      [reach, reach],
+    ];
+    const visited = new Set<StreamedTile>();
+    const trunks: TreeTrunk[] = [];
+    for (const [offsetX, offsetZ] of corners) {
+      const record = this.tileAtScenePosition(body.x + offsetX, body.z + offsetZ);
+      if (!record || visited.has(record)) continue;
+      visited.add(record);
+      const fields = record.treeField?.root.isEnabled()
+        ? [record.treeField, record.saplingField]
+        : [record.farTreeField];
+      for (const field of fields) {
+        const index = field?.trunks;
+        if (!index) continue;
+        const localX = body.x - record.offsetX;
+        const localZ = body.z - record.offsetZ;
+        for (const trunk of index.nearby(localX, localZ, body.radius)) {
+          trunks.push({
+            ...trunk,
+            x: trunk.x + record.offsetX,
+            z: trunk.z + record.offsetZ,
+          });
+        }
+      }
+    }
+    if (trunks.length === 0) return undefined;
+    const resolved = resolveTreeTrunkCollisions(body, trunks);
+    return resolved.blocked ? resolved : undefined;
   }
 
   /** Finds the streamed tile whose footprint contains a scene position. */

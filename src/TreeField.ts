@@ -81,6 +81,7 @@ import {
 } from "./procedural/ProceduralRegions";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 import { treeSeasonAt } from "./TreeSeason";
+import { TREE_TRUNK_PROFILES, TreeTrunkIndex } from "./TreeTrunkCollision";
 import { directionalExposureDeclaration } from "./DirectionalExposure";
 
 export type TreeFieldResult = VegetationFieldResult;
@@ -124,6 +125,8 @@ const TREE_SPECIES_SCALE: Readonly<Record<TreeSpecies, number>> = {
  */
 const RAINFOREST_OCCUPANCY_BOOST = 0.55;
 const RAINFOREST_HEIGHT_BOOST = 0.3;
+/** A walker's reach is about a meter, so a cell holds only a handful of stems. */
+const TRUNK_INDEX_CELL_METERS = 8;
 
 export interface ImpostorPrototype {
   root: TransformNode;
@@ -773,6 +776,7 @@ export async function createTreeField(
       return definition.captureDiameter * treeHeight / definition.sourceHeight;
     })) * 0.55;
     const matrices: Matrix[] = [];
+    const trunks = new TreeTrunkIndex(TRUNK_INDEX_CELL_METERS / metersPerUnit);
     let variantBuckets = new Map<string, TreeVariantBucket>();
 
     if (landCover) {
@@ -868,6 +872,18 @@ export async function createTreeField(
             ),
           );
           matrices.push(matrix);
+          // The stem follows the instance scale: the model is stretched from
+          // its source height to the render height, then by this tree's own
+          // width and height variation.
+          const trunkProfile = TREE_TRUNK_PROFILES[species];
+          const modelScale = treeHeight / TREE_SPECIES[species].sourceHeight;
+          trunks.add({
+            x: worldX,
+            z: worldZ,
+            baseY: elevation / metersPerUnit + positionOffset.y,
+            radius: trunkProfile.radius * modelScale * widthScale,
+            height: trunkProfile.heightFraction * treeHeight * heightScale,
+          });
           // Three reusable autumn crowns, selected by world position without
           // consuming placement randomness or allocating an atlas per tree.
           const autumnVariant = Math.floor(cellRandom(
@@ -1011,7 +1027,9 @@ export async function createTreeField(
       }
       await yieldControl?.();
     }
-    return combineVegetationFieldResults(root, fields, matrixData);
+    const result = combineVegetationFieldResults(root, fields, matrixData);
+    result.trunks = trunks;
+    return result;
   } finally {
     trace.finish();
   }

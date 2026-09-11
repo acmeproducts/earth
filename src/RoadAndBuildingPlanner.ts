@@ -53,6 +53,14 @@ export interface PlannedRoadPolygon {
   gradeRange: readonly [number, number];
   /** Optional direction used only to keep strip textures coherent across joins. */
   textureAxis?: readonly [PlanningPoint, PlanningPoint];
+  /**
+   * Set only on a junction disc: every carriageway through the node, widest
+   * first, each running from the node out to the far end of its approach. A
+   * strip texture stays opaque along each arm and fades only in the wedges
+   * between them, so the disc reads as the roads running through rather than
+   * as a separate patch.
+   */
+  junctionArms?: ReadonlyArray<JunctionArm>;
   /** Distance from the beginning of the source path to centerline[0], in scene units. */
   startDistance: number;
   widthMeters: number;
@@ -61,6 +69,12 @@ export interface PlannedRoadPolygon {
   surface: RoadSurface;
   structure: RoadPlan["structure"];
   layer: number;
+}
+
+export interface JunctionArm {
+  /** From the junction node out along one approach, in scene units. */
+  axis: readonly [PlanningPoint, PlanningPoint];
+  widthMeters: number;
 }
 
 export interface PlannedBuildingSite {
@@ -872,13 +886,14 @@ function buildRoadNetworkCandidates(
       node.point,
       winner.startDistance,
     );
-    const oneSource = new Set(node.incidents.map(({ input }) => input.id)).size === 1;
     surfaceCandidates.push({
       ...common,
       textureAxis: winner.textureAxis,
-      visualStyle: oneSource
-        ? winner.input.appearance.visualStyle
-        : junctionStyle(node.incidents.map(({ input }) => input.appearance)),
+      junctionArms: junctionArms(node, winner),
+      visualStyle: junctionStyle(
+        winner.input.appearance,
+        node.incidents.map(({ input }) => input.appearance),
+      ),
       outline: circlePolygon(node.point, halfWidth),
       priority: 1_000_000_000 + roadPriority(winner.input.appearance),
     });
@@ -1290,12 +1305,33 @@ function roadPriority(appearance: RoadPlan): number {
   return appearance.widthMeters * 1_000 + (classPriority[appearance.roadClass] ?? 0);
 }
 
-function junctionStyle(appearances: readonly RoadPlan[]): RoadVisualStyle {
+/**
+ * A junction disc is inscribed in the widest road through it, so it wears
+ * that road's finish and disappears into it. Any other choice paints a disc of
+ * a different material into the carriageway: a plain patch in a marked road
+ * where the centre line stops, or asphalt in a gravel track.
+ */
+function junctionStyle(
+  winner: RoadPlan,
+  appearances: readonly RoadPlan[],
+): RoadVisualStyle {
   if (appearances.some((appearance) => appearance.visualStyle === "ford")) return "ford";
-  if (appearances.every((appearance) => appearance.visualStyle === "dirt")) return "dirt";
-  if (appearances.every((appearance) => appearance.visualStyle === "unpaved")) return "unpaved";
-  if (appearances.every((appearance) => appearance.visualStyle === "pedestrian")) return "pedestrian";
-  return "paved";
+  return winner.visualStyle;
+}
+
+/** Every approach through a node as an arm from the node outward, widest first. */
+function junctionArms(node: NetworkNode, winner: NetworkIncident): JunctionArm[] {
+  const ordered = [winner, ...node.incidents.filter((incident) => incident !== winner)];
+  const arms: JunctionArm[] = [];
+  for (const incident of ordered) {
+    const far = farEnd(node, incident);
+    if (!far) continue;
+    arms.push({
+      axis: [node.point, far.point],
+      widthMeters: incident.input.appearance.widthMeters,
+    });
+  }
+  return arms;
 }
 
 function interpolate(start: PlanningPoint, end: PlanningPoint, amount: number): PlanningPoint {

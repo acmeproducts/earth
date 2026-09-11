@@ -1,5 +1,6 @@
 import { Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
+import type { TreeTrunkIndex } from "./TreeTrunkCollision";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
 
@@ -30,6 +31,8 @@ export interface VegetationFieldResult {
   shadowCasterMeshes: Mesh[];
   instanceMatrices: Float32Array;
   count: number;
+  /** Solid stems the walker collides with; absent for soft vegetation. */
+  trunks?: TreeTrunkIndex;
   setRenderMode(mode: VegetationRenderMode): void;
   /** Dithers the whole field in or out; 0 hides it and 1 shows it fully. */
   setFade(fade: number): void;

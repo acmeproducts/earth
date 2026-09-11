@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 
-const { conformTerrainToLakePolygons } = await import("../src/TerrainLakePolygons.ts");
+const { conformTerrainToLakePolygons, measureLakeSupport } =
+  await import("../src/TerrainLakePolygons.ts");
 
 function terrain(elevations) {
   return {
@@ -85,27 +86,119 @@ test("caps an elevated interior DEM level at the lower surrounding shoreline", a
   );
 
   assert.equal(lakes[0].elevationMeters, 42);
-  assert.equal(grid.elevations[2 * 5 + 2], 40);
+  // One sample diagonal inside the outline is still the level shelf.
+  assert.equal(grid.elevations[2 * 5 + 2], 42);
 });
 
-test("slopes the lake bed down from the vector shore and leaves distant terrain alone", async () => {
-  const grid = terrain(new Array(25).fill(50));
-  await conformTerrainToLakePolygons(
-    grid,
-    Float32Array.from(sourceElevations),
-    [square()],
-    {
-      meshWidth: 10,
-      meshDepth: 10,
-      metersPerUnit: 1,
-      shorelineBlendMeters: 2,
-      lakeBedDepthMeters: 2,
-    },
-  );
+test("slopes the lake bed down behind a level shelf and leaves distant terrain alone", async () => {
+  // 9 x 9 samples at 1.25 m: the shelf spans one sample diagonal (1.77 m),
+  // then the bed descends over another sample spacing.
+  const width = 9;
+  const raw = new Float32Array(width * width).fill(50);
+  for (let row = 2; row <= 6; row++) {
+    for (let column = 2; column <= 6; column++) raw[row * width + column] = 40;
+  }
+  const grid = {
+    ...terrain(new Array(25).fill(50)),
+    elevations: new Float32Array(width * width).fill(50),
+    width,
+    height: width,
+  };
+  const half = 3.5;
+  const lake = {
+    sourceId: "water/14/42",
+    outline: [
+      { x: -half, z: -half }, { x: half, z: -half }, { x: half, z: half }, { x: -half, z: half },
+    ],
+    holes: [],
+  };
+  await conformTerrainToLakePolygons(grid, raw, [lake], {
+    meshWidth: 10,
+    meshDepth: 10,
+    metersPerUnit: 1,
+    shorelineBlendMeters: 2,
+    lakeBedDepthMeters: 2,
+  });
 
-  assert.equal(grid.elevations[2 * 5 + 2], 38);
-  assert.equal(grid.elevations[0], 50);
+  const at = (x, z) => grid.elevations[((4 - z / 1.25) * width) + (x / 1.25 + 4)];
+  assert.equal(at(0, 0), 38, "the centre reaches the full bed depth");
+  assert.equal(at(2.5, 0), 40, "one metre inside the outline is a level shelf");
+  assert.ok(at(1.25, 0) < 40 && at(1.25, 0) > 38, "the bed slopes between shelf and floor");
+  assert.equal(grid.elevations[0], 50, "corners beyond the shore blend keep their height");
   assert.equal(grid.minElevation, 38);
+});
+
+test("widens the shelf to the coarsest rendered vertex spacing", async () => {
+  const width = 129;
+  const metersPerUnit = 12.6;
+  const meshWidth = 25;
+  const raw = new Float32Array(width * width).fill(100);
+  const makeGrid = () => ({
+    ...terrain(new Array(25).fill(50)),
+    elevations: raw.slice(),
+    width,
+    height: width,
+    groundWidthMeters: meshWidth * metersPerUnit,
+    groundHeightMeters: meshWidth * metersPerUnit,
+  });
+  const outline = [];
+  for (let index = 0; index < 96; index++) {
+    const angle = (index / 96) * Math.PI * 2;
+    const radius = (100 + 15 * Math.sin(angle * 3)) / metersPerUnit;
+    outline.push({ x: 0.37 + Math.cos(angle) * radius, z: 0.21 + Math.sin(angle) * radius });
+  }
+  const source = { sourceId: "water/14/9", outline, holes: [] };
+  const measure = async (renderedVertexSpacing) => {
+    const grid = makeGrid();
+    const polygons = await conformTerrainToLakePolygons(grid, raw, [source], {
+      meshWidth, meshDepth: meshWidth, metersPerUnit, renderedVertexSpacing,
+    });
+    const [report] = measureLakeSupport(grid, polygons, {
+      meshWidth, meshDepth: meshWidth, metersPerUnit, meshSubdivisions: 32,
+    });
+    return report;
+  };
+
+  const narrow = await measure(undefined);
+  assert.ok(narrow.maxGapMeters > 0.05 && narrow.unsupportedFraction > 0.2,
+    "a far mesh dips below the level along much of the outline without the wide shelf");
+  const wide = await measure(meshWidth / 32);
+  assert.equal(wide.maxGapMeters, 0);
+  assert.equal(wide.unsupportedFraction, 0);
+});
+
+test("leaves the level of a context lake beyond this tile's samples to its own tile", async () => {
+  const raw = new Float32Array(25).fill(50);
+  const carved = raw.slice();
+  carved[14] = 10;
+  const grid = terrain(carved);
+  const shared = new Map();
+  const lakes = await conformTerrainToLakePolygons(grid, raw, [{
+    sourceId: "water/14/7",
+    outline: [{ x: 11, z: -1 }, { x: 14, z: -1 }, { x: 14, z: 1 }, { x: 11, z: 1 }],
+    holes: [],
+  }], {
+    meshWidth: 10, meshDepth: 10, metersPerUnit: 1, shorelineBlendMeters: 3,
+    sharedLakeElevations: shared,
+  });
+  assert.deepEqual(lakes, []);
+  assert.equal(shared.get("water/14/7"), undefined,
+    "the tile edge must not be published as the lake level");
+  assert.equal(grid.elevations[14], 50, "the raster carve next to the lake is still repaired");
+
+  // Within shore-sampling range but still outside: one-sided bank samples
+  // (50 m here, against a real lake at 20 m) must not set the level either.
+  const near = new Map();
+  const nearLakes = await conformTerrainToLakePolygons(terrain(raw), raw, [{
+    sourceId: "water/14/8",
+    outline: [{ x: 6, z: -1 }, { x: 9, z: -1 }, { x: 9, z: 1 }, { x: 6, z: 1 }],
+    holes: [],
+  }], {
+    meshWidth: 10, meshDepth: 10, metersPerUnit: 1, shorelineBlendMeters: 3,
+    sharedLakeElevations: near,
+  });
+  assert.deepEqual(nearLakes, []);
+  assert.equal(near.get("water/14/8"), undefined);
 });
 
 test("repairs the wider raster-carved valley outside a smaller OSM lake", async () => {

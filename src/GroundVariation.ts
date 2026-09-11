@@ -1,7 +1,7 @@
 import { groundMetersAt } from "./Geo";
 import { SimplexNoise2D } from "./SimplexNoise";
 import { LandCoverClass } from "./WorldCover";
-import { clamp01 } from "./MathUtils";
+import { clamp01, resolvableBandWeight } from "./MathUtils";
 import { DEFAULT_WORLD_SEED, layerSeed } from "./WorldGrid";
 
 /**
@@ -83,7 +83,7 @@ export function varyGroundColor(
   for (let index = 0; index < BANDS.length; index++) {
     const band = BANDS[index];
     const value = noise[index].sample(x / band.meters, y / band.meters) *
-      bandWeight(band.meters, minimumFeatureMeters);
+      resolvableBandWeight(band.meters, minimumFeatureMeters);
     shade += value * band.shade;
     tone += value * band.tone;
   }
@@ -96,15 +96,4 @@ export function varyGroundColor(
     clamp01(color[1] * (1 + 0.04 * dry + 0.05 * lush) * shade),
     clamp01(color[2] * (1 - 0.16 * dry - 0.06 * lush) * shade),
   ];
-}
-
-/**
- * Fades a band out as it approaches the resolution of the mesh sampling it. A
- * band shorter than about twice the vertex spacing cannot be reconstructed and
- * would only add per-vertex speckle.
- */
-function bandWeight(bandMeters: number, minimumFeatureMeters: number): number {
-  if (minimumFeatureMeters <= 0) return 1;
-  const t = clamp01((bandMeters / minimumFeatureMeters - 2) / 2);
-  return t * t * (3 - 2 * t);
 }

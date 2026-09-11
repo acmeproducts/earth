@@ -15,6 +15,7 @@ import {
   WALK_CAMERA_INERTIA,
 } from "./WalkerMotion";
 import { moveWalkerWithCollisions } from "./WalkerCollision";
+import type { WalkerBody } from "./TreeTrunkCollision";
 import type { PlayerPose } from "./integration/GameProtocol";
 
 const MIN_FLY_SPEED = 0.05;
@@ -43,6 +44,11 @@ interface PlayerControlsOptions {
   ) => number | undefined;
   /** Returns true only when the terrain containing a scene position is ready. */
   isScenePositionLoaded: (x: number, z: number) => boolean;
+  /**
+   * Pushes the walker's body out of any tree stems it overlaps. Returns
+   * undefined when no stem is within reach, so the body stays where it is.
+   */
+  resolveTreeTrunkCollisions: (body: WalkerBody) => { x: number; z: number } | undefined;
   isMenuOpen: () => boolean;
   onPointerLockExit: () => void;
 }
@@ -318,6 +324,9 @@ export class PlayerControls {
         this.rememberLoadedPosition();
       }
     }
+    // Trees are thin instances, which Babylon's mesh collider never sees, and
+    // a stand can also stream in around a standing walker. Resolve every frame.
+    this.pushOutOfTreeTrunks(metersPerUnit);
 
     const jumpRequested = this.walkerJumpRequested;
     this.walkerJumpRequested = false;
@@ -336,6 +345,24 @@ export class PlayerControls {
     });
     camera.position.y = verticalMotion.eyeHeight;
     this.verticalVelocityMetersPerSecond = verticalMotion.verticalVelocityMetersPerSecond;
+  }
+
+  private pushOutOfTreeTrunks(metersPerUnit: number): void {
+    const { camera } = this.options;
+    const resolved = this.options.resolveTreeTrunkCollisions({
+      x: camera.position.x,
+      z: camera.position.z,
+      footY: camera.position.y - PLAYER_HEIGHT_METERS / metersPerUnit,
+      radius: PLAYER_RADIUS_METERS / metersPerUnit,
+      height: PLAYER_HEIGHT_METERS / metersPerUnit,
+    });
+    if (!resolved) return;
+    // A stem on a tile edge could push the walker onto a tile that has not
+    // finished building; staying inside the trunk is the lesser problem.
+    if (!this.options.isScenePositionLoaded(resolved.x, resolved.z)) return;
+    camera.position.x = resolved.x;
+    camera.position.z = resolved.z;
+    this.rememberLoadedPosition();
   }
 
   private ensurePlayerAboveGround(): void {

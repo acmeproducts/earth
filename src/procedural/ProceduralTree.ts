@@ -5,7 +5,7 @@ import {
 } from "./ProceduralCaptureMaterial";
 import { lerp } from "../MathUtils";
 import { createSeededRandom, hashString, unitFromSeed } from "../Random";
-import { autumnLeafTint, type TreeSeasonAppearance } from "../TreeSeason";
+import { autumnLeafSamples, autumnLeafTint, type LeafCardPosition, type TreeSeasonAppearance } from "../TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 3.2;
@@ -794,36 +794,49 @@ function createPalmTree(scene: Scene, options: ProceduralTreeOptions): Procedura
   const palmLeafAspect = foliageCardShape("palm")?.aspect ?? DEFAULT_FOLIAGE_CARD_ASPECT;
   const livingFrondCount = 17;
   for (let frond = 0; frond < livingFrondCount; frond++) {
-    // Offset neighboring fronds vertically as well as azimuthally. A single
-    // perfect radial ring reads as a parasol; overlapping crown layers give a
-    // palm its characteristic fountain silhouette.
+    // A crown is fronds of every age at once: the newest stand almost upright
+    // in the centre, older ones lean further out and the oldest hang level or
+    // below. Interleaving the ages around the stem spreads the crown into a
+    // sphere of fronds pointing every way, not a flat ring at one height.
     const crownLayer = frond % 4;
+    const age = crownLayer / 3;
     const angle = frond * Math.PI * 2 / livingFrondCount + (random() - 0.5) * 0.28;
-    const direction = new Vector3(Math.cos(angle), 0, Math.sin(angle));
-    const crownOrigin = trunkTop.add(new Vector3(0, 0.025 * crownLayer, 0));
-    const length = 0.78 + random() * 0.3 + crownLayer * 0.025;
-    const end = crownOrigin.add(direction.scale(length)).add(new Vector3(
-      0,
-      crownLayer === 3 ? -0.04 - random() * 0.08 : -0.14 - random() * 0.2,
-      0,
-    ));
-    // A frond arches: it leaves the crown steeply and the tip hangs below the
-    // chord. Two straight segments can only corner where the arch should be.
-    const rachis = curvePath(crownOrigin, end, new Vector3(0, 0.19 + random() * 0.11, 0), 6);
+    const elevation = lerp(1.3, 0.05, age) + (random() - 0.5) * 0.24;
+    const horizontal = new Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const direction = horizontal.scale(Math.cos(elevation))
+      .add(Vector3.Up().scale(Math.sin(elevation)));
+    const crownOrigin = trunkTop.add(new Vector3(0, 0.09 - 0.03 * crownLayer, 0));
+    const length = lerp(0.7, 0.98, age) + random() * 0.14;
+    // A frond arches: it leaves the crown along its own direction and the tip
+    // bends over by roughly the same amount whatever the age, so a young frond
+    // ends level while an old one ends hanging.
+    const arch = 1.05 + random() * 0.3;
+    const tipElevation = elevation - arch;
+    const tipDirection = horizontal.scale(Math.cos(tipElevation))
+      .add(Vector3.Up().scale(Math.sin(tipElevation)));
+    const control = crownOrigin.add(direction.scale(length * 0.55));
+    const end = control.add(tipDirection.scale(length * 0.5));
+    const rachis = curvePath(crownOrigin, end, control.subtract(Vector3.Lerp(crownOrigin, end, 0.5)), 6);
     const frondSpine = new Color3(0.2, 0.36, 0.065);
     addLimbAlongPath(branchBuffers, rachis, 0.022, 0.0035, 5, 0.9, frondSpine, frondSpine);
+    const sideAxis = Vector3.Cross(Vector3.Up(), horizontal).normalize();
     const leafletCount = 32;
     for (let leaflet = 1; leaflet <= leafletCount; leaflet++) {
       const along = leaflet / (leafletCount + 1);
       const anchor = pointAlongPath(rachis, along);
+      // Leaflets grow off the local rachis, so they follow it over the arch
+      // instead of all pointing the way the frond left the crown.
+      const tangent = pointAlongPath(rachis, along + 0.04)
+        .subtract(pointAlongPath(rachis, along - 0.04)).normalize();
+      let hang = Vector3.Cross(tangent, sideAxis).normalize();
+      if (hang.y > 0) hang = hang.scale(-1);
       for (const side of [-1, 1]) {
         const sweep = 0.08 + along * 0.18;
-        const droop = 0.08 + along * along * 0.28 + crownLayer * 0.015;
-        const lateral = new Vector3(
-          -direction.z * side + direction.x * sweep,
-          -droop,
-          direction.x * side + direction.z * sweep,
-        ).normalize();
+        const droop = 0.08 + along * along * 0.28 + age * 0.06;
+        const lateral = sideAxis.scale(side)
+          .add(tangent.scale(sweep))
+          .add(hang.scale(droop))
+          .normalize();
         const middleFullness = Math.pow(Math.sin(Math.PI * along), 0.38);
         const halfLength = (0.14 + middleFullness * 0.09) * (0.94 + random() * 0.12);
         // The palm image is one unusually slender leaflet. Preserve its measured
@@ -1433,7 +1446,48 @@ function applySeasonalFoliage(
 ): void {
   if (season.leafCoverage >= 1 && season.foliageTint.every((value) => value === 1)) return;
 
+  const cards = collectFoliageCards(buffers);
+  const seed = hashString(season.key);
+  // Autumn color follows the crown's shape (top and rim first, whole branch
+  // clusters together) rather than a per-leaf hash; see autumnLeafSamples.
+  const samples = season.autumnPalette
+    ? autumnLeafSamples(cards.map((vertex) => foliageCardCenter(buffers, vertex)), seed)
+    : undefined;
+
   const droppedVertices = new Set<number>();
+  cards.forEach((vertex, card) => {
+    // Geometry order is deterministic, so this keeps the same scattered leaves
+    // in models and captures without consuming or perturbing the tree RNG.
+    const retained = unitFromSeed(vertex ^ seed) < season.leafCoverage;
+    const tint = autumnLeafTint(season, samples ? samples[card] : 0);
+    // Recolored leaves lose the texture's green, so give each its own
+    // brightness to keep a turned cluster from reading as one flat color.
+    const leafShade = 0.92 + 0.16 * unitFromSeed(vertex ^ seed ^ 0x53484144);
+    for (let corner = 0; corner < 4; corner++) {
+      const index = vertex + corner;
+      if (!retained) droppedVertices.add(index);
+      const color = index * 4;
+      if (tint[3] < 1) {
+        // Recolored leaf: the shader reads these as the leaf's own hue.
+        buffers.colors[color] = tint[0] * leafShade;
+        buffers.colors[color + 1] = tint[1] * leafShade;
+        buffers.colors[color + 2] = tint[2] * leafShade;
+        buffers.colors[color + 3] = tint[3];
+      } else {
+        buffers.colors[color] = Math.min(1, buffers.colors[color] * tint[0]);
+        buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * tint[1]);
+        buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * tint[2]);
+      }
+    }
+  });
+  if (droppedVertices.size > 0) {
+    buffers.indices = buffers.indices.filter((index) => !droppedVertices.has(index));
+  }
+}
+
+/** First vertex index of every four-vertex leaf card, in geometry order. */
+function collectFoliageCards(buffers: GeometryBuffers): number[] {
+  const cards: number[] = [];
   for (let vertex = 0; vertex + 3 < buffers.positions.length / 3;) {
     let foliageCard = true;
     for (let corner = 0; corner < 4; corner++) {
@@ -1445,24 +1499,23 @@ function applySeasonalFoliage(
       vertex++;
       continue;
     }
-
-    // Geometry order is deterministic, so this keeps the same scattered leaves
-    // in models and captures without consuming or perturbing the tree RNG.
-    const retained = unitFromSeed(vertex ^ hashString(season.key)) < season.leafCoverage;
-    const tint = autumnLeafTint(season, unitFromSeed(vertex ^ hashString(season.key) ^ 0x4c454146));
-    for (let corner = 0; corner < 4; corner++) {
-      const index = vertex + corner;
-      if (!retained) droppedVertices.add(index);
-      const color = index * 4;
-      buffers.colors[color] = Math.min(1, buffers.colors[color] * tint[0]);
-      buffers.colors[color + 1] = Math.min(1, buffers.colors[color + 1] * tint[1]);
-      buffers.colors[color + 2] = Math.min(1, buffers.colors[color + 2] * tint[2]);
-    }
+    cards.push(vertex);
     vertex += 4;
   }
-  if (droppedVertices.size > 0) {
-    buffers.indices = buffers.indices.filter((index) => !droppedVertices.has(index));
+  return cards;
+}
+
+function foliageCardCenter(buffers: GeometryBuffers, vertex: number): LeafCardPosition {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  for (let corner = 0; corner < 4; corner++) {
+    const offset = (vertex + corner) * 3;
+    x += buffers.positions[offset];
+    y += buffers.positions[offset + 1];
+    z += buffers.positions[offset + 2];
   }
+  return { x: x / 4, y: y / 4, z: z / 4 };
 }
 
 function createTreePartMesh(

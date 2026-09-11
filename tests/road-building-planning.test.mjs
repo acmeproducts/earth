@@ -539,3 +539,46 @@ function properIntersection(a, b, c, d) {
   const cross = (p, q, r) => (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
   return cross(a, b, c) * cross(a, b, d) < -1e-9 && cross(c, d, a) * cross(c, d, b) < -1e-9;
 }
+
+test("a junction disc wears the widest road's finish and maps along its arms", () => {
+  const marked = { ...appearance, roadClass: "tertiary", widthMeters: 6, visualStyle: "marked" };
+  const service = { ...appearance, roadClass: "service", widthMeters: 3, visualStyle: "paved" };
+  const plan = planRoadsAndBuildings([
+    { id: "through", paths: [[{ x: -5, z: 0 }, { x: 5, z: 0 }]], appearance: marked },
+    { id: "branch", paths: [[{ x: 0, z: 5 }, { x: 0, z: 0 }]], appearance: service },
+  ], [], options);
+
+  const disc = plan.roads.find((road) =>
+    road.centerline[0].x === road.centerline[1].x &&
+    road.centerline[0].z === road.centerline[1].z &&
+    Math.hypot(road.centerline[0].x, road.centerline[0].z) < 1e-8);
+  assert.ok(disc, "the T junction should raise one level disc");
+  assert.equal(disc.visualStyle, "marked", "the disc must not turn into a plain paved patch");
+  assert.equal(disc.sourceId, "through");
+  assert.ok(disc.junctionArms && disc.junctionArms.length >= 3);
+  assert.equal(disc.junctionArms[0].widthMeters, 6, "the widest road's arm comes first");
+  for (const arm of disc.junctionArms) {
+    assert.ok(Math.hypot(arm.axis[0].x, arm.axis[0].z) < 1e-8, "every arm starts at the node");
+    assert.ok(Math.hypot(arm.axis[1].x, arm.axis[1].z) > 1, "every arm points out along an approach");
+  }
+  const approaches = plan.roads.filter((road) =>
+    road.sourceId === "through" &&
+    Math.hypot(road.centerline[1].x - road.centerline[0].x, road.centerline[1].z - road.centerline[0].z) > 1e-8);
+  assert.ok(approaches.every((road) => road.junctionArms === undefined));
+});
+
+test("a dirt track keeps a dirt junction where a footpath joins it", () => {
+  const track = { ...appearance, roadClass: "track", widthMeters: 2.4, surface: "unpaved", visualStyle: "dirt" };
+  const path = { ...appearance, roadClass: "path", widthMeters: 1.2, visualStyle: "pedestrian" };
+  const plan = planRoadsAndBuildings([
+    { id: "track", paths: [[{ x: -5, z: 0 }, { x: 5, z: 0 }]], appearance: track },
+    { id: "path", paths: [[{ x: 0, z: 5 }, { x: 0, z: 0 }]], appearance: path },
+  ], [], options);
+
+  const disc = plan.roads.find((road) =>
+    road.centerline[0].x === road.centerline[1].x &&
+    road.centerline[0].z === road.centerline[1].z &&
+    Math.hypot(road.centerline[0].x, road.centerline[0].z) < 1e-8);
+  assert.ok(disc);
+  assert.equal(disc.visualStyle, "dirt");
+});

@@ -12,6 +12,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { FpsCounter } from "./FpsCounter";
+import { treeSeasonAt } from "./TreeSeason";
 import {
   captureImpostorAtlases,
   CubeFace,
@@ -38,6 +39,14 @@ interface CaptureSet {
   textures: Texture[];
   settings: CaptureSettings;
 }
+
+/** Midseason dates for the demo's `season` query, at a temperate latitude. */
+const SEASON_DEMO_DATES: Record<string, Date | undefined> = {
+  spring: new Date(2026, 3, 1),
+  summer: new Date(2026, 6, 1),
+  autumn: new Date(2026, 9, 1),
+  winter: new Date(2026, 0, 15),
+};
 
 const CUBE_FACE_NAMES = ["pos-x", "neg-x", "pos-y", "pos-z", "neg-z"] as const;
 const CUBE_FACES: readonly NamedCubeFace[] = IMPOSTOR_CUBE_FACES.map((face, index) => ({
@@ -134,10 +143,16 @@ export class TreeImpostorDemo {
     this.setStatus("Generating source tree...");
     await measureFoliageTextures();
     // `?tree-impostor=<species>` previews any species; a bare flag keeps birch.
-    const requested = new URLSearchParams(window.location.search).get("tree-impostor") ?? "";
+    const query = new URLSearchParams(window.location.search);
+    const requested = query.get("tree-impostor") ?? "";
     const species: TreeSpecies = requested in TREE_SPECIES ? requested as TreeSpecies : "birch";
     const definition = TREE_SPECIES[species];
-    const source = definition.create(this.scene, { name: "treeCaptureSource" });
+    // `&season=autumn|spring|winter&maturity=0..2` bakes a temperate seasonal crown.
+    const seasonDate = SEASON_DEMO_DATES[query.get("season") ?? ""];
+    const season = seasonDate
+      ? treeSeasonAt(seasonDate, 52, species, Number(query.get("maturity") ?? "1"))
+      : undefined;
+    const source = definition.create(this.scene, { name: "treeCaptureSource", season });
     const sourceRoot = new TransformNode("treeCaptureSourceRoot", this.scene);
     source.log.parent = sourceRoot;
     source.branches.parent = sourceRoot;

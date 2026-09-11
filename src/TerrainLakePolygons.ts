@@ -34,6 +34,13 @@ export interface TerrainLakePolygonOptions {
   sharedLakeElevations?: SharedValueMap<string, number>;
   /** Enables small-water plausibility checks using the renderer's vertical offset. */
   smallWaterSurfaceClearanceMeters?: number;
+  /**
+   * Widest vertex spacing any mesh renders this terrain with, in scene units.
+   * The bed keeps a level shelf this wide inside the outline so a coarse mesh
+   * interpolating between a bed vertex and a bank vertex still carries the
+   * water edge. Defaults to the terrain sample spacing.
+   */
+  renderedVertexSpacing?: number;
 }
 
 /** Maximum default distance at which an OSM lake can alter neighboring terrain. */
@@ -58,6 +65,8 @@ interface Bounds {
 interface PreparedLake {
   polygon: TerrainLakePolygon;
   bounds: Bounds;
+  /** False for context pieces whose level this tile cannot judge: repair only. */
+  shapes: boolean;
 }
 
 /**
@@ -82,10 +91,13 @@ export async function conformTerrainToLakePolygons(
   const minimumElevation = options.minimumElevationMeters ?? 1;
   const lakes: PreparedLake[] = sources.flatMap((source) => {
     const elevationMeters = levels.get(source.sourceId);
-    if (elevationMeters === undefined || elevationMeters < minimumElevation) return [];
+    if (elevationMeters !== undefined && elevationMeters < minimumElevation) return [];
+    // Off-grid context pieces still restore the raster carve reaching into
+    // this tile; their level is left to the tile that actually contains them.
     return [{
-      polygon: { ...source, elevationMeters },
+      polygon: { ...source, elevationMeters: elevationMeters ?? Number.NaN },
       bounds: polygonBounds(source),
+      shapes: elevationMeters !== undefined,
     }];
   });
   if (lakes.length === 0) return [];
@@ -107,6 +119,9 @@ export async function conformTerrainToLakePolygons(
   );
   const bedSlopeWidth = Math.max(shorelineWidth * 0.5, sampleSpacing);
   const bedDepth = options.lakeBedDepthMeters ?? 2;
+  // Every vertex within one rendered cell diagonal of the outline stays at the
+  // water level, so linear interpolation across the outline cannot dip below it.
+  const shelfWidth = Math.max(sampleSpacing, options.renderedVertexSpacing ?? 0) * Math.SQRT2;
 
   for (let row = 0; row < terrain.height; row++) {
     const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
@@ -117,17 +132,19 @@ export async function conformTerrainToLakePolygons(
       let targetWeight = 0;
       let strongestShore = 0;
 
-      for (const { polygon, bounds } of lakes) {
+      for (const { polygon, bounds, shapes } of lakes) {
         if (!withinExpandedBounds(x, z, bounds, repairWidth)) continue;
         const inside = pointInLake(x, z, polygon);
         const distance = distanceToRings(x, z, polygon);
         repair = Math.max(repair, inside || distance <= fullRepairWidth
           ? 1
           : 1 - smoothstep(fullRepairWidth, repairWidth, distance));
-        if (!inside && distance >= shorelineWidth) continue;
+        if (!shapes || (!inside && distance >= shorelineWidth)) continue;
 
         const shore = inside ? 1 : 1 - smoothstep(0, shorelineWidth, distance);
-        const depth = inside ? bedDepth * smoothstep(0, bedSlopeWidth, distance) : 0;
+        const depth = inside
+          ? bedDepth * smoothstep(shelfWidth, shelfWidth + bedSlopeWidth, distance)
+          : 0;
         targetSum += (polygon.elevationMeters - depth) * shore;
         targetWeight += shore;
         strongestShore = Math.max(strongestShore, shore);
@@ -222,21 +239,12 @@ function lakeLevels(
         }
       }
     }
-    if (interiorSamples.length === 0 && shoreSamples.length === 0) {
-      for (const piece of pieces) {
-        for (const point of piece.outline) {
-          shoreSamples.push(sampleGridElevation(
-            terrain,
-            point.x,
-            point.z,
-            options.meshWidth,
-            options.meshDepth,
-            elevations,
-          ));
-        }
-      }
-    }
-    if (interiorSamples.length === 0 && shoreSamples.length === 0) continue;
+    // A context piece beyond this grid has no water surface of its own here.
+    // Bank samples from one side alone overestimate the level (they miss the
+    // outlet side and the DEM water surface), and publishing that would leave
+    // the tile owning the lake unable to fit its own shore. Leave it to that tile.
+    if (interiorSamples.length === 0 &&
+        (shoreSamples.length === 0 || !withinGrid(bounds, options))) continue;
     interiorSamples.sort((a, b) => a - b);
     shoreSamples.sort((a, b) => a - b);
     const interiorLevel = interiorSamples.length === 0
@@ -306,6 +314,117 @@ function isUnsupportedSmallWater(
   return perimeter > 0 && unsupported / perimeter >= 0.75;
 }
 
+export interface LakeSupportOptions {
+  meshWidth: number;
+  meshDepth: number;
+  metersPerUnit: number;
+  /** Vertex grid the ground is rendered with; defaults to the terrain sample grid. */
+  meshSubdivisions?: number;
+  sampleStepMeters?: number;
+}
+
+export interface LakeSupportReport {
+  sourceId: string;
+  elevationMeters: number;
+  perimeterMeters: number;
+  /** Share of the outline under which the rendered ground lies below the water level. */
+  unsupportedFraction: number;
+  /** Largest drop from the water level to the rendered ground under the outline. */
+  maxGapMeters: number;
+}
+
+/**
+ * Measures how well the rendered ground carries each water outline. A mesh
+ * interpolates linearly between its vertices, so the ground is sampled the way
+ * the vertex grid of the given subdivision count would render it.
+ */
+export function measureLakeSupport(
+  terrain: TerrainData,
+  polygons: readonly TerrainLakePolygon[],
+  options: LakeSupportOptions,
+  elevations: Float32Array = terrain.elevations,
+): LakeSupportReport[] {
+  const subdivisions = Math.max(1, Math.round(
+    options.meshSubdivisions ?? Math.max(terrain.width, terrain.height) - 1,
+  ));
+  const step = (options.sampleStepMeters ?? 2) / options.metersPerUnit;
+  const tolerance = 0.05;
+  const halfWidth = options.meshWidth / 2;
+  const halfDepth = options.meshDepth / 2;
+  const edgeEpsilon = 1e-6 * Math.max(options.meshWidth, options.meshDepth);
+  // Segments running along the tile boundary are clip edges over open water,
+  // not shores, so they carry no information about shoreline support.
+  const onTileEdge = (a: TerrainLakePoint, b: TerrainLakePoint): boolean =>
+    (Math.abs(Math.abs(a.x) - halfWidth) < edgeEpsilon &&
+      Math.abs(Math.abs(b.x) - halfWidth) < edgeEpsilon && Math.sign(a.x) === Math.sign(b.x)) ||
+    (Math.abs(Math.abs(a.z) - halfDepth) < edgeEpsilon &&
+      Math.abs(Math.abs(b.z) - halfDepth) < edgeEpsilon && Math.sign(a.z) === Math.sign(b.z));
+  return polygons.map((polygon) => {
+    let perimeter = 0;
+    let unsupported = 0;
+    let maxGap = 0;
+    for (const ring of [polygon.outline, ...polygon.holes]) {
+      for (let index = 0; index < ring.length; index++) {
+        const a = ring[index];
+        const b = ring[(index + 1) % ring.length];
+        const length = Math.hypot(b.x - a.x, b.z - a.z);
+        if (length === 0 || onTileEdge(a, b)) continue;
+        const count = Math.max(1, Math.ceil(length / step));
+        for (let sample = 0; sample < count; sample++) {
+          const t = (sample + 0.5) / count;
+          const x = a.x + (b.x - a.x) * t;
+          const z = a.z + (b.z - a.z) * t;
+          if (x < -halfWidth || x > halfWidth || z < -halfDepth || z > halfDepth) continue;
+          const ground = sampleMeshElevation(terrain, x, z, options, subdivisions, elevations);
+          const gap = polygon.elevationMeters - ground;
+          perimeter += length / count;
+          if (gap > tolerance) {
+            unsupported += length / count;
+            maxGap = Math.max(maxGap, gap);
+          }
+        }
+      }
+    }
+    return {
+      sourceId: polygon.sourceId,
+      elevationMeters: polygon.elevationMeters,
+      perimeterMeters: perimeter * options.metersPerUnit,
+      unsupportedFraction: perimeter > 0 ? unsupported / perimeter : 0,
+      maxGapMeters: maxGap,
+    };
+  });
+}
+
+/** Ground height as a mesh with the given subdivisions renders it at (x, z). */
+function sampleMeshElevation(
+  terrain: TerrainData,
+  x: number,
+  z: number,
+  options: Pick<LakeSupportOptions, "meshWidth" | "meshDepth">,
+  subdivisions: number,
+  elevations: Float32Array,
+): number {
+  const u = Math.max(0, Math.min(1, x / options.meshWidth + 0.5));
+  const v = Math.max(0, Math.min(1, 0.5 - z / options.meshDepth));
+  const cu = u * subdivisions;
+  const cv = v * subdivisions;
+  const u0 = Math.min(Math.floor(cu), subdivisions - 1);
+  const v0 = Math.min(Math.floor(cv), subdivisions - 1);
+  const fu = cu - u0;
+  const fv = cv - v0;
+  const vertex = (column: number, row: number): number => sampleGridElevation(
+    terrain,
+    (column / subdivisions - 0.5) * options.meshWidth,
+    (0.5 - row / subdivisions) * options.meshDepth,
+    options.meshWidth,
+    options.meshDepth,
+    elevations,
+  );
+  const top = vertex(u0, v0) * (1 - fu) + vertex(u0 + 1, v0) * fu;
+  const bottom = vertex(u0, v0 + 1) * (1 - fu) + vertex(u0 + 1, v0 + 1) * fu;
+  return top * (1 - fv) + bottom * fv;
+}
+
 function percentile(sorted: readonly number[], fraction: number): number {
   return sorted[Math.floor(Math.max(0, Math.min(1, fraction)) * (sorted.length - 1))];
 }
@@ -370,6 +489,14 @@ function combinedBounds(polygons: readonly TerrainLakeSource[]): Bounds {
 
 function emptyBounds(): Bounds {
   return { minimumX: Infinity, maximumX: -Infinity, minimumZ: Infinity, maximumZ: -Infinity };
+}
+
+function withinGrid(
+  bounds: Bounds,
+  options: Pick<TerrainLakePolygonOptions, "meshWidth" | "meshDepth">,
+): boolean {
+  return bounds.minimumX >= -options.meshWidth / 2 && bounds.maximumX <= options.meshWidth / 2 &&
+    bounds.minimumZ >= -options.meshDepth / 2 && bounds.maximumZ <= options.meshDepth / 2;
 }
 
 function withinExpandedBounds(x: number, z: number, bounds: Bounds, margin: number): boolean {

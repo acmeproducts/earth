@@ -92,8 +92,8 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
     polygon: { outer },
     label: `Room ${index + 1}`,
   }));
-  assignApartmentRoomTypes(rooms);
-  return { boundary, rooms, openings: [...openings, ...internalRoomDoors(rooms)] };
+  assignApartmentRoomTypes(rooms, openings);
+  return { boundary, rooms, openings: [...openings, ...internalRoomDoors(rooms, openings)] };
 }
 
 /**
@@ -102,9 +102,14 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
  * The assignment is deliberately deterministic: when several rooms qualify
  * for the toilet, the smallest one wins, and the largest remaining room gets
  * the kitchen.
+ *
+ * A toilet is always a dead end. Rooms that hold an entrance door, or whose
+ * removal would cut the apartment in two, never become the toilet, so no
+ * route between two other rooms ever leads through it.
  */
 export function assignApartmentRoomTypes(
   rooms: LayoutRoom<ApartmentRoomType>[],
+  openings: readonly Opening2D[] = [],
 ): void {
   if (rooms.length === 0) return;
   if (rooms.length === 1) {
@@ -129,8 +134,11 @@ export function assignApartmentRoomTypes(
     const difference = area(first) - area(second);
     return Math.abs(difference) > 1e-7 ? difference : comparePosition(first, second);
   };
+  const adjacency = roomAdjacency(rooms);
   const smallRoom = rooms
-    .filter((room) => area(room) <= SMALL_ROOM_AREA_SQUARE_METERS + 1e-7)
+    .filter((room, index) => area(room) <= SMALL_ROOM_AREA_SQUARE_METERS + 1e-7 &&
+      !roomHasDoor(room, openings) &&
+      !isPassThroughRoom(index, adjacency))
     .sort(compareArea)[0];
   if (smallRoom) {
     smallRoom.type = "toilet";
@@ -153,23 +161,76 @@ function polygonCenter(points: readonly Point2D[]): Point2D {
   };
 }
 
-function internalRoomDoors(rooms: readonly LayoutRoom<ApartmentRoomType>[]): Opening2D[] {
+/** True when removing the room would leave some other rooms unreachable from the rest. */
+function isPassThroughRoom(index: number, adjacency: readonly (readonly boolean[])[]): boolean {
+  const count = adjacency.length;
+  if (count < 3) return false;
+  const start = index === 0 ? 1 : 0;
+  const reached = new Set<number>([start]);
+  const pending = [start];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    for (let other = 0; other < count; other++) {
+      if (other === index || reached.has(other) || !adjacency[current][other]) continue;
+      reached.add(other);
+      pending.push(other);
+    }
+  }
+  return reached.size < count - 1;
+}
+
+function roomAdjacency(rooms: readonly LayoutRoom<ApartmentRoomType>[]): boolean[][] {
+  return rooms.map((room) => rooms.map((other) =>
+    other !== room && sharedSegment(room.polygon.outer, other.polygon.outer) !== undefined));
+}
+
+/** True when a door opening lies along one of the room's walls. */
+function roomHasDoor(room: LayoutRoom<ApartmentRoomType>, openings: readonly Opening2D[]): boolean {
+  const points = room.polygon.outer;
+  return openings.some((opening) => opening.type === "door" && points.some((a, index) => {
+    const b = points[(index + 1) % points.length];
+    const overlap = overlappingSegment(a, b, opening.start, opening.end);
+    return overlap !== undefined && Math.hypot(overlap[1].x - overlap[0].x, overlap[1].y - overlap[0].y) > 1e-4;
+  }));
+}
+
+/**
+ * Connects every room with a spanning tree of doors along the longest shared
+ * walls. The tree grows from a room with an entrance door and never grows
+ * out of a toilet, so a toilet only ever has the single door that leads in.
+ */
+function internalRoomDoors(
+  rooms: readonly LayoutRoom<ApartmentRoomType>[],
+  openings: readonly Opening2D[],
+): Opening2D[] {
   if (rooms.length < 2) return [];
-  const connected = new Set<number>([0]);
+  const isToilet = (index: number): boolean => rooms[index].type === "toilet";
+  const startIndex = [
+    rooms.findIndex((room, index) => !isToilet(index) && roomHasDoor(room, openings)),
+    rooms.findIndex((_, index) => !isToilet(index)),
+    0,
+  ].find((index) => index >= 0)!;
+  const connected = new Set<number>([startIndex]);
   const doors: Opening2D[] = [];
   while (connected.size < rooms.length) {
     let best: { from: number; to: number; segment: readonly [Point2D, Point2D]; length: number } | undefined;
-    for (const from of connected) {
-      for (let to = 0; to < rooms.length; to++) {
-        if (connected.has(to)) continue;
-        const segment = sharedSegment(
-          rooms[from].polygon.outer,
-          rooms[to].polygon.outer,
-        );
-        if (!segment) continue;
-        const length = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y);
-        if (!best || length > best.length) best = { from, to, segment, length };
+    // Toilets are only used as a source when nothing else can reach a room,
+    // so connectivity still wins over the dead-end rule in degenerate plans.
+    for (const allowToilets of [false, true]) {
+      for (const from of connected) {
+        if (!allowToilets && isToilet(from)) continue;
+        for (let to = 0; to < rooms.length; to++) {
+          if (connected.has(to)) continue;
+          const segment = sharedSegment(
+            rooms[from].polygon.outer,
+            rooms[to].polygon.outer,
+          );
+          if (!segment) continue;
+          const length = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y);
+          if (!best || length > best.length) best = { from, to, segment, length };
+        }
       }
+      if (best) break;
     }
     if (!best) break;
     connected.add(best.to);

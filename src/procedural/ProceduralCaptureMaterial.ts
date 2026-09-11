@@ -547,7 +547,18 @@ export function createVertexColorCaptureMaterial(
           } else if (leafTextureEnabled > 0.5 && vUv.x >= 0.0) {
             vec4 leafSample = texture2D(leafTexture, vUv);
             if (leafSample.a < 0.5) discard;
-            surfaceColor *= leafSample.rgb;
+            // Vertex alpha below one marks a turning leaf (autumn): the vertex
+            // color is then the leaf's own hue and the texture contributes
+            // brightness detail, as multiplying its green could never produce
+            // a vivid red or yellow. The turn is uneven within the leaf: the
+            // brighter blade goes first while veins and shaded folds keep
+            // their green longest.
+            float turn = 1.0 - vColor.a;
+            float leafLuma = dot(leafSample.rgb, vec3(0.299, 0.587, 0.114));
+            vec3 greenLeaf = mix(surfaceColor, vec3(1.0), turn) * leafSample.rgb;
+            vec3 turnedLeaf = surfaceColor * (0.45 + 1.1 * leafLuma);
+            float pixelTurn = clamp(turn * (0.55 + 1.5 * leafLuma), 0.0, 1.0);
+            surfaceColor = mix(greenLeaf, turnedLeaf, pixelTurn);
           }
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;

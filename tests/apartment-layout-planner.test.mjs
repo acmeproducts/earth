@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   MINIMUM_ROOM_AREA_SQUARE_METERS,
   MINIMUM_ROOM_CLEAR_WIDTH_METERS,
+  assignApartmentRoomTypes,
   planApartmentLayout,
 } from "../src/ApartmentLayoutPlanner.ts";
 
@@ -224,4 +225,67 @@ function roomCenterKey(points) {
   const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
   const y = points.reduce((sum, point) => sum + point.y, 0) / points.length;
   return `${x.toFixed(6)},${y.toFixed(6)}`;
+}
+
+test("a toilet is a dead end with exactly one door", () => {
+  const apartments = [
+    apartment,
+    { outer: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 5 }, { x: 0, y: 5 }] },
+    { outer: [{ x: 0, y: 0 }, { x: 14, y: 0 }, { x: 14, y: 9 }, { x: 0, y: 9 }] },
+    { outer: [{ x: 0, y: 0 }, { x: 24, y: 0 }, { x: 24, y: 7 }, { x: 0, y: 7 }] },
+  ];
+  for (const polygon of apartments) {
+    for (const minimumRoomAreaSquareMeters of [12, 14, 16, 20]) {
+      const layout = planApartmentLayout({ apartmentPolygon: polygon, minimumRoomAreaSquareMeters });
+      const toilet = layout.rooms.find((room) => room.type === "toilet");
+      if (!toilet) continue;
+      const doors = layout.openings.filter((opening) => opening.type === "door" &&
+        segmentOnPolygon(opening, toilet.polygon.outer));
+      assert.equal(doors.length, 1, `${JSON.stringify(polygon.outer)} @ ${minimumRoomAreaSquareMeters}`);
+    }
+  }
+});
+
+test("the room holding the entrance door never becomes the toilet", () => {
+  // Four 5x5 rooms; the entrance sits on the wall of the bottom-left room.
+  const layout = planApartmentLayout({
+    apartmentPolygon: apartment,
+    minimumRoomAreaSquareMeters: 12,
+    openings: [{ id: "entrance", type: "door", start: { x: 1, y: 0 }, end: { x: 2, y: 0 } }],
+  });
+  const toilet = layout.rooms.find((room) => room.type === "toilet");
+  assert.ok(toilet);
+  const entrance = layout.openings.find((opening) => opening.id === "entrance");
+  assert.ok(!segmentOnPolygon(entrance, toilet.polygon.outer));
+  const toiletDoors = layout.openings.filter((opening) => opening.type === "door" &&
+    segmentOnPolygon(opening, toilet.polygon.outer));
+  assert.equal(toiletDoors.length, 1);
+});
+
+test("a room that other rooms can only be reached through never becomes the toilet", () => {
+  // Three rooms in a row: the middle one is the smallest but is the only link
+  // between the two ends, so it must not become the toilet.
+  const rectangle = (minX, maxX) => ({
+    outer: [{ x: minX, y: 0 }, { x: maxX, y: 0 }, { x: maxX, y: 4 }, { x: minX, y: 4 }],
+  });
+  const rooms = [
+    { id: "room-1", type: "room", polygon: rectangle(0, 5) },
+    { id: "room-2", type: "room", polygon: rectangle(5, 8) },
+    { id: "room-3", type: "room", polygon: rectangle(8, 13) },
+  ];
+  assignApartmentRoomTypes(rooms);
+  assert.notEqual(rooms[1].type, "toilet");
+  assert.equal(rooms.filter((room) => room.type === "toilet").length, 1);
+  assert.equal(rooms.filter((room) => room.type === "kitchen").length, 1);
+});
+
+function segmentOnPolygon(opening, points) {
+  const middle = { x: (opening.start.x + opening.end.x) / 2, y: (opening.start.y + opening.end.y) / 2 };
+  return points.some((a, index) => {
+    const b = points[(index + 1) % points.length];
+    const cross = (b.x - a.x) * (middle.y - a.y) - (b.y - a.y) * (middle.x - a.x);
+    if (Math.abs(cross) > 1e-6) return false;
+    return middle.x >= Math.min(a.x, b.x) - 1e-6 && middle.x <= Math.max(a.x, b.x) + 1e-6 &&
+      middle.y >= Math.min(a.y, b.y) - 1e-6 && middle.y <= Math.max(a.y, b.y) + 1e-6;
+  });
 }

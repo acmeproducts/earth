@@ -24,6 +24,17 @@ export function lerp(from: number, to: number, amount: number): number {
   return from + (to - from) * amount;
 }
 
+/**
+ * Weight of a wavelength that samples at the given spacing can still
+ * reconstruct. A band shorter than about twice the spacing cannot be
+ * represented and would only alias into per-sample speckle, so it fades to
+ * zero there. Non-positive spacing means "unlimited resolution".
+ */
+export function resolvableBandWeight(bandMeters: number, spacingMeters: number): number {
+  if (spacingMeters <= 0) return 1;
+  return smoothstep(2, 4, bandMeters / spacingMeters);
+}
+
 /** Wraps a value into [0, modulus), for negative values too. */
 export function wrap(value: number, modulus: number): number {
   return ((value % modulus) + modulus) % modulus;

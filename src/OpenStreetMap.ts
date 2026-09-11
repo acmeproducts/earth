@@ -61,6 +61,7 @@ import {
 import {
   planRoadsAndBuildings,
   roadGradeAmount,
+  type JunctionArm,
   type PlannedRoadPolygon,
   type RoadAndBuildingPlan,
 } from "./RoadAndBuildingPlanner";
@@ -984,22 +985,31 @@ function plannedRoadUv(
   const lengthSquared = dx * dx + dz * dz;
   const length = Math.sqrt(lengthSquared);
   if (length <= 1e-8) return { x: 0, y: 0.5 };
-  const amount = Math.max(0, Math.min(1, (
+  const projected = (
     (point.x - axis[0].x) * dx + (point.z - axis[0].z) * dz
-  ) / lengthSquared));
+  ) / lengthSquared;
+  // A junction disc borrows the widest approach's axis and straddles that
+  // approach's end, so half of it projects outside the piece. Left unclamped,
+  // its strip runs on continuously into the next piece of the same road.
+  const amount = road.junctionArms
+    ? projected
+    : Math.max(0, Math.min(1, projected));
   const across = ((point.x - axis[0].x) * -dz + (point.z - axis[0].z) * dx) / length;
   const isJoin = Math.hypot(
     road.centerline[1].x - road.centerline[0].x,
     road.centerline[1].z - road.centerline[0].z,
   ) <= 1e-8;
-  // Junction discs and bend wedges borrow an incident road's texture axis,
-  // but that axis must not also decide which connections receive the dirt
-  // texture's transparent edge. Fade these filler polygons radially instead:
-  // every incident approach then remains opaque at its centre and the alpha
-  // falloff is reserved for the exposed outside of the join.
-  const acrossUv = isJoin
-    ? radialJoinUv(point, road)
-    : 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters);
+  // A junction disc is mapped as the roads running through it, so the
+  // markings and the dirt texture's transparent edges line up with each
+  // approach. A bend wedge has no such arms; it borrows a chord of its own
+  // road as texture axis, and that axis must not decide which side gets the
+  // transparent edge, so it fades radially with the falloff kept for the
+  // exposed outside of the bend.
+  const acrossUv = road.junctionArms
+    ? junctionAcrossUv(point, road.junctionArms, road.visualStyle, metersPerUnit)
+    : isJoin
+      ? radialJoinUv(point, road)
+      : 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters);
   return {
     x: (road.startDistance + amount * length) * metersPerUnit / repeatMeters,
     y: Math.max(0, Math.min(1, acrossUv)),
@@ -1016,6 +1026,34 @@ function radialJoinUv(
   ));
   const distance = Math.hypot(point.x - center.x, point.z - center.z);
   return 0.5 + 0.5 * distance / radius;
+}
+
+/**
+ * Across-strip coordinate inside a junction disc. A marked disc follows only
+ * the widest road, so its centre line runs straight through while the side
+ * roads' markings stop at the disc. A dirt disc follows every arm: it is
+ * opaque along each approach's corridor and fades only in the wedges between
+ * them, so no approach meets a transparent rim.
+ */
+function junctionAcrossUv(
+  point: { x: number; z: number },
+  arms: ReadonlyArray<JunctionArm>,
+  visualStyle: RoadVisualStyle,
+  metersPerUnit: number,
+): number {
+  const considered = visualStyle === "marked" ? arms.slice(0, 1) : arms;
+  let nearest = Infinity;
+  for (const arm of considered) {
+    const dx = arm.axis[1].x - arm.axis[0].x;
+    const dz = arm.axis[1].z - arm.axis[0].z;
+    const length = Math.hypot(dx, dz);
+    if (length <= 1e-8) continue;
+    const lateral = Math.abs(
+      (point.x - arm.axis[0].x) * -dz + (point.z - arm.axis[0].z) * dx,
+    ) / length;
+    nearest = Math.min(nearest, lateral * metersPerUnit / Math.max(0.01, arm.widthMeters));
+  }
+  return nearest === Infinity ? 0.5 : 0.5 + nearest;
 }
 
 function createRoad(
