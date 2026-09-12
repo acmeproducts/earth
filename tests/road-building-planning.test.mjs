@@ -214,7 +214,7 @@ test("separates true overpasses while treating fords as ground-level roads", () 
     .some((right) => hasPositiveAreaIntersection(left.outline, right.outline))));
 });
 
-test("gently grades roads across their width and levels building sites in one pass", async () => {
+test("gently grades roads after leveling building sites", async () => {
   const width = 13;
   const height = 13;
   const elevations = new Float32Array(width * height);
@@ -252,9 +252,8 @@ test("gently grades roads across their width and levels building sites in one pa
     assert.equal(terrain.elevations[7 * width + column], terrain.elevations[6 * width + column]);
   }
   const buildingValues = [];
-  for (let row = 1; row <= 3; row++) {
-    for (let column = 2; column <= 4; column++) buildingValues.push(terrain.elevations[row * width + column]);
-  }
+  // The road blend can reshape the near edge of a pad; its far edge stays level.
+  for (let column = 2; column <= 4; column++) buildingValues.push(terrain.elevations[column]);
   assert.equal(new Set(buildingValues).size, 1);
 });
 
@@ -431,7 +430,7 @@ test("neighboring building pads cannot raise terrain through a lower floor", asy
   }
 });
 
-test("road grading cannot raise footprint support samples through a building", async () => {
+test("road grading takes priority over overlapping building support samples", async () => {
   const opts = { ...options, sharedBuildingElevations: new Map([["house", 10]]) };
   const terrain = gradingTerrain(13, 30);
   const plan = planRoadsAndBuildings([
@@ -442,7 +441,62 @@ test("road grading cannot raise footprint support samples through a building", a
   await conformTerrainToPlannedFeatures(terrain, plan, opts);
   for (let row = 4; row <= 6; row++) {
     for (let column = 5; column <= 7; column++) {
-      assert.equal(terrain.elevations[row * 13 + column], 10);
+      assert.equal(terrain.elevations[row * 13 + column], 30);
+    }
+  }
+});
+
+test("road beds stay flat beside raised building pads at different scene scales", async () => {
+  for (const metersPerUnit of [1, 5]) {
+    const opts = {
+      meshWidth: 12 / metersPerUnit, meshDepth: 12 / metersPerUnit, metersPerUnit,
+      sharedBuildingElevations: new Map([["house", 40]]),
+    };
+    const point = (x, z) => ({ x: x / metersPerUnit, z: z / metersPerUnit });
+    const buildings = [{ id: "house", outline: [
+      point(-1, 2), point(1, 2), point(1, 5), point(-1, 5),
+    ] }];
+    const terrain = gradingTerrain(13, 20);
+    const buildingOnly = gradingTerrain(13, 20);
+    await conformTerrainToPlannedFeatures(buildingOnly, planRoadsAndBuildings([], buildings, opts), opts);
+    assert.ok(buildingOnly.elevations[5 * 13 + 6] > 21,
+      "the building pad must raise the nearby road bed beyond the natural earthwork limit");
+    const plan = planRoadsAndBuildings([
+      { id: "street", paths: [[point(-5, 0), point(5, 0)]], appearance },
+    ], buildings, opts);
+    await conformTerrainToPlannedFeatures(terrain, plan, opts);
+    for (let row = 5; row <= 7; row++) {
+      for (let column = 2; column <= 10; column++) {
+        assert.equal(terrain.elevations[row * 13 + column], 20);
+      }
+    }
+    assert.equal(terrain.elevations[6], 40,
+      "the building pad stays level beyond the road blend");
+    assert.equal(terrain.minElevation, Math.min(...terrain.elevations));
+    assert.equal(terrain.maxElevation, Math.max(...terrain.elevations));
+  }
+});
+
+test("the final road pass fills deep dips beside buildings across the bed and shoulders", async () => {
+  for (const metersPerUnit of [1, 5]) {
+    const opts = {
+      meshWidth: 12 / metersPerUnit, meshDepth: 12 / metersPerUnit, metersPerUnit,
+      sharedBuildingElevations: new Map([["house", 12]]),
+    };
+    const point = (x, z) => ({ x: x / metersPerUnit, z: z / metersPerUnit });
+    const terrain = gradingTerrain(13, 20);
+    for (let row = 4; row <= 8; row++) {
+      for (let column = 4; column <= 8; column++) terrain.elevations[row * 13 + column] = 10;
+    }
+    const plan = planRoadsAndBuildings([
+      { id: "street", paths: [[point(-5, 0), point(5, 0)]], appearance },
+    ], [{ id: "house", outline: [point(-1, 3), point(1, 3), point(1, 5), point(-1, 5)] }], opts);
+    await conformTerrainToPlannedFeatures(terrain, plan, opts);
+    for (let row = 4; row <= 8; row++) {
+      for (let column = 4; column <= 8; column++) {
+        assert.equal(terrain.elevations[row * 13 + column], 20,
+          "the ground must rise to the road grade after building leveling");
+      }
     }
   }
 });

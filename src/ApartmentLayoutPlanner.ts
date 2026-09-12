@@ -1,5 +1,5 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
-import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "./PlanningFrame.mjs";
+import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame, type PlanningFrame2D } from "./PlanningFrame.mjs";
 import { decomposeToConvexPolygons, mergeConvexNeighbours } from "./PolygonDecomposition.mjs";
 import {
   clipPolygonAtAxis,
@@ -7,6 +7,7 @@ import {
   overlappingSegment,
   polygonArea,
   polygonBounds,
+  polygonMinimumMeanWidth,
   samePoint,
   type CartesianAxis,
 } from "./PolygonGeometry";
@@ -34,6 +35,8 @@ export const SMALL_ROOM_AREA_SQUARE_METERS = 25;
 
 export interface ApartmentPlannerInput {
   apartmentPolygon: Polygon2D;
+  /** Inherit the parent building's wall axes when subdividing its apartments. */
+  planningFrame?: PlanningFrame2D;
   openings?: readonly Opening2D[];
   /** Overrides the default room-size target for this apartment. */
   minimumRoomAreaSquareMeters?: number;
@@ -51,7 +54,7 @@ export function maximumMinimumRoomAreaForApartment(apartment: Polygon2D): number
 
 /** Recursively bisects an apartment into balanced rooms using orthogonal walls. */
 export function planApartmentLayout(input: ApartmentPlannerInput): ApartmentLayout {
-  const frame = planningFrameForPolygon(input.apartmentPolygon.outer);
+  const frame = input.planningFrame ?? planningFrameForPolygon(input.apartmentPolygon.outer);
   const toLocal = (point: Point2D): Point2D => pointInPlanningFrame(point, frame);
   const toWorld = (point: Point2D): Point2D => pointFromPlanningFrame(point, frame);
   const minimumRoomArea = validatedMinimumRoomArea(
@@ -350,8 +353,7 @@ function bestSplit(
 
 function isUsableRoom(polygon: readonly Point2D[], minimumRoomArea: number): boolean {
   if (polygonArea(polygon) < minimumRoomArea - 1e-7) return false;
-  const bounds = polygonBounds(polygon);
-  return Math.min(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) >=
+  return polygonMinimumMeanWidth(polygon) >=
     MINIMUM_ROOM_CLEAR_WIDTH_METERS - 1e-7;
 }
 

@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { planApartmentLayout } from "../src/ApartmentLayoutPlanner.ts";
 import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
+import { planningFrameForPolygon } from "../src/PlanningFrame.mjs";
 import { renderFloorPlanSvg } from "../src/FloorPlan.ts";
 
 const inputPath = process.argv[2];
@@ -32,9 +33,11 @@ for (let index = 0; index < capture.buildings.length; index++) {
     await writeFile(path.join(outputDirectory, buildingFilename), buildingSvg, "utf8");
     const apartmentFiles = [];
     const apartmentLayouts = [];
+    const planningFrame = planningFrameForPolygon(layout.boundary.outer);
     for (const room of layout.rooms.filter((room) => room.type === "apartment")) {
       const apartment = planApartmentLayout({
         apartmentPolygon: room.polygon,
+        planningFrame,
         openings: [...(layout.openings ?? []), ...(building.facadeOpenings ?? [])]
           .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
       });

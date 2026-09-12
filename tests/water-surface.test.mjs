@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { waterMotionSpeed } from '../src/WaterFrame.ts';
 
 const water = readFileSync(new URL("../src/Water.ts", import.meta.url), "utf8");
 const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url), "utf8");
@@ -30,13 +31,15 @@ test("water waits for alpha-cut foliage depth before writing SSR reflectivity", 
 });
 
 test("separately streamed water materials animate in phase", () => {
-  assert.match(water, /const \{ seconds, wind \} = waterFrame\(scene\)/);
+  assert.match(water, /const \{ driftX, driftY, wind \} = waterFrame\(scene\)/);
   assert.doesNotMatch(water, /seconds \+= scene\.getEngine\(\)\.getDeltaTime\(\)/);
 });
 
 test("water motion is zero at calm wind and grows sublinearly", () => {
-  assert.match(water, /export function waterMotionSpeed\(windStrength: number, exposure = 1\)/);
-  assert.match(water, /Math\.sqrt\(strength \/ WATER_WIND_RESPONSE\)/);
+  assert.equal(waterMotionSpeed(0), 0);
+  assert.equal(waterMotionSpeed(1), 1.25);
+  assert.ok(waterMotionSpeed(2) < 2 * waterMotionSpeed(1));
+  assert.equal(waterMotionSpeed(1, 0.62), 1.25 * 0.62);
   assert.doesNotMatch(water, /Math\.max\(0\.15, wind\.strength\)/);
 });
 

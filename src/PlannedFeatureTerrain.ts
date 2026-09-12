@@ -37,11 +37,11 @@ interface BuildingGrade {
   elevation: number;
 }
 
-// Elevations are in metres, independent of the scene scale. Roads may smooth
-// small irregularities, but must not cut a straight ramp through an entire hill.
-const MAX_ROAD_EARTHWORK_METERS = 1;
+// Limit excavation into natural hills, while allowing low ground to be filled
+// to the road grade. Building earthwork is replaced by the final road pass.
+const MAX_ROAD_CUT_METERS = 1;
 
-/** Applies one coordinated terrain pass from the shared construction plan. */
+/** Levels building pads, then applies road grades from the original terrain. */
 export async function conformTerrainToPlannedFeatures(
   terrain: TerrainData,
   plan: RoadAndBuildingPlan,
@@ -93,49 +93,54 @@ export async function conformTerrainToPlannedFeatures(
   const cellSize = Math.max(sampleSpacing * 4, 12 / options.metersPerUnit);
   const roadCells = new PlanarCellIndex<RoadGrade>(cellSize);
   for (const grade of roads) {
-    roadCells.add(grade, pointBounds(grade.road.outline), rasterMargin + roadBlendWidth);
+    roadCells.add(grade, pointBounds(grade.road.outline),
+      rasterMargin + grade.road.shoulderWidthMeters / options.metersPerUnit + roadBlendWidth);
   }
   const buildingCells = new PlanarCellIndex<BuildingGrade>(cellSize);
   for (const grade of buildings) {
     buildingCells.add(grade, pointBounds(grade.site.outline), buildingFlatMargin + buildingBlendWidth);
   }
   let modified = 0;
+  const touched = new Uint8Array(original.length);
+  // Finish every building pad before aligning the road bed and its shoulders.
   for (let row = 0; row < terrain.height; row++) {
     const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
     for (let column = 0; column < terrain.width; column++) {
       const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
       const sample = { x, z };
-      const roadTarget = strongestRoadTarget(
-        sample,
-        roadCells.queryPoint(sample),
-        rasterMargin,
-        roadBlendWidth,
-      );
       const buildingTarget = strongestBuildingTarget(
         sample,
         buildingCells.queryPoint(sample),
         buildingFlatMargin,
         buildingBlendWidth,
       );
-      if (!roadTarget && !buildingTarget) continue;
+      if (!buildingTarget) continue;
 
-      // Footprint support samples must stay below every floor they support.
-      // Road grades and neighboring pads may otherwise push terrain indoors.
-      const selected = buildingTarget?.weight === 1
-        ? buildingTarget
-        : roadTarget?.inside
-        ? roadTarget
-        : buildingTarget && (!roadTarget || buildingTarget.weight > roadTarget.weight)
-          ? buildingTarget
-          : roadTarget!;
       const index = row * terrain.width + column;
-      const delta = selected.elevation - original[index];
-      const earthwork = selected === roadTarget
-        ? Math.max(-MAX_ROAD_EARTHWORK_METERS, Math.min(MAX_ROAD_EARTHWORK_METERS, delta))
-        : delta;
       terrain.elevations[index] = original[index] +
-        earthwork * selected.weight;
+        (buildingTarget.elevation - original[index]) * buildingTarget.weight;
+      touched[index] = 1;
       modified++;
+    }
+    await yieldControl?.();
+  }
+  for (let row = 0; row < terrain.height; row++) {
+    const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
+    for (let column = 0; column < terrain.width; column++) {
+      const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
+      const sample = { x, z };
+      const roadTarget = strongestRoadTarget(
+        sample, roadCells.queryPoint(sample), rasterMargin, roadBlendWidth, options.metersPerUnit,
+      );
+      if (!roadTarget) continue;
+      const index = row * terrain.width + column;
+      // Sample grades from the original terrain so building pad edges cannot
+      // introduce bumps. Fill depressions fully, including those deeper than
+      // the excavation limit, then blend into the completed building pass.
+      const roadElevation = Math.max(original[index] - MAX_ROAD_CUT_METERS, roadTarget.elevation);
+      const elevation = terrain.elevations[index];
+      terrain.elevations[index] = elevation + (roadElevation - elevation) * roadTarget.weight;
+      if (!touched[index]) modified++;
     }
     await yieldControl?.();
   }
@@ -148,6 +153,7 @@ function strongestRoadTarget(
   roads: readonly RoadGrade[],
   flatMargin: number,
   blendWidth: number,
+  metersPerUnit: number,
 ): { elevation: number; weight: number; inside: boolean } | undefined {
   let result: { elevation: number; weight: number; distance: number; inside: boolean } | undefined;
   for (const grade of roads) {
@@ -155,9 +161,11 @@ function strongestRoadTarget(
     const distance = inside
       ? 0
       : distanceToRing(sample, grade.road.outline);
-    const outer = flatMargin + blendWidth;
+    // Shoulders share their carriageway's grade, including at junctions.
+    const roadFlatMargin = flatMargin + grade.road.shoulderWidthMeters / metersPerUnit;
+    const outer = roadFlatMargin + blendWidth;
     if (distance >= outer) continue;
-    const weight = distance <= flatMargin ? 1 : 1 - smoothstep(flatMargin, outer, distance);
+    const weight = distance <= roadFlatMargin ? 1 : 1 - smoothstep(roadFlatMargin, outer, distance);
     if (result && (weight < result.weight || (weight === result.weight && distance >= result.distance))) continue;
     const amount = roadGradeAmount(grade.road, sample);
     result = {

@@ -24,6 +24,7 @@ import { averagePoint, clipToBounds, pointInRing, signedArea } from "../PlanarGe
 import { unitFromSeed } from "../Random";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
 import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
+import { planningFrameForPolygon } from "../PlanningFrame.mjs";
 import {
   maximumMinimumRoomAreaForApartment,
   planApartmentLayout,
@@ -37,6 +38,7 @@ import {
 import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
 import { buildingProfile } from "../BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture } from "./InteriorFurniture";
+import { createRooftopEquipment } from "./RooftopEquipment";
 import type { TerrainData } from "../TerrainData";
 import type {
   BuildingAppearance,
@@ -66,6 +68,7 @@ import {
   BUILDING_ROOF_OVERHANG_METERS,
   BUILDING_ROOF_TRIM_METERS,
   BUILDING_STAIR_MAX_RUN_METERS,
+  BUILDING_STAIR_LANDING_METERS,
   BUILDING_STAIR_MIN_RUN_METERS,
   BUILDING_STAIR_WALL_CLEARANCE_METERS,
   BUILDING_STAIR_WIDTH_METERS,
@@ -139,7 +142,9 @@ export class ProceduralBuildingRenderer {
     );
     const parts = detailed.parts;
     const showRoofs = options.showRoofs !== false;
-    const trim = showRoofs && createRoofTrim(
+    // The trim is a solid slab, not a perimeter band. Flat roofs already have
+    // a cap here; layering both exposes competing triangulations at distance.
+    const trim = showRoofs && roofHeightMeters > 0 && createRoofTrim(
       scene,
       prepared.outline,
       wallTopElevation,
@@ -173,6 +178,10 @@ export class ProceduralBuildingRenderer {
         appearance,
       );
       if (rooftop) parts.push(rooftop);
+      const equipment = createRooftopEquipment(scene, plan, prepared.outline, [],
+        wallTopElevation + flatRoofThickness(areaSquareMeters) / 2,
+        options.metersPerUnit, appearance.wall);
+      if (equipment) parts.push(equipment);
     }
 
     parts.forEach(compactMeshBuffers);
@@ -331,7 +340,7 @@ function createCourtyardBuilding(
   const bottomElevation = plan.minimumHeightMeters > 0
     ? prepared.baseElevation + plan.minimumHeightMeters
     : prepared.baseElevation - BUILDING_GROUND_OVERLAP_METERS;
-  const mesh = createBuildingPrism(
+  let mesh = createBuildingPrism(
     scene,
     prepared.outline,
     prepared.baseElevation + plan.heightMeters,
@@ -340,6 +349,11 @@ function createCourtyardBuilding(
     prepared.holes,
   );
   colorBuildingMass(mesh, appearance);
+  if (options.showRoofs !== false) {
+    const equipment = createRooftopEquipment(scene, plan, prepared.outline, prepared.holes,
+      prepared.baseElevation + plan.heightMeters, options.metersPerUnit, appearance.wall);
+    if (equipment) mesh = Mesh.MergeMeshes([mesh, equipment], true, true) ?? mesh;
+  }
   mesh.metadata = {
     buildingId: plan.id,
     enterable: false,
@@ -439,7 +453,17 @@ function createEnterableBuilding(
   const planningAttempt = profile.interiorLayout === "rooms"
     ? createPlannedInterior(outline, entranceOpenings, options)
     : undefined;
-  const plannedInterior = planningAttempt?.interior;
+  let plannedInterior = planningAttempt?.interior;
+  const plannedStairs = plannedInterior && profile.hasStairs && floorCount > 1
+    ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed)
+    : [];
+  // Perimeter fallback flights are placed in the building footprint, outside
+  // the planned core. Keep that fallback interior open so apartment walls
+  // cannot cut across the stairs or their approach.
+  if (plannedInterior && profile.hasStairs && floorCount > 1 && plannedStairs.length === 0) {
+    plannedInterior = undefined;
+    if (planningAttempt) planningAttempt.failure = "The stair core has no accessible flight; using an open interior with perimeter stairs.";
+  }
   const interiorUse = plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
   const facadeOpenings = plannedFacadeOpenings(
     plan, outline, storyHeight, entranceEdge, windowStyle, options,
@@ -462,7 +486,7 @@ function createEnterableBuilding(
       plan.detailSeed,
     );
     plannedInterior.apartments = apartmentPlanning.apartments;
-    if (apartmentPlanning.failure) planningAttempt.failure = apartmentPlanning.failure;
+    if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
   }
   if (part === "exterior" && planningAttempt) {
     captureEncounteredBuildingLayout({
@@ -489,9 +513,6 @@ function createEnterableBuilding(
       fallbackReason: `The ${plan.buildingClass} profile uses an open interior.`,
     });
   }
-  const plannedStairs = plannedInterior
-    ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed)
-    : [];
   const stairs = profile.hasStairs && floorCount > 1
     ? plannedStairs.length > 0
       ? plannedStairs
@@ -527,7 +548,6 @@ function createEnterableBuilding(
           stairs[floor],
           baseElevation + floor * storyHeight,
           storyHeight,
-          floor % 2 === 1,
           options,
           floorColor,
         );
@@ -817,12 +837,14 @@ function planApartmentLayouts(
   buildingSeed: number,
 ): { apartments: ApartmentLayout[]; failure?: string } {
   const failures: string[] = [];
+  const planningFrame = planningFrameForPolygon(building.boundary.outer);
   const apartments = building.rooms
     .filter((room) => room.type === "apartment")
     .flatMap((room, apartmentIndex) => {
       try {
         return [planApartmentLayout({
           apartmentPolygon: room.polygon,
+          planningFrame,
           minimumRoomAreaSquareMeters: apartmentRoomAreaTarget(
             buildingSeed,
             apartmentIndex,
@@ -942,8 +964,9 @@ function stairLayoutsFromPlan(
       : candidates;
     // Flights on non-adjacent storeys are vertically separated and can reuse
     // the same shaft position. If a narrow core has only one viable position,
-    // stacking is still preferable to silently ending the stairs partway up.
-    const choices = separated.length > 0 ? separated : candidates;
+    // reuse the exact flight with the same ascent direction so solid treads
+    // above do not obstruct the arriving player's headroom.
+    const choices = separated.length > 0 ? separated : [previous];
     layouts.push(choices[Math.floor(
       unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
     )]);
@@ -958,6 +981,11 @@ function stairLayoutCandidatesFromPlan(
   const stair = layout.rooms.find((room) => room.type === "stairs");
   if (!stair) return [];
   const points = stair.polygon.outer;
+  const landing = BUILDING_STAIR_LANDING_METERS;
+  const doors = (layout.openings ?? []).filter((opening) =>
+    opening.type === "door" && openingTouchesBoundary(opening, points));
+  if (layout.rooms.length > 1 && !doors.some((door) =>
+    Math.hypot(door.end.x - door.start.x, door.end.y - door.start.y) >= 0.75)) return [];
   const center = points.reduce(
     (sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }),
     { x: 0, y: 0 },
@@ -967,28 +995,40 @@ function stairLayoutCandidatesFromPlan(
     const start = points[index];
     const end = points[(index + 1) % points.length];
     const edgeLength = Math.hypot(end.x - start.x, end.y - start.y);
-    if (edgeLength < BUILDING_STAIR_MIN_RUN_METERS + 0.4) continue;
+    if (edgeLength < BUILDING_STAIR_MIN_RUN_METERS + 2 * landing) continue;
     const direction = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
     let inward = { x: -direction.y, y: direction.x };
     if ((center.x - (start.x + end.x) / 2) * inward.x +
         (center.y - (start.y + end.y) / 2) * inward.y < 0) {
       inward = { x: -inward.x, y: -inward.y };
     }
-    const maxRun = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLength - 0.4);
+    const maxRun = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLength - 2 * landing);
     for (let run = maxRun; run >= BUILDING_STAIR_MIN_RUN_METERS; run -= 0.1) {
-      const alongStarts = [0.2, (edgeLength - run) / 2, edgeLength - run - 0.2]
-        .filter((along) => along >= 0.2 && along + run <= edgeLength - 0.2);
+      const alongStarts = [landing, (edgeLength - run) / 2, edgeLength - run - landing]
+        .filter((along) => along >= landing - 1e-7 && along + run <= edgeLength - landing + 1e-7);
       for (let width = BUILDING_STAIR_WIDTH_METERS; width >= 0.75; width -= 0.05) {
         for (const alongStart of alongStarts) {
           const acrossStart = BUILDING_STAIR_WALL_CLEARANCE_METERS;
           const corners = [
-            [alongStart, acrossStart], [alongStart + run, acrossStart],
-            [alongStart + run, acrossStart + width], [alongStart, acrossStart + width],
+            [alongStart - landing, acrossStart], [alongStart + run + landing, acrossStart],
+            [alongStart + run + landing, acrossStart + width], [alongStart - landing, acrossStart + width],
           ].map(([along, across]) => ({
             x: start.x + direction.x * along + inward.x * across,
             y: start.y + direction.y * along + inward.y * across,
           }));
           if (!corners.every((point) => pointInPolygonInclusive(point, points))) continue;
+          // Reserve the full doorway and enough space to step through it. A
+          // flight beside a door can otherwise seal it with its tall treads.
+          if (doors.some((door) => {
+            const projected = [door.start, door.end].map((point) => ({
+              along: (point.x - start.x) * direction.x + (point.y - start.y) * direction.y,
+              across: (point.x - start.x) * inward.x + (point.y - start.y) * inward.y,
+            }));
+            return Math.max(...projected.map((point) => point.along)) + landing > alongStart &&
+              Math.min(...projected.map((point) => point.along)) - landing < alongStart + run &&
+              Math.max(...projected.map((point) => point.across)) + landing > acrossStart &&
+              Math.min(...projected.map((point) => point.across)) - landing < acrossStart + width;
+          })) continue;
           candidates.push({ edge: [start, end] as const, start: alongStart, run, width });
         }
       }
@@ -1508,7 +1548,8 @@ function findStairLayouts(
     const edgeStart = outline[edgeIndex];
     const edgeEnd = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(edgeStart, edgeEnd) * options.metersPerUnit;
-    const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLengthMeters - 1.2);
+    const landing = BUILDING_STAIR_LANDING_METERS;
+    const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLengthMeters - 2 * landing);
     if (runMeters < BUILDING_STAIR_MIN_RUN_METERS) continue;
     const direction = {
       x: (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters,
@@ -1520,13 +1561,13 @@ function findStairLayouts(
     const centeredStart = (edgeLengthMeters - runMeters) / 2;
     const alongStarts = [
       centeredStart,
-      0.6,
-      edgeLengthMeters - runMeters - 0.6,
+      landing,
+      edgeLengthMeters - runMeters - landing,
     ].filter((value, index, values) =>
       values.findIndex((candidate) => Math.abs(candidate - value) < 0.1) === index
     );
     for (const alongStart of alongStarts) {
-      if (alongStart < 0.35 || alongStart + runMeters > edgeLengthMeters - 0.35) continue;
+      if (alongStart < landing - 1e-7 || alongStart + runMeters > edgeLengthMeters - landing + 1e-7) continue;
       if (edgeIndex === entrance.edgeIndex) {
         const doorwayMinimum = entrance.centerMeters - entrance.widthMeters / 2 - 0.65;
         const doorwayMaximum = entrance.centerMeters + entrance.widthMeters / 2 + 0.65;
@@ -1546,7 +1587,16 @@ function findStairLayouts(
         runMeters,
         widthMeters: BUILDING_STAIR_WIDTH_METERS,
       };
-      if (stairOpening(layout, options).every((point) => pointInRing(point, outline))) {
+      const landingCorners = [-landing, runMeters + landing].flatMap((along) =>
+        [-BUILDING_STAIR_WIDTH_METERS / 2, BUILDING_STAIR_WIDTH_METERS / 2].map((across) => ({
+          x: (start.x * options.metersPerUnit + direction.x * along + inward.x * across),
+          y: (start.z * options.metersPerUnit + direction.z * along + inward.z * across),
+        })));
+      const footprintMeters = outline.map((point) => ({
+        x: point.x * options.metersPerUnit, y: point.z * options.metersPerUnit,
+      }));
+      if (landingCorners.every((point) => pointInPolygonInclusive(point, footprintMeters)) &&
+          stairOpening(layout, options).every((point) => pointInRing(point, outline))) {
         candidates.push(layout);
       }
     }
@@ -1559,7 +1609,7 @@ function findStairLayouts(
     const separated = previous
       ? candidates.filter((candidate) => !stairLayoutsOverlap(candidate, previous, options))
       : candidates;
-    const choices = separated.length > 0 ? separated : candidates;
+    const choices = separated.length > 0 ? separated : [previous];
     layouts.push(choices[Math.floor(
       unitFromSeed(detailSeed ^ (flight * 0x1b873593) ^ 0x6d2b79f5) * choices.length,
     )]);
@@ -1582,10 +1632,10 @@ function stairLayoutsOverlap(
   const corners = (stair: StairLayout): ScenePoint[] => {
     const halfWidth = stair.widthMeters / 2;
     return [
-      [0, -halfWidth],
-      [stair.runMeters, -halfWidth],
-      [stair.runMeters, halfWidth],
-      [0, halfWidth],
+      [-BUILDING_STAIR_LANDING_METERS, -halfWidth - 0.1],
+      [stair.runMeters + BUILDING_STAIR_LANDING_METERS, -halfWidth - 0.1],
+      [stair.runMeters + BUILDING_STAIR_LANDING_METERS, halfWidth + 0.1],
+      [-BUILDING_STAIR_LANDING_METERS, halfWidth + 0.1],
     ].map(([along, across]) => ({
       x: stair.start.x + (stair.direction.x * along + stair.inward.x * across) /
         options.metersPerUnit,
@@ -1635,7 +1685,6 @@ function createStairFlight(
   stair: StairLayout,
   floorElevation: number,
   storyHeight: number,
-  reverse: boolean,
   options: BuildingRenderOptions,
   color: Color3,
 ): void {
@@ -1645,26 +1694,24 @@ function createStairFlight(
   for (let step = 0; step < stepCount; step++) {
     const along = (step + 0.5) * treadMeters;
     const heightMeters = (step + 1) * riseMeters;
-    const signedAlong = reverse ? stair.runMeters - along : along;
-    const direction = reverse
-      ? { x: -stair.direction.x, z: -stair.direction.z }
-      : stair.direction;
     const center = {
-      x: stair.start.x + stair.direction.x * signedAlong / options.metersPerUnit,
-      z: stair.start.z + stair.direction.z * signedAlong / options.metersPerUnit,
+      x: stair.start.x + stair.direction.x * along / options.metersPerUnit,
+      z: stair.start.z + stair.direction.z * along / options.metersPerUnit,
     };
     const mesh = stageBuildingMesh(MeshBuilder.CreateBox("buildingStair", {
       width: stair.widthMeters / options.metersPerUnit,
-      height: heightMeters / options.metersPerUnit,
+      // Thin treads preserve headroom when a compact core must stack flights.
+      // Floor-height columns under each tread would seal the flight below.
+      height: riseMeters / options.metersPerUnit,
       depth: treadMeters / options.metersPerUnit,
     }, scene));
     mesh.position.set(
       center.x,
-      (floorElevation + BUILDING_FLOOR_THICKNESS_METERS + heightMeters / 2) /
+      (floorElevation + BUILDING_FLOOR_THICKNESS_METERS + heightMeters - riseMeters / 2) /
         options.metersPerUnit,
       center.z,
     );
-    mesh.rotation.y = Math.atan2(direction.x, direction.z);
+    mesh.rotation.y = Math.atan2(stair.direction.x, stair.direction.z);
     setSolidVertexColor(mesh, color);
     parts.push(mesh);
   }
@@ -2115,7 +2162,7 @@ function createRooftopVolume(
 ): Mesh | undefined {
   // Complex footprints cannot use the pitched triangulation. Always provide
   // a footprint-matching cap so a building never renders open to the sky.
-  const thicknessMeters = Math.max(0.18, Math.min(0.32, areaSquareMeters > 260 ? 0.28 : 0.2));
+  const thicknessMeters = flatRoofThickness(areaSquareMeters);
   const rooftop = createBuildingPrism(
     scene,
     outline,
@@ -2125,6 +2172,10 @@ function createRooftopVolume(
   );
   setSolidVertexColor(rooftop, appearance.roof, appearance.roofSurface);
   return rooftop;
+}
+
+function flatRoofThickness(areaSquareMeters: number): number {
+  return areaSquareMeters > 260 ? 0.28 : 0.2;
 }
 
 function inferredRoofHeight(

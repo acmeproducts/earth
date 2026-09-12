@@ -25,6 +25,38 @@ export function polygonBounds(points: readonly Point2D[]): Bounds2D {
   };
 }
 
+/**
+ * Conservative average depth across the planning axes and each wall direction.
+ * Unlike bounding-box width, this accounts for empty space beside tapered or
+ * concave outlines and for narrow wings running diagonally through the frame.
+ */
+export function polygonMinimumMeanWidth(points: readonly Point2D[]): number {
+  if (points.length < 3) return 0;
+  const bounds = polygonBounds(points);
+  let longestSpan = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  for (let edge = 0; edge < points.length; edge++) {
+    const start = points[edge];
+    const end = points[(edge + 1) % points.length];
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    if (length < 1e-7) continue;
+    const dx = (end.x - start.x) / length;
+    const dy = (end.y - start.y) / length;
+    let minAlong = Infinity, maxAlong = -Infinity;
+    let minAcross = Infinity, maxAcross = -Infinity;
+    for (const point of points) {
+      const x = point.x - start.x, y = point.y - start.y;
+      const along = x * dx + y * dy;
+      const across = -x * dy + y * dx;
+      minAlong = Math.min(minAlong, along);
+      maxAlong = Math.max(maxAlong, along);
+      minAcross = Math.min(minAcross, across);
+      maxAcross = Math.max(maxAcross, across);
+    }
+    longestSpan = Math.max(longestSpan, maxAlong - minAlong, maxAcross - minAcross);
+  }
+  return longestSpan > 1e-7 ? polygonArea(points) / longestSpan : 0;
+}
+
 export function overlappingSegment(
   a: Point2D,
   b: Point2D,

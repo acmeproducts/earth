@@ -221,7 +221,7 @@ test("surface roads stay on the ground even when their endpoint grade spans a va
   assert.equal(elevated[0][0].y, 1000 + clearance, "elevated geometry retains its planned grade");
 });
 
-test("road earthwork preserves hills and valleys without steep banks at either edge", async () => {
+test("road earthwork limits hill cuts but fills valleys to the road grade", async () => {
   for (const metersPerUnit of [1, 24]) {
     for (const direction of [-1, 1]) {
       const localOptions = { meshWidth: 100 / metersPerUnit, meshDepth: 100 / metersPerUnit, metersPerUnit };
@@ -239,12 +239,21 @@ test("road earthwork preserves hills and valleys without steep banks at either e
       }], [], localOptions);
       await conformTerrainToPlannedFeatures(terrain, plan, localOptions);
       let maxChange = 0;
+      let maxCut = 0;
       for (let index = 0; index < original.length; index++) {
         maxChange = Math.max(maxChange, Math.abs(terrain.elevations[index] - original[index]));
+        maxCut = Math.max(maxCut, original[index] - terrain.elevations[index]);
       }
       assert.ok(maxChange > 0, "small road grading still occurs");
-      assert.ok(maxChange <= 1.00001, `earthwork must stay within one metre, got ${maxChange}`);
-      for (let row = 1; row < 101; row++) {
+      assert.ok(maxCut <= 1.00001, `excavation must stay within one metre, got ${maxCut}`);
+      if (direction === -1) {
+        assert.ok(maxChange > 10, "low ground must be filled beyond the old one-metre limit");
+        for (let row = 48; row <= 52; row++) {
+          assert.equal(terrain.elevations[row * 101 + 50], terrain.elevations[50 * 101 + 50],
+            "the filled road bed must be flat across its width");
+        }
+      }
+      for (let row = 1; direction === 1 && row < 101; row++) {
         const slope = Math.abs(terrain.elevations[row * 101 + 50] - terrain.elevations[(row - 1) * 101 + 50]);
         assert.ok(slope < 0.8, `no steep bank on either side of the road, got ${slope}`);
       }

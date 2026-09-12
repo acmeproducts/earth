@@ -1,4 +1,5 @@
 import { ResourceCache } from "./ResourceCache";
+import { mergeOverlappingBuildings } from "./CompositeBuildings";
 import { inferBuildingUse, type BuildingUseContext } from "./BuildingUseInference";
 import type { SharedValueMap } from "./OwnedValueCache";
 import {
@@ -115,6 +116,7 @@ interface RoadSource {
 }
 
 const buildingSourceCache = new WeakMap<VectorTile, readonly BuildingSource[]>();
+const compositeBuildingSourceCache = new WeakMap<readonly MapTile[], readonly BuildingSource[]>();
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
 interface MapLayerOptions {
@@ -272,8 +274,7 @@ export class OpenStreetMap {
     const renderOptions = {
       ...options,
       renderWholeBuildingFootprints: true,
-      neighboringBuildingFootprints: tiles.flatMap((tile) =>
-        buildingSources(tile).map((source) => source.polygon)),
+      neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
     };
     if (options.planning) {
       const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
@@ -293,25 +294,25 @@ export class OpenStreetMap {
       }
     }
 
-    for (const tile of tiles) {
-      for (const source of buildingSources(tile)) {
-        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-        await yieldControl?.();
-        const plan = planBuilding(source);
-        const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-        if (mesh) {
-          buildings.push(mesh);
-          buildingCount++;
-          chunkVertices += mesh.getTotalVertices();
-          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-            const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
-            if (chunk) buildingChunks.push(chunk);
-            buildings.length = 0;
-            chunkVertices = 0;
-          }
+    for (const source of compositeBuildingSources(tiles)) {
+      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+      await yieldControl?.();
+      const plan = planBuilding(source);
+      const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+      if (mesh) {
+        buildings.push(mesh);
+        buildingCount++;
+        chunkVertices += mesh.getTotalVertices();
+        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+          const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
+          if (chunk) buildingChunks.push(chunk);
+          buildings.length = 0;
+          chunkVertices = 0;
         }
-        await yieldControl?.();
       }
+      await yieldControl?.();
+    }
+    for (const tile of tiles) {
       await yieldControl?.();
       for (const source of roadSources(tile)) {
         const appearance = planRoad(source.properties);
@@ -417,11 +418,11 @@ export class OpenStreetMap {
         appearance,
       }] : [];
     }));
-    const buildings = tiles.flatMap((tile) => buildingSources(tile).map((source) => ({
+    const buildings = compositeBuildingSources(tiles).map((source) => ({
       id: source.id,
       outline: source.polygon.outer.map(project),
       holes: source.polygon.holes.map((hole) => hole.map(project)),
-    })));
+    }));
     return planRoadsAndBuildings(roads, buildings, options);
   }
 
@@ -458,10 +459,10 @@ export class OpenStreetMap {
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
     const cellSize = Math.max(options.meshWidth, options.meshDepth) / 8;
     const overlapsBuildings = createWaterBuildingOverlapFilter(
-      tiles.flatMap((tile) => buildingSources(tile).map(({ polygon }) => ({
+      compositeBuildingSources(tiles).map(({ polygon }) => ({
         outline: polygon.outer.map(project),
         holes: polygon.holes.map((hole) => hole.map(project)),
-      }))),
+      })),
       cellSize,
       0.15,
     );
@@ -516,31 +517,27 @@ export class OpenStreetMap {
     const renderOptions = {
       ...options,
       renderWholeBuildingFootprints: true,
-      neighboringBuildingFootprints: tiles.flatMap((tile) =>
-        buildingSources(tile).map((source) => source.polygon)),
+      neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
     };
-    for (const tile of tiles) {
-      for (const source of buildingSources(tile)) {
-        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-        await yieldControl?.();
-        const plan = planBuilding(source);
-        const mesh = detail === "far"
-          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
-          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-        if (mesh) {
-          buildings.push(mesh);
-          count++;
-          chunkVertices += mesh.getTotalVertices();
-          // Bound merge copies and GPU uploads instead of duplicating a whole
-          // dense city tile in memory in one uninterrupted merge.
-          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
-            if (chunk) meshes.push(chunk);
-            buildings.length = 0;
-            chunkVertices = 0;
-          }
+    for (const source of compositeBuildingSources(tiles)) {
+      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+      await yieldControl?.();
+      const plan = planBuilding(source);
+      const mesh = detail === "far"
+        ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
+        : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+      if (mesh) {
+        buildings.push(mesh);
+        count++;
+        chunkVertices += mesh.getTotalVertices();
+        // Bound merge copies and GPU uploads instead of duplicating a whole
+        // dense city tile in memory in one uninterrupted merge.
+        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+          const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+          if (chunk) meshes.push(chunk);
+          buildings.length = 0;
+          chunkVertices = 0;
         }
-        await yieldControl?.();
       }
       await yieldControl?.();
     }
@@ -651,15 +648,13 @@ export class OpenStreetMap {
       }))
       : [];
     if (!options.planning) {
-      for (const tile of tiles) {
-        for (const source of buildingSources(tile)) {
-          const project = ([lon, lat]: LonLat) =>
-            lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
-          buildings.push({
-            outer: source.polygon.outer.map(project),
-            holes: source.polygon.holes.map((hole) => hole.map(project)),
-          });
-        }
+      for (const source of compositeBuildingSources(tiles)) {
+        const project = ([lon, lat]: LonLat) =>
+          lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+        buildings.push({
+          outer: source.polygon.outer.map(project),
+          holes: source.polygon.holes.map((hole) => hole.map(project)),
+        });
         await yieldControl?.();
       }
     }
@@ -722,6 +717,14 @@ function forEachFeature(
   const layer = tile.data.layers[layerName];
   if (!layer) return;
   for (let index = 0; index < layer.length; index++) visit(layer.feature(index), index);
+}
+
+function compositeBuildingSources(tiles: readonly MapTile[]): readonly BuildingSource[] {
+  const cached = compositeBuildingSourceCache.get(tiles);
+  if (cached) return cached;
+  const sources = mergeOverlappingBuildings(tiles.flatMap((tile) => buildingSources(tile)));
+  compositeBuildingSourceCache.set(tiles, sources);
+  return sources;
 }
 
 function buildingSources(tile: MapTile): readonly BuildingSource[] {

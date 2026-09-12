@@ -15,6 +15,7 @@ import {
 } from '@babylonjs/core';
 import type { Nullable, Observer } from '@babylonjs/core';
 import { waterFrame } from './WaterFrame';
+export { waterMotionSpeed } from './WaterFrame';
 import { WaterMotionPlugin } from './WaterMotion';
 import { maximumWaterLift, WATER_PROFILES } from './WaterProfile';
 import type { WaterSurfaceKind } from './WaterProfile';
@@ -36,12 +37,6 @@ const CHOP_TILE_RATIO = 5.37;
 const SWELL_DRIFT_METERS_PER_SECOND = 0.5;
 /** Chop rides across the swell rather than with it, so the two never lock. */
 const CHOP_DRIFT_METERS_PER_SECOND = 1.4;
-/**
- * Water responds less than linearly to wind: once the surface is moving,
- * additional wind mostly makes it rougher rather than proportionally faster.
- */
-const WATER_WIND_RESPONSE = 1;
-const WATER_MOTION_GAIN = 1.25;
 /**
  * Normal-map strength was authored around the procedural wind's 0..1 range.
  * Manual weather can report strengths up to 3; feeding that straight into the
@@ -135,12 +130,6 @@ export interface WaterSurfaceMaterialOptions {
   /** Ocean is deeper, cooler, and more wind-exposed than an inland lake. */
   kind?: WaterSurfaceKind;
   name?: string;
-}
-
-/** Maps wind strength to water motion while preserving exactly still water at zero. */
-export function waterMotionSpeed(windStrength: number, exposure = 1): number {
-  const strength = Math.max(0, windStrength);
-  return WATER_MOTION_GAIN * Math.sqrt(strength / WATER_WIND_RESPONSE) * Math.max(0, exposure);
 }
 
 /** Creates the shared reflective, animated material used by water meshes. */
@@ -380,21 +369,18 @@ function animateWaves(
   const chopRepeatsPerSecond =
     (CHOP_DRIFT_METERS_PER_SECOND * CHOP_TILE_RATIO) / SWELL_TILE_METERS;
   const observer: Nullable<Observer<Scene>> = scene.onBeforeRenderObservable.add(() => {
-    // Absolute page time keeps separately streamed water materials in phase.
-    const { seconds, wind } = waterFrame(scene);
-    const directionX = wind.direction.x;
-    const directionY = wind.direction.y;
+    // Shared accumulated drift keeps separately streamed materials in phase.
+    const { driftX, driftY, wind } = waterFrame(scene);
     const profile = WATER_PROFILES[kind];
     const exposure = profile.exposure;
-    const speed = waterMotionSpeed(wind.strength, exposure);
     // Each layer runs on its own heading so the surface never looks like one
     // sheet sliding past the camera.
     // Different starting phases keep the two copies of the same source image
     // from reinforcing its square tile boundaries.
-    swell.uOffset = 0.173 + seconds * swellRepeatsPerSecond * directionX * speed;
-    swell.vOffset = 0.417 + seconds * swellRepeatsPerSecond * directionY * speed;
-    chop.uOffset = 0.631 - seconds * chopRepeatsPerSecond * directionY * speed * 0.55;
-    chop.vOffset = 0.289 + seconds * chopRepeatsPerSecond * directionX * speed;
+    swell.uOffset = 0.173 + driftX * swellRepeatsPerSecond * exposure;
+    swell.vOffset = 0.417 + driftY * swellRepeatsPerSecond * exposure;
+    chop.uOffset = 0.631 - driftY * chopRepeatsPerSecond * exposure * 0.55;
+    chop.vOffset = 0.289 + driftX * chopRepeatsPerSecond * exposure;
     // Wind makes the surface more broken without changing the authored look
     // at calm conditions. Lakes respond less dramatically than open sea.
     const roughnessWind = Math.min(MAX_WAVE_ROUGHNESS_WIND, wind.strength);

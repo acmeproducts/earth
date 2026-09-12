@@ -136,6 +136,53 @@ function pointInPolygon(point, polygon) {
   return inside;
 }
 
+test("flat composite roofs have only one upper surface across the footprint", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const building = planBuilding({
+      id: "composite:flat-roof",
+      polygon: {
+        outer: [[0.3, 0.3], [0.6, 0.3], [0.6, 0.45], [0.45, 0.45], [0.45, 0.6], [0.3, 0.6], [0.3, 0.3]],
+        holes: [],
+      },
+      properties: { render_height: 12, roof_shape: "flat" },
+    });
+    for (const metersPerUnit of [1, 10]) {
+      const mesh = ProceduralBuildingRenderer.createDetailed(scene, building, terrain, {
+        ...options, metersPerUnit,
+        meshWidth: options.meshWidth / metersPerUnit,
+        meshDepth: options.meshDepth / metersPerUnit,
+      });
+      assert.ok(mesh);
+      const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+      const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+      const indices = mesh.getIndices();
+      const upperElevations = new Set();
+      for (let i = 0; i < indices.length; i += 3) {
+        const triangle = [indices[i], indices[i + 1], indices[i + 2]];
+        if (!triangle.every((vertex) => normals[vertex * 3 + 1] > 0.99)) continue;
+        // Rooftop equipment has its own small top faces; inspect the roof slabs.
+        const [a, b, c] = triangle.map((vertex) => ({
+          x: positions[vertex * 3] * metersPerUnit,
+          z: positions[vertex * 3 + 2] * metersPerUnit,
+        }));
+        if (Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) / 2 < 20) continue;
+        const heights = triangle.map((vertex) =>
+          (positions[vertex * 3 + 1] + mesh.position.y) * metersPerUnit);
+        if (heights.every((height) => height > 22.01)) {
+          heights.forEach((height) => upperElevations.add(height.toFixed(3)));
+        }
+      }
+      assert.equal(upperElevations.size, 1, "a flat roof must not have a second trim cap above the walls");
+      mesh.dispose(false, true);
+    }
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
 test("inferred roofs rise above the mapped massing without clipping its cap", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
@@ -590,7 +637,7 @@ test("house heights without mapped levels do not round up to a second floor", ()
 
 test("fits planned stairs inside a clipped stair room", () => {
   const stairRoom = {
-    outer: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }],
+    outer: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }],
   };
   const stair = stairLayoutFromPlan({
     buildingType: "house",
@@ -599,15 +646,45 @@ test("fits planned stairs inside a clipped stair room", () => {
   }, options);
   assert.ok(stair);
   const corners = [
-    [0, -stair.widthMeters / 2],
-    [stair.runMeters, -stair.widthMeters / 2],
-    [stair.runMeters, stair.widthMeters / 2],
-    [0, stair.widthMeters / 2],
+    [-0.84, -stair.widthMeters / 2],
+    [stair.runMeters + 0.84, -stair.widthMeters / 2],
+    [stair.runMeters + 0.84, stair.widthMeters / 2],
+    [-0.84, stair.widthMeters / 2],
   ].map(([along, across]) => ({
     x: stair.start.x + stair.direction.x * along + stair.inward.x * across,
     y: stair.start.z + stair.direction.z * along + stair.inward.z * across,
   }));
   assert.ok(corners.every((point) => pointInPolygon(point, stairRoom.outer)));
+});
+
+test("rejects a stair room that fits treads but has no room for landings", () => {
+  const boundary = { outer: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }] };
+  assert.equal(stairLayoutFromPlan({
+    buildingType: "house", boundary,
+    rooms: [{ id: "stairs-1", type: "stairs", polygon: boundary }],
+  }, options), undefined);
+});
+
+test("planned flights leave the stair doorway approach clear at different scene scales", () => {
+  const boundary = { outer: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 4 }, { x: 0, y: 4 }] };
+  for (const metersPerUnit of [1, 10]) {
+    const stair = stairLayoutFromPlan({
+      buildingType: "house", boundary,
+      rooms: [{ id: "stairs-1", type: "stairs", polygon: boundary }],
+      openings: [{ id: "stairs-door", type: "door", start: { x: 2.4, y: 0 }, end: { x: 3.6, y: 0 } }],
+    }, { ...options, metersPerUnit });
+    assert.ok(stair);
+    // Sample the complete doorway approach, including the player's width.
+    for (let x = 2.1; x <= 3.9; x += 0.1) {
+      for (let y = 0; y <= 0.8; y += 0.1) {
+        const dx = x - stair.start.x * metersPerUnit;
+        const dz = y - stair.start.z * metersPerUnit;
+        const along = dx * stair.direction.x + dz * stair.direction.z;
+        const across = dx * stair.inward.x + dz * stair.inward.z;
+        assert.ok(along < 0 || along > stair.runMeters || Math.abs(across) > stair.widthMeters / 2);
+      }
+    }
+  }
 });
 
 test("facade windows keep one coherent size per building", () => {
@@ -775,4 +852,34 @@ test("small-footprint high-rises keep fallback stairs on every floor", () => {
   narrowTower.dispose(false, true);
   scene.dispose();
   engine.dispose();
+});
+
+test("compact fallback stairs preserve two meters of headroom beneath the next flight", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const building = ProceduralBuildingRenderer.createDetailed(scene, planBuilding({
+      id: "compact-stair-headroom",
+      polygon: {
+        outer: [[0.4775, 0.485], [0.5225, 0.485], [0.5225, 0.515], [0.4775, 0.515], [0.4775, 0.485]],
+        holes: [],
+      },
+      properties: { render_height: 9.3, levels: 3, roof_shape: "flat" },
+    }), terrain, options);
+    assert.ok(building);
+    assert.equal(building.metadata.plannedInterior, false);
+    assert.equal(building.metadata.stairFlightCount, 2);
+    assert.deepEqual(building.metadata.stairFlightCenters[0], building.metadata.stairFlightCenters[1]);
+    const interior = building.metadata.pendingInterior.load();
+    assert.ok(interior);
+    interior.computeWorldMatrix(true);
+    const center = building.metadata.stairFlightCenters[0];
+    const tread = interior.intersects(new Ray(new Vector3(center.x, 13, center.z), new Vector3(0, -1, 0), 3));
+    assert.ok(tread.hit && tread.pickedPoint);
+    const headroom = interior.intersects(new Ray(tread.pickedPoint.add(new Vector3(0, 0.02, 0)), new Vector3(0, 1, 0), 2));
+    assert.equal(headroom.hit, false, "the upper flight must not block a player standing on the lower flight");
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
 });

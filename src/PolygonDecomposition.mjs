@@ -1,5 +1,3 @@
-import earcut from "earcut";
-
 export function isConvexPolygon(points) {
   let direction = 0;
   for (let index = 0; index < points.length; index++) {
@@ -15,62 +13,30 @@ export function isConvexPolygon(points) {
   return true;
 }
 
-/** Decomposes a concave simple polygon into exact, convex triangles. */
+/**
+ * Partitions a polygon in the caller's local planning frame using orthogonal
+ * walls. Retains any piece that cannot be safely divided, even if concave.
+ */
 export function decomposeToConvexPolygons(points) {
   if (isConvexPolygon(points)) return [[...points]];
-  const partitioned = splitAtReflexCorners(counterClockwise([...points]));
-  if (partitioned) return partitioned;
-  // A malformed ring can defeat the geometric cuts below. Ear clipping still
-  // gives a footprint-faithful last resort rather than dropping the building.
-  return earcutDecomposition(points);
-}
-
-function earcutDecomposition(points) {
-  const indices = earcut(points.flatMap((point) => [point.x, point.y]));
-  const pieces = [];
-  for (let index = 0; index < indices.length; index += 3) {
-    const triangle = [points[indices[index]], points[indices[index + 1]], points[indices[index + 2]]]
-      .map((point) => ({ ...point }));
-    if (Math.abs(signedArea(triangle)) > 1e-7) pieces.push(signedArea(triangle) < 0 ? triangle.reverse() : triangle);
-  }
-  let merged = true;
-  while (merged) {
-    merged = false;
-    let best;
-    for (let first = 0; first < pieces.length; first++) {
-      for (let second = first + 1; second < pieces.length; second++) {
-        const candidate = mergeConvexNeighbours(pieces[first], pieces[second]);
-        if (candidate) {
-          const aspect = aspectRatio(candidate.polygon);
-          if (!best || aspect < best.aspect - 1e-7 ||
-              (Math.abs(aspect - best.aspect) < 1e-7 && candidate.sharedLength > best.sharedLength)) {
-            best = { first, second, aspect, ...candidate };
-          }
-        }
-      }
-    }
-    if (best) {
-      pieces.splice(best.second, 1);
-      pieces[best.first] = best.polygon;
-      merged = true;
-    }
-  }
-  return pieces;
+  return splitAtReflexCorners(counterClockwise([...points]));
 }
 
 function splitAtReflexCorners(points, remainingCuts = 64) {
   if (isConvexPolygon(points)) return [points];
-  if (remainingCuts <= 0) return undefined;
+  if (remainingCuts <= 0) return [points];
   const split = bestReflexSplit(points);
-  if (!split) return undefined;
+  // Triangulation edges are mesh details, not suitable room partitions.
+  if (!split) return [points];
   const first = splitAtReflexCorners(split.first, remainingCuts - 1);
   const second = splitAtReflexCorners(split.second, remainingCuts - 1);
-  return first && second ? [...first, ...second] : undefined;
+  return [...first, ...second];
 }
 
 function bestReflexSplit(points) {
-  const axis = dominantAxis(points);
-  const directions = [axis, { x: -axis.x, y: -axis.y }, { x: -axis.y, y: axis.x }, { x: axis.y, y: -axis.x }];
+  // Both planners already transform their shell into a local planning frame.
+  // Recomputing the longest edge here rotates successive cuts into a fan.
+  const directions = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
   let best;
   for (let vertex = 0; vertex < points.length; vertex++) {
     const previous = points[(vertex + points.length - 1) % points.length];
@@ -127,19 +93,6 @@ function splitPolygonAtCut(points, vertex, edge, point) {
   return first.length >= 3 && second.length >= 3
     ? { first: counterClockwise(first), second: counterClockwise(second) }
     : undefined;
-}
-
-function dominantAxis(points) {
-  let best = { x: 1, y: 0, length: 0 };
-  for (let index = 0; index < points.length; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    const x = end.x - start.x;
-    const y = end.y - start.y;
-    const length = Math.hypot(x, y);
-    if (length > best.length) best = { x: x / length, y: y / length, length };
-  }
-  return best;
 }
 
 function pointInside(point, polygon) {

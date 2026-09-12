@@ -7,6 +7,7 @@ import {
   overlappingSegment,
   polygonArea,
   polygonBounds,
+  polygonMinimumMeanWidth,
   samePoint,
   type Bounds2D,
   type CartesianAxis,
@@ -29,6 +30,7 @@ interface BuildingEntrance extends Interval {
 
 export const MAXIMUM_APARTMENT_AREA_SQUARE_METERS = 120;
 const MINIMUM_APARTMENT_AREA_SQUARE_METERS = 24;
+const MINIMUM_APARTMENT_MEAN_WIDTH_METERS = 2.8;
 const MAXIMUM_APARTMENT_BOUNDING_ASPECT = 3;
 
 export type BuildingLayoutType = "house" | "apartment-building";
@@ -781,6 +783,9 @@ function safePolygonSplit(
       ))) continue;
       const firstArea = polygonArea(split.first);
       const secondArea = polygonArea(split.second);
+      if (Math.min(firstArea, secondArea) < MINIMUM_APARTMENT_AREA_SQUARE_METERS - 1e-7 ||
+          polygonMinimumMeanWidth(split.first) < MINIMUM_APARTMENT_MEAN_WIDTH_METERS - 1e-7 ||
+          polygonMinimumMeanWidth(split.second) < MINIMUM_APARTMENT_MEAN_WIDTH_METERS - 1e-7) continue;
       const score = Math.abs(firstArea - secondArea) / (firstArea + secondArea) + axisIndex * 0.02;
       if (!best || score < best.score) best = { split, score };
     }
