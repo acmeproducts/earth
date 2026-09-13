@@ -19,6 +19,7 @@ function createMeshStub(name) {
     enabled: true,
     alwaysSelectAsActiveMesh: false,
     partialUpdateCalls: 0,
+    fullUpdateCalls: 0,
     thinInstanceSetBuffer(kind, buffer) {
       cpuBuffers.set(kind, buffer);
       gpuBuffers.set(kind, buffer.slice());
@@ -27,6 +28,7 @@ function createMeshStub(name) {
     freezeWorldMatrix() {},
     setEnabled(enabled) { this.enabled = enabled; },
     thinInstanceBufferUpdated(kind) {
+      this.fullUpdateCalls++;
       const cpu = cpuBuffers.get(kind);
       if (cpu) gpuBuffers.get(kind).set(cpu);
     },
@@ -68,6 +70,7 @@ test("small field uploads respect the budget without forcing a frame per buffer"
 
 /** The weight the shader mask expects: 1 = model only, 0 = impostor only. */
 function expectedModelWeight(position, camera, distanceMeters, transitionWidthMeters) {
+  if (distanceMeters === 0) return 0;
   const width = Math.min(transitionWidthMeters, distanceMeters);
   const inner = distanceMeters - width / 2;
   const outer = distanceMeters + width / 2;
@@ -296,5 +299,33 @@ test("incremental LOD survives direction changes and revisits", async () => {
       distanceMeters,
       `path point ${index}`,
     );
+  }
+});
+
+test("large moves and range changes preserve buffers and only visit nearby populations", async () => {
+  const positions = [];
+  for (let x = -100; x <= 3000; x += 2) {
+    positions.push({ x, y: 0, z: 0 }, { x, y: 15, z: 12 });
+  }
+  const impostor = createMeshStub("impostor");
+  const model = createMeshStub("model");
+  const field = await createVegetationFieldResult(
+    {}, [impostor], [model], packMatrices(positions), 1, "auto",
+  );
+  await field.prepareLod(new Vector3(0, 2, 0), 40);
+  field.consumeLodDebugStats();
+  const fullUploads = impostor.fullUpdateCalls + model.fullUpdateCalls;
+  for (const [x, y, range] of [
+    [1000, 2, 40], [2000, 2, 60], [2000, 2, 10],
+    [2000, 200, 10], [0, 0, 0], [40, 0, 0], [0, 2, 60],
+  ]) {
+    const camera = new Vector3(x, y, 0);
+    field.updateLod(camera, range);
+    assertFieldMatchesGroundTruth(impostor, model, positions, camera, range, `${x}/${y}/${range}`);
+    const stats = field.consumeLodDebugStats();
+    assert.equal(stats.fullRebuilds, 0);
+    assert.ok(stats.processedInstances < positions.length / 4,
+      `visited ${stats.processedInstances} of ${positions.length} instances`);
+    assert.equal(impostor.fullUpdateCalls + model.fullUpdateCalls, fullUploads);
   }
 });

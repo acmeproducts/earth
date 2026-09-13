@@ -3,6 +3,7 @@ import { SpatialReferenceGrid } from "./SpatialReferenceGrid";
 import type { TreeTrunkIndex } from "./TreeTrunkCollision";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
+type LodUpdateScope = "rebuild" | "nearby" | "transition";
 
 /** Narrow enough to keep the movement-time transition working set small. */
 const LOD_TRANSITION_WIDTH_METERS = 20;
@@ -171,7 +172,7 @@ export async function createVegetationFieldResult(
       setCounts(0, count);
       updateMeshBuffers(modelMeshes, true);
     } else if (hasLastCameraPosition) {
-      updateAutoLod(lastCameraPosition, lastDistanceMeters, true);
+      updateAutoLod(lastCameraPosition, lastDistanceMeters, "rebuild");
     } else {
       impostorMatrices.set(matrices);
       impostorColors.set(sourceColors);
@@ -198,11 +199,11 @@ export async function createVegetationFieldResult(
   const beginAutoLodUpdate = (
     cameraPosition: Vector3,
     distanceMeters: number,
-    forceFullUpdate: boolean,
+    scope: LodUpdateScope,
   ): AutoLodUpdate => {
-    const rebuildSlots = forceFullUpdate || !autoSlotsValid;
-    if (rebuildSlots) lodDebugStats.fullRebuilds++;
+    const rebuildSlots = scope === "rebuild" || !autoSlotsValid;
     if (rebuildSlots) {
+      lodDebugStats.fullRebuilds++;
       modelSlotBySource.fill(-1);
       impostorSlotBySource.fill(-1);
       modelSourceBySlot.length = 0;
@@ -216,35 +217,38 @@ export async function createVegetationFieldResult(
     const outerDistance = (distanceMeters + transitionWidthMeters / 2) / metersPerUnit;
     const innerDistanceSquared = innerDistance * innerDistance;
     const outerDistanceSquared = outerDistance * outerDistance;
-    const currentTransitionIndices = new Set<number>();
-    const addBounds = (near: number, far: number): void => {
-      const maximumVerticalOffset = Math.max(
-        Math.abs(minimumInstanceY - cameraPosition.y),
-        Math.abs(maximumInstanceY - cameraPosition.y),
-      );
-      const conservativeInnerRadius = Math.sqrt(Math.max(
-        0,
-        near * near - maximumVerticalOffset * maximumVerticalOffset,
-      ));
-      for (const index of spatialGrid.queryAnnulusBounds(
+    const maximumVerticalOffset = Math.max(
+      Math.abs(minimumInstanceY - cameraPosition.y),
+      Math.abs(maximumInstanceY - cameraPosition.y),
+    );
+    const conservativeInnerRadius = scope === "nearby" ? 0 : Math.sqrt(Math.max(
+      0,
+      innerDistanceSquared - maximumVerticalOffset * maximumVerticalOffset,
+    ));
+    const currentTransitionIndices = new Set(distanceMeters > 0
+      ? spatialGrid.queryAnnulusBounds(
         cameraPosition.x,
         cameraPosition.z,
         conservativeInnerRadius,
-        far,
-      )) currentTransitionIndices.add(index);
-    };
-    addBounds(innerDistance, outerDistance);
+        outerDistance,
+      ) : []);
     const incrementalIndices = new Set(currentTransitionIndices);
-    if (!forceFullUpdate) {
-      previousTransitionIndices.forEach((index) => incrementalIndices.add(index));
+    // Large moves and range changes can cross the entire transition band.
+    // Revisit the old model set and new nearby candidates without repacking
+    // every distant impostor. Copy indices before membership swaps mutate slots.
+    if (!rebuildSlots) {
+      for (const index of previousTransitionIndices) incrementalIndices.add(index);
+      if (scope === "nearby") {
+        for (const index of modelSourceBySlot) incrementalIndices.add(index);
+      }
     }
     return {
       rebuildSlots,
       innerDistanceSquared,
       outerDistanceSquared,
       currentTransitionIndices,
-      transitionIndices: forceFullUpdate ? allInstanceIndices : incrementalIndices,
-      transitionCount: forceFullUpdate ? allInstanceIndices.length : incrementalIndices.size,
+      transitionIndices: rebuildSlots ? allInstanceIndices : incrementalIndices,
+      transitionCount: rebuildSlots ? allInstanceIndices.length : incrementalIndices.size,
       exactTransitionCount: 0,
       dirtyModelSlots: new Set<number>(),
       dirtyModelBlendSlots: new Set<number>(),
@@ -268,7 +272,9 @@ export async function createVegetationFieldResult(
         distanceSquared < update.outerDistanceSquared
       ) update.exactTransitionCount++;
       let modelWeight: number;
-      if (distanceSquared <= update.innerDistanceSquared) {
+      if (update.outerDistanceSquared === 0) {
+        modelWeight = 0;
+      } else if (distanceSquared <= update.innerDistanceSquared) {
         modelWeight = 1;
       } else if (distanceSquared >= update.outerDistanceSquared) {
         modelWeight = 0;
@@ -341,8 +347,12 @@ export async function createVegetationFieldResult(
     }
   };
 
-  const updateAutoLod = (cameraPosition: Vector3, distanceMeters: number, forceFullUpdate = false): void => {
-    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, forceFullUpdate);
+  const updateAutoLod = (
+    cameraPosition: Vector3,
+    distanceMeters: number,
+    scope: LodUpdateScope,
+  ): void => {
+    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, scope);
     for (const instanceIndex of update.transitionIndices) {
       updateAutoLodInstance(instanceIndex, cameraPosition, update);
     }
@@ -401,22 +411,22 @@ export async function createVegetationFieldResult(
 
   const updateLod = (cameraPosition: Vector3, distanceMeters: number): boolean => {
     const distanceChanged = distanceMeters !== lastDistanceMeters;
+    if (mode === "auto" && autoSlotsValid && !distanceChanged && distanceMeters === 0) return false;
     const movementSquared = hasLastCameraPosition
       ? Vector3.DistanceSquared(cameraPosition, lastCameraPosition)
       : Number.POSITIVE_INFINITY;
     const minimumMovement = LOD_UPDATE_MIN_MOVEMENT_METERS / metersPerUnit;
     if (!distanceChanged && movementSquared < minimumMovement * minimumMovement) return false;
-    const hadPreviousCameraPosition = hasLastCameraPosition;
     const transitionWidth = Math.min(LOD_TRANSITION_WIDTH_METERS, distanceMeters) / metersPerUnit;
-    const forceFullUpdate = !hadPreviousCameraPosition || distanceChanged ||
-      movementSquared >= transitionWidth * transitionWidth;
+    const scope: LodUpdateScope = distanceChanged || movementSquared >= transitionWidth * transitionWidth
+      ? "nearby" : "transition";
     lastCameraPosition.copyFrom(cameraPosition);
     hasLastCameraPosition = true;
     lastDistanceMeters = distanceMeters;
     // Impostor-only and model-only modes hold a fixed instance set; the
     // material resolves impostor detail per fragment.
     if (mode !== "auto") return false;
-    updateAutoLod(cameraPosition, distanceMeters, forceFullUpdate);
+    updateAutoLod(cameraPosition, distanceMeters, scope);
     return true;
   };
 
@@ -429,7 +439,7 @@ export async function createVegetationFieldResult(
     hasLastCameraPosition = true;
     lastDistanceMeters = distanceMeters;
     if (mode !== "auto") return false;
-    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, true);
+    const update = beginAutoLodUpdate(cameraPosition, distanceMeters, "rebuild");
     let processed = 0;
     for (const instanceIndex of update.transitionIndices) {
       updateAutoLodInstance(instanceIndex, cameraPosition, update);

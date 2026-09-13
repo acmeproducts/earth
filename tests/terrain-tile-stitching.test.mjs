@@ -207,6 +207,36 @@ test("overlap strips stay beneath sloping terrain, including diagonal corners", 
   }
 });
 
+test("skirt textures continue across every overlap and down vertical walls", () => {
+  const positions = [];
+  const uvs = [];
+  for (let row = 0; row <= 2; row++) {
+    for (let column = 0; column <= 2; column++) {
+      positions.push(column * 2, 10, -row * 3);
+      // Non-unit scale and reversed V catch assumptions about scene units.
+      uvs.push(7 + column * 8, 30 - row * 12);
+    }
+  }
+  for (const overlap of [0, 0.5]) {
+    const skirt = createTerrainSkirtGeometry(positions, uvs, 2, 0, undefined, overlap);
+    for (let segment = 0; segment < 8; segment++) {
+      const base = segment * 8;
+      for (let offset = 0; offset < 6; offset++) {
+        const vertex = base + offset;
+        assert.equal(skirt.uvs[vertex * 2], 7 + skirt.positions[vertex * 3] * 4);
+        assert.equal(skirt.uvs[vertex * 2 + 1], 30 + skirt.positions[vertex * 3 + 2] * 4);
+      }
+      for (const bottom of [base + 6, base + 7]) {
+        const top = bottom - 2;
+        assert.equal(Math.hypot(
+          skirt.uvs[bottom * 2] - skirt.uvs[top * 2],
+          skirt.uvs[bottom * 2 + 1] - skirt.uvs[top * 2 + 1],
+        ), 40);
+      }
+    }
+  }
+});
+
 test("caches shared edges only after lake and map deformation", () => {
   const lakeStamp = game.indexOf("conformTerrainToLakePolygons(");
   const featureStamp = game.indexOf("OpenStreetMap.conformTerrainToPlan");

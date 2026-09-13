@@ -115,6 +115,20 @@ export function createTerrainSkirtGeometry(
   const colors = surfaceColors ? new Float32Array(boundary.length * 8 * 4) : undefined;
   const indices = new Uint32Array(boundary.length * 24);
 
+  // Continue the surface mapping across the overlap instead of stretching its
+  // last UV row. Derive both axes so physical scale and V orientation survive.
+  const spanX = surfacePositions[subdivisions * 3] - surfacePositions[0];
+  const spanZ = surfacePositions[subdivisions * rowSize * 3 + 2] - surfacePositions[2];
+  const uvX = [0, 1].map((axis) => spanX === 0 ? 0
+    : (surfaceUvs[subdivisions * 2 + axis] - surfaceUvs[axis]) / spanX);
+  const uvZ = [0, 1].map((axis) => spanZ === 0 ? 0
+    : (surfaceUvs[subdivisions * rowSize * 2 + axis] - surfaceUvs[axis]) / spanZ);
+  const offsetUv = (target: number, dx: number, dz: number): void => {
+    for (let axis = 0; axis < 2; axis++) {
+      uvs[target * 2 + axis] += dx * uvX[axis] + dz * uvZ[axis];
+    }
+  };
+
   const copyVertex = (source: number, target: number, y?: number): void => {
     positions[target * 3] = surfacePositions[source * 3];
     positions[target * 3 + 1] = y ?? surfacePositions[source * 3 + 1];
@@ -194,10 +208,20 @@ export function createTerrainSkirtGeometry(
     for (const outerVertex of [vertex + 2, vertex + 4, vertex + 6]) {
       positions[outerVertex * 3] += startOffset[0];
       positions[outerVertex * 3 + 2] += startOffset[1];
+      offsetUv(outerVertex, startOffset[0], startOffset[1]);
     }
     for (const outerVertex of [vertex + 3, vertex + 5, vertex + 7]) {
       positions[outerVertex * 3] += endOffset[0];
       positions[outerVertex * 3 + 2] += endOffset[1];
+      offsetUv(outerVertex, endOffset[0], endOffset[1]);
+    }
+
+    // Unfold the vertical wall outwards in UV space, preserving texture scale
+    // down its height even when there is no horizontal overlap.
+    const outward = segmentOutward(start, end);
+    for (const bottom of [vertex + 6, vertex + 7]) {
+      const drop = positions[(bottom - 2) * 3 + 1] - positions[bottom * 3 + 1];
+      offsetUv(bottom, outward[0] * drop, outward[1] * drop);
     }
 
     const index = segment * 24;
