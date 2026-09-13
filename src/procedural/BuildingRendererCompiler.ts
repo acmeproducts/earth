@@ -17,6 +17,8 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
+import { BuildingTrace } from "../BuildingDiagnostics";
+import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
 import { compactMeshBuffers } from "../CompactMeshBuffers";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
 import { clamp01 } from "../MathUtils";
@@ -37,7 +39,7 @@ import {
 } from "../BuildingLayoutDebugCapture";
 import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
 import { buildingProfile } from "../BuildingProfile";
-import { createInteriorFurniture, planInteriorFurniture } from "./InteriorFurniture";
+import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
 import { createRooftopEquipment } from "./RooftopEquipment";
 import type { TerrainData } from "../TerrainData";
 import type {
@@ -63,7 +65,6 @@ import {
   BUILDING_INTERIOR_CHECK_INTERVAL_MS,
   BUILDING_INTERIOR_LOAD_DISTANCE_METERS,
   BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
-  BUILDING_INTERIORS_PER_CHECK,
   BUILDING_ROOF_EAVE_CLEARANCE_METERS,
   BUILDING_ROOF_OVERHANG_METERS,
   BUILDING_ROOF_TRIM_METERS,
@@ -99,140 +100,146 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
-    if (!prepared) return undefined;
+    return BuildingTrace.run(`building=${plan.id} exterior vertices=${plan.footprint.outer.length}`, (trace) => {
+      trace.stage("footprint/terrain sampling");
+      const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
+      if (!prepared) return undefined;
 
-    const appearance = buildingAppearance(plan);
-    // Courtyard footprints cannot use the enterable shell: that path builds
-    // floors and roofs from the outer ring alone. Keep these buildings as one
-    // faithful mass so a real building inside a courtyard does not appear to
-    // sit on top of a second, incorrectly filled building.
-    if (prepared.holes.length > 0) {
-      captureUnplannedBuilding(plan, prepared, options, "Courtyard footprints use the massing renderer.");
-      return createCourtyardBuilding(scene, plan, prepared, options, appearance);
-    }
-    const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
-    const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
-    const roofHeightMeters = roofShape === "flat"
-      ? 0
-      : plan.roofHeightMeters === undefined
-        ? inferredRoofHeight(prepared.outline, areaSquareMeters, options, plan.detailSeed)
-        : Math.min(
-          plan.roofHeightMeters,
-          Math.max(0, plan.heightMeters - Math.max(3, plan.minimumHeightMeters)),
-        );
-    // Provider heights rarely include usable roof metadata. Only subtract a
-    // mapped roof height; inferred construction sits above the mapped massing.
-    const wallTopElevation = prepared.baseElevation + plan.heightMeters -
-      (plan.roofHeightMeters === undefined ? 0 : roofHeightMeters);
-    const sharedFacadeEdges = findSharedFacadeEdges(
-      plan.footprint, prepared.outline, terrain, options,
-    );
-    const roofEaveElevation = wallTopElevation + BUILDING_ROOF_EAVE_CLEARANCE_METERS;
-    const detailed = createEnterableBuilding(
-      scene,
-      plan,
-      prepared.outline,
-      prepared.baseElevation,
-      wallTopElevation,
-      options,
-      appearance,
-      "exterior",
-      sharedFacadeEdges,
-    );
-    const parts = detailed.parts;
-    const showRoofs = options.showRoofs !== false;
-    // The trim is a solid slab, not a perimeter band. Flat roofs already have
-    // a cap here; layering both exposes competing triangulations at distance.
-    const trim = showRoofs && roofHeightMeters > 0 && createRoofTrim(
-      scene,
-      prepared.outline,
-      wallTopElevation,
-      options,
-      appearance.trim,
-      appearance.roofSurface,
-      plan.detailSeed,
-    );
-    if (trim) parts.push(trim);
-
-    if (showRoofs && roofHeightMeters > 0) {
-      const roof = createPitchedRoof(
-        scene,
-        prepared.outline,
-        roofEaveElevation,
-        roofEaveElevation + roofHeightMeters,
-        roofShape,
-        options,
-        appearance.roof,
-        appearance.roofSurface,
-        plan.detailSeed,
+      trace.stage("appearance/roof planning");
+      const appearance = buildingAppearance(plan);
+      // Courtyard footprints cannot use the enterable shell: that path builds
+      // floors and roofs from the outer ring alone. Keep these buildings as one
+      // faithful mass so a real building inside a courtyard does not appear to
+      // sit on top of a second, incorrectly filled building.
+      if (prepared.holes.length > 0) {
+        trace.stage("courtyard capture/massing");
+        captureUnplannedBuilding(plan, prepared, options, "Courtyard footprints use the massing renderer.");
+        return createCourtyardBuilding(scene, plan, prepared, options, appearance);
+      }
+      const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
+      const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
+      const roofHeightMeters = roofShape === "flat"
+        ? 0
+        : plan.roofHeightMeters === undefined
+          ? inferredRoofHeight(prepared.outline, areaSquareMeters, options, plan.detailSeed)
+          : Math.min(
+            plan.roofHeightMeters,
+            Math.max(0, plan.heightMeters - Math.max(3, plan.minimumHeightMeters)),
+          );
+      // Provider heights rarely include usable roof metadata. Only subtract a
+      // mapped roof height; inferred construction sits above the mapped massing.
+      const wallTopElevation = prepared.baseElevation + plan.heightMeters -
+        (plan.roofHeightMeters === undefined ? 0 : roofHeightMeters);
+      trace.stage("shared facade detection");
+      const sharedFacadeEdges = findSharedFacadeEdges(
+        plan.footprint, prepared.outline, terrain, options,
       );
-      if (roof) parts.push(roof);
-    } else if (showRoofs) {
-      const rooftop = createRooftopVolume(
+      const roofEaveElevation = wallTopElevation + BUILDING_ROOF_EAVE_CLEARANCE_METERS;
+      trace.stage("exterior geometry (inclusive)");
+      const detailed = createEnterableBuilding(
+        scene,
+        plan,
+        prepared.outline,
+        prepared.baseElevation,
+        wallTopElevation,
+        options,
+        appearance,
+        "exterior",
+        sharedFacadeEdges,
+      );
+      trace.stage("roof geometry/equipment");
+      const parts = detailed.parts;
+      const showRoofs = options.showRoofs !== false;
+      // The trim is a solid slab, not a perimeter band. Flat roofs already have
+      // a cap here; layering both exposes competing triangulations at distance.
+      const trim = showRoofs && roofHeightMeters > 0 && createRoofTrim(
         scene,
         prepared.outline,
         wallTopElevation,
-        areaSquareMeters,
         options,
-        appearance,
+        appearance.trim,
+        appearance.roofSurface,
+        plan.detailSeed,
       );
-      if (rooftop) parts.push(rooftop);
-      const equipment = createRooftopEquipment(scene, plan, prepared.outline, [],
-        wallTopElevation + flatRoofThickness(areaSquareMeters) / 2,
-        options.metersPerUnit, appearance.wall);
-      if (equipment) parts.push(equipment);
-    }
+      if (trim) parts.push(trim);
 
-    parts.forEach(compactMeshBuffers);
-    const merged = Mesh.MergeMeshes(parts, false, true);
-    if (!merged) {
-      for (const part of parts) part.dispose(false, true);
-      return undefined;
-    }
-    for (const part of parts) part.dispose(false, true);
-    const interiorCenter = averagePoint(prepared.outline);
-    const interiorRadiusMeters = Math.max(...prepared.outline.map((point) =>
-      Math.hypot(point.x - interiorCenter.x, point.z - interiorCenter.z) * options.metersPerUnit,
-    ));
-    merged.metadata = {
-      buildingId: plan.id,
-      buildingClass: plan.buildingClass,
-      enterable: true,
-      windowCount: detailed.windowCount,
-      windowStyleId: detailed.windowStyleId,
-      windowRegion: detailed.windowRegion,
-      plannedInterior: detailed.plannedInterior,
-      interiorFloorCount: detailed.floorCount,
-      stairFlightCount: detailed.stairFlightCount,
-      entranceEdgeIndex: detailed.entranceEdgeIndex,
-      stairEdgeIndex: detailed.stairEdgeIndex,
-      stairEdgeIndices: detailed.stairEdgeIndices,
-      stairFlightCenters: detailed.stairFlightCenters,
-      metersPerUnit: options.metersPerUnit,
-      skyReflection: options.skyReflection,
-      interiorsLoaded: false,
-      pendingInterior: {
-        // Use the footprint radius when deciding proximity. A camera can be
-        // inside a large building while still being far from its centroid.
-        center: new Vector3(
-          interiorCenter.x,
-          (prepared.baseElevation + wallTopElevation) / (2 * options.metersPerUnit),
-          interiorCenter.z,
-        ),
-        radiusMeters: interiorRadiusMeters,
-        load: () => createInteriorMesh(
+      if (showRoofs && roofHeightMeters > 0) {
+        const roof = createPitchedRoof(
           scene,
-          plan,
           prepared.outline,
-          prepared.baseElevation,
+          roofEaveElevation,
+          roofEaveElevation + roofHeightMeters,
+          roofShape,
+          options,
+          appearance.roof,
+          appearance.roofSurface,
+          plan.detailSeed,
+        );
+        if (roof) parts.push(roof);
+      } else if (showRoofs) {
+        const rooftop = createRooftopVolume(
+          scene,
+          prepared.outline,
           wallTopElevation,
+          areaSquareMeters,
           options,
           appearance,
-        ),
-      } satisfies PendingBuildingInterior,
-    };
-    return stageBuildingMesh(merged);
+        );
+        if (rooftop) parts.push(rooftop);
+        const equipment = createRooftopEquipment(scene, plan, prepared.outline, [],
+          wallTopElevation + flatRoofThickness(areaSquareMeters) / 2,
+          options.metersPerUnit, appearance.wall);
+        if (equipment) parts.push(equipment);
+      }
+
+      trace.stage(`compact buffers parts=${parts.length}`);
+      parts.forEach(compactMeshBuffers);
+      trace.stage("merge/upload");
+      const merged = Mesh.MergeMeshes(parts, false, true);
+      if (!merged) {
+        for (const part of parts) part.dispose(false, true);
+        return undefined;
+      }
+      trace.stage("dispose source meshes");
+      for (const part of parts) part.dispose(false, true);
+      trace.stage("metadata/staging");
+      const interiorCenter = averagePoint(prepared.outline);
+      const interiorRadiusMeters = Math.max(...prepared.outline.map((point) =>
+        Math.hypot(point.x - interiorCenter.x, point.z - interiorCenter.z) * options.metersPerUnit,
+      ));
+      const interiorParts = detailed.interiorParts;
+      merged.metadata = {
+        buildingId: plan.id,
+        buildingClass: plan.buildingClass,
+        enterable: true,
+        windowCount: detailed.windowCount,
+        windowStyleId: detailed.windowStyleId,
+        windowRegion: detailed.windowRegion,
+        plannedInterior: detailed.plannedInterior,
+        interiorFloorCount: detailed.floorCount,
+        stairFlightCount: detailed.stairFlightCount,
+        entranceEdgeIndex: detailed.entranceEdgeIndex,
+        stairEdgeIndex: detailed.stairEdgeIndex,
+        stairEdgeIndices: detailed.stairEdgeIndices,
+        stairFlightCenters: detailed.stairFlightCenters,
+        metersPerUnit: options.metersPerUnit,
+        skyReflection: options.skyReflection,
+        interiorsLoaded: false,
+        pendingInterior: {
+          id: plan.id,
+          // Use the footprint radius when deciding proximity. A camera can be
+          // inside a large building while still being far from its centroid.
+          center: new Vector3(
+            interiorCenter.x,
+            (prepared.baseElevation + wallTopElevation) / (2 * options.metersPerUnit),
+            interiorCenter.z,
+          ),
+          radiusMeters: interiorRadiusMeters,
+          build: (root: TransformNode) => buildInteriorChunks(interiorParts, root, options),
+        } satisfies PendingBuildingInterior,
+      };
+      return stageBuildingMesh(merged);
+    });
   }
 
   /** Keeps the distant compiler to colored massing without roof detail. */
@@ -242,62 +249,76 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
-    if (!prepared) return undefined;
-    const bottomElevation = plan.minimumHeightMeters > 0
-      ? prepared.baseElevation + plan.minimumHeightMeters
-      : terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
-    const mesh = createBuildingPrism(
-      scene,
-      prepared.outline,
-      prepared.baseElevation + plan.heightMeters,
-      bottomElevation,
-      options,
-      prepared.holes,
-    );
-    colorBuildingMass(mesh, buildingAppearance(plan));
-    return mesh;
+    return BuildingTrace.run(`building=${plan.id} far`, (trace) => {
+      trace.stage("footprint/terrain sampling");
+      const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
+      if (!prepared) return undefined;
+      const bottomElevation = plan.minimumHeightMeters > 0
+        ? prepared.baseElevation + plan.minimumHeightMeters
+        : terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
+      trace.stage("massing geometry/upload");
+      const mesh = createBuildingPrism(
+        scene,
+        prepared.outline,
+        prepared.baseElevation + plan.heightMeters,
+        bottomElevation,
+        options,
+        prepared.holes,
+      );
+      trace.stage("vertex colors");
+      colorBuildingMass(mesh, buildingAppearance(plan));
+      return mesh;
+    });
   }
 
-  static merge(meshes: Mesh[], name: string, parent: TransformNode): Mesh | undefined {
+  static merge(meshes: Mesh[], name: string, parent: TransformNode, logTiming = true): Mesh | undefined {
     if (meshes.length === 0) return undefined;
-    meshes.forEach(compactMeshBuffers);
-    const buildingIds = meshes
-      .map((mesh) => mesh.metadata?.buildingId)
-      .filter((id): id is string => typeof id === "string");
-    const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
-    const skyReflection = meshes.find((mesh) => mesh.metadata?.skyReflection)?.metadata
-      ?.skyReflection as BaseTexture | null | undefined;
-    const pendingInteriors = meshes
-      .map((mesh) => mesh.metadata?.pendingInterior as PendingBuildingInterior | undefined)
-      .filter((pending): pending is PendingBuildingInterior => pending !== undefined);
-    const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
-    if (!result) return undefined;
-    const material = createBuildingSolidMaterial(
-      `${name}Material`, result.getScene(), Number.isFinite(metersPerUnit) ? metersPerUnit : 1,
-    );
-    material.transparencyMode = Material.MATERIAL_OPAQUE;
-    result.useVertexColors = true;
-    result.hasVertexAlpha = true;
-    result.name = name;
-    result.material = material;
-    result.parent = parent;
-    result.setEnabled(true);
-    result.checkCollisions = name === "buildings" || name === "detailedBuildings";
-    retainCurrentBuildingLayoutCaptures(buildingIds, result);
-    if (Number.isFinite(metersPerUnit)) {
-      const shadowRanges = configureBuildingSurfaceMaterials(
-        result,
-        metersPerUnit,
-        material,
-        skyReflection,
+    return BuildingTrace.run(`chunk=${parent.name}/${parent.uniqueId} ${name} meshes=${meshes.length}`, (trace) => {
+      trace.stage("compact buffers/metadata");
+      meshes.forEach(compactMeshBuffers);
+      const buildingIds = meshes
+        .map((mesh) => mesh.metadata?.buildingId)
+        .filter((id): id is string => typeof id === "string");
+      const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
+      const skyReflection = meshes.find((mesh) => mesh.metadata?.skyReflection)?.metadata
+        ?.skyReflection as BaseTexture | null | undefined;
+      const pendingInteriors = meshes
+        .map((mesh) => mesh.metadata?.pendingInterior as PendingBuildingInterior | undefined)
+        .filter((pending): pending is PendingBuildingInterior => pending !== undefined);
+      trace.stage("merge/upload/dispose");
+      const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
+      if (!result) return undefined;
+      trace.stage(`solid material/activation vertices=${result.getTotalVertices()}`);
+      const material = createBuildingSolidMaterial(
+        `${name}Material`, result.getScene(), Number.isFinite(metersPerUnit) ? metersPerUnit : 1,
       );
-      if (name === "buildings" || name === "detailedBuildings") {
-        createBuildingShadowCaster(result, parent, shadowRanges);
+      material.transparencyMode = Material.MATERIAL_OPAQUE;
+      result.useVertexColors = true;
+      result.hasVertexAlpha = true;
+      result.name = name;
+      result.material = material;
+      result.parent = parent;
+      result.setEnabled(true);
+      result.checkCollisions = name === "buildings" || name === "detailedBuildings";
+      trace.stage("retain layout captures");
+      retainCurrentBuildingLayoutCaptures(buildingIds, result);
+      if (Number.isFinite(metersPerUnit)) {
+        trace.stage("surface materials/submeshes");
+        const shadowRanges = configureBuildingSurfaceMaterials(
+          result,
+          metersPerUnit,
+          material,
+          skyReflection,
+        );
+        if (name === "buildings" || name === "detailedBuildings") {
+          trace.stage("shadow caster");
+          createBuildingShadowCaster(result, parent, shadowRanges);
+        }
+        trace.stage("register interior streaming");
+        configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
       }
-      configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
-    }
-    return result;
+      return result;
+    }, logTiming);
   }
 }
 
@@ -365,34 +386,166 @@ function createCourtyardBuilding(
   return mesh;
 }
 
-function createInteriorMesh(
-  scene: Scene,
-  plan: BuildingPlan,
-  outline: ScenePoint[],
-  baseElevation: number,
-  topElevation: number,
-  options: BuildingRenderOptions,
-  appearance: BuildingAppearance,
-): Mesh | undefined {
-  const interior = createEnterableBuilding(
-    scene,
-    plan,
-    outline,
-    baseElevation,
-    topElevation,
-    options,
-    appearance,
-    "interior",
-  );
-  interior.parts.forEach(compactMeshBuffers);
-  const merged = Mesh.MergeMeshes(interior.parts, false, true);
-  if (!merged) {
-    for (const part of interior.parts) part.dispose(false, true);
-    return undefined;
+/** Bound both temporary source meshes and each merge/upload. No whole-building merge. */
+function* buildInteriorChunks(
+  createParts: (parts: Mesh[]) => Generator<string, void, void>,
+  root: TransformNode, options: BuildingRenderOptions,
+): Generator<string, void, void> {
+  const parts: Mesh[] = [];
+  const source = createParts(parts);
+  const batch: Mesh[] = [];
+  let vertices = 0;
+  const flush = (): void => {
+    if (!batch.length) return;
+    const merged = ProceduralBuildingRenderer.merge(batch, "buildingInteriors", root, false);
+    if (!merged) throw new Error("Interior batch merge failed");
+    merged.checkCollisions = true;
+    merged.setEnabled(false);
+    batch.length = 0;
+    vertices = 0;
+  };
+  try {
+    while (true) {
+      const next = source.next();
+      yield next.done ? "geometry complete" : next.value;
+      for (const mesh of parts) {
+        mesh.parent = root;
+        if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) setBuildingSurface(mesh, "plaster");
+        compactMeshBuffers(mesh);
+        mesh.metadata = { metersPerUnit: options.metersPerUnit };
+        yield "compact buffers";
+        if (vertices + mesh.getTotalVertices() > INTERIOR_MERGE_VERTEX_BUDGET && batch.length) {
+          flush();
+          yield "merge/materials";
+        }
+        batch.push(mesh);
+        vertices += mesh.getTotalVertices();
+      }
+      parts.length = 0;
+      if (next.done) break;
+    }
+    flush();
+    yield "merge/materials";
+    // Let first draws and shader setup spread across frames as well as CPU construction.
+    root.setEnabled(true);
+    yield "activation";
+    for (const mesh of root.getChildMeshes()) {
+      mesh.setEnabled(true);
+      yield "activation";
+    }
+  } finally {
+    source.return();
+    // Completed chunks belong to root. On cancellation, the caller disposes root too.
+    for (const mesh of parts) if (!mesh.isDisposed()) mesh.dispose(false, true);
+    for (const mesh of batch) if (!mesh.isDisposed()) mesh.dispose(false, true);
   }
-  for (const part of interior.parts) part.dispose(false, true);
-  merged.metadata = { metersPerUnit: options.metersPerUnit };
-  return stageBuildingMesh(merged);
+}
+
+function* createInteriorParts(
+  parts: Mesh[], scene: Scene, plan: BuildingPlan, outline: ScenePoint[],
+  baseElevation: number, options: BuildingRenderOptions, appearance: BuildingAppearance,
+  floorCount: number, storyHeight: number, stairs: StairLayout[],
+  plannedInterior: PlannedInterior | undefined, entranceOpenings: Opening2D[],
+  facadeOpenings: Opening2D[], interiorUse: NonNullable<BuildingPlan["interiorUse"]>,
+): Generator<string, void, void> {
+  const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
+  for (let floor = 0; floor < floorCount; floor++) {
+    const slabBottom = baseElevation + floor * storyHeight;
+    const slab = createBuildingPrism(
+      scene,
+      outline,
+      slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
+      slabBottom,
+      options,
+      floor > 0 && stairs[floor - 1]
+        ? [stairOpening(stairs[floor - 1], options)]
+        : undefined,
+    );
+    setSolidVertexColor(slab, floorColor);
+    parts.push(slab);
+    yield "floor slabs";
+  }
+  if (stairs.length > 0) {
+    for (let floor = 0; floor < stairs.length; floor++) {
+      createStairFlight(
+        parts,
+        scene,
+        stairs[floor],
+        baseElevation + floor * storyHeight,
+        storyHeight,
+        options,
+        floorColor,
+      );
+      yield "stair flights";
+    }
+  }
+
+  if (plannedInterior) {
+    const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
+    for (let floor = 0; floor < floorCount; floor++) {
+      // One ground-floor suite serves as reception; upper floors retain their rooms.
+      const floorUse = floor === 0 ? plan.groundFloorUse ?? interiorUse : interiorUse;
+      const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
+        (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
+      const entrance = entranceOpenings[0]?.start;
+      const receptionIndex = entrance ? plannedInterior.apartments.reduce((best, apartment, index, apartments) => {
+        const gap = (layout: ApartmentLayout): number => Math.min(...layout.boundary.outer.map((p) => Math.hypot(p.x - entrance.x, p.y - entrance.y)));
+        return gap(apartment) < gap(apartments[best]) ? index : best;
+      }, 0) : 0;
+      const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
+        (floor === 0 && plan.groundFloorUse) || (hasReception && index === receptionIndex) ? {
+          ...apartment,
+          rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
+          openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
+        } : apartment) };
+      const furniture: FurniturePlacement[] = [];
+      for (let index = 0; index < floorInterior.apartments.length; index++) {
+        const apartment = floorInterior.apartments[index];
+        for (const room of apartment.rooms) {
+          furniture.push(...planInteriorFurniture({ ...apartment, rooms: [room] },
+            plan.detailSeed + floor * 7919 + index * 101,
+            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : floorUse));
+          yield "furniture planning";
+        }
+      }
+      yield* addPlannedInteriorWalls(
+        parts,
+        scene,
+        floorInterior,
+        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+        storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+        options,
+        wallColor,
+      );
+      yield* createFurnitureParts(parts, scene, furniture,
+        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+        options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+        plan.detailSeed + floor);
+    }
+  } else if (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage") {
+    const boundary = { outer: outline.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit })) };
+    const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
+      openings: [...entranceOpenings, ...facadeOpenings] };
+    for (let floor = 0; floor < floorCount; floor++) {
+      const furniture = planInteriorFurniture(layout, plan.detailSeed + floor * 7919, interiorUse);
+      yield "furniture planning";
+      yield* createFurnitureParts(parts, scene, furniture,
+        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
+        options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
+    }
+  }
+
+}
+
+function* createFurnitureParts(
+  parts: Mesh[], scene: Scene, furniture: FurniturePlacement[],
+  elevation: number, metersPerUnit: number, height: number, seed: number,
+): Generator<string, void, void> {
+  for (const item of furniture) {
+    const mesh = createInteriorFurniture(scene, [item], elevation, metersPerUnit, height, seed);
+    if (mesh) parts.push(mesh);
+    yield "furniture geometry";
+  }
 }
 
 /**
@@ -411,313 +564,248 @@ function createEnterableBuilding(
   part: "exterior" | "interior",
   blockedFacadeEdges: ReadonlySet<number> = new Set(),
 ): DetailedBuildingParts {
-  const usableHeight = Math.max(0, topElevation - baseElevation);
-  const profile = buildingProfile(plan.buildingClass);
-  // A partial story is not another floor. Rounding made ordinary 4.7-6.1 m
-  // houses grow a second facade row when no level count was mapped.
-  const requestedFloors = plan.levels ?? Math.floor(usableHeight / 3.1);
-  const floorsThatFit = Math.max(1, Math.floor(usableHeight / 2.4));
-  const floorCount = Math.max(1, Math.min(
-    profile.maximumInteriorFloors,
-    Math.round(requestedFloors),
-    floorsThatFit,
-  ));
-  const storyHeight = usableHeight / floorCount;
-  const windowStyle = buildingWindowStyle(plan);
-  const glass = varyColor(
-    new Color3(...windowStyle.glass),
-    unitFromSeed(plan.detailSeed ^ 0x45f3a921) * 0.1,
-    0,
-  );
-  const entranceEdge = longestPolygonEdge(outline, blockedFacadeEdges);
-  const entranceEdgeLengthMeters = pointDistance(
-    outline[entranceEdge],
-    outline[(entranceEdge + 1) % outline.length],
-  ) * options.metersPerUnit;
-  const entranceBayCount = facadeBayCount(
-    entranceEdgeLengthMeters,
-    windowStyle,
-  );
-  const entranceBayWidth = entranceEdgeLengthMeters / entranceBayCount;
-  const entranceClearance: EntranceClearance = {
-    edgeIndex: entranceEdge,
-    centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
-    widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
-  };
-  // The doorway is the only façade opening the building planner needs.  Once
-  // its shells exist, choose windows from the apartment-facing exterior walls;
-  // this keeps circulation and stair walls opaque by construction.
-  const entranceOpenings = plannedEntranceOpenings(
-    outline, entranceEdge, windowStyle, options,
-  );
-  const planningAttempt = profile.interiorLayout === "rooms"
-    ? createPlannedInterior(outline, entranceOpenings, options)
-    : undefined;
-  let plannedInterior = planningAttempt?.interior;
-  const plannedStairs = plannedInterior && profile.hasStairs && floorCount > 1
-    ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed)
-    : [];
-  // Perimeter fallback flights are placed in the building footprint, outside
-  // the planned core. Keep that fallback interior open so apartment walls
-  // cannot cut across the stairs or their approach.
-  if (plannedInterior && profile.hasStairs && floorCount > 1 && plannedStairs.length === 0) {
-    plannedInterior = undefined;
-    if (planningAttempt) planningAttempt.failure = "The stair core has no accessible flight; using an open interior with perimeter stairs.";
-  }
-  const interiorUse = plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
-  const facadeOpenings = plannedFacadeOpenings(
-    plan, outline, storyHeight, entranceEdge, windowStyle, options,
-    plannedInterior?.building,
-    blockedFacadeEdges,
-  );
-  if (plannedInterior) {
-    const apartmentPlanning = interiorUse !== "residential" && interiorUse !== "hotel" ? {
-      // Keep commercial suites open, preserving the shared corridor and stair core.
-      apartments: plannedInterior.building.rooms.filter((room) => room.type === "apartment").map((room): ApartmentLayout => ({
-        boundary: room.polygon,
-        rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
-        openings: [...(plannedInterior.building.openings ?? []), ...facadeOpenings]
-          .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
-      })),
-      failure: undefined,
-    } : planApartmentLayouts(
-      plannedInterior.building,
-      facadeOpenings,
-      plan.detailSeed,
+  return BuildingTrace.run(`building=${plan.id} ${part} planning/parts`, (trace) => {
+    trace.stage("profile/entrance");
+    const usableHeight = Math.max(0, topElevation - baseElevation);
+    const profile = buildingProfile(plan.buildingClass);
+    // A partial story is not another floor. Rounding made ordinary 4.7-6.1 m
+    // houses grow a second facade row when no level count was mapped.
+    const requestedFloors = plan.levels ?? Math.floor(usableHeight / 3.1);
+    const floorsThatFit = Math.max(1, Math.floor(usableHeight / 2.4));
+    const floorCount = Math.max(1, Math.min(
+      profile.maximumInteriorFloors,
+      Math.round(requestedFloors),
+      floorsThatFit,
+    ));
+    const storyHeight = usableHeight / floorCount;
+    const windowStyle = buildingWindowStyle(plan);
+    const glass = varyColor(
+      new Color3(...windowStyle.glass),
+      unitFromSeed(plan.detailSeed ^ 0x45f3a921) * 0.1,
+      0,
     );
-    plannedInterior.apartments = apartmentPlanning.apartments;
-    if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
-  }
-  if (part === "exterior" && planningAttempt) {
-    captureEncounteredBuildingLayout({
-      id: plan.id,
-      buildingClass: plan.buildingClass,
-      heightMeters: plan.heightMeters,
-      levels: plan.levels,
-      geographicFootprint: plan.footprint,
-      plannerInput: planningAttempt.input,
-      facadeOpenings,
-      buildingLayout: plannedInterior?.building,
-      apartmentLayouts: plannedInterior?.apartments,
-      fallbackReason: planningAttempt.failure,
-    });
-  } else if (part === "exterior") {
-    captureEncounteredBuildingLayout({
-      id: plan.id,
-      buildingClass: plan.buildingClass,
-      heightMeters: plan.heightMeters,
-      levels: plan.levels,
-      geographicFootprint: plan.footprint,
-      plannerInput: plannerInputFromOutline(outline, facadeOpenings, options),
-      facadeOpenings,
-      fallbackReason: `The ${plan.buildingClass} profile uses an open interior.`,
-    });
-  }
-  const stairs = profile.hasStairs && floorCount > 1
-    ? plannedStairs.length > 0
-      ? plannedStairs
-      : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
-    : [];
-  const parts: Mesh[] = [];
-  const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
-  let windowCount = 0;
-
-  if (part === "interior") {
-    const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
-    for (let floor = 0; floor < floorCount; floor++) {
-      const slabBottom = baseElevation + floor * storyHeight;
-      const slab = createBuildingPrism(
-        scene,
-        outline,
-        slabBottom + BUILDING_FLOOR_THICKNESS_METERS,
-        slabBottom,
-        options,
-        floor > 0 && stairs[floor - 1]
-          ? [stairOpening(stairs[floor - 1], options)]
-          : undefined,
-      );
-      setSolidVertexColor(slab, floorColor);
-      parts.push(slab);
+    const entranceEdge = longestPolygonEdge(outline, blockedFacadeEdges);
+    const entranceEdgeLengthMeters = pointDistance(
+      outline[entranceEdge],
+      outline[(entranceEdge + 1) % outline.length],
+    ) * options.metersPerUnit;
+    const entranceBayCount = facadeBayCount(
+      entranceEdgeLengthMeters,
+      windowStyle,
+    );
+    const entranceBayWidth = entranceEdgeLengthMeters / entranceBayCount;
+    const entranceClearance: EntranceClearance = {
+      edgeIndex: entranceEdge,
+      centerMeters: (Math.floor(entranceBayCount / 2) + 0.5) * entranceBayWidth,
+      widthMeters: Math.min(BUILDING_DOOR_WIDTH_METERS, entranceBayWidth * 0.64),
+    };
+    // The doorway is the only façade opening the building planner needs.  Once
+    // its shells exist, choose windows from the apartment-facing exterior walls;
+    // this keeps circulation and stair walls opaque by construction.
+    const entranceOpenings = plannedEntranceOpenings(
+      outline, entranceEdge, windowStyle, options,
+    );
+    trace.stage("building layout planner");
+    const planningAttempt = profile.interiorLayout === "rooms"
+      ? createPlannedInterior(outline, entranceOpenings, options)
+      : undefined;
+    let plannedInterior = planningAttempt?.interior;
+    trace.stage("stair layout");
+    const plannedStairs = plannedInterior && profile.hasStairs && floorCount > 1
+      ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed)
+      : [];
+    // Perimeter fallback flights are placed in the building footprint, outside
+    // the planned core. Keep that fallback interior open so apartment walls
+    // cannot cut across the stairs or their approach.
+    if (plannedInterior && profile.hasStairs && floorCount > 1 && plannedStairs.length === 0) {
+      plannedInterior = undefined;
+      if (planningAttempt) planningAttempt.failure = "The stair core has no accessible flight; using an open interior with perimeter stairs.";
     }
+    const interiorUse = plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
+    trace.stage("facade opening planning");
+    const facadeOpenings = plannedFacadeOpenings(
+      plan, outline, storyHeight, entranceEdge, windowStyle, options,
+      plannedInterior?.building,
+      blockedFacadeEdges,
+    );
+    trace.stage("apartment layout planners");
+    if (plannedInterior) {
+      const apartmentPlanning = interiorUse !== "residential" && interiorUse !== "hotel" ? {
+        // Keep commercial suites open, preserving the shared corridor and stair core.
+        apartments: plannedInterior.building.rooms.filter((room) => room.type === "apartment").map((room): ApartmentLayout => ({
+          boundary: room.polygon,
+          rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
+          openings: [...(plannedInterior.building.openings ?? []), ...facadeOpenings]
+            .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
+        })),
+        failure: undefined,
+      } : planApartmentLayouts(
+        plannedInterior.building,
+        facadeOpenings,
+        plan.detailSeed,
+      );
+      plannedInterior.apartments = apartmentPlanning.apartments;
+      if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
+    }
+    trace.stage("debug layout capture");
+    if (part === "exterior" && planningAttempt) {
+      captureEncounteredBuildingLayout({
+        id: plan.id,
+        buildingClass: plan.buildingClass,
+        heightMeters: plan.heightMeters,
+        levels: plan.levels,
+        geographicFootprint: plan.footprint,
+        plannerInput: planningAttempt.input,
+        facadeOpenings,
+        buildingLayout: plannedInterior?.building,
+        apartmentLayouts: plannedInterior?.apartments,
+        fallbackReason: planningAttempt.failure,
+      });
+    } else if (part === "exterior") {
+      captureEncounteredBuildingLayout({
+        id: plan.id,
+        buildingClass: plan.buildingClass,
+        heightMeters: plan.heightMeters,
+        levels: plan.levels,
+        geographicFootprint: plan.footprint,
+        plannerInput: plannerInputFromOutline(outline, facadeOpenings, options),
+        facadeOpenings,
+        fallbackReason: `The ${plan.buildingClass} profile uses an open interior.`,
+      });
+    }
+    trace.stage("fallback stair planning");
+    const stairs = profile.hasStairs && floorCount > 1
+      ? plannedStairs.length > 0
+        ? plannedStairs
+        : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
+      : [];
+    const parts: Mesh[] = [];
+    const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
+    let windowCount = 0;
 
-    if (stairs.length > 0) {
-      for (let floor = 0; floor < stairs.length; floor++) {
-        createStairFlight(
+    // Facade bays are intentionally split around openings, but the outside
+    // corners belong to the footprint rather than to either adjacent wall.
+    // Build those corners once per story from the shared outline vertices so
+    // the two wall runs meet with one continuous mitered outer edge.
+    if (part === "exterior") {
+      trace.stage("facade corner geometry");
+      for (let floor = 0; floor < floorCount; floor++) {
+        addFacadeCorners(
           parts,
           scene,
-          stairs[floor],
+          outline,
           baseElevation + floor * storyHeight,
           storyHeight,
           options,
-          floorColor,
+          appearance.wall,
         );
       }
     }
 
-    if (plannedInterior) {
-      const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
-      for (let floor = 0; floor < floorCount; floor++) {
-        // One ground-floor suite serves as reception; upper floors retain their rooms.
-        const floorUse = floor === 0 ? plan.groundFloorUse ?? interiorUse : interiorUse;
-        const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
-          (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
-        const entrance = entranceOpenings[0]?.start;
-        const receptionIndex = entrance ? plannedInterior.apartments.reduce((best, apartment, index, apartments) => {
-          const gap = (layout: ApartmentLayout): number => Math.min(...layout.boundary.outer.map((p) => Math.hypot(p.x - entrance.x, p.y - entrance.y)));
-          return gap(apartment) < gap(apartments[best]) ? index : best;
-        }, 0) : 0;
-        const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
-          (floor === 0 && plan.groundFloorUse) || (hasReception && index === receptionIndex) ? {
-            ...apartment,
-            rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
-            openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
-          } : apartment) };
-        const furniture = floorInterior.apartments.flatMap((apartment, index) =>
-          planInteriorFurniture(apartment, plan.detailSeed + floor * 7919 + index * 101,
-            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : floorUse));
-        addPlannedInteriorWalls(
-          parts,
-          scene,
-          floorInterior,
-          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-          storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
-          options,
-          wallColor,
-        );
-        const props = createInteriorFurniture(scene, furniture,
-          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-          options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
-          plan.detailSeed + floor);
-        if (props) parts.push(props);
+    trace.stage("facade wall/window geometry");
+    for (let edgeIndex = 0; part === "exterior" && edgeIndex < outline.length; edgeIndex++) {
+      const start = outline[edgeIndex];
+      const end = outline[(edgeIndex + 1) % outline.length];
+      const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
+      if (edgeLengthMeters < 0.35) continue;
+      const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
+      const bayWidth = edgeLengthMeters / bayCount;
+
+      if (blockedFacadeEdges.has(edgeIndex)) {
+        for (let floor = 0; floor < floorCount; floor++) {
+          addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
+            edgeLengthMeters, baseElevation + floor * storyHeight, storyHeight,
+            options, appearance.wall);
+        }
+        continue;
       }
-    } else if (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage") {
-      const boundary = { outer: outline.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit })) };
-      const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
-        openings: [...entranceOpenings, ...facadeOpenings] };
+
       for (let floor = 0; floor < floorCount; floor++) {
-        const furniture = planInteriorFurniture(layout, plan.detailSeed + floor * 7919, interiorUse);
-        const props = createInteriorFurniture(scene, furniture,
-          baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-          options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
-        if (props) parts.push(props);
-      }
-    }
-  }
-
-  // Facade bays are intentionally split around openings, but the outside
-  // corners belong to the footprint rather than to either adjacent wall.
-  // Build those corners once per story from the shared outline vertices so
-  // the two wall runs meet with one continuous mitered outer edge.
-  if (part === "exterior") {
-    for (let floor = 0; floor < floorCount; floor++) {
-      addFacadeCorners(
-        parts,
-        scene,
-        outline,
-        baseElevation + floor * storyHeight,
-        storyHeight,
-        options,
-        appearance.wall,
-      );
-    }
-  }
-
-  for (let edgeIndex = 0; part === "exterior" && edgeIndex < outline.length; edgeIndex++) {
-    const start = outline[edgeIndex];
-    const end = outline[(edgeIndex + 1) % outline.length];
-    const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
-    if (edgeLengthMeters < 0.35) continue;
-    const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
-    const bayWidth = edgeLengthMeters / bayCount;
-
-    if (blockedFacadeEdges.has(edgeIndex)) {
-      for (let floor = 0; floor < floorCount; floor++) {
-        addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
-          edgeLengthMeters, baseElevation + floor * storyHeight, storyHeight,
-          options, appearance.wall);
-      }
-      continue;
-    }
-
-    for (let floor = 0; floor < floorCount; floor++) {
-      const storyBottom = baseElevation + floor * storyHeight;
-      for (let bay = 0; bay < bayCount; bay++) {
-        const isEntrance = floor === 0 && edgeIndex === entranceEdge &&
-          bay === Math.floor(bayCount / 2);
-        const bayStart = bay * bayWidth;
-        if (isEntrance) {
-          const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
-          const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28);
-          if (doorHeight > 0.35) {
+        const storyBottom = baseElevation + floor * storyHeight;
+        for (let bay = 0; bay < bayCount; bay++) {
+          const isEntrance = floor === 0 && edgeIndex === entranceEdge &&
+            bay === Math.floor(bayCount / 2);
+          const bayStart = bay * bayWidth;
+          if (isEntrance) {
+            const doorWidth = Math.min(BUILDING_DOOR_WIDTH_METERS, bayWidth * 0.64);
+            const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28);
+            if (doorHeight > 0.35) {
+              addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
+                storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+            } else {
+              addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
+                bayWidth, storyBottom, storyHeight, options, appearance.wall);
+            }
+            continue;
+          }
+          const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
+            (floor * 0x45d9f3b) ^ (bay * 0x119de1f3);
+          const blankBay = bayCount > 2 && !isEntrance &&
+            unitFromSeed(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
+          if (blankBay) {
+            addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
+              bayWidth, storyBottom, storyHeight, options, appearance.wall);
+            continue;
+          }
+          const apertureWidth = windowStyle.widthMeters;
+          const apertureHeight = windowStyle.heightMeters;
+          const sillHeight = windowStyle.sillMeters;
+          const windowFits = bayWidth >= apertureWidth + BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
+            storyHeight >= sillHeight + apertureHeight + BUILDING_WINDOW_HEAD_CLEARANCE_METERS;
+          const plannedOpening = facadeOpenings.find((opening) =>
+            opening.id === `window-${edgeIndex}-${bay}`
+          );
+          if (windowFits && (!plannedInterior || !plannedOpening ||
+              !plannedInteriorBlocksOpening(plannedInterior, plannedOpening))) {
+            const apertureOffset = (bayWidth - apertureWidth) / 2;
             addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
-              storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+              storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
+              options, appearance.wall, apertureOffset);
+            addWindowQuad(windows, start, end, edgeLengthMeters,
+              bayStart + apertureOffset, apertureWidth,
+              storyBottom + sillHeight, apertureHeight, options, glass,
+              BUILDING_WINDOW_CLOSE_ALPHA, -windowStyle.recessMeters);
+            addWindowMullions(
+              windows, start, end, edgeLengthMeters, bayStart + apertureOffset,
+              storyBottom + sillHeight, windowStyle, options,
+            );
+            windowCount++;
           } else {
             addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
               bayWidth, storyBottom, storyHeight, options, appearance.wall);
           }
-          continue;
-        }
-        const windowSeed = plan.detailSeed ^ (edgeIndex * 0x1f123bb5) ^
-          (floor * 0x45d9f3b) ^ (bay * 0x119de1f3);
-        const blankBay = bayCount > 2 && !isEntrance &&
-          unitFromSeed(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
-        if (blankBay) {
-          addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
-            bayWidth, storyBottom, storyHeight, options, appearance.wall);
-          continue;
-        }
-        const apertureWidth = windowStyle.widthMeters;
-        const apertureHeight = windowStyle.heightMeters;
-        const sillHeight = windowStyle.sillMeters;
-        const windowFits = bayWidth >= apertureWidth + BUILDING_WINDOW_EDGE_CLEARANCE_METERS * 2 &&
-          storyHeight >= sillHeight + apertureHeight + BUILDING_WINDOW_HEAD_CLEARANCE_METERS;
-        const plannedOpening = facadeOpenings.find((opening) =>
-          opening.id === `window-${edgeIndex}-${bay}`
-        );
-        if (windowFits && (!plannedInterior || !plannedOpening ||
-            !plannedInteriorBlocksOpening(plannedInterior, plannedOpening))) {
-          const apertureOffset = (bayWidth - apertureWidth) / 2;
-          addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
-            storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
-            options, appearance.wall, apertureOffset);
-          addWindowQuad(windows, start, end, edgeLengthMeters,
-            bayStart + apertureOffset, apertureWidth,
-            storyBottom + sillHeight, apertureHeight, options, glass,
-            BUILDING_WINDOW_CLOSE_ALPHA, -windowStyle.recessMeters);
-          addWindowMullions(
-            windows, start, end, edgeLengthMeters, bayStart + apertureOffset,
-            storyBottom + sillHeight, windowStyle, options,
-          );
-          windowCount++;
-        } else {
-          addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
-            bayWidth, storyBottom, storyHeight, options, appearance.wall);
         }
       }
     }
-  }
 
-  const windowMesh = createWindowMesh(scene, windows);
-  if (windowMesh) parts.push(windowMesh);
-  for (const mesh of parts) {
-    if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) {
-      setBuildingSurface(mesh, part === "exterior" ? appearance.wallSurface : "plaster");
+    trace.stage(`window mesh/upload windows=${windowCount}`);
+    const windowMesh = createWindowMesh(scene, windows);
+    if (windowMesh) parts.push(windowMesh);
+    trace.stage(`surface attributes parts=${parts.length}`);
+    for (const mesh of parts) {
+      if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) {
+        setBuildingSurface(mesh, part === "exterior" ? appearance.wallSurface : "plaster");
+      }
     }
-  }
 
-  return {
-    parts,
-    windowCount,
-    floorCount,
-    stairFlightCount: stairs.length,
-    entranceEdgeIndex: entranceEdge,
-    stairEdgeIndex: stairs[0]?.edgeIndex,
-    stairEdgeIndices: stairs.map((stair) => stair.edgeIndex),
-    stairFlightCenters: stairs.map(stairCenter),
-    windowStyleId: windowStyle.id,
-    windowRegion: windowStyle.region,
-    plannedInterior: plannedInterior !== undefined,
-  };
+    return {
+      interiorParts: (interiorParts: Mesh[]) => createInteriorParts(
+        interiorParts, scene, plan, outline, baseElevation, options, appearance,
+        floorCount, storyHeight, stairs, plannedInterior, entranceOpenings, facadeOpenings, interiorUse,
+      ),
+      parts,
+      windowCount,
+      floorCount,
+      stairFlightCount: stairs.length,
+      entranceEdgeIndex: entranceEdge,
+      stairEdgeIndex: stairs[0]?.edgeIndex,
+      stairEdgeIndices: stairs.map((stair) => stair.edgeIndex),
+      stairFlightCenters: stairs.map(stairCenter),
+      windowStyleId: windowStyle.id,
+      windowRegion: windowStyle.region,
+      plannedInterior: plannedInterior !== undefined,
+    };
+  });
 }
 
 function facadeBayCount(edgeLengthMeters: number, style: BuildingWindowStyle): number {
@@ -1006,31 +1094,31 @@ function stairLayoutCandidatesFromPlan(
     for (let run = maxRun; run >= BUILDING_STAIR_MIN_RUN_METERS; run -= 0.1) {
       const alongStarts = [landing, (edgeLength - run) / 2, edgeLength - run - landing]
         .filter((along) => along >= landing - 1e-7 && along + run <= edgeLength - landing + 1e-7);
-      for (let width = BUILDING_STAIR_WIDTH_METERS; width >= 0.75; width -= 0.05) {
-        for (const alongStart of alongStarts) {
-          const acrossStart = BUILDING_STAIR_WALL_CLEARANCE_METERS;
-          const corners = [
-            [alongStart - landing, acrossStart], [alongStart + run + landing, acrossStart],
-            [alongStart + run + landing, acrossStart + width], [alongStart - landing, acrossStart + width],
-          ].map(([along, across]) => ({
-            x: start.x + direction.x * along + inward.x * across,
-            y: start.y + direction.y * along + inward.y * across,
+      // Keep a comfortable flight width; an undersized core uses perimeter stairs.
+      const width = BUILDING_STAIR_WIDTH_METERS;
+      for (const alongStart of alongStarts) {
+        const acrossStart = BUILDING_STAIR_WALL_CLEARANCE_METERS;
+        const corners = [
+          [alongStart - landing, acrossStart], [alongStart + run + landing, acrossStart],
+          [alongStart + run + landing, acrossStart + width], [alongStart - landing, acrossStart + width],
+        ].map(([along, across]) => ({
+          x: start.x + direction.x * along + inward.x * across,
+          y: start.y + direction.y * along + inward.y * across,
+        }));
+        if (!corners.every((point) => pointInPolygonInclusive(point, points))) continue;
+        // Reserve the full doorway and enough space to step through it. A
+        // flight beside a door can otherwise seal it with its tall treads.
+        if (doors.some((door) => {
+          const projected = [door.start, door.end].map((point) => ({
+            along: (point.x - start.x) * direction.x + (point.y - start.y) * direction.y,
+            across: (point.x - start.x) * inward.x + (point.y - start.y) * inward.y,
           }));
-          if (!corners.every((point) => pointInPolygonInclusive(point, points))) continue;
-          // Reserve the full doorway and enough space to step through it. A
-          // flight beside a door can otherwise seal it with its tall treads.
-          if (doors.some((door) => {
-            const projected = [door.start, door.end].map((point) => ({
-              along: (point.x - start.x) * direction.x + (point.y - start.y) * direction.y,
-              across: (point.x - start.x) * inward.x + (point.y - start.y) * inward.y,
-            }));
-            return Math.max(...projected.map((point) => point.along)) + landing > alongStart &&
-              Math.min(...projected.map((point) => point.along)) - landing < alongStart + run &&
-              Math.max(...projected.map((point) => point.across)) + landing > acrossStart &&
-              Math.min(...projected.map((point) => point.across)) - landing < acrossStart + width;
-          })) continue;
-          candidates.push({ edge: [start, end] as const, start: alongStart, run, width });
-        }
+          return Math.max(...projected.map((point) => point.along)) + landing > alongStart &&
+            Math.min(...projected.map((point) => point.along)) - landing < alongStart + run &&
+            Math.max(...projected.map((point) => point.across)) + landing > acrossStart &&
+            Math.min(...projected.map((point) => point.across)) - landing < acrossStart + width;
+        })) continue;
+        candidates.push({ edge: [start, end] as const, start: alongStart, run, width });
       }
     }
   }
@@ -1074,7 +1162,7 @@ function pointInPolygonInclusive(point: Point2D, polygon: readonly Point2D[]): b
   );
 }
 
-function addPlannedInteriorWalls(
+function* addPlannedInteriorWalls(
   parts: Mesh[],
   scene: Scene,
   interior: PlannedInterior,
@@ -1082,14 +1170,14 @@ function addPlannedInteriorWalls(
   heightMeters: number,
   options: BuildingRenderOptions,
   color: Color3,
-): void {
-  addLayoutWalls(parts, scene, interior.building, bottomElevation, heightMeters, options, color);
+): Generator<string, void, void> {
+  yield* addLayoutWalls(parts, scene, interior.building, bottomElevation, heightMeters, options, color);
   for (const apartment of interior.apartments) {
-    addLayoutWalls(parts, scene, apartment, bottomElevation, heightMeters, options, color);
+    yield* addLayoutWalls(parts, scene, apartment, bottomElevation, heightMeters, options, color);
   }
 }
 
-function addLayoutWalls(
+function* addLayoutWalls(
   parts: Mesh[],
   scene: Scene,
   layout: PolygonLayout,
@@ -1097,7 +1185,7 @@ function addLayoutWalls(
   heightMeters: number,
   options: BuildingRenderOptions,
   color: Color3,
-): void {
+): Generator<string, void, void> {
   const edges = new Map<string, readonly [Point2D, Point2D]>();
   for (const room of layout.rooms) {
     const polygon = room.polygon.outer;
@@ -1112,6 +1200,7 @@ function addLayoutWalls(
   for (const [start, end] of edges.values()) {
     addInteriorWall(parts, scene, start, end, layout.openings ?? [],
       bottomElevation, heightMeters, options, color);
+    yield "wall geometry";
   }
 }
 
@@ -1899,8 +1988,6 @@ function createBuildingShadowCaster(
   return caster;
 }
 
-const interiorLoadFrames = new WeakMap<Scene, number>();
-
 function configureLazyInteriors(
   exterior: Mesh,
   parent: TransformNode,
@@ -1910,109 +1997,91 @@ function configureLazyInteriors(
   if (pendingInteriors.length === 0) return;
   exterior.metadata ??= {};
   delete exterior.metadata.pendingInterior;
-  exterior.metadata.pendingInteriorCount = pendingInteriors.length;
-  exterior.metadata.loadedInteriorCount = 0;
   const loadedInteriors: LoadedBuildingInterior[] = [];
+  const builds = new Map<PendingBuildingInterior, () => void>();
+  let failedBuilds = 0;
   exterior.metadata.loadedInteriors = loadedInteriors;
   let lastCheckMilliseconds = -Infinity;
   const scene = exterior.getScene();
-  // Creating and merging an interior mutates the scene graph. Doing that from
-  // onBeforeRender lets the main pass, SSR, and transparent windows observe
-  // different scene contents in one frame, which produces visible flashes.
-  // Queue the residency work after the frame so the next frame sees a stable
-  // set of meshes across every render pass.
-  const afterRenderObserver = scene.onAfterRenderObservable.add(() => {
-    // Streamed chunks are staged at the origin before their tile offset commits.
-    // Disabled chunks must not load interiors using that temporary position.
-    if (!exterior.isEnabled()) return;
+  const updateCounts = (): void => {
+    exterior.metadata.pendingInteriorCount = pendingInteriors.length + builds.size;
+    exterior.metadata.loadingInteriorCount = builds.size;
+    exterior.metadata.loadedInteriorCount = loadedInteriors.length;
+    exterior.metadata.failedInteriorCount = failedBuilds;
+    exterior.metadata.interiorsLoaded = pendingInteriors.length + builds.size + failedBuilds === 0;
+  };
+  const cameraPosition = (): Vector3 | undefined => {
+    const camera = scene.activeCamera;
+    if (!camera) return undefined;
+    return Vector3.TransformCoordinates(
+      camera.globalPosition, parent.computeWorldMatrix(true).clone().invert(),
+    );
+  };
+  const distance = (candidate: PendingBuildingInterior, localCamera = cameraPosition()): number =>
+    localCamera ? interiorDistanceMeters(candidate.center, candidate.radiusMeters, localCamera, metersPerUnit) : Infinity;
+  updateCounts();
+  // Residency checks only enqueue work. A single scene queue builds after rendering.
+  const observer = scene.onAfterRenderObservable.add(() => {
+    if (!exterior.isEnabled()) {
+      for (const cancel of [...builds.values()]) cancel();
+      for (const loaded of loadedInteriors) if (loaded.mesh.isEnabled()) loaded.mesh.setEnabled(false);
+      return;
+    }
     const now = performance.now();
     if (now - lastCheckMilliseconds < BUILDING_INTERIOR_CHECK_INTERVAL_MS) return;
     lastCheckMilliseconds = now;
-    const camera = scene.activeCamera;
-    if (!camera) return;
-    const parentWorld = parent.computeWorldMatrix(true);
-    const localCamera = Vector3.TransformCoordinates(
-      camera.globalPosition,
-      parentWorld.clone().invert(),
-    );
-
-    // Release interiors that are no longer near enough to be seen. Their
-    // pending descriptors are retained so returning to the building can load
-    // them again without rebuilding the detailed exterior.
+    const localCamera = cameraPosition();
+    if (!localCamera) return;
     for (let index = loadedInteriors.length - 1; index >= 0; index--) {
-      const loadedInterior = loadedInteriors[index];
-      if (interiorDistanceMeters(loadedInterior.center, loadedInterior.pending.radiusMeters,
-          localCamera, metersPerUnit) <= BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS) continue;
-      loadedInterior.mesh.dispose(false, true);
-      pendingInteriors.push(loadedInterior.pending);
-      loadedInteriors.splice(index, 1);
-      exterior.metadata.loadedInteriorCount--;
-    }
-    for (const loadedInterior of loadedInteriors) {
-      // Keep the render cutoff explicit on the interior mesh itself. This is
-      // intentionally separate from residency so a stale/culled exterior
-      // callback can never make an interior visible at distance.
-      loadedInterior.mesh.isVisible = true;
-    }
-
-    let loaded = 0;
-    while (loaded < BUILDING_INTERIORS_PER_CHECK && pendingInteriors.length > 0) {
-      // Every tile/chunk has an observer; the limit must apply scene-wide.
-      if (interiorLoadFrames.get(scene) === scene.getFrameId()) break;
-      let nearestIndex = 0;
-      let nearestDistanceMeters = Number.POSITIVE_INFINITY;
-      for (let index = 0; index < pendingInteriors.length; index++) {
-        const pending = pendingInteriors[index];
-        const distanceMeters = interiorDistanceMeters(
-          pending.center,
-          pending.radiusMeters,
-          localCamera,
-          metersPerUnit,
-        );
-        if (distanceMeters < nearestDistanceMeters) {
-          nearestDistanceMeters = distanceMeters;
-          nearestIndex = index;
-        }
+      const loaded = loadedInteriors[index];
+      if (distance(loaded.pending, localCamera) > BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS) {
+        BuildingTrace.run(`building=${loaded.pending.id} interior unload`, () => loaded.mesh.dispose(false, true));
+        pendingInteriors.push(loaded.pending);
+        loadedInteriors.splice(index, 1);
+      } else if (!loaded.mesh.isEnabled()) {
+        loaded.mesh.setEnabled(true);
       }
-      const candidate = pendingInteriors[nearestIndex];
-      if (nearestDistanceMeters > BUILDING_INTERIOR_LOAD_DISTANCE_METERS) break;
-      interiorLoadFrames.set(scene, scene.getFrameId());
-      pendingInteriors.splice(nearestIndex, 1);
-      const interiorSource = candidate.load();
-      if (!interiorSource) continue;
-      const interior = ProceduralBuildingRenderer.merge(
-        [interiorSource],
-        "buildingInteriors",
-        parent,
-      );
-      if (!interior) continue;
-      interior.onBeforeRenderObservable.add(() => {
-        const activeCamera = interior.getScene().activeCamera;
-        if (!activeCamera) return;
-        const currentParentWorld = parent.computeWorldMatrix(true);
-        const currentLocalCamera = Vector3.TransformCoordinates(
-          activeCamera.globalPosition,
-          currentParentWorld.clone().invert(),
-        );
-        interior.isVisible = interiorDistanceMeters(
-          candidate.center,
-          candidate.radiusMeters,
-          currentLocalCamera,
-          metersPerUnit,
-        ) <=
-          BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS;
-      });
-      interior.checkCollisions = true;
-      interior.setEnabled(true);
-      loadedInteriors.push({ center: candidate.center, pending: candidate, mesh: interior });
-      exterior.metadata.loadedInteriorCount++;
-      loaded++;
     }
-    exterior.metadata.pendingInteriorCount = pendingInteriors.length;
-    exterior.metadata.interiorsLoaded = pendingInteriors.length === 0;
+    // Closest in this chunk first; the scene queue applies one shared budget.
+    let nearestIndex = -1;
+    let nearestDistance = BUILDING_INTERIOR_LOAD_DISTANCE_METERS;
+    for (let index = 0; index < pendingInteriors.length; index++) {
+      const gap = distance(pendingInteriors[index], localCamera);
+      if (gap <= nearestDistance) { nearestIndex = index; nearestDistance = gap; }
+    }
+    if (nearestIndex >= 0) {
+      const candidate = pendingInteriors.splice(nearestIndex, 1)[0];
+      const root = new Mesh("buildingInteriorRoot", scene);
+      root.parent = parent;
+      root.setEnabled(false);
+      const cancel = enqueueInteriorBuild(scene, {
+        label: `building=${candidate.id} chunk=${parent.name}/${parent.uniqueId}`,
+        steps: candidate.build(root),
+        valid: () => !exterior.isDisposed() && exterior.isEnabled() && !root.isDisposed() &&
+          distance(candidate) <= BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
+        complete: () => {
+          builds.delete(candidate);
+          // Activation also yields between batches. Windows open only once all are ready.
+          root.setEnabled(true);
+          loadedInteriors.push({ center: candidate.center, pending: candidate, mesh: root });
+          updateCounts();
+        },
+        cancel: (retry) => {
+          builds.delete(candidate);
+          root.dispose(false, true);
+          if (!retry) failedBuilds++;
+          if (retry && !exterior.isDisposed()) pendingInteriors.push(candidate);
+          updateCounts();
+        },
+      });
+      builds.set(candidate, cancel);
+    }
+    updateCounts();
   });
-  exterior.onDisposeObservable.add(() => {
-    scene.onAfterRenderObservable.remove(afterRenderObserver);
+  exterior.onDisposeObservable.addOnce(() => {
+    scene.onAfterRenderObservable.remove(observer);
+    for (const cancel of [...builds.values()]) cancel();
+    for (const loaded of loadedInteriors) loaded.mesh.dispose(false, true);
   });
 }
 

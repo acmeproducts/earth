@@ -1,10 +1,10 @@
 import { ResourceCache } from "./ResourceCache";
+import { BuildingTrace } from "./BuildingDiagnostics";
 import { mergeOverlappingBuildings } from "./CompositeBuildings";
 import { inferBuildingUse, type BuildingUseContext } from "./BuildingUseInference";
 import type { SharedValueMap } from "./OwnedValueCache";
 import {
   Color3,
-  Material,
   Mesh,
   MeshBuilder,
   MultiMaterial,
@@ -249,150 +249,162 @@ export class OpenStreetMap {
     options: MapLayerOptions,
     yieldControl?: () => Promise<void>,
   ): Promise<MapFeatureLayer> {
-    const root = new TransformNode("mapFeatures", scene);
-    if (options.startDisabled) root.setEnabled(false);
-    const buildings: Mesh[] = [];
-    const buildingChunks: Mesh[] = [];
-    let buildingCount = 0;
-    let chunkVertices = 0;
-    const roadMeshes: Record<RoadVisualStyle, Mesh[]> = {
-      marked: [],
-      paved: [],
-      pedestrian: [],
-      dirt: [],
-      unpaved: [],
-      ford: [],
-    };
-    const roadShoulders: Record<RoadSurface, Mesh[]> = {
-      paved: [],
-      unpaved: [],
-    };
-    const bridgeDecks: Mesh[] = [];
-    const junctionCandidates: RoadJunctionCandidate[] = [];
-    const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
-    const waterways: Mesh[] = [];
-    const renderOptions = {
-      ...options,
-      renderWholeBuildingFootprints: true,
-      neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
-    };
-    if (options.planning) {
-      const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
-      for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
-        const mesh = plannedMeshes[visualStyle];
-        if (mesh) roadMeshes[visualStyle].push(mesh);
-      }
-      const plannedShoulders = createPlannedShoulderMeshes(
-        scene,
-        options.planning.shoulders,
-        terrain,
-        options,
-      );
-      for (const surface of Object.keys(plannedShoulders) as RoadSurface[]) {
-        const mesh = plannedShoulders[surface];
-        if (mesh) roadShoulders[surface].push(mesh);
-      }
-    }
-
-    for (const source of compositeBuildingSources(tiles)) {
-      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-      await yieldControl?.();
-      const plan = planBuilding(source);
-      const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-      if (mesh) {
-        buildings.push(mesh);
-        buildingCount++;
-        chunkVertices += mesh.getTotalVertices();
-        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-          const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
-          if (chunk) buildingChunks.push(chunk);
-          buildings.length = 0;
-          chunkVertices = 0;
+    return BuildingTrace.runAsync(`tile=${JSON.stringify(terrain.worldTile)} map layer`, async (trace) => {
+      trace.stage("layer setup/lakes/building sources");
+      const root = new TransformNode("mapFeatures", scene);
+      if (options.startDisabled) root.setEnabled(false);
+      const buildings: Mesh[] = [];
+      const buildingChunks: Mesh[] = [];
+      let buildingCount = 0;
+      let chunkVertices = 0;
+      const roadMeshes: Record<RoadVisualStyle, Mesh[]> = {
+        marked: [],
+        paved: [],
+        pedestrian: [],
+        dirt: [],
+        unpaved: [],
+        ford: [],
+      };
+      const roadShoulders: Record<RoadSurface, Mesh[]> = {
+        paved: [],
+        unpaved: [],
+      };
+      const bridgeDecks: Mesh[] = [];
+      const junctionCandidates: RoadJunctionCandidate[] = [];
+      const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
+      const waterways: Mesh[] = [];
+      const renderOptions = {
+        ...options,
+        renderWholeBuildingFootprints: true,
+        neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
+      };
+      if (options.planning) {
+        trace.stage("planned road/shoulder geometry");
+        const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
+        for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
+          const mesh = plannedMeshes[visualStyle];
+          if (mesh) roadMeshes[visualStyle].push(mesh);
+        }
+        const plannedShoulders = createPlannedShoulderMeshes(
+          scene,
+          options.planning.shoulders,
+          terrain,
+          options,
+        );
+        for (const surface of Object.keys(plannedShoulders) as RoadSurface[]) {
+          const mesh = plannedShoulders[surface];
+          if (mesh) roadShoulders[surface].push(mesh);
         }
       }
-      await yieldControl?.();
-    }
-    for (const tile of tiles) {
-      await yieldControl?.();
-      for (const source of roadSources(tile)) {
-        const appearance = planRoad(source.properties);
-        if (!appearance || appearance.isTunnel) continue;
-        if (options.planning && appearance.structure !== "bridge") continue;
-        const target = roadMeshes[appearance.visualStyle];
-        for (const line of source.paths) {
-          const created = createRoad(scene, line, terrain, options, appearance);
-          target.push(...created.surfaces);
-          if (appearance.visualStyle !== "dirt") {
-            roadShoulders[appearance.surface].push(...created.shoulders);
+
+      for (const source of compositeBuildingSources(tiles)) {
+        trace.stage("building ownership");
+        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+        trace.stage("frame yield before building");
+        await yieldControl?.();
+        trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
+        const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
+        const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+        if (mesh) {
+          buildings.push(mesh);
+          buildingCount++;
+          chunkVertices += mesh.getTotalVertices();
+          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+            const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
+            if (chunk) buildingChunks.push(chunk);
+            buildings.length = 0;
+            chunkVertices = 0;
           }
-          bridgeDecks.push(...created.bridgeDecks);
-          if (!options.planning &&
-              (appearance.structure === "surface" || appearance.structure === "ford")) {
-            for (const path of created.paths) {
-              if (path.length < 2) continue;
-              for (const point of [path[0], path[path.length - 1]]) {
-                junctionCandidates.push({
-                  sourceId: source.id,
-                  point,
-                  halfWidth: appearance.widthMeters / options.metersPerUnit / 2,
-                  layer: appearance.layer,
-                  visualStyle: appearance.visualStyle,
-                });
+        }
+        trace.stage("frame yield after building");
+        await yieldControl?.();
+      }
+      trace.stage("roads/waterways including frame yields");
+      for (const tile of tiles) {
+        await yieldControl?.();
+        for (const source of roadSources(tile)) {
+          const appearance = planRoad(source.properties);
+          if (!appearance || appearance.isTunnel) continue;
+          if (options.planning && appearance.structure !== "bridge") continue;
+          const target = roadMeshes[appearance.visualStyle];
+          for (const line of source.paths) {
+            const created = createRoad(scene, line, terrain, options, appearance);
+            target.push(...created.surfaces);
+            if (appearance.visualStyle !== "dirt") {
+              roadShoulders[appearance.surface].push(...created.shoulders);
+            }
+            bridgeDecks.push(...created.bridgeDecks);
+            if (!options.planning &&
+                (appearance.structure === "surface" || appearance.structure === "ford")) {
+              for (const path of created.paths) {
+                if (path.length < 2) continue;
+                for (const point of [path[0], path[path.length - 1]]) {
+                  junctionCandidates.push({
+                    sourceId: source.id,
+                    point,
+                    halfWidth: appearance.widthMeters / options.metersPerUnit / 2,
+                    layer: appearance.layer,
+                    visualStyle: appearance.visualStyle,
+                  });
+                }
               }
             }
           }
         }
+        await yieldControl?.();
+        forEachFeature(tile, "waterway", (feature) => {
+          if (!isSurfaceWaterFeature(feature.properties)) return;
+          const widthMeters = waterwayWidthMeters(feature.properties.class);
+          if (widthMeters === undefined) return;
+          for (const line of lines(feature, tile)) {
+            waterways.push(...createWaterway(scene, line, terrain, options, widthMeters));
+          }
+        });
+        await yieldControl?.();
       }
-      await yieldControl?.();
-      forEachFeature(tile, "waterway", (feature) => {
-        if (!isSurfaceWaterFeature(feature.properties)) return;
-        const widthMeters = waterwayWidthMeters(feature.properties.class);
-        if (widthMeters === undefined) return;
-        for (const line of lines(feature, tile)) {
-          waterways.push(...createWaterway(scene, line, terrain, options, widthMeters));
-        }
-      });
-      await yieldControl?.();
-    }
 
-    for (const junction of createRoadJunctions(
-      scene,
-      junctionCandidates,
-      terrain,
-      options,
-    )) {
-      roadMeshes[junction.visualStyle].push(junction.mesh);
-    }
+      trace.stage("road junction geometry");
+      for (const junction of createRoadJunctions(
+        scene,
+        junctionCandidates,
+        terrain,
+        options,
+      )) {
+        roadMeshes[junction.visualStyle].push(junction.mesh);
+      }
 
-    const meshes = [
-      ...buildingChunks,
-      ProceduralBuildingRenderer.merge(buildings, "buildings", root),
-      mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
-      mergeRoads(roadShoulders.unpaved, "unpavedRoadShoulders", "unpavedShoulder", root),
-      mergeRoads(bridgeDecks, "bridgeDecks", "bridgeDeck", root),
-      mergeRoads(roadMeshes.marked, "markedRoads", "marked", root),
-      mergeRoads(roadMeshes.paved, "pavedRoads", "paved", root),
-      mergeRoads(roadMeshes.pedestrian, "pedestrianRoads", "pedestrian", root),
-      mergeRoads(roadMeshes.dirt, "dirtRoads", "dirt", root),
-      mergeRoads(roadMeshes.unpaved, "unpavedRoads", "unpaved", root),
-      mergeRoads(roadMeshes.ford, "fordRoads", "ford", root),
-      mergeWaterways(waterways, root, options),
-    ].filter((mesh): mesh is Mesh => mesh !== undefined);
-    // Source meshes are disabled as soon as they are constructed so yielding
-    // between feature batches cannot expose them at the scene origin. The
-    // merged meshes can now be enabled safely: a streamed layer's disabled
-    // root keeps them hidden until Game applies the tile offset and commits it.
-    for (const mesh of meshes) mesh.setEnabled(true);
-    return {
-      root,
-      meshes,
-      lakePolygons,
-      counts: {
-        buildings: buildingCount,
-        roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
-        water: lakePolygons.length + waterways.length,
-      },
-    };
+      trace.stage("final building/road/water merges (inclusive)");
+      const meshes = [
+        ...buildingChunks,
+        ProceduralBuildingRenderer.merge(buildings, "buildings", root),
+        mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
+        mergeRoads(roadShoulders.unpaved, "unpavedRoadShoulders", "unpavedShoulder", root),
+        mergeRoads(bridgeDecks, "bridgeDecks", "bridgeDeck", root),
+        mergeRoads(roadMeshes.marked, "markedRoads", "marked", root),
+        mergeRoads(roadMeshes.paved, "pavedRoads", "paved", root),
+        mergeRoads(roadMeshes.pedestrian, "pedestrianRoads", "pedestrian", root),
+        mergeRoads(roadMeshes.dirt, "dirtRoads", "dirt", root),
+        mergeRoads(roadMeshes.unpaved, "unpavedRoads", "unpaved", root),
+        mergeRoads(roadMeshes.ford, "fordRoads", "ford", root),
+        mergeWaterways(waterways, root, options),
+      ].filter((mesh): mesh is Mesh => mesh !== undefined);
+      // Source meshes are disabled as soon as they are constructed so yielding
+      // between feature batches cannot expose them at the scene origin. The
+      // merged meshes can now be enabled safely: a streamed layer's disabled
+      // root keeps them hidden until Game applies the tile offset and commits it.
+      trace.stage("enable staged meshes");
+      for (const mesh of meshes) mesh.setEnabled(true);
+      return {
+        root,
+        meshes,
+        lakePolygons,
+        counts: {
+          buildings: buildingCount,
+          roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
+          water: lakePolygons.length + waterways.length,
+        },
+      };
+    });
   }
 
   /** Projects map features once so terrain, meshes, and placement share one plan. */
@@ -507,45 +519,54 @@ export class OpenStreetMap {
     detail: BuildingDetailLevel,
     yieldControl?: () => Promise<void>,
   ): Promise<BuildingFeatureLayer> {
-    const name = detail === "far" ? "farBuildings" : "detailedBuildings";
-    const root = new TransformNode(name, scene);
-    if (options.startDisabled) root.setEnabled(false);
-    const buildings: Mesh[] = [];
-    const meshes: Mesh[] = [];
-    let count = 0;
-    let chunkVertices = 0;
-    const renderOptions = {
-      ...options,
-      renderWholeBuildingFootprints: true,
-      neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
-    };
-    for (const source of compositeBuildingSources(tiles)) {
-      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-      await yieldControl?.();
-      const plan = planBuilding(source);
-      const mesh = detail === "far"
-        ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
-        : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-      if (mesh) {
-        buildings.push(mesh);
-        count++;
-        chunkVertices += mesh.getTotalVertices();
-        // Bound merge copies and GPU uploads instead of duplicating a whole
-        // dense city tile in memory in one uninterrupted merge.
-        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-          const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
-          if (chunk) meshes.push(chunk);
-          buildings.length = 0;
-          chunkVertices = 0;
+    return BuildingTrace.runAsync(`tile=${JSON.stringify(terrain.worldTile)} ${detail} building layer`, async (trace) => {
+      trace.stage("layer setup/building sources");
+      const name = detail === "far" ? "farBuildings" : "detailedBuildings";
+      const root = new TransformNode(name, scene);
+      if (options.startDisabled) root.setEnabled(false);
+      const buildings: Mesh[] = [];
+      const meshes: Mesh[] = [];
+      let count = 0;
+      let chunkVertices = 0;
+      const renderOptions = {
+        ...options,
+        renderWholeBuildingFootprints: true,
+        neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
+      };
+      for (const source of compositeBuildingSources(tiles)) {
+        trace.stage("building ownership");
+        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+        trace.stage("frame yield before building");
+        await yieldControl?.();
+        trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
+        const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
+        const mesh = detail === "far"
+          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
+          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+        if (mesh) {
+          buildings.push(mesh);
+          count++;
+          chunkVertices += mesh.getTotalVertices();
+          // Bound merge copies and GPU uploads instead of duplicating a whole
+          // dense city tile in memory in one uninterrupted merge.
+          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+            if (chunk) meshes.push(chunk);
+            buildings.length = 0;
+            chunkVertices = 0;
+          }
         }
+        trace.stage("frame yield after building");
+        await yieldControl?.();
       }
-      await yieldControl?.();
-    }
 
-    const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
-    if (merged) meshes.push(merged);
-    for (const mesh of meshes) mesh.setEnabled(true);
-    return { root, meshes, count };
+      trace.stage("final merge (inclusive)");
+      const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
+      if (merged) meshes.push(merged);
+      trace.stage("enable staged meshes");
+      for (const mesh of meshes) mesh.setEnabled(true);
+      return { root, meshes, count };
+    });
   }
 
   /** Keeps road surfaces visible beyond the full map-feature detail rings. */
@@ -722,9 +743,14 @@ function forEachFeature(
 function compositeBuildingSources(tiles: readonly MapTile[]): readonly BuildingSource[] {
   const cached = compositeBuildingSourceCache.get(tiles);
   if (cached) return cached;
-  const sources = mergeOverlappingBuildings(tiles.flatMap((tile) => buildingSources(tile)));
-  compositeBuildingSourceCache.set(tiles, sources);
-  return sources;
+  return BuildingTrace.run(`provider tiles=${tiles.map((tile) => `${tile.zoom}/${tile.x}/${tile.y}`).join(",")} sources`, (trace) => {
+    trace.stage("decode/features/use inference");
+    const rawSources = tiles.flatMap((tile) => buildingSources(tile));
+    trace.stage(`merge overlapping footprints count=${rawSources.length}`);
+    const sources = mergeOverlappingBuildings(rawSources);
+    compositeBuildingSourceCache.set(tiles, sources);
+    return sources;
+  });
 }
 
 function buildingSources(tile: MapTile): readonly BuildingSource[] {
@@ -978,7 +1004,7 @@ function plannedRoadUv(
   const repeatMeters = road.visualStyle === "dirt" || road.visualStyle === "unpaved" || road.visualStyle === "ford"
     ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
     : 4;
-  if (forceWorldUvs || (road.visualStyle !== "marked" && road.visualStyle !== "dirt")) {
+  if (forceWorldUvs || road.visualStyle !== "marked") {
     const scale = metersPerUnit / repeatMeters;
     return { x: point.x * scale, y: point.z * scale };
   }
@@ -1002,14 +1028,10 @@ function plannedRoadUv(
     road.centerline[1].x - road.centerline[0].x,
     road.centerline[1].z - road.centerline[0].z,
   ) <= 1e-8;
-  // A junction disc is mapped as the roads running through it, so the
-  // markings and the dirt texture's transparent edges line up with each
-  // approach. A bend wedge has no such arms; it borrows a chord of its own
-  // road as texture axis, and that axis must not decide which side gets the
-  // transparent edge, so it fades radially with the falloff kept for the
-  // exposed outside of the bend.
+  // Junction markings follow the widest approach. Bend wedges use a
+  // radial coordinate to keep the centre marking off the outside edge.
   const acrossUv = road.junctionArms
-    ? junctionAcrossUv(point, road.junctionArms, road.visualStyle, metersPerUnit)
+    ? junctionAcrossUv(point, road.junctionArms, metersPerUnit)
     : isJoin
       ? radialJoinUv(point, road)
       : 0.5 + across * metersPerUnit / Math.max(0.01, road.widthMeters);
@@ -1032,19 +1054,16 @@ function radialJoinUv(
 }
 
 /**
- * Across-strip coordinate inside a junction disc. A marked disc follows only
- * the widest road, so its centre line runs straight through while the side
- * roads' markings stop at the disc. A dirt disc follows every arm: it is
- * opaque along each approach's corridor and fades only in the wedges between
- * them, so no approach meets a transparent rim.
+ * Across-strip coordinate inside a marked junction disc. Follow only the
+ * widest road so its centre line runs straight through while side roads'
+ * markings stop at the disc.
  */
 function junctionAcrossUv(
   point: { x: number; z: number },
   arms: ReadonlyArray<JunctionArm>,
-  visualStyle: RoadVisualStyle,
   metersPerUnit: number,
 ): number {
-  const considered = visualStyle === "marked" ? arms.slice(0, 1) : arms;
+  const considered = arms.slice(0, 1);
   let nearest = Infinity;
   for (const arm of considered) {
     const dx = arm.axis[1].x - arm.axis[0].x;
@@ -1147,9 +1166,9 @@ function createRoadMeshes(
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
-      // Dirt and marked roads need an across-road coordinate for their soft
-      // edge and centre marking. Other surfaces retain world-projected grain.
-      const uvs = visualStyle === "marked" || visualStyle === "dirt"
+      // Only markings need an across-road coordinate. World-projected dirt
+      // grain stays continuous through bends and connecting road pieces.
+      const uvs = visualStyle === "marked"
         ? roadUvs(left, right, options.metersPerUnit, visualStyle)
         : worldPositionRoadUvs(left, right, options.metersPerUnit, visualStyle);
       meshes.push(stageMapMesh(
@@ -1562,10 +1581,6 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
   }
   const texture = createRoadTexture(scene, `${name}Texture`, visualStyle, true);
   material.diffuseTexture = texture;
-  if (visualStyle === "dirt") {
-    material.useAlphaFromDiffuseTexture = true;
-    material.transparencyMode = Material.MATERIAL_ALPHABLEND;
-  }
   if (looseSurface) {
     const relief = createRoadTexture(scene, `${name}Relief`, visualStyle, false);
     relief.level = visualStyle === "dirt" ? 0.12 : 0.24;
@@ -1624,17 +1639,8 @@ function createRoadTexture(
       pixels[offset] = value;
       pixels[offset + 1] = value;
       pixels[offset + 2] = value;
-      const acrossFraction = Math.min(y, ROAD_TEXTURE_SIZE - 1 - y) /
-        ((ROAD_TEXTURE_SIZE - 1) * 0.5);
-      const dirtEdgeStart = 0.03 + gravelBroad * 0.05;
-      const dirtEdgeAmount = Math.max(0, Math.min(
-        1,
-        (acrossFraction - dirtEdgeStart) / 0.3,
-      ));
-      const dirtEdge = dirtEdgeAmount * dirtEdgeAmount * (3 - 2 * dirtEdgeAmount);
-      pixels[offset + 3] = visualStyle === "dirt"
-        ? Math.round((218 + gravelBroad * 18 + gravelCluster * 10) * dirtEdge)
-        : 255;
+      // Opaque coverage avoids faded rims on joins and small circular pieces.
+      pixels[offset + 3] = 255;
     }
   }
   const texture = RawTexture.CreateRGBATexture(
@@ -1648,7 +1654,7 @@ function createRoadTexture(
   );
   texture.name = name;
   texture.gammaSpace = gammaSpace;
-  texture.hasAlpha = visualStyle === "dirt";
+  texture.hasAlpha = false;
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
   texture.anisotropicFilteringLevel = 12;

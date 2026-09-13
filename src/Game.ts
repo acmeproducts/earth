@@ -1096,6 +1096,7 @@ export class Game {
       mapOptions,
       yieldControl,
     );
+    trace?.stage("plot boundaries");
     const plotBoundaryLayer = await OpenStreetMapBarriers.createPlannedLayer(
       this.scene,
       record.roadAndBuildingPlan.plotBoundaries,
@@ -1103,6 +1104,7 @@ export class Game {
       mapOptions,
       yieldControl,
     );
+    trace?.stage("street lamp geometry");
     const streetLampLayer = StreetLamps.createLayer(
       this.scene,
       record.roadAndBuildingPlan.streetLamps,
@@ -1117,13 +1119,17 @@ export class Game {
     }
     plotBoundaryLayer.root.parent = mapFeatures.root;
     streetLampLayer.root.parent = mapFeatures.root;
+    trace?.stage("map commit frame wait");
     await this.streamingYielder.nextFrame();
+    trace?.stage("map world matrices/offset");
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
+    trace?.stage("map activation frame wait");
     await this.streamingYielder.nextFrame();
     if (generation !== this.streamingGeneration) {
       OpenStreetMap.disposeLayer(mapFeatures.root);
       return;
     }
+    trace?.stage("map activation/fades");
     mapFeatures.root.setEnabled(true);
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
@@ -1142,7 +1148,9 @@ export class Game {
         () => OpenStreetMap.disposeLayer(farRoads));
     }
     record.detailed = true;
+    trace?.stage("refresh shadow casters");
     this.refreshShadowCasters();
+    trace?.stage("detail complete");
     console.log(
       `Tile ${record.key}: ${treeField.count} trees, ${saplingField.count} saplings, ` +
       `${grassField.count} grass, ${tallPlantField.count} wildflower patches, ` +

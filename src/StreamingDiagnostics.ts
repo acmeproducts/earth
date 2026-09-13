@@ -12,7 +12,7 @@ export class StreamingTrace {
 
   stage(name: string): void {
     const now = performance.now();
-    this.timings.push(`${this.stageName}=${Math.round(now - this.stageStarted)}ms`);
+    this.timings.push(`${this.stageName}=${(now - this.stageStarted).toFixed(2)}ms`);
     this.stageName = name;
     this.stageStarted = now;
   }

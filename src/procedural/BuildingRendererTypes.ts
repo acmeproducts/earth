@@ -1,4 +1,4 @@
-import type { BaseTexture, Color3, Mesh, Vector3 } from "@babylonjs/core";
+import type { BaseTexture, Color3, Mesh, TransformNode, Vector3 } from "@babylonjs/core";
 import type { BuildingPlan, BuildingPolygon } from "../BuildingPlanner";
 import type { BuildingLayout } from "../BuildingLayoutPlanner";
 import type { ApartmentLayout } from "../ApartmentLayoutPlanner";
@@ -47,6 +47,8 @@ export interface Bounds {
 }
 
 export interface DetailedBuildingParts {
+  /** Reuses exterior planning; creates no interior geometry until advanced. */
+  interiorParts: (parts: Mesh[]) => Generator<string, void, void>;
   parts: Mesh[];
   windowCount: number;
   floorCount: number;
@@ -72,9 +74,10 @@ export interface InteriorPlanningAttempt {
 }
 
 export interface PendingBuildingInterior {
+  id: string;
   center: Vector3;
   radiusMeters: number;
-  load: () => Mesh | undefined;
+  build: (root: TransformNode) => Generator<string, void, void>;
 }
 
 export interface LoadedBuildingInterior {

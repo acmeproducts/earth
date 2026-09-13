@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { drainInteriorBuilds } from "./interior-streaming-helpers.mjs";
 import { planBuilding } from "../src/BuildingPlanner.ts";
 import { FreeCamera, NullEngine, Scene, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
@@ -38,10 +39,11 @@ test("building use tags reach the streamed interior compiler, including open flo
       assert.equal(detailed.metadata.plannedInterior, !["warehouse", "industrial", "garages"].includes(buildingClass));
       ProceduralBuildingRenderer.merge([detailed], "buildings", new TransformNode("root", scene));
       scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
-      scene.onAfterRenderObservable.notifyObservers(scene);
+      drainInteriorBuilds(scene);
       const interior = scene.getMeshByName("buildingInteriors");
       assert.ok(interior);
-      const positions = interior.getVerticesData(VertexBuffer.PositionKind);
+      const positions = scene.meshes.filter((mesh) => mesh.name === "buildingInteriors")
+        .flatMap((mesh) => Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)));
       assert.ok(positions.every(Number.isFinite));
       geometry.push(positions);
     } finally { scene.dispose(); engine.dispose(); }

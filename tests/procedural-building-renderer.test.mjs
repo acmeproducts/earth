@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { advanceInteriorFrame, drainInteriorBuilds } from "./interior-streaming-helpers.mjs";
 import {
   FreeCamera,
   Material,
@@ -437,7 +438,7 @@ test("disabled tile staging never loads interiors at its temporary origin", () =
     const merged = ProceduralBuildingRenderer.merge([detailed], "buildings", root);
     const camera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
     scene.activeCamera = camera;
-    scene.onAfterRenderObservable.notifyObservers(scene);
+    drainInteriorBuilds(scene);
     assert.equal(merged.metadata.loadedInteriorCount, 0);
     assert.equal(scene.getMeshByName("buildingInteriors"), null);
     root.position.x = 1000;
@@ -445,7 +446,7 @@ test("disabled tile staging never loads interiors at its temporary origin", () =
     root.setEnabled(true);
     camera.position.x = 1000;
     camera.getViewMatrix(true);
-    scene.onAfterRenderObservable.notifyObservers(scene);
+    drainInteriorBuilds(scene);
     assert.equal(merged.metadata.loadedInteriorCount, 1);
   } finally {
     scene.dispose();
@@ -510,7 +511,7 @@ test("detailed buildings defer interiors until the camera is very close", () => 
   );
 
   scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
-  scene.onAfterRenderObservable.notifyObservers(scene);
+  drainInteriorBuilds(scene);
   assert.ok(scene.getMeshByName("buildingInteriors"));
   assert.equal(merged.metadata.loadedInteriorCount, 1);
   assert.equal(merged.metadata.pendingInteriorCount, 0);
@@ -551,7 +552,7 @@ test("near windows become transparent while other tile interiors remain pending"
   assert.ok(merged);
   scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
 
-  scene.onAfterRenderObservable.notifyObservers(scene);
+  drainInteriorBuilds(scene);
   merged.onBeforeRenderObservable.notifyObservers(merged);
 
   assert.equal(merged.metadata.loadedInteriorCount, 1);
@@ -637,7 +638,7 @@ test("house heights without mapped levels do not round up to a second floor", ()
 
 test("fits planned stairs inside a clipped stair room", () => {
   const stairRoom = {
-    outer: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }],
+    outer: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 5, y: 4 }, { x: 0, y: 4 }],
   };
   const stair = stairLayoutFromPlan({
     buildingType: "house",
@@ -645,16 +646,25 @@ test("fits planned stairs inside a clipped stair room", () => {
     rooms: [{ id: "stairs-1", type: "stairs", polygon: stairRoom }],
   }, options);
   assert.ok(stair);
+  assert.ok(stair.widthMeters >= 1.6, "flights must leave room to steer");
   const corners = [
-    [-0.84, -stair.widthMeters / 2],
-    [stair.runMeters + 0.84, -stair.widthMeters / 2],
-    [stair.runMeters + 0.84, stair.widthMeters / 2],
-    [-0.84, stair.widthMeters / 2],
+    [-0.99, -stair.widthMeters / 2],
+    [stair.runMeters + 0.99, -stair.widthMeters / 2],
+    [stair.runMeters + 0.99, stair.widthMeters / 2],
+    [-0.99, stair.widthMeters / 2],
   ].map(([along, across]) => ({
     x: stair.start.x + stair.direction.x * along + stair.inward.x * across,
     y: stair.start.z + stair.direction.z * along + stair.inward.z * across,
   }));
   assert.ok(corners.every((point) => pointInPolygon(point, stairRoom.outer)));
+});
+
+test("rejects narrow stair cores instead of squeezing the flight", () => {
+  const boundary = { outer: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 1.8 }, { x: 0, y: 1.8 }] };
+  assert.equal(stairLayoutFromPlan({
+    buildingType: "house", boundary,
+    rooms: [{ id: "stairs-1", type: "stairs", polygon: boundary }],
+  }, options), undefined);
 });
 
 test("rejects a stair room that fits treads but has no room for landings", () => {
@@ -822,11 +832,81 @@ test("interior construction is limited across all tile chunks in a frame", () =>
       plan(id, { render_height: 3.1, levels: 1 }), terrain, options),
   ], "buildings", new TransformNode(`tile-${id}`, scene)));
   scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
-  scene.onAfterRenderObservable.notifyObservers(scene);
+  advanceInteriorFrame(scene);
+  assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.loadedInteriorCount, 0), 0);
+  assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.loadingInteriorCount, 0), 3);
+  drainInteriorBuilds(scene, () => chunks.some((chunk) => chunk.metadata.loadedInteriorCount === 1));
   assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.loadedInteriorCount, 0), 1);
   assert.equal(chunks.reduce((sum, chunk) => sum + chunk.metadata.pendingInteriorCount, 0), 2);
   scene.dispose();
   engine.dispose();
+});
+
+test("leaving mid-build cleans up staged meshes and returning can finish the interior", (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const engine = new NullEngine(), scene = new Scene(engine);
+  try {
+    const parent = new TransformNode("tile", scene);
+    const exterior = ProceduralBuildingRenderer.merge([
+      ProceduralBuildingRenderer.createDetailed(scene,
+        plan(123, { render_height: 12.4, levels: 4 }), terrain, options),
+    ], "buildings", parent);
+    const baseline = new Set(scene.meshes);
+    const materials = new Set(scene.materials);
+    const camera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+    scene.activeCamera = camera;
+    for (let frame = 0; frame < 20; frame++) { clock += 16; advanceInteriorFrame(scene); }
+    assert.equal(exterior.metadata.loadingInteriorCount, 1);
+    assert.equal(exterior.metadata.loadedInteriorCount, 0);
+    const staged = scene.getMeshByName("buildingInteriorRoot");
+    assert.ok(staged);
+    assert.equal(staged.isEnabled(), false);
+    camera.position.x = 1000;
+    camera.getViewMatrix(true);
+    clock += 16;
+    advanceInteriorFrame(scene);
+    assert.equal(staged.isDisposed(), true);
+    assert.equal(exterior.metadata.loadingInteriorCount, 0);
+    assert.equal(exterior.metadata.pendingInteriorCount, 1);
+    assert.deepEqual(new Set(scene.meshes), baseline, "no orphan source meshes or completed batches");
+    assert.deepEqual(new Set(scene.materials), materials, "cancelled batches release their materials");
+
+    camera.position.x = 0;
+    camera.getViewMatrix(true);
+    clock += 150;
+    const frames = drainInteriorBuilds(scene);
+    assert.ok(frames > 1);
+    assert.equal(exterior.metadata.loadedInteriorCount, 1);
+    assert.equal(exterior.metadata.pendingInteriorCount, 0);
+    const loadedRoot = scene.getMeshByName("buildingInteriorRoot");
+    const chunks = loadedRoot.getChildMeshes();
+    assert.ok(chunks.length > 1, "interior remains in bounded merge batches");
+    assert.ok(chunks.every((mesh) => mesh.getTotalVertices() <= 4096));
+    assert.ok(chunks.every((mesh) => mesh.isEnabled() && mesh.checkCollisions));
+    exterior.dispose(false, true);
+    assert.equal(loadedRoot.isDisposed(), true, "exterior disposal also owns its loaded interior");
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
+test("disposing a tile while its interior is queued or building leaves no orphan geometry", (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const engine = new NullEngine(), scene = new Scene(engine);
+  try {
+    scene.activeCamera = new FreeCamera("camera", new Vector3(0, 15, 0), scene);
+    const roots = [0, 1].map((index) => {
+      const parent = new TransformNode(`tile-${index}`, scene);
+      ProceduralBuildingRenderer.merge([
+        ProceduralBuildingRenderer.createDetailed(scene,
+          plan(123 + index, { render_height: 12.4, levels: 4 }), terrain, options),
+      ], "buildings", parent);
+      return parent;
+    });
+    for (let frame = 0; frame < 10; frame++) advanceInteriorFrame(scene);
+    for (const root of roots) root.dispose(false, true);
+    for (let frame = 0; frame < 10; frame++) advanceInteriorFrame(scene);
+    assert.equal(scene.meshes.length, 0);
+  } finally { scene.dispose(); engine.dispose(); }
 });
 
 test("small-footprint high-rises keep fallback stairs on every floor", () => {
@@ -870,14 +950,17 @@ test("compact fallback stairs preserve two meters of headroom beneath the next f
     assert.equal(building.metadata.plannedInterior, false);
     assert.equal(building.metadata.stairFlightCount, 2);
     assert.deepEqual(building.metadata.stairFlightCenters[0], building.metadata.stairFlightCenters[1]);
-    const interior = building.metadata.pendingInterior.load();
-    assert.ok(interior);
-    interior.computeWorldMatrix(true);
+    const interior = new TransformNode("testInterior", scene);
+    for (const _stage of building.metadata.pendingInterior.build(interior)) { /* Drain geometry for ray checks. */ }
+    const intersect = (ray) => interior.getChildMeshes().map((mesh) => {
+      mesh.computeWorldMatrix(true);
+      return mesh.intersects(ray);
+    }).filter((hit) => hit.hit).sort((a, b) => a.distance - b.distance)[0];
     const center = building.metadata.stairFlightCenters[0];
-    const tread = interior.intersects(new Ray(new Vector3(center.x, 13, center.z), new Vector3(0, -1, 0), 3));
+    const tread = intersect(new Ray(new Vector3(center.x, 13, center.z), new Vector3(0, -1, 0), 3));
     assert.ok(tread.hit && tread.pickedPoint);
-    const headroom = interior.intersects(new Ray(tread.pickedPoint.add(new Vector3(0, 0.02, 0)), new Vector3(0, 1, 0), 2));
-    assert.equal(headroom.hit, false, "the upper flight must not block a player standing on the lower flight");
+    const headroom = intersect(new Ray(tread.pickedPoint.add(new Vector3(0, 0.02, 0)), new Vector3(0, 1, 0), 2));
+    assert.equal(headroom, undefined, "the upper flight must not block a player standing on the lower flight");
   } finally {
     scene.dispose();
     engine.dispose();

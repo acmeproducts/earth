@@ -138,7 +138,7 @@ function concaveBuildingPlan(
     openings,
   );
   const serviceSide = entrance?.side ?? "lower";
-  const stairLength = Math.min(4, (longMax - longMin) * 0.3);
+  const stairLength = Math.min(6.2, (longMax - longMin) * 0.4);
   const stairMin = safeStairMinimum(
     horizontal,
     longMin,
@@ -360,7 +360,7 @@ function apartmentBuildingPlan(
   const hallwayWidth = Math.min(2.4, Math.max(1.5, shortSpan * 0.22));
   const hallwayMin = (shortMin + shortMax - hallwayWidth) / 2;
   const hallwayMax = hallwayMin + hallwayWidth;
-  const stairLength = Math.min(4, longSpan * 0.3);
+  const stairLength = Math.min(6.2, longSpan * 0.4);
   const entrance = exteriorEntrance(
     horizontal,
     longMin,
