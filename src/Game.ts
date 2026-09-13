@@ -57,6 +57,7 @@ import {
 import type { WorldLocation, WorldLocationStore } from "./Locations";
 import {
   combineHorizontalExclusionMasks,
+  PolygonExclusionMask,
   geographicFrameOffset,
   lonLatToScene,
   sampleElevation,
@@ -384,7 +385,7 @@ export class Game {
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
     this.applyAntialiasing(camera);
 
-    // Keep the loading screen up until the entire render window is generated.
+    // Wait for the full-detail inner window; far terrain streams after spawn.
     await this.startWorld(location, onProgress);
     if (presenceSession.restoredPose) this.playerControls.applyRestoredPose(presenceSession.restoredPose);
     this.publishLocalPlayerPose(true);
@@ -458,7 +459,7 @@ export class Game {
     }
   }
 
-  /** Generate the same terrain/detail window used by movement streaming. */
+  /** Generate every tile in the configured full-detail inner window. */
   private async prepareSpawnWindow(
     target: WorldLocation,
     generation: number,
@@ -469,15 +470,13 @@ export class Game {
     const detailWindow = worldTileWindowOffsetsAtLocation(
       target.lat, target.lon, this.sceneSettings.value.detailTilesAcross, center.level,
     );
-    const work: Array<{ id: WorldTileId; detail: boolean; distanceSquared: number }> = [];
-    for (let dy = -this.terrainTileRadius; dy <= this.terrainTileRadius; dy++) {
+    const work: Array<{ id: WorldTileId; distanceSquared: number }> = [];
+    for (let dy = detailWindow.minimumY; dy <= detailWindow.maximumY; dy++) {
       const y = center.y + dy;
       if (y < 0 || y >= scale) continue;
-      for (let dx = -this.terrainTileRadius; dx <= this.terrainTileRadius; dx++) {
+      for (let dx = detailWindow.minimumX; dx <= detailWindow.maximumX; dx++) {
         work.push({
           id: { level: center.level, x: ((center.x + dx) % scale + scale) % scale, y },
-          detail: dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
-            dy >= detailWindow.minimumY && dy <= detailWindow.maximumY,
           distanceSquared: dx * dx + dy * dy,
         });
       }
@@ -485,20 +484,18 @@ export class Game {
     work.sort((a, b) => a.distanceSquared - b.distanceSquared);
     for (const [index, item] of work.entries()) {
       await reportInitializationProgress(
-        onProgress, `Generating render tiles (${index}/${work.length})`,
+        onProgress, `Generating full-detail tiles (${index}/${work.length})`,
         35 + 61 * index / work.length,
       );
-      await this.streamTile(item.id, item.detail, generation);
+      await this.streamTile(item.id, true, generation);
       const record = this.tiles.get(worldTileKey(item.id));
-      if (generation !== this.streamingGeneration || !record ||
-          (item.detail ? !record.detailed :
-            !record.farTreeField || !record.farBuildings || !record.farRoads)) {
+      if (generation !== this.streamingGeneration || !record?.detailed) {
         throw new Error(`Spawn tile ${worldTileKey(item.id)} did not finish generating.`);
       }
       this.layerFades.finish();
     }
     await reportInitializationProgress(
-      onProgress, `Render tiles ready (${work.length}/${work.length})`, 96,
+      onProgress, `Full-detail tiles ready (${work.length}/${work.length})`, 96,
     );
   }
 
@@ -840,6 +837,10 @@ export class Game {
       offsetZ: offset.z,
       nativeTerrain: native,
       lakeSurfaces,
+      lakeExclusionMask: new PolygonExclusionMask(
+        lakePolygons.map(polygon => ({ outer: polygon.outline, holes: polygon.holes })),
+        Math.max(0.25, 20 / metersPerUnit),
+      ),
       farTreeField: carriedFarTreeField,
       farBuildings: carriedFarBuildings,
       farRoads: carriedFarRoads,
@@ -1002,6 +1003,7 @@ export class Game {
       { kind: "grassField", label: "Growing grass", progress: 68,
         create: () => createGrassField(this.scene, terrainData, {
           ...fieldOptions,
+          lakeExclusionMask: record.lakeExclusionMask,
           seed: layerSeed(terrainData.generationSeed, "grass"),
           renderMode: this.vegetationModes.grass,
           densityScale: () => winterGroundCover ? 0 : actorMix.grass.densityScale,

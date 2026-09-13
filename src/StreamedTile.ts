@@ -10,6 +10,7 @@ import type { TerrainLakeLayer } from "./TerrainLakeSurface";
 import type { VegetationFieldResult } from "./VegetationField";
 import type { WorldTileId } from "./WorldGrid";
 import type { WorldCover } from "./WorldCover";
+import type { HorizontalExclusionMask } from "./Geo";
 
 export const VEGETATION_FIELD_KINDS = [
   "treeField",
@@ -46,6 +47,7 @@ export interface StreamedTile extends Partial<Record<VegetationFieldKind, Vegeta
   mapFeatures?: TransformNode;
   barrierField?: VegetationFieldResult;
   lakeSurfaces?: TerrainLakeLayer;
+  lakeExclusionMask?: HorizontalExclusionMask;
   farBuildings?: TransformNode;
   farRoads?: TransformNode;
   farTreeField?: VegetationFieldResult;

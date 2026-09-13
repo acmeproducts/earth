@@ -918,6 +918,7 @@ function createPlannedRoadBatch(
   const indices: number[] = [];
   const uvs: number[] = [];
   const dirtEdges: number[] = [];
+  const groundNormalVertices: number[] = [];
   const clearance = clearanceMeters / options.metersPerUnit;
   for (const road of roads) {
     const outline = signedArea(road.outline) >= 0
@@ -937,6 +938,9 @@ function createPlannedRoadBatch(
     for (const ring of rings) {
       const vertexOffset = positions.length / 3;
       for (const point of ring) {
+        if (options.terrainSurface && (road.structure === "surface" || road.structure === "ford")) {
+          groundNormalVertices.push(positions.length / 3);
+        }
         positions.push(point.x, point.y, point.z);
         const uv = plannedRoadUv(point, road, options.metersPerUnit, forceWorldUvs);
         uvs.push(uv.x, uv.y);
@@ -959,6 +963,15 @@ function createPlannedRoadBatch(
   }
   const normals: number[] = [];
   VertexData.ComputeNormals(positions, indices, normals);
+  // Fragment vertices are duplicated for UVs and polygon boundaries. Sampling
+  // one ground normal field keeps lighting continuous across all road batches.
+  for (const vertex of groundNormalVertices) {
+    const offset = vertex * 3;
+    const normal = options.terrainSurface!.normalAt({ x: positions[offset], z: positions[offset + 2] });
+    normals[offset] = normal.x;
+    normals[offset + 1] = normal.y;
+    normals[offset + 2] = normal.z;
+  }
   const vertexData = new VertexData();
   vertexData.positions = positions;
   vertexData.indices = indices;

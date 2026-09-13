@@ -12,13 +12,13 @@ import {
 } from "./Impostor";
 import { createVertexColorCaptureMaterial, scaleVertexColorModel } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
+import { smoothstep } from "./MathUtils";
 
 const SOURCE_HEIGHT = 0.85;
-// Keeping the patch compact and relatively tall lets its blades use the square
-// capture efficiently instead of collapsing into a thin strip of pixels.
-const CAPTURE_DIAMETER = 3.8;
+// Allow the broad, low fringe to fit inside the capture without clipping.
+const CAPTURE_DIAMETER = 5.4;
 /** Nominal blade radius of the clump, in source units. */
-const CLUMP_RADIUS = 1.3;
+const CLUMP_RADIUS = 1.95;
 const CLUMP_EDGE_RADIUS_SCALE_MINIMUM = 0.78;
 const CLUMP_EDGE_RADIUS_SCALE_SPAN = 0.44;
 const CLUMP_EDGE_RADIUS_SCALE_MAXIMUM =
@@ -54,7 +54,7 @@ const grassImpostors = createImpostorAssetProvider({
   sampling: {
     horizontalSamples: { default: 5, minimum: 1, maximum: 24 },
     verticalSamples: { default: 5, minimum: 1, maximum: 20 },
-    resolution: { default: 128, minimum: 48, maximum: 512 },
+    resolution: { default: 192, minimum: 48, maximum: 512 },
   },
 });
 
@@ -65,7 +65,7 @@ export function acquireGrassImpostorAssets(
   return grassImpostors.acquireAssets(scene, undefined, variant);
 }
 
-/** Builds a dense clump from tapered, curved blade strips without external assets. */
+/** Builds a broad, sparse clump with a low fringe for overlapping neighbours. */
 function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153): Mesh {
   const random = createSeededRandom(seed);
   const positions: number[] = [];
@@ -73,7 +73,7 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
   const colors: number[] = [];
   const segments = 5;
   // Blade density is baked into the atlas, so it does not increase field draw cost.
-  const bladeCount = 2800;
+  const bladeCount = 1600;
   const symmetryOrder = 8;
   const sectorAngle = Math.PI * 2 / symmetryOrder;
 
@@ -87,8 +87,9 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
     const radius = Math.sqrt(random()) * edgeRadius;
     const bladeAngle = random() * Math.PI * 2;
     const bendAngle = baseAngle + (random() - 0.5) * 1.8;
-    // Shorter outer blades form a low fringe that merges into the terrain.
-    const edgeScale = 1 - 0.46 * Math.pow(radius / edgeRadius, 1.6);
+    // Keep height near the centre, then descend to 8% at the irregular perimeter.
+    // Overlapping fringes fill one another without stacking tall, dense rims.
+    const edgeScale = 1 - 0.92 * smoothstep(0.12, 1, radius / edgeRadius);
     const height = (0.28 + Math.pow(random(), 0.7) * 0.57) * edgeScale;
     const bend = (0.035 + random() * 0.3) * height;
     const width = 0.012 + Math.pow(random(), 1.7) * 0.052;

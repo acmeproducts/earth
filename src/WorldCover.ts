@@ -182,6 +182,7 @@ export class WorldCover {
     const water = new Uint8Array(coverage.length);
     const north = toWebMercator(0, bounds.latNorth).y;
     const south = toWebMercator(0, bounds.latSouth).y;
+    let hasWaterCoverage = false;
 
     for (let y = 0; y < sampleHeight; y++) {
       const v = (y - haloY) / (height - 1);
@@ -191,6 +192,7 @@ export class WorldCover {
         const longitude = bounds.lonWest + (bounds.lonEast - bounds.lonWest) * u;
         const index = y * sampleWidth + x;
         coverage[index] = this.waterCoverage(longitude, latitude);
+        if (coverage[index] !== 0) hasWaterCoverage = true;
       }
       await yieldControl?.();
     }
@@ -203,14 +205,15 @@ export class WorldCover {
       1,
       Math.round(coastlineSmoothingMeters / metersPerPixelY),
     );
-    coverage = await smoothCoverage(
+    // An entirely dry padded grid stays zero through both smoothing passes.
+    coverage = hasWaterCoverage ? await smoothCoverage(
       coverage,
       sampleWidth,
       sampleHeight,
       smoothingRadiusX,
       smoothingRadiusY,
       yieldControl,
-    );
+    ) : coverage;
     for (let index = 0; index < water.length; index++) {
       water[index] = coverage[index] >= 0.5 ? 1 : 0;
       if ((index & 4095) === 4095) await yieldControl?.();

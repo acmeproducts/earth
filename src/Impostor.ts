@@ -23,7 +23,7 @@ export interface ImpostorAssets {
   textures: Texture[];
   /** Source canvases retained for the capture preview and validation tools. */
   atlasCanvases: HTMLCanvasElement[];
-  /** Per-frame downsampled atlases used once an impostor is small on screen. */
+  /** Per-frame downsampled atlases, with the extreme-distance tier packed below. */
   lowResolutionTextures: Texture[];
   rotationallySymmetric: boolean;
   rotationalSymmetryOrder: number;
@@ -38,6 +38,9 @@ export interface ImpostorAssets {
   resolutionHeight: number;
   lowResolutionWidth: number;
   lowResolutionHeight: number;
+  /** Extra coarse frames packed below the low-resolution atlas, when present. */
+  ultraLowResolutionWidth?: number;
+  ultraLowResolutionHeight?: number;
   sourceHeight: number;
   captureDiameter: number;
   captureWidth: number;
@@ -51,6 +54,7 @@ const BACKGROUND_CAPTURE_VIEWS_PER_SLICE = 16;
 
 /** Target height of each frame in the distant impostor atlas. */
 const LOW_RESOLUTION_FRAME_SIZE = 20;
+const ULTRA_LOW_RESOLUTION_FRAME_SIZE = 4;
 /** Exposure is broad lighting; half resolution preserves it with 75% fewer pixels. */
 const EXPOSURE_ATLAS_SCALE = 0.5;
 /** Any meaningful source coverage becomes a solid distant texel. */
@@ -656,6 +660,11 @@ export async function captureImpostorAtlases(
       Math.round(LOW_RESOLUTION_FRAME_SIZE * resolutionWidth / resolutionHeight),
     ),
     lowResolutionHeight: LOW_RESOLUTION_FRAME_SIZE,
+    ultraLowResolutionWidth: Math.max(
+      1,
+      Math.round(ULTRA_LOW_RESOLUTION_FRAME_SIZE * resolutionWidth / resolutionHeight),
+    ),
+    ultraLowResolutionHeight: ULTRA_LOW_RESOLUTION_FRAME_SIZE,
     sourceHeight,
     captureDiameter,
     captureWidth,
@@ -775,11 +784,32 @@ async function createImpostorTextures(
       metadata.lowResolutionHeight,
       cooperative,
     );
+    const ultraImage = await downsampleAtlasTiles(
+      canvases[index],
+      metadata.gridWidth,
+      metadata.gridHeight,
+      metadata.resolutionWidth,
+      metadata.resolutionHeight,
+      metadata.ultraLowResolutionWidth!,
+      metadata.ultraLowResolutionHeight!,
+      cooperative,
+      true,
+    );
+    // Stack both tiers in one texture to stay within the fragment sampler limit.
+    const packedHeight = lowImage.height + ultraImage.height;
+    const packedPixels = new Uint8ClampedArray(lowImage.width * packedHeight * 4);
+    packedPixels.set(lowImage.data);
+    for (let row = 0; row < ultraImage.height; row++) {
+      packedPixels.set(
+        ultraImage.data.subarray(row * ultraImage.width * 4, (row + 1) * ultraImage.width * 4),
+        (lowImage.height + row) * lowImage.width * 4,
+      );
+    }
     if (cooperative) await nextFrame();
     const texture = new RawTexture(
-      lowImage.data,
+      packedPixels,
       lowImage.width,
-      lowImage.height,
+      packedHeight,
       Constants.TEXTUREFORMAT_RGBA,
       scene,
       false,
@@ -867,6 +897,7 @@ async function downsampleAtlasTiles(
   targetTileWidth: number,
   targetTileHeight: number,
   cooperative: boolean,
+  preserveCoverage = false,
 ): Promise<ImageData> {
   const target = document.createElement("canvas");
   target.width = gridWidth * targetTileWidth;
@@ -890,6 +921,14 @@ async function downsampleAtlasTiles(
     }
   }
   const pixels = context.getImageData(0, 0, target.width, target.height);
+  if (preserveCoverage) {
+    // Keep area-averaged alpha at extreme distances so fine foliage no longer
+    // samples the original, high-frequency mask. Extend RGB without inflating coverage.
+    await dilateTransparentTileColors(
+      pixels, gridWidth, gridHeight, targetTileWidth, targetTileHeight, cooperative,
+    );
+    return pixels;
+  }
   // The regular impostor shader uses alpha testing, not alpha blending. At
   // At low resolution, retaining averaged fractional coverage produces a conspicuous Bayer
   // pattern of holes. Preserve the filtered color but make meaningful distant

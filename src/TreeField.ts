@@ -297,6 +297,9 @@ uniform vec2 gridDimensions;
 uniform vec2 atlasTileCounts;
 uniform vec2 tileInset;
 uniform vec2 lowTileInset;
+uniform vec2 ultraLowTileInset;
+uniform vec2 lowAtlasScale;
+uniform vec2 ultraLowAtlasScale;
 uniform vec2 captureDimensions;
 uniform float impostorLodNear;
 uniform float impostorLodFar;
@@ -348,8 +351,22 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   vec2 atlasUV = (tile + localUV) / atlasTileCounts;
   if (lodBlend <= 0.0) return atlasSample(face, atlasUV);
 
+  float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
+  float ultraBlend = step(0.0001, ultraLowAtlasScale.y) * smoothstep(
+    max(60.0, impostorLodFar * 2.0),
+    max(120.0, impostorLodFar * 4.0),
+    distanceRatio
+  );
+  vec4 ultraColor = vec4(0.0);
+  if (ultraBlend > 0.0) {
+    vec2 ultraLocalUV = mix(ultraLowTileInset, vec2(1.0) - ultraLowTileInset, imageUV);
+    vec2 ultraUV = (tile + ultraLocalUV) / atlasTileCounts * ultraLowAtlasScale;
+    ultraColor = lowAtlasSample(face, ultraUV + vec2(0.0, lowAtlasScale.y));
+    // Once fully distant, stop sampling the detailed silhouette altogether.
+    if (ultraBlend >= 1.0) return ultraColor;
+  }
   vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
-  vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts);
+  vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts * lowAtlasScale);
   // The low atlas is color-only. Its coarse coverage is unsuitable for a
   // stable foliage silhouette, so the original atlas remains the alpha mask.
   lowColor.a = step(0.5, lowColor.a);
@@ -362,11 +379,12 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   float lowPresent = step(1.0 / 255.0, lowColor.a);
   vec3 highStraight = mix(lowColor.rgb, highColor.rgb, highPresent);
   vec3 lowStraight = mix(highStraight, lowColor.rgb, lowPresent);
-  // Preserve the detailed atlas's coverage through and beyond the color LOD.
-  // This avoids both low-resolution holes and an opaque coarse silhouette.
+  // Keep detailed coverage in the ordinary distant tier, then smoothly filter
+  // both coverage and color when the entire impostor is only a few pixels tall.
   float alpha = highColor.a;
   vec3 straightColor = mix(highStraight, lowStraight, lodBlend);
-  return vec4(straightColor, alpha);
+  vec3 ultraStraight = mix(straightColor, ultraColor.rgb, step(1.0 / 255.0, ultraColor.a));
+  return vec4(mix(straightColor, ultraStraight, ultraBlend), mix(alpha, ultraColor.a, ultraBlend));
 }
 
 float bayer4(vec2 pixel) {
@@ -524,9 +542,8 @@ void main(void) {
   // instance covers every detail tier. No per-instance blend attribute and no
   // CPU transition ring are needed to reach the reduced source.
   float distanceRatio = length(vViewDirection) / max(captureDimensions.y, 0.0001);
-  // Far-tile fields still use the low atlas for color, but retain the detailed
-  // atlas's fractional alpha so their silhouettes receive the same ordered
-  // coverage dither as ordinary distant impostors.
+  // Far-tile fields start with reduced color detail. The extreme-distance
+  // tier inside frame() follows actual distance even for these forced fields.
   float lodBlend = max(
     forceLowestLod,
     smoothstep(impostorLodNear, impostorLodFar, distanceRatio)
@@ -1300,6 +1317,7 @@ export function createImpostorMaterial(
     },
   );
   material.backFaceCulling = true;
+  material.options.uniforms.push("ultraLowTileInset", "lowAtlasScale", "ultraLowAtlasScale");
   if (assets.exposureTextures) {
     material.options.defines.push("#define TREE_EXPOSURE");
     material.options.samplers.push("exposureLowAtlas", "exposureHighAtlas");
@@ -1327,6 +1345,16 @@ export function createImpostorMaterial(
   material.setVector2("lowTileInset", new Vector2(
     0.5 / assets.lowResolutionWidth,
     0.5 / assets.lowResolutionHeight,
+  ));
+  const ultraWidth = assets.ultraLowResolutionWidth ?? assets.lowResolutionWidth;
+  const ultraHeight = assets.ultraLowResolutionHeight ?? 0;
+  const packedHeight = assets.lowResolutionHeight + ultraHeight;
+  material.setVector2("ultraLowTileInset", new Vector2(
+    0.5 / ultraWidth, 0.5 / (ultraHeight || assets.lowResolutionHeight),
+  ));
+  material.setVector2("lowAtlasScale", new Vector2(1, assets.lowResolutionHeight / packedHeight));
+  material.setVector2("ultraLowAtlasScale", new Vector2(
+    ultraWidth / assets.lowResolutionWidth, ultraHeight / packedHeight,
   ));
   // Distances are multiples of the impostor's capture height, so the same
   // range holds for any scene scale. Begin the distant tier close enough to

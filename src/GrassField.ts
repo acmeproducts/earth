@@ -7,7 +7,7 @@ import {
   TransformNode,
   Vector3,
 } from "@babylonjs/core";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "./Geo";
+import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation, type HorizontalExclusionMask } from "./Geo";
 import { clamp } from "./MathUtils";
 import {
   acquireGrassImpostorAssets,
@@ -37,10 +37,11 @@ import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 /** Keeps the broad grass patch above small terrain interpolation differences. */
 const GRASS_GROUND_OFFSET_METERS = 0.07;
 const GRASS_HEIGHT_METERS = 0.55;
-// A mature grass clump is about two metres wide after source scaling. Keeping
-// centres comfortably inside that footprint lets neighbouring clumps overlap
-// into turf instead of reading as isolated tufts.
+// Broad, sparse clumps share the same placement spacing: their low fringes
+// overlap more often while the reduced blade count keeps the field open.
 const GRASS_SPACING_METERS = 1.3;
+/** Let the sparse outer blades reach road verges; keep the roots clear. */
+const GRASS_SURFACE_CLEARANCE_METERS = 1.2;
 /** How strongly each clump adopts the hue and brightness of its local ground. */
 const GRASS_GROUND_COLOR_INFLUENCE = 1;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
@@ -60,7 +61,10 @@ const GRASS_SHADOW_DARKNESS = 0.3;
 const GRASS_WIDTH_SCALE_MINIMUM = 1.1;
 const GRASS_WIDTH_SCALE_SPAN = 0.42;
 
-type GrassFieldOptions = VegetationPlacementOptions;
+interface GrassFieldOptions extends VegetationPlacementOptions {
+  /** Lake outlines use the full clump footprint, independently of road clearance. */
+  lakeExclusionMask?: HorizontalExclusionMask;
+}
 
 export interface GrassDistanceFadeRange {
   near: number;
@@ -124,6 +128,7 @@ export async function createGrassField(
     waterLineMeters = 0,
     landCover,
     exclusionMask,
+    lakeExclusionMask,
     densityScale,
     renderMode = "auto",
     yieldControl,
@@ -161,7 +166,8 @@ export async function createGrassField(
         if (random() > occupancy) continue;
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
-        if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
+        if (exclusionMask?.intersects(x, z, GRASS_SURFACE_CLEARANCE_METERS / metersPerUnit)) continue;
+        if (lakeExclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
           x,

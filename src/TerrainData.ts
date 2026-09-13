@@ -4,6 +4,10 @@ import type { TileBounds, WorldTileId } from "./WorldGrid";
 export interface TerrainData {
   /** Raw elevation values in meters, row-major (width × height). */
   elevations: Float32Array;
+  /** Relief omitted from geometry but retained for terrain normal mapping. */
+  shadingRelief?: Float32Array;
+  /** Geometry heights before roads, lakes and pads reshape the surface. */
+  reliefReferenceElevations?: Float32Array;
   minElevation: number;
   maxElevation: number;
   width: number;

@@ -149,7 +149,13 @@ export async function applyTerrainDetail(
   if (width < 2 || height < 2) return;
   const weights = TERRAIN_RELIEF_BANDS.map((band) =>
     resolvableBandWeight(band.meters, options.meshVertexSpacingMeters));
-  if (weights.every((weight) => weight <= 0)) return;
+  const rasterSpacing = Math.max(
+    terrain.groundWidthMeters / (width - 1),
+    terrain.groundHeightMeters / (height - 1),
+  );
+  const shadingWeights = TERRAIN_RELIEF_BANDS.map((band, index) =>
+    Math.max(0, resolvableBandWeight(band.meters, rasterSpacing) - weights[index]));
+  const shadingRelief = new Float32Array(width * height);
 
   const fields = reliefFields(options.worldSeed ?? DEFAULT_WORLD_SEED);
   const steepness = await steepnessField(terrain, yieldControl);
@@ -169,10 +175,14 @@ export async function applyTerrainDetail(
       const ground = groundMetersAt(longitude, latitude);
       elevations[index] = elevation +
         receptivity * reliefAt(fields, ground.x, ground.y, steepness[index], weights);
+      shadingRelief[index] = receptivity *
+        reliefAt(fields, ground.x, ground.y, steepness[index], shadingWeights);
     }
     await yieldControl?.();
   }
 
+  terrain.shadingRelief = shadingRelief;
+  terrain.reliefReferenceElevations = elevations.slice();
   terrain.minElevation = Infinity;
   terrain.maxElevation = -Infinity;
   for (const elevation of elevations) {

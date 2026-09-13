@@ -224,3 +224,15 @@ test("elevation range follows the displaced raster", async () => {
   assert.equal(data.maxElevation, Math.max(...data.elevations));
   assert.ok(data.minElevation < 100 && data.maxElevation > 100);
 });
+
+test("coarse geometry retains omitted relief for normal mapping", async () => {
+  const near = terrain(TILE, 256, () => 100);
+  const far = terrain(TILE, 256, () => 100);
+  const spacing = Math.max(near.groundWidthMeters, near.groundHeightMeters) / 256;
+  await applyTerrainDetail(near, { meshVertexSpacingMeters: spacing });
+  await applyTerrainDetail(far, { meshVertexSpacingMeters: FAR_SPACING_METERS });
+  assert.ok(far.shadingRelief.some(value => Math.abs(value) > 0.01));
+  for (let i = 0; i < near.elevations.length; i++) {
+    assert.ok(Math.abs(near.elevations[i] - far.elevations[i] - far.shadingRelief[i]) < 0.00002);
+  }
+});

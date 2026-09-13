@@ -23,6 +23,7 @@ import type { LandCoverClass, LandCoverSampler } from "./WorldCover";
 import { yieldToNextFrame } from "./FrameBudget";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
 import type { FrameBudgetYielder } from "./FrameBudget";
+import { attachTerrainReliefNormals } from "./TerrainReliefNormals";
 
 const GROUND_COVER_BLEND_METERS = 12;
 const FAR_TILE_SUBDIVISIONS = 32;
@@ -225,6 +226,7 @@ export async function createTerrainMesh(
 
   await yieldToNextFrame(yieldControl);
   applyDefaultTerrainMaterial(scene, ground);
+  attachTerrainReliefNormals(ground, terrain, meshWidth, meshDepth);
   if (terrain.shoreDistanceMeters) {
     await attachShoreline(ground, positions, indices, metersPerUnit, yieldControl);
   }

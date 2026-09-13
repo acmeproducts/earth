@@ -32,6 +32,6 @@ test("grass clump silhouettes taper through an irregular low fringe", () => {
   );
   assert.match(
     impostorSource,
-    /1 - 0\.46 \* Math\.pow\(radius \/ edgeRadius, 1\.6\)/,
+    /1 - 0\.92 \* smoothstep\(0\.12, 1, radius \/ edgeRadius\)/,
   );
 });

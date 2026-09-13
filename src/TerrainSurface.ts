@@ -1,4 +1,4 @@
-import { VertexBuffer } from "@babylonjs/core";
+import { VertexBuffer, VertexData } from "@babylonjs/core";
 import type { Mesh } from "@babylonjs/core";
 import {
   clipHalfPlane,
@@ -26,12 +26,14 @@ export class TerrainSurface {
   readonly meshDepth: number;
   private readonly cellWidth: number;
   private readonly cellDepth: number;
+  private normals?: Float32Array;
 
   constructor(
     heights: Float32Array,
     subdivisions: number,
     meshWidth: number,
     meshDepth: number,
+    normals?: Float32Array,
   ) {
     this.heights = heights;
     this.subdivisions = subdivisions;
@@ -39,6 +41,7 @@ export class TerrainSurface {
     this.meshDepth = meshDepth;
     this.cellWidth = meshWidth / subdivisions;
     this.cellDepth = meshDepth / subdivisions;
+    this.normals = normals;
   }
 
   /** Reads the rendered vertices of a ground built by createTerrainMesh. */
@@ -57,7 +60,11 @@ export class TerrainSurface {
     for (let index = 0; index < heights.length; index++) {
       heights[index] = positions[index * 3 + 1];
     }
-    return new TerrainSurface(heights, verticesPerRow - 1, meshWidth, meshDepth);
+    const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+    return new TerrainSurface(
+      heights, verticesPerRow - 1, meshWidth, meshDepth,
+      normals ? new Float32Array(normals) : undefined,
+    );
   }
 
   columnAt(x: number): number {
@@ -85,6 +92,49 @@ export class TerrainSurface {
     const column = clampCell(Math.floor(this.columnAt(point.x)), this.subdivisions);
     const row = clampCell(Math.floor(this.rowAt(point.z)), this.subdivisions);
     return this.planeAt(column, row, this.diagonalSide(column, row, point))(point);
+  }
+
+  /** Interpolates the ground's smooth vertex normals across its actual triangles. */
+  normalAt(point: PlanarPoint): { x: number; y: number; z: number } {
+    const normals = this.normals ??= this.computeNormals();
+    const column = clampCell(Math.floor(this.columnAt(point.x)), this.subdivisions);
+    const row = clampCell(Math.floor(this.rowAt(point.z)), this.subdivisions);
+    const across = Math.max(0, Math.min(1, this.columnAt(point.x) - column));
+    const along = Math.max(0, Math.min(1, this.rowAt(point.z) - row));
+    const stride = this.subdivisions + 1;
+    const northWest = row * stride + column;
+    const southEast = northWest + stride + 1;
+    const upper = across >= along;
+    const corner = upper ? northWest + 1 : northWest + stride;
+    const firstWeight = 1 - Math.max(across, along);
+    const cornerWeight = Math.abs(across - along);
+    const lastWeight = Math.min(across, along);
+    const component = (axis: number) => normals[northWest * 3 + axis] * firstWeight +
+      normals[corner * 3 + axis] * cornerWeight + normals[southEast * 3 + axis] * lastWeight;
+    const x = component(0);
+    const y = component(1);
+    const z = component(2);
+    const length = Math.hypot(x, y, z) || 1;
+    return { x: x / length, y: y / length, z: z / length };
+  }
+
+  private computeNormals(): Float32Array {
+    const positions = new Float32Array(this.heights.length * 3);
+    const indices: number[] = [];
+    const stride = this.subdivisions + 1;
+    for (let row = 0; row <= this.subdivisions; row++) {
+      for (let column = 0; column <= this.subdivisions; column++) {
+        const index = row * stride + column;
+        positions.set([this.xAt(column), this.height(column, row), this.zAt(row)], index * 3);
+        if (row < this.subdivisions && column < this.subdivisions) {
+          indices.push(index, index + stride + 1, index + 1,
+            index, index + stride, index + stride + 1);
+        }
+      }
+    }
+    const normals = new Float32Array(positions.length);
+    VertexData.ComputeNormals(positions, indices, normals);
+    return normals;
   }
 
   /**

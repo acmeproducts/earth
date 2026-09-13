@@ -33,7 +33,7 @@ function fixture() {
   return subject;
 }
 
-test("spawn waits for every render tile and its configured detail, including wrapped longitude", async () => {
+test("2x2 inner detail waits for exactly four tiles despite 5x5 far terrain, including wrapped longitude", async () => {
   const subject = fixture();
   const target = { lat: 45, lon: 179.999 };
   const calls = [];
@@ -41,7 +41,7 @@ test("spawn waits for every render tile and its configured detail, including wra
   let releaseLast;
   subject.streamTile = async (id, detail) => {
     calls.push({ id, detail });
-    if (calls.length === 25) await new Promise((resolve) => { releaseLast = resolve; });
+    if (calls.length === 4) await new Promise((resolve) => { releaseLast = resolve; });
     subject.tiles.set(worldTileKey(id), detail
       ? { detailed: true }
       : { farTreeField: {}, farBuildings: {}, farRoads: {} });
@@ -51,10 +51,11 @@ test("spawn waits for every render tile and its configured detail, including wra
     .then(() => { completed = true; });
   while (!releaseLast) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(completed, false);
-  assert.equal(subject.tiles.size, 24);
+  assert.equal(subject.tiles.size, 3);
   releaseLast();
   await pending;
-  assert.equal(subject.tiles.size, 25);
+  assert.equal(subject.tiles.size, 4);
+  assert.equal(calls.length, 4);
   assert.equal(calls.filter((call) => call.detail).length, 4);
   assert.equal(worldTileKey(calls[0].id), worldTileKey(worldTileAtLocation(45, 179.999, 10)));
   assert.ok(calls.some(({ id }) => id.x === 0));
@@ -62,16 +63,14 @@ test("spawn waits for every render tile and its configured detail, including wra
   assert.equal(progress.at(-1), 96);
 });
 
-test("incomplete detail or distant scenery keeps startup from succeeding", async () => {
-  for (const missing of ["detailed", "farRoads"]) {
+test("incomplete inner detail keeps startup from succeeding", async () => {
     const subject = fixture();
     subject.streamTile = async (id) => {
       const record = { detailed: true, farTreeField: {}, farBuildings: {}, farRoads: {} };
-      delete record[missing];
+      delete record.detailed;
       subject.tiles.set(worldTileKey(id), record);
     };
     await assert.rejects(subject.prepareSpawnWindow({ lat: 45, lon: 10 }, 1), /did not finish generating/);
-  }
 });
 
 test("startup finishes layer visibility and completion callbacks before reveal", () => {

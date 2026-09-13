@@ -15,6 +15,7 @@ import {
 } from "./TerrainTextureData";
 import type { TerrainTextureData, TerrainTextureLayer } from "./TerrainTextureData";
 import { createCloudShadowTerrainMaterial } from "./CloudShadows";
+import { TerrainReliefNormalsPlugin } from "./TerrainReliefNormals";
 
 let cachedTextureData: TerrainTextureData | undefined;
 const sceneMaterials = new WeakMap<Scene, {
@@ -90,6 +91,7 @@ export function createTerrainMaterial(
     const material = createCloudShadowTerrainMaterial(name, scene)
       ?? new StandardMaterial(name, scene);
     material.diffuseTexture = albedo;
+    new TerrainReliefNormalsPlugin(material);
     material.bumpTexture = normal;
     // One extra sampler buys both the finest grain and its micro-relief: Babylon
     // reads red as albedo modulation around 0.5 and alpha/green as normal xy.
@@ -111,6 +113,7 @@ export function createTerrainMaterial(
     const material = createCloudShadowTerrainMaterial("terrainMaterialSnow", scene)
       ?? new StandardMaterial("terrainMaterialSnow", scene);
     // Snow uses the existing physical-scale relief but not the earthy albedo
+    new TerrainReliefNormalsPlugin(material);
     // or land-cover vertex tint beneath it.
     material.bumpTexture = normal;
     material.detailMap.texture = detail;

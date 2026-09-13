@@ -71,7 +71,10 @@ export async function shapeCoastlineElevations(
     throw new Error("Shallow coastline depth must remain below sea level.");
   }
 
-  const distance = await distanceFromShore(
+  // With no water anywhere in the context, every shore distance is infinite.
+  // Keep the common elevation pass so clearance, bounds and distance caps agree.
+  const hasWater = coverage.some(value => value !== 0) || water.some(value => value !== 0);
+  const distance = hasWater ? await distanceFromShore(
     water,
     coverage,
     sampleWidth,
@@ -79,7 +82,7 @@ export async function shapeCoastlineElevations(
     metersPerPixelX,
     metersPerPixelY,
     yieldControl,
-  );
+  ) : undefined;
   const landClearance = 0.25;
   terrain.shoreDistanceMeters = new Float32Array(terrain.width * terrain.height);
 
@@ -90,7 +93,7 @@ export async function shapeCoastlineElevations(
       const terrainIndex = y * terrain.width + x;
       const sampleIndex = (y + terrainOffsetY) * sampleWidth + x + terrainOffsetX;
       const isWater = water[sampleIndex] === 1;
-      const shoreDistance = Math.min(1e6, distance[sampleIndex]);
+      const shoreDistance = Math.min(1e6, distance?.[sampleIndex] ?? Infinity);
       terrain.shoreDistanceMeters[terrainIndex] = isWater ? -shoreDistance : shoreDistance;
       const blendWidth = isWater ? waterBlendWidthMeters : landBlendWidthMeters;
       const amount = Math.min(1, shoreDistance / blendWidth);

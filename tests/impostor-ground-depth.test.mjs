@@ -38,7 +38,7 @@ test("grass pulls its depth plane out to the near blades", () => {
   );
   // The pull has to follow the same clump radius the source geometry uses, or
   // it drifts away from where the near blades actually are.
-  assert.match(grassImpostorSource, /const CLUMP_RADIUS = 1\.3;/);
+  assert.match(grassImpostorSource, /const CLUMP_RADIUS = 1\.95;/);
   assert.match(
     grassImpostorSource,
     /CLUMP_RADIUS \* CLUMP_EDGE_RADIUS_SCALE_MAXIMUM \* renderHeight \/ SOURCE_HEIGHT/,
@@ -50,7 +50,7 @@ test("grass pulls its depth plane out to the near blades", () => {
 
   // A clump reaches much further sideways than up, which is why depth at the
   // capture center let the ground bury the lower half of the captured image.
-  const clumpRadius = 1.3 * 0.55 / 0.85;
+  const clumpRadius = 1.95 * 0.55 / 0.85;
   const averageWidthScale = 1.1 + 0.42 / 2;
   assert.ok(clumpRadius * averageWidthScale > 0.55 * 1.5);
 });
