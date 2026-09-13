@@ -446,6 +446,12 @@ beside that lobby instead of occupying the doorway. Apartment entrance doors
 are generated on each shared apartment–hallway boundary.
 
 Building interiors use explicit building tags first, including provider subclasses.
+Stepped composites and courtyard buildings also receive enterable facades and
+incrementally loaded interiors. These use furnished open floors that follow each
+height band's footprint, preserving courtyard voids, terraces, and overhangs.
+Stairs connect overlapping sections without filling the gaps between towers.
+Their entry gates follow the same shapes and open when the whole interior is ready.
+
 For unclassified buildings, `BuildingUseInference.ts` uses recognized POIs inside
 the footprint, then enclosing land-use polygons. Courtyards are excluded and
 conflicting categories remain unresolved. Residential buildings with a mapped

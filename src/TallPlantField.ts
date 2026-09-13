@@ -11,16 +11,13 @@ import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
 import {
-  combineVegetationFieldResults,
-  createVegetationFieldResult,
 } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
-import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
-  proceduralBucketSuffix,
   createPlacementGrid,
   packInstanceMatrices,
 } from "./VegetationPlacement";
@@ -163,36 +160,24 @@ export async function createTallPlantField(
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const fields: VegetationFieldResult[] = [];
-  for (const bucket of variantBuckets.values()) {
-    const suffix = proceduralBucketSuffix(bucket);
-    const { root: variantRoot, impostor: plants, model: plantModel } =
-      await createVegetationFieldRenderers(scene, {
-        rootName: `tallPlantField-${suffix}`,
-        impostorName: `plantImpostors-${suffix}`,
+  return createRegionalVegetationField(
+    scene, root, variantBuckets.values(), matrixData,
+    { metersPerUnit, renderMode, yieldControl },
+    (bucket, suffix) => ({
+      rootName: `tallPlantField-${suffix}`,
+      impostorName: `plantImpostors-${suffix}`,
+      renderHeight,
+      loadAssets: () => acquirePlantImpostorAssets(scene, bucket.variant),
+      createModel: () => createPlantModel(
+        scene,
         renderHeight,
-        loadAssets: () => acquirePlantImpostorAssets(scene, bucket.variant),
-        createModel: () => createPlantModel(
-          scene,
-          renderHeight,
-          bucket.variant.seed,
-          bucket.variant.variantIndex,
-        ),
-      });
-    variantRoot.parent = root;
-    configureRenderers(plants, plantModel, meshWidth, meshDepth);
-    fields.push(await createVegetationFieldResult(
-      variantRoot,
-      [plants],
-      [plantModel],
-      await packInstanceMatrices(bucket.matrices, yieldControl),
-      metersPerUnit,
-      renderMode,
-      new Float32Array(bucket.colors),
-      yieldControl,
-    ));
-  }
-  return combineVegetationFieldResults(root, fields, matrixData);
+        bucket.variant.seed,
+        bucket.variant.variantIndex,
+      ),
+
+      configure: (plants, plantModel) => configureRenderers(plants, plantModel, meshWidth, meshDepth),
+    }),
+  );
 
   function addPlant(x: number, z: number, vigor: number): void {
     if (exclusionMask?.intersects(x, z, maximumHalfWidth)) return;

@@ -11,19 +11,14 @@ import { habitatField } from "./HabitatNoise";
 import type { TerrainData } from "./TerrainData";
 import { LandCoverClass } from "./WorldCover";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
-import {
-  combineVegetationFieldResults,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
+import type { VegetationFieldResult } from "./VegetationField";
 import { createSeededRandom } from "./Random";
-import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
   createPlacementGrid,
   addProceduralVariantPlacement,
-  proceduralBucketSuffix,
   packInstanceMatrices,
   ProceduralPlacementBucket,
   VegetationPlacementOptions,
@@ -163,32 +158,22 @@ export async function createBushField(
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const fields: VegetationFieldResult[] = [];
-  for (const bucket of variantBuckets.values()) {
-    const suffix = proceduralBucketSuffix(bucket);
-    const { root: variantRoot, impostor: bush, model: bushModel } =
-      await createVegetationFieldRenderers(scene, {
-        rootName: `bushField-${suffix}`,
-        impostorName: `bushImpostors-${suffix}`,
-        renderHeight: bushHeight,
-        loadAssets: () => acquireBushImpostorAssets(scene, bucket.variant),
-        createModel: () => createBushModel(scene, bushHeight, bucket.variant.seed),
-      });
-    variantRoot.parent = root;
-    configureVegetationMaterials([bush], {
-      floats: { impostorLodNear: 20, impostorLodFar: 50 },
-    });
-    setVegetationWindShear([bush, bushModel], windShearFraction("bush"));
-    fields.push(await createVegetationFieldResult(
-      variantRoot,
-      [bush],
-      [bushModel],
-      await packInstanceMatrices(bucket.matrices, yieldControl),
-      metersPerUnit,
-      renderMode,
-      undefined,
-      yieldControl,
-    ));
-  }
-  return combineVegetationFieldResults(root, fields, matrixData);
+  return createRegionalVegetationField(
+    scene, root, variantBuckets.values(), matrixData,
+    { metersPerUnit, renderMode, yieldControl },
+    (bucket, suffix) => ({
+      rootName: `bushField-${suffix}`,
+      impostorName: `bushImpostors-${suffix}`,
+      renderHeight: bushHeight,
+      loadAssets: () => acquireBushImpostorAssets(scene, bucket.variant),
+      createModel: () => createBushModel(scene, bushHeight, bucket.variant.seed),
+
+      configure: (bush, bushModel) => {
+        configureVegetationMaterials([bush], {
+          floats: { impostorLodNear: 20, impostorLodFar: 50 },
+        });
+        setVegetationWindShear([bush, bushModel], windShearFraction("bush"));
+      },
+    }),
+  );
 }

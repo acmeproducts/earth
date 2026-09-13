@@ -1,7 +1,7 @@
-import { Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
+import { Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
 import {
   createVertexColorCaptureMaterial,
-  setVertexColorModelHeight,
+  scaleVertexColorModel,
 } from "./procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
@@ -138,17 +138,6 @@ function createFernSource(scene: Scene, liveLighting = false, seed = 0x4645524e)
 export function createFernModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
   const fern = createFernSource(scene, true, seed);
   fern.name = "fernModels";
-  const positions = fern.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error("Fern model has no position data.");
-
-  const scale = renderHeight / SOURCE_HEIGHT;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  fern.setVerticesData(VertexBuffer.PositionKind, positions);
-  fern.refreshBoundingInfo({ updatePositionsArray: false });
-  setVertexColorModelHeight(fern, renderHeight);
+  scaleVertexColorModel(fern, renderHeight, SOURCE_HEIGHT);
   return fern;
 }

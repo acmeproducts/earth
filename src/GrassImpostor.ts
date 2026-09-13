@@ -2,8 +2,6 @@ import {
   Color3,
   Mesh,
   Scene,
-  ShaderMaterial,
-  VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
 import {
@@ -12,7 +10,7 @@ import {
   ImpostorAssetLease,
   ImpostorVariant,
 } from "./Impostor";
-import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
+import { createVertexColorCaptureMaterial, scaleVertexColorModel } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
 const SOURCE_HEIGHT = 0.85;
@@ -170,23 +168,6 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
 export function createGrassModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
   const grass = createGrassSource(scene, true, seed);
   grass.name = "grassModels";
-  scaleSourceToHeight(grass, renderHeight, SOURCE_HEIGHT);
-  if (grass.material instanceof ShaderMaterial) {
-    grass.material.setFloat("modelHeight", renderHeight);
-  }
+  scaleVertexColorModel(grass, renderHeight, SOURCE_HEIGHT);
   return grass;
-}
-
-function scaleSourceToHeight(mesh: Mesh, renderHeight: number, sourceHeight: number): void {
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error(`${mesh.name} has no position data.`);
-
-  const scale = renderHeight / sourceHeight;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  mesh.setVerticesData(VertexBuffer.PositionKind, positions);
-  mesh.refreshBoundingInfo({ updatePositionsArray: false });
 }

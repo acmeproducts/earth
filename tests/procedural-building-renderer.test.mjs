@@ -266,7 +266,8 @@ test("courtyard buildings keep interior rings instead of roofing over nested bui
   assert.ok(detailed && far);
   assert.equal(detailed.metadata.complexFootprint, true);
   assert.equal(detailed.metadata.courtyardCount, 1);
-  assert.equal(detailed.metadata.enterable, false);
+  assert.equal(detailed.metadata.enterable, true);
+  assert.ok(detailed.metadata.pendingInterior);
   assert.equal(horizontalRoofCovers(detailed, 0, 0), false);
   assert.equal(horizontalRoofCovers(far, 0, 0), false);
 

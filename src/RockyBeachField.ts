@@ -15,11 +15,9 @@ import {
 import { createSeededRandom } from "./Random";
 import type { TerrainData } from "./TerrainData";
 import {
-  combineVegetationFieldResults,
-  createVegetationFieldResult,
   type VegetationFieldResult,
 } from "./VegetationField";
-import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import {
   addProceduralVariantPlacement,
@@ -161,10 +159,10 @@ export async function createRockyBeachField(
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const fields: VegetationFieldResult[] = [];
-  for (const bucket of variantBuckets.values()) {
-    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
-    const { root: variantRoot, impostor, model } = await createVegetationFieldRenderers(scene, {
+  return createRegionalVegetationField(
+    scene, root, variantBuckets.values(), matrixData,
+    { metersPerUnit, renderMode, yieldControl },
+    (bucket, suffix) => ({
       rootName: `rockyBeachField-${suffix}`,
       impostorName: `rockyBeachImpostors-${suffix}`,
       renderHeight,
@@ -172,21 +170,9 @@ export async function createRockyBeachField(
       depth: { groundPlaneHeight: 0.08 / metersPerUnit },
       loadAssets: () => acquireRockyBeachImpostorAssets(scene, bucket.variant),
       createModel: () => createRockyBeachModel(scene, renderHeight, bucket.variant.seed),
-    });
-    variantRoot.parent = root;
-    configureRockyBeachRenderers(impostor, model);
-    fields.push(await createVegetationFieldResult(
-      variantRoot,
-      [impostor],
-      [model],
-      await packInstanceMatrices(bucket.matrices, yieldControl),
-      metersPerUnit,
-      renderMode,
-      new Float32Array(bucket.colors),
-      yieldControl,
-    ));
-  }
-  return combineVegetationFieldResults(root, fields, matrixData);
+      configure: (impostor, model) => configureRockyBeachRenderers(impostor, model),
+    }),
+  );
 }
 
 /** World-anchored broad variation makes whole shore stretches rocky or clear. */

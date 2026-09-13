@@ -1,6 +1,6 @@
 // Browser smoke check and coastal close-up. Requires yarn dev on port 3000.
 // Run: yarn node tests/drive-shoreline-shot.mjs [--webgpu]
-import { spawn } from 'node:child_process';
+import { launchBrowser, sleep } from "./browser-harness.mjs";
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -31,46 +31,22 @@ if (process.argv.includes('--fixture')) {
   });
   await new Promise(resolve => server.listen(9350, '127.0.0.1', resolve));
 }
-const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
+let chrome, socket;
+try {
+  const browser = await launchBrowser([
   `--remote-debugging-port=${port}`, `--user-data-dir=${output}/profile`,
   '--headless=new', '--window-size=1440,900', '--enable-unsafe-webgpu',
   '--enable-unsafe-swiftshader', '--no-first-run', 'about:blank',
-], { stdio: 'ignore' });
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-let socket;
-try {
-  let target;
-  for (let i = 0; i < 50; i++) {
-    try { target = (await (await fetch(`http://localhost:${port}/json`)).json()).find(t => t.type === 'page'); } catch {}
-    if (target) break;
-    await sleep(200);
-  }
-  if (!target) throw new Error('Browser did not start');
-  socket = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-  let id = 0;
-  const pending = new Map();
+]);
+  ({ chrome, socket } = browser);
+  const { send, evaluate } = browser;
   const errors = [];
-  socket.onmessage = event => {
-    const message = JSON.parse(event.data);
-    if (message.id) {
-      const request = pending.get(message.id);
-      pending.delete(message.id);
-      if (message.error) request?.reject(new Error(JSON.stringify(message.error)));
-      else request?.resolve(message.result);
-    }
+  socket.onmessage = ({ data }) => {
+    const message = JSON.parse(data);
     if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails);
     if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
       errors.push(message.params.args.map(arg => arg.value ?? arg.description).join(' '));
     }
-  };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    pending.set(++id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params }));
-  });
-  const evaluate = async expression => {
-    const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-    return result.result?.value;
   };
   await send('Runtime.enable');
   await send('Page.enable');
@@ -176,7 +152,7 @@ try {
   if (errors.some(error => /shore|shader|compil/i.test(JSON.stringify(error)))) process.exitCode = 1;
 } finally {
   socket?.close();
-  chrome.kill();
+  chrome?.kill();
   server?.closeAllConnections();
   server?.close();
 }

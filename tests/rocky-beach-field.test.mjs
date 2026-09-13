@@ -46,8 +46,6 @@ test("uses a broader, more detailed rocky shoreline treatment", () => {
 test("streams rocky-beach impostors as a normal detailed field", () => {
   assert.match(game, /createRockyBeachField\(this\.scene, terrainData/);
   assert.match(game, /"rockyBeachField"/);
-  assert.match(game, /record,\s+"rockyBeachField",\s+rockyBeachField/);
-  assert.match(game, /rockyBeachField\.count} rocky beach patches/);
 });
 
 test("restores contrast lost when stone normals are flattened into an impostor", () => {

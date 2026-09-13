@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 
 const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
@@ -67,13 +68,44 @@ test("prebuilds every distant stand-in before demoting tile detail", () => {
   );
 });
 
-test("cross-fades all detailed vegetation with the retained tree impostors", () => {
-  assert.match(
-    game,
-    /this\.stageTileField\(record, "fernField", fernField, generation\)[\s\S]*?this\.activateTileVegetation\(record, generation\);/,
-  );
-  assert.match(
-    game,
-    /private async activateTileVegetation[\s\S]*?this\.layerFades\.begin\(0, 1, \(fade\) => \{[\s\S]*?field\.setFade\(fade\);[\s\S]*?farTrees\.setFade\(1 - fade\);/,
-  );
+test("cross-fades all detailed vegetation and aborts activation after a world change", async () => {
+  // Execute the real method without constructing the browser-only Game shell.
+  const parsed = ts.createSourceFile("Game.ts", game, ts.ScriptTarget.Latest, true);
+  const method = parsed.statements.find(ts.isClassDeclaration).members
+    .find((member) => member.name?.getText(parsed) === "activateTileVegetation");
+  const { outputText } = ts.transpileModule(`class Subject { ${method.getText(parsed)} }`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  });
+  const kinds = ["treeField", "saplingField", "grassField", "tallPlantField", "wheatField", "rockyBeachField", "bushField", "fernField"];
+  const Subject = new Function("VEGETATION_FIELD_KINDS", outputText + "; return Subject;")(kinds);
+  const field = () => ({ fades: [], enabled: false, disposed: false,
+    setFade(value) { this.fades.push(value); },
+    get root() { return { setEnabled: (value) => { this.enabled = value; },
+      isDisposed: () => this.disposed, dispose: () => { this.disposed = true; } }; },
+  });
+  for (const cancel of [false, true]) {
+    const subject = new Subject();
+    const record = Object.fromEntries([...kinds, "rockField", "farTreeField"].map((kind) => [kind, field()]));
+    record.terrain = { isDisposed: () => false };
+    const farTrees = record.farTreeField;
+    let frames = 0, fadeStarted = false;
+    subject.streamingGeneration = 1;
+    subject.streamingYielder = { nextFrame: async () => { frames++; if (cancel) subject.streamingGeneration++; } };
+    subject.refreshShadowCasters = () => {};
+    subject.updateVegetationLod = () => {};
+    subject.layerFades = { begin: (from, to, update, finish) => {
+      fadeStarted = true;
+      assert.deepEqual([from, to], [0, 1]);
+      update(0.25);
+      for (const kind of [...kinds, "rockField"]) assert.deepEqual(record[kind].fades, [0, 0.25]);
+      assert.deepEqual(farTrees.fades, [0.75]);
+      finish();
+    } };
+    await subject.activateTileVegetation(record, 1);
+    assert.equal(frames, cancel ? 1 : 9);
+    assert.equal(fadeStarted, !cancel);
+    assert.equal(farTrees.disposed, !cancel);
+    if (cancel) assert.equal(record.saplingField.enabled, false);
+    else assert.equal(record.farTreeField, undefined);
+  }
 });

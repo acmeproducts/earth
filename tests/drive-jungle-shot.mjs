@@ -2,7 +2,7 @@
 // server at localhost:3000 in headless Chrome, screenshots the kapok source
 // tree in the impostor demo, then loads an Amazon rainforest location in the
 // game and screenshots the canopy. Run with: node tests/drive-jungle-shot.mjs
-import { spawn } from "node:child_process";
+import { launchBrowser, sleep } from "./browser-harness.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
@@ -15,7 +15,7 @@ const LONGITUDE = process.argv[4] ?? "-60.6";
 
 mkdirSync(OUT_DIR, { recursive: true });
 
-const chrome = spawn(CHROME, [
+const { chrome, socket, send, evaluate } = await launchBrowser([
   `--remote-debugging-port=${DEBUG_PORT}`,
   `--user-data-dir=${OUT_DIR}/profile`,
   "--headless=new",
@@ -23,41 +23,11 @@ const chrome = spawn(CHROME, [
   "--enable-unsafe-swiftshader",
   "--no-first-run",
   "about:blank",
-], { stdio: "ignore" });
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function getTarget() {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`);
-      const targets = await response.json();
-      const page = targets.find((target) => target.type === "page");
-      if (page) return page;
-    } catch {}
-    await sleep(200);
-  }
-  throw new Error("Chrome debug endpoint never came up");
-}
-
-const target = await getTarget();
-const socket = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  socket.onopen = resolve;
-  socket.onerror = reject;
-});
-
-let nextId = 1;
-const pending = new Map();
+], CHROME);
 const consoleLogs = [];
-socket.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (message.id && pending.has(message.id)) {
-    const { resolve, reject } = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) reject(new Error(JSON.stringify(message.error)));
-    else resolve(message.result);
-  } else if (message.method === "Runtime.consoleAPICalled") {
+socket.onmessage = ({ data }) => {
+  const message = JSON.parse(data);
+  if (message.method === "Runtime.consoleAPICalled") {
     const text = message.params.args
       .map((argument) => argument.value ?? argument.description ?? "")
       .join(" ");
@@ -66,19 +36,6 @@ socket.onmessage = (event) => {
     consoleLogs.push(`[exception] ${JSON.stringify(message.params.exceptionDetails)}`);
   }
 };
-
-function send(method, params = {}) {
-  const id = nextId++;
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-}
-
-async function evaluate(expression) {
-  const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  return result.result?.value;
-}
 
 async function screenshot(name) {
   const { data } = await send("Page.captureScreenshot", { format: "png" });

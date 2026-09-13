@@ -18,12 +18,8 @@ import {
 import { setVegetationWindShear } from "./procedural/ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
 import type { TerrainData } from "./TerrainData";
-import {
-  combineVegetationFieldResults,
-  createVegetationFieldResult,
-  VegetationFieldResult,
-} from "./VegetationField";
-import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
+import type { VegetationFieldResult } from "./VegetationField";
+import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import { LandCoverClass, landCoverSurfaceColor } from "./WorldCover";
 import { varyGroundColor } from "./GroundVariation";
@@ -224,31 +220,19 @@ export async function createGrassField(
   }
 
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
-  const fields: VegetationFieldResult[] = [];
-  for (const bucket of variantBuckets.values()) {
-    const suffix = `${bucket.variant.regionX}-${bucket.variant.regionY}`;
-    const { root: variantRoot, impostor: grass, model: grassModel } =
-      await createVegetationFieldRenderers(scene, {
-        rootName: `grassField-${suffix}`,
-        impostorName: `grassImpostors-${suffix}`,
-        renderHeight: grassHeight,
-        loadAssets: () => acquireGrassImpostorAssets(scene, bucket.variant),
-        createModel: () => createGrassModel(scene, grassHeight, bucket.variant.seed),
-      });
-    variantRoot.parent = root;
-    configureGrassRenderers(grass, grassModel, meshWidth, meshDepth, grassHeight);
-    fields.push(await createVegetationFieldResult(
-      variantRoot,
-      [grass],
-      [grassModel],
-      await packInstanceMatrices(bucket.matrices, yieldControl),
-      metersPerUnit,
-      renderMode,
-      new Float32Array(bucket.colors),
-      yieldControl,
-    ));
-  }
-  return combineVegetationFieldResults(root, fields, matrixData);
+  return createRegionalVegetationField(
+    scene, root, variantBuckets.values(), matrixData,
+    { metersPerUnit, renderMode, yieldControl },
+    (bucket, suffix) => ({
+      rootName: `grassField-${suffix}`,
+      impostorName: `grassImpostors-${suffix}`,
+      renderHeight: grassHeight,
+      loadAssets: () => acquireGrassImpostorAssets(scene, bucket.variant),
+      createModel: () => createGrassModel(scene, grassHeight, bucket.variant.seed),
+
+      configure: (grass, grassModel) => configureGrassRenderers(grass, grassModel, meshWidth, meshDepth, grassHeight),
+    }),
+  );
 }
 
 /**

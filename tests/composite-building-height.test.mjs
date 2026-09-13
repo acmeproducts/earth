@@ -123,7 +123,7 @@ test("band geometry scales consistently and merging an existing composite retain
   assert.equal(horizontalArea(geometry(again),30,1),12);
 });
 
-test("detailed and far renderers preserve the same stepped shell and terrace elevations", async () => {
+test("detailed and far renderers preserve stepped roofs while only detailed facades are enterable", async () => {
   const { NullEngine, Scene, VertexBuffer } = await import("@babylonjs/core");
   const { ProceduralBuildingRenderer } = await import("../src/procedural/ProceduralBuildingRenderer.ts");
   const { lonLatToScene } = await import("../src/Geo.ts");
@@ -147,11 +147,26 @@ test("detailed and far renderers preserve the same stepped shell and terrace ele
       assert.ok(mesh);
       assert.equal(mesh.metadata.heightBandCount,2);
       const data = { positions: mesh.getVerticesData(VertexBuffer.PositionKind), normals: mesh.getVerticesData(VertexBuffer.NormalKind) };
-      assert.ok(Math.abs(horizontalArea(data,20,1)-terraceArea)<1e-5);
-      assert.ok(Math.abs(horizontalArea(data,40,1)-towerArea)<1e-5);
-      assert.equal(horizontalArea(data,20,-1),0);
+      if (mesh === meshes[1]) {
+        assert.ok(Math.abs(horizontalArea(data,20,1)-terraceArea)<1e-5);
+        assert.ok(Math.abs(horizontalArea(data,40,1)-towerArea)<1e-5);
+        assert.equal(horizontalArea(data,20,-1),0);
+      }
     }
-    assert.deepEqual(meshes[0].getVerticesData(VertexBuffer.PositionKind),meshes[1].getVerticesData(VertexBuffer.PositionKind));
+    assert.equal(meshes[0].metadata.enterable, true);
+    assert.ok(meshes[0].metadata.pendingInterior);
+    assert.equal(meshes[1].metadata.enterable, false);
+    assert.equal(meshes[1].metadata.pendingInterior, undefined);
+    const { Ray, Vector3 } = await import("@babylonjs/core");
+    for (const mesh of meshes) {
+      mesh.computeWorldMatrix(true);
+      for (const [lon, lat, height] of [[1,1,20], [5,5,40]]) {
+        const point = lonLatToScene(lon, lat, terrain.bounds,10,10);
+        const hit = mesh.intersects(new Ray(new Vector3(point.x,50,point.z),new Vector3(0,-1,0),50));
+        assert.ok(hit.hit);
+        assert.ok(Math.abs(hit.pickedPoint.y-height)<1e-5);
+      }
+    }
   } finally {
     scene.dispose();
     engine.dispose();

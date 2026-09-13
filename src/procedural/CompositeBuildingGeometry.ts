@@ -9,6 +9,7 @@ export function compositeBuildingGeometry(
   project: (point: LonLat) => Point,
   elevation: (height: number) => number,
   showRoofs = true,
+  showWalls = true,
 ): { positions: number[]; normals: number[]; indices: number[] } {
   const positions: number[] = [], normals: number[] = [], indices: number[] = [];
   const triangle = (a: number[], b: number[], c: number[]) => {
@@ -48,7 +49,7 @@ export function compositeBuildingGeometry(
   };
   for (const band of bands) {
     const bottom = elevation(band.minimumHeightMeters), top = elevation(band.heightMeters);
-    for (const polygon of band.footprints) {
+    for (const polygon of showWalls ? band.footprints : []) {
       for (const loop of [ring(polygon.outer, true), ...polygon.holes.map((hole) => ring(hole, false))]) {
         for (let i = 0; i < loop.length; i++) {
           const a = loop[i], b = loop[(i + 1) % loop.length];

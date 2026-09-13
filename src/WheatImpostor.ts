@@ -1,10 +1,10 @@
-import { Color3, Mesh, Scene, ShaderMaterial, Vector3, VertexData } from "@babylonjs/core";
+import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
 } from "./Impostor";
 import type { ImpostorAssetLease, ImpostorVariant } from "./Impostor";
-import { createVertexColorCaptureMaterial } from "./procedural/ProceduralCaptureMaterial";
+import { createVertexColorCaptureMaterial, scaleVertexColorModel } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
 const SOURCE_HEIGHT = 1.42;
@@ -151,14 +151,6 @@ function createWheatSource(scene: Scene, liveLighting = false, seed = 0x57484541
 export function createWheatModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
   const wheat = createWheatSource(scene, true, seed);
   wheat.name = "wheatModels";
-  const positions = wheat.getVerticesData("position");
-  if (positions) for (let i = 0; i < positions.length; i += 3) {
-    positions[i] *= renderHeight / SOURCE_HEIGHT;
-    positions[i + 1] = positions[i + 1] * renderHeight / SOURCE_HEIGHT + renderHeight / 2;
-    positions[i + 2] *= renderHeight / SOURCE_HEIGHT;
-  }
-  if (positions) wheat.setVerticesData("position", positions);
-  wheat.refreshBoundingInfo({ updatePositionsArray: false });
-  if (wheat.material instanceof ShaderMaterial) wheat.material.setFloat("modelHeight", renderHeight);
+  scaleVertexColorModel(wheat, renderHeight, SOURCE_HEIGHT);
   return wheat;
 }

@@ -15,7 +15,6 @@ test("grass instances inherit their local rendered ground color", () => {
   assert.match(fieldSource, /surfaceColor = landCoverSurfaceColor\(landCover\)/);
   assert.match(fieldSource, /const color = grassGroundColorMultiplier/);
   assert.match(fieldSource, /addProceduralVariantPlacement\([\s\S]*?matrix,[\s\S]*?color/);
-  assert.match(fieldSource, /new Float32Array\(bucket\.colors\)/);
 });
 
 test("WorldCover exposes a continuous tint across source raster cells", () => {

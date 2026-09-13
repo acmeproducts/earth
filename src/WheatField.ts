@@ -3,10 +3,9 @@ import { isTerrainFootprintAbove, sampleElevation, sceneToLonLat } from "./Geo";
 import { habitatField } from "./HabitatNoise";
 import { acquireWheatImpostorAssets, createWheatModel, wheatRenderedCaptureSize } from "./WheatImpostor";
 import type { TerrainData } from "./TerrainData";
-import { combineVegetationFieldResults, createVegetationFieldResult } from "./VegetationField";
 import type { VegetationFieldResult } from "./VegetationField";
-import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
-import { addProceduralVariantPlacement, createPlacementGrid, packInstanceMatrices, proceduralBucketSuffix } from "./VegetationPlacement";
+import { createRegionalVegetationField } from "./VegetationFieldRenderers";
+import { addProceduralVariantPlacement, createPlacementGrid, packInstanceMatrices } from "./VegetationPlacement";
 import type { ProceduralPlacementBucket, VegetationPlacementOptions } from "./VegetationPlacement";
 import { createSeededRandom } from "./Random";
 import { DEFAULT_WORLD_SEED } from "./WorldGrid";
@@ -42,20 +41,20 @@ export async function createWheatField(scene: Scene, terrain: TerrainData, optio
     }
     await yieldControl?.();
   }
-  const fields: VegetationFieldResult[] = [];
-  for (const bucket of buckets.values()) {
-    const suffix = proceduralBucketSuffix(bucket);
-    const renderers = await createVegetationFieldRenderers(scene, { rootName: `wheatField-${suffix}`, impostorName: `wheatImpostors-${suffix}`, renderHeight: HEIGHT_METERS / metersPerUnit, loadAssets: () => acquireWheatImpostorAssets(scene, bucket.variant), createModel: () => createWheatModel(scene, HEIGHT_METERS / metersPerUnit, bucket.variant.seed) });
-    renderers.root.parent = root;
-    setVegetationWindShear([renderers.impostor, renderers.model], windShearFraction("grass") * 1.2);
-    fields.push(await createVegetationFieldResult(renderers.root, [renderers.impostor], [renderers.model], await packInstanceMatrices(bucket.matrices, yieldControl), metersPerUnit, renderMode, undefined, yieldControl));
-  }
-  return combineVegetationFieldResults(
-    root,
-    fields,
+  return createRegionalVegetationField(
+    scene, root, buckets.values(),
     await packInstanceMatrices(
       [...buckets.values()].flatMap((bucket) => bucket.matrices),
       yieldControl,
     ),
+    { metersPerUnit, renderMode, yieldControl },
+    (bucket, suffix) => ({
+      rootName: `wheatField-${suffix}`,
+      impostorName: `wheatImpostors-${suffix}`,
+      renderHeight: HEIGHT_METERS / metersPerUnit,
+      loadAssets: () => acquireWheatImpostorAssets(scene, bucket.variant),
+      createModel: () => createWheatModel(scene, HEIGHT_METERS / metersPerUnit, bucket.variant.seed),
+      configure: (impostor, model) => setVegetationWindShear([impostor, model], windShearFraction("grass") * 1.2),
+    }),
   );
 }

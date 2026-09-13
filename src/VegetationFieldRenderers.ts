@@ -1,6 +1,8 @@
 import { Mesh, Scene, TransformNode } from "@babylonjs/core";
 import type { ImpostorAssetLease, ImpostorAssets } from "./Impostor";
 import { createImpostorPrototypeFromAssets, type ImpostorDepthOptions } from "./TreeField";
+import { combineVegetationFieldResults, createVegetationFieldResult, type VegetationFieldResult } from "./VegetationField";
+import { packInstanceMatrices, proceduralBucketSuffix, type ProceduralPlacementBucket, type VegetationPlacementOptions } from "./VegetationPlacement";
 
 interface VegetationFieldRendererOptions {
   rootName: string;
@@ -17,6 +19,34 @@ export interface VegetationFieldRenderers {
   impostor: Mesh;
   model: Mesh;
   captureSize: number;
+}
+
+/** Assembles regional renderers while retaining the field's original placement order. */
+export async function createRegionalVegetationField(
+  scene: Scene,
+  root: TransformNode,
+  buckets: Iterable<ProceduralPlacementBucket>,
+  instanceMatrices: Float32Array,
+  { metersPerUnit, renderMode = "auto", yieldControl }: Pick<VegetationPlacementOptions, "metersPerUnit" | "renderMode" | "yieldControl">,
+  describe: (bucket: ProceduralPlacementBucket, suffix: string) => VegetationFieldRendererOptions & {
+    configure: (impostor: Mesh, model: Mesh) => void;
+  },
+): Promise<VegetationFieldResult> {
+  const fields: VegetationFieldResult[] = [];
+  for (const bucket of buckets) {
+    const options = describe(bucket, proceduralBucketSuffix(bucket));
+    const renderers = await createVegetationFieldRenderers(scene, options);
+    renderers.root.parent = root;
+    options.configure(renderers.impostor, renderers.model);
+    fields.push(await createVegetationFieldResult(
+      renderers.root, [renderers.impostor], [renderers.model],
+      await packInstanceMatrices(bucket.matrices, yieldControl),
+      metersPerUnit, renderMode,
+      bucket.colors.length ? new Float32Array(bucket.colors) : undefined,
+      yieldControl,
+    ));
+  }
+  return combineVegetationFieldResults(root, fields, instanceMatrices);
 }
 
 /** Creates and owns the model/impostor pair shared by low vegetation fields. */

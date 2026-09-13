@@ -77,6 +77,16 @@ export class LayerFades {
     if (refreshShadows) this.options.refreshShadowsDuringFade();
   }
 
+  /** Settle generated layers before revealing the initial world. */
+  finish(): void {
+    const fades = this.active.splice(0);
+    for (const fade of fades) {
+      fade.apply(fade.to);
+      fade.onComplete?.();
+    }
+    if (fades.some((fade) => fade.refreshShadows)) this.options.refreshShadows();
+  }
+
   clear(): void {
     this.active.length = 0;
   }

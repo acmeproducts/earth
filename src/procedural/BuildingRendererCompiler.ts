@@ -17,6 +17,7 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
+import polygonClipping from "polygon-clipping";
 import { compositeBuildingGeometry } from "./CompositeBuildingGeometry";
 import { BuildingTrace } from "../BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
@@ -108,18 +109,8 @@ export class ProceduralBuildingRenderer {
 
       trace.stage("appearance/roof planning");
       const appearance = buildingAppearance(plan);
-      if (plan.heightBands?.length) {
-        captureUnplannedBuilding(plan, prepared, options, "Stepped buildings use the exterior shell renderer.");
-        return createCompositeBuilding(scene, plan, prepared, terrain, options, appearance);
-      }
-      // Courtyard footprints cannot use the enterable shell: that path builds
-      // floors and roofs from the outer ring alone. Keep these buildings as one
-      // faithful mass so a real building inside a courtyard does not appear to
-      // sit on top of a second, incorrectly filled building.
-      if (prepared.holes.length > 0) {
-        trace.stage("courtyard capture/massing");
-        captureUnplannedBuilding(plan, prepared, options, "Courtyard footprints use the massing renderer.");
-        return createCourtyardBuilding(scene, plan, prepared, options, appearance);
+      if (plan.heightBands?.length || prepared.holes.length > 0) {
+        return createComplexEnterableBuilding(scene, plan, prepared, terrain, options, appearance);
       }
       const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
       const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
@@ -400,39 +391,214 @@ function createCompositeBuilding(
   return mesh;
 }
 
-function createCourtyardBuilding(
+type InteriorSection = {
+  outline: ScenePoint[];
+  holes: ScenePoint[][];
+  bottom: number;
+  top: number;
+  incoming: StairLayout[];
+  outgoing: StairLayout[];
+  openings: Opening2D[];
+};
+
+function sectionRings(section: Pick<InteriorSection, "outline" | "holes">): LonLat[][] {
+  return [section.outline, ...section.holes].map((ring) => ring.map((p): LonLat => [p.x, p.z]));
+}
+
+function scenePolygon([outer, ...holes]: LonLat[][]): Pick<InteriorSection, "outline" | "holes"> {
+  const ring = (points: LonLat[], positive: boolean): ScenePoint[] => {
+    const result = points.map(([x, z]) => ({ x, z }));
+    if (result.length > 1 && samePoint(result[0], result[result.length - 1])) result.pop();
+    if ((signedArea(result) > 0) !== positive) result.reverse();
+    return result;
+  };
+  return { outline: ring(outer, true), holes: holes.map((hole) => ring(hole, false)) };
+}
+
+/** Hollow band facades and open floors preserve terraces, overhangs and courtyard voids. */
+function createComplexEnterableBuilding(
   scene: Scene,
   plan: BuildingPlan,
   prepared: PreparedBuildingFootprint,
+  terrain: TerrainData,
   options: BuildingRenderOptions,
   appearance: BuildingAppearance,
 ): Mesh {
-  const bottomElevation = plan.minimumHeightMeters > 0
-    ? prepared.baseElevation + plan.minimumHeightMeters
-    : prepared.baseElevation - BUILDING_GROUND_OVERLAP_METERS;
-  let mesh = createBuildingPrism(
-    scene,
-    prepared.outline,
-    prepared.baseElevation + plan.heightMeters,
-    bottomElevation,
-    options,
-    prepared.holes,
-  );
-  colorBuildingMass(mesh, appearance);
-  if (options.showRoofs !== false) {
-    const equipment = createRooftopEquipment(scene, plan, prepared.outline, prepared.holes,
-      prepared.baseElevation + plan.heightMeters, options.metersPerUnit, appearance.wall);
-    if (equipment) mesh = Mesh.MergeMeshes([mesh, equipment], true, true) ?? mesh;
+  const bands = plan.heightBands ?? [{ minimumHeightMeters: plan.minimumHeightMeters,
+    heightMeters: plan.heightMeters, footprints: [plan.footprint], roofs: [plan.footprint], soffits: [plan.footprint] }];
+  const project = ([lon, lat]: LonLat) => lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
+  const projectPolygon = (polygon: BuildingPolygon) => scenePolygon(
+    [polygon.outer, ...polygon.holes].map((ring) => ring.map((p): LonLat => {
+      const point = project(p); return [point.x, point.z];
+    })));
+  const parts: Mesh[] = [];
+  const sections: InteriorSection[] = [];
+  let windowCount = 0;
+  const profile = buildingProfile(plan.buildingClass);
+  const usableHeight = plan.heightMeters - plan.minimumHeightMeters;
+  const targetFloors = Math.max(1, Math.min(profile.maximumInteriorFloors,
+    plan.levels ?? Math.floor(usableHeight / 3.1), Math.floor(usableHeight / 2.4)));
+  const targetStoryHeight = usableHeight / targetFloors;
+  for (const band of bands) {
+    const height = band.heightMeters - band.minimumHeightMeters;
+    const floors = Math.max(1, Math.floor(height / targetStoryHeight + 1e-6));
+    const storyHeight = height / floors;
+    for (const footprint of band.footprints) {
+      const polygon = projectPolygon(footprint);
+      const bottom = prepared.baseElevation + band.minimumHeightMeters;
+      const top = prepared.baseElevation + band.heightMeters;
+      const bandPlan = { ...plan, footprint, levels: floors };
+      const openings: Opening2D[] = [];
+      for (const ring of [polygon.outline, ...polygon.holes]) {
+        const facade = createEnterableBuilding(scene, bandPlan, ring, bottom, top, options,
+          appearance, "exterior", ring === polygon.outline
+            ? findSharedFacadeEdges(plan.footprint, ring, terrain, options) : new Set(), true);
+        parts.push(...facade.parts);
+        windowCount += facade.windowCount;
+        openings.push(...plannedEntranceOpenings(ring, facade.entranceEdgeIndex, buildingWindowStyle(plan), options));
+      }
+      for (let floor = 0; floor < floors; floor++) {
+        sections.push({ ...polygon, bottom: bottom + floor * storyHeight,
+          top: bottom + (floor + 1) * storyHeight, incoming: [], outgoing: [],
+          openings: floor === 0 ? openings : [] });
+      }
+    }
   }
+  // Each overlap component gets a connection, including separate towers above one podium.
+  for (const lower of sections) {
+    for (const upper of sections) {
+      if (Math.abs(lower.top - upper.bottom) > 1e-6) continue;
+      const overlaps = polygonClipping.intersection(sectionRings(lower), sectionRings(upper));
+      for (const overlap of overlaps) {
+        const polygon = scenePolygon(overlap);
+        const stair = findStairLayouts(polygon.outline, options,
+          { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1,
+          plan.detailSeed, [...polygon.holes, ...lower.openings.map((opening) => doorwayClearance(opening, options))])[0];
+        if (!stair) continue;
+        lower.outgoing.push(stair);
+        upper.incoming.push(stair);
+      }
+    }
+  }
+  // Keep the exact exposed horizontal faces of the distant shell; its solid walls
+  // must not survive behind the new doors and windows.
+  const caps = compositeBuildingGeometry(bands, project,
+    (height) => (prepared.baseElevation + height) / options.metersPerUnit,
+    options.showRoofs !== false, false);
+  const capMesh = stageBuildingMesh(new Mesh("complexBuildingCaps", scene));
+  const capData = new VertexData();
+  capData.positions = caps.positions;
+  capData.indices = caps.indices;
+  capData.normals = caps.normals;
+  capData.uvs = new Float32Array(caps.positions.length / 3 * 2);
+  capData.applyToMesh(capMesh);
+  colorBuildingMass(capMesh, { ...appearance, roofSurface: roofSurfaceFor(plan.roofMaterial, "flat", plan.buildingClass) });
+  parts.push(capMesh);
+  if (options.showRoofs !== false && !plan.heightBands?.length) for (const band of bands) for (const roof of band.roofs) {
+    const polygon = projectPolygon(roof);
+    const equipment = createRooftopEquipment(scene, plan, polygon.outline, polygon.holes,
+      prepared.baseElevation + band.heightMeters, options.metersPerUnit, appearance.wall);
+    if (equipment) parts.push(equipment);
+  }
+  parts.forEach(compactMeshBuffers);
+  const mesh = stageBuildingMesh(Mesh.MergeMeshes(parts, true, true)!);
+  const center = averagePoint(prepared.outline);
+  const distanceTo = (position: Vector3): number => Math.min(...sections.map((section) => {
+    if (pointInRing(position, section.outline) && !section.holes.some((hole) => pointInRing(position, hole))) return 0;
+    return Math.sqrt(Math.min(...[section.outline, ...section.holes].map((ring) =>
+      nearestFootprintPoint(position, ring).distanceSquared))) * options.metersPerUnit;
+  }));
+  captureUnplannedBuilding(plan, prepared, options, "Open interiors follow the building's height bands and courtyard boundaries.");
   mesh.metadata = {
     buildingId: plan.id,
-    enterable: false,
+    buildingClass: plan.buildingClass,
+    enterable: true,
     complexFootprint: true,
+    heightBandCount: plan.heightBands?.length,
     courtyardCount: prepared.holes.length,
+    windowCount,
+    interiorFloorCount: new Set(sections.map((section) => section.bottom)).size,
+    stairFlightCount: sections.reduce((sum, section) => sum + section.outgoing.length, 0),
+    stairFlightCenters: sections.flatMap((section) => section.outgoing.map((stair) => ({
+      x: stair.start.x + stair.direction.x * stair.runMeters / (2 * options.metersPerUnit),
+      y: section.top / options.metersPerUnit,
+      z: stair.start.z + stair.direction.z * stair.runMeters / (2 * options.metersPerUnit),
+    }))),
+    plannedInterior: false,
+    interiorsLoaded: false,
     metersPerUnit: options.metersPerUnit,
     skyReflection: options.skyReflection,
+    pendingInterior: {
+      id: plan.id,
+      center: new Vector3(center.x, (prepared.baseElevation + plan.heightMeters / 2) / options.metersPerUnit, center.z),
+      radiusMeters: Math.max(...prepared.outline.map((p) => pointDistance(p, center))) * options.metersPerUnit,
+      distanceTo,
+      createGate: (parent: TransformNode) => {
+        const root = new Mesh("complexBuildingInteriorGate", scene);
+        root.parent = parent;
+        for (const section of sections) createInteriorGate(scene, section.outline,
+          section.bottom, section.top, options, root, section.holes);
+        return root;
+      },
+      build: (root: TransformNode) => buildInteriorChunks((interiorParts) =>
+        createComplexInteriorParts(interiorParts, scene, plan, sections, options, appearance), root, options),
+    } satisfies PendingBuildingInterior,
   };
   return mesh;
+}
+
+function* createComplexInteriorParts(
+  parts: Mesh[], scene: Scene, plan: BuildingPlan, sections: InteriorSection[],
+  options: BuildingRenderOptions, appearance: BuildingAppearance,
+): Generator<string, void, void> {
+  const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
+  for (const section of sections) {
+    const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
+    const floors = openings.length ? polygonClipping.difference(sectionRings(section), ...openings) : [sectionRings(section)];
+    for (const floor of floors) {
+      const polygon = scenePolygon(floor);
+      const slab = createBuildingPrism(scene, polygon.outline,
+        section.bottom + BUILDING_FLOOR_THICKNESS_METERS, section.bottom, options, polygon.holes);
+      setSolidVertexColor(slab, floorColor);
+      parts.push(slab);
+      yield "complex floor slabs";
+    }
+    for (const stair of section.outgoing) {
+      createStairFlight(parts, scene, stair, section.bottom, section.top - section.bottom, options, floorColor);
+      yield "complex stair flights";
+    }
+    const meters = (ring: ScenePoint[]) => ring.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit }));
+    const boundary = { outer: meters(section.outline), holes: [
+      ...section.holes, ...[...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options)),
+    ].map(meters) };
+    const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
+      openings: section.openings };
+    const use = section.bottom === sections[0].bottom ? plan.groundFloorUse ?? plan.interiorUse : plan.interiorUse;
+    const seed = plan.detailSeed + Math.round(section.bottom * 100) * 7919;
+    const furniture = planInteriorFurniture(layout, seed, use ?? (plan.buildingClass === "commercial" ? "office" : "residential"));
+    yield "complex furniture planning";
+    yield* createFurnitureParts(parts, scene, furniture, section.bottom + BUILDING_FLOOR_THICKNESS_METERS,
+      options.metersPerUnit, section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, seed);
+  }
+}
+
+function doorwayClearance(opening: Opening2D, options: BuildingRenderOptions): ScenePoint[] {
+  const dx = opening.end.x - opening.start.x, dz = opening.end.y - opening.start.y;
+  const length = Math.hypot(dx, dz) || 1;
+  const x = dx / length, z = dz / length;
+  return [[-0.6, -1.2], [length + 0.6, -1.2], [length + 0.6, 1.2], [-0.6, 1.2]].map(([along, across]) => ({
+    x: (opening.start.x + x * along - z * across) / options.metersPerUnit,
+    z: (opening.start.y + z * along + x * across) / options.metersPerUnit,
+  }));
+}
+
+function stairClearance(stair: StairLayout, options: BuildingRenderOptions): ScenePoint[] {
+  const landing = BUILDING_STAIR_LANDING_METERS;
+  return [[-landing, -stair.widthMeters / 2 - 0.1], [stair.runMeters + landing, -stair.widthMeters / 2 - 0.1],
+    [stair.runMeters + landing, stair.widthMeters / 2 + 0.1], [-landing, stair.widthMeters / 2 + 0.1]].map(([along, across]) => ({
+    x: stair.start.x + (stair.direction.x * along + stair.inward.x * across) / options.metersPerUnit,
+    z: stair.start.z + (stair.direction.z * along + stair.inward.z * across) / options.metersPerUnit,
+  }));
 }
 
 /** Bound both temporary source meshes and each merge/upload. No whole-building merge. */
@@ -447,6 +613,10 @@ function* buildInteriorChunks(
   let vertices = 0;
   const flush = (): void => {
     if (!batch.length) return;
+    // MergeMeshes bakes source world matrices. Staged parts belong to root for
+    // cleanup, but their transforms are in building coordinates: detach them
+    // before merging so the tile transform is applied only to the final batch.
+    for (const mesh of batch) mesh.parent = null;
     const merged = ProceduralBuildingRenderer.merge(batch, "buildingInteriors", root, false);
     if (!merged) throw new Error("Interior batch merge failed");
     merged.checkCollisions = true;
@@ -612,6 +782,7 @@ function createEnterableBuilding(
   appearance: BuildingAppearance,
   part: "exterior" | "interior",
   blockedFacadeEdges: ReadonlySet<number> = new Set(),
+  shellOnly = false,
 ): DetailedBuildingParts {
   return BuildingTrace.run(`building=${plan.id} ${part} planning/parts`, (trace) => {
     trace.stage("profile/entrance");
@@ -655,7 +826,7 @@ function createEnterableBuilding(
       outline, entranceEdge, windowStyle, options,
     );
     trace.stage("building layout planner");
-    const planningAttempt = profile.interiorLayout === "rooms"
+    const planningAttempt = !shellOnly && profile.interiorLayout === "rooms"
       ? createPlannedInterior(outline, entranceOpenings, options)
       : undefined;
     let plannedInterior = planningAttempt?.interior;
@@ -697,7 +868,7 @@ function createEnterableBuilding(
       if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
     }
     trace.stage("debug layout capture");
-    if (part === "exterior" && planningAttempt) {
+    if (!shellOnly && part === "exterior" && planningAttempt) {
       captureEncounteredBuildingLayout({
         id: plan.id,
         buildingClass: plan.buildingClass,
@@ -710,7 +881,7 @@ function createEnterableBuilding(
         apartmentLayouts: plannedInterior?.apartments,
         fallbackReason: planningAttempt.failure,
       });
-    } else if (part === "exterior") {
+    } else if (!shellOnly && part === "exterior") {
       captureEncounteredBuildingLayout({
         id: plan.id,
         buildingClass: plan.buildingClass,
@@ -723,7 +894,7 @@ function createEnterableBuilding(
       });
     }
     trace.stage("fallback stair planning");
-    const stairs = profile.hasStairs && floorCount > 1
+    const stairs = !shellOnly && profile.hasStairs && floorCount > 1
       ? plannedStairs.length > 0
         ? plannedStairs
         : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
@@ -1675,6 +1846,7 @@ function findStairLayouts(
   entrance: EntranceClearance,
   flightCount: number,
   detailSeed: number,
+  holes: ScenePoint[][] = [],
 ): StairLayout[] {
   const edges = outline.map((_, index) => index).sort((a, b) =>
     Number(a === entrance.edgeIndex) - Number(b === entrance.edgeIndex) ||
@@ -1733,7 +1905,10 @@ function findStairLayouts(
       const footprintMeters = outline.map((point) => ({
         x: point.x * options.metersPerUnit, y: point.z * options.metersPerUnit,
       }));
-      if (landingCorners.every((point) => pointInPolygonInclusive(point, footprintMeters)) &&
+      const landingRing = stairClearance(layout, options).map((point): LonLat => [point.x, point.z]);
+      const fitsVoids = !holes.some((hole) => polygonClipping.intersection([landingRing],
+        [hole.map((point): LonLat => [point.x, point.z])]).length > 0);
+      if (fitsVoids && landingCorners.every((point) => pointInPolygonInclusive(point, footprintMeters)) &&
           stairOpening(layout, options).every((point) => pointInRing(point, outline))) {
         candidates.push(layout);
       }
@@ -2153,8 +2328,9 @@ function nearestFootprintPoint(position: ScenePoint, outline: readonly ScenePoin
 function createInteriorGate(
   scene: Scene, outline: ScenePoint[], bottom: number, top: number,
   options: BuildingRenderOptions, parent: TransformNode,
+  holes: ScenePoint[][] = [],
 ): Mesh {
-  const gate = createBuildingPrism(scene, outline, top, bottom, options);
+  const gate = createBuildingPrism(scene, outline, top, bottom, options, holes);
   gate.name = "buildingInteriorGate";
   gate.metadata = { buildingInteriorGate: true };
   gate.parent = parent;
@@ -2169,10 +2345,12 @@ function createInteriorGate(
     const world = parent.computeWorldMatrix(true);
     const local = Vector3.TransformCoordinates(camera.globalPosition, world.clone().invert());
     if (local.y < bottom / options.metersPerUnit || local.y > top / options.metersPerUnit ||
-        !pointInRing(local, outline)) return;
-    const nearest = nearestFootprintPoint(local, outline);
-    const a = outline[nearest.edge], b = outline[(nearest.edge + 1) % outline.length];
-    const winding = signedArea(outline) >= 0 ? 1 : -1;
+        !pointInRing(local, outline) || holes.some((hole) => pointInRing(local, hole))) return;
+    const boundary = [outline, ...holes].map((ring) => ({ ring, nearest: nearestFootprintPoint(local, ring) }))
+      .sort((a, b) => a.nearest.distanceSquared - b.nearest.distanceSquared)[0];
+    const { nearest, ring } = boundary;
+    const a = ring[nearest.edge], b = ring[(nearest.edge + 1) % ring.length];
+    const winding = ring === outline ? (signedArea(ring) >= 0 ? 1 : -1) : (signedArea(ring) >= 0 ? -1 : 1);
     const direction = nearest.distanceSquared > 1e-10
       ? new Vector3(nearest.x - local.x, 0, nearest.z - local.z).normalize()
       : new Vector3((b.z - a.z) * winding, 0, (a.x - b.x) * winding).normalize();

@@ -779,6 +779,21 @@ export function setVegetationWindShear(
 }
 
 /** Sets the normalized-height range used by live vegetation model lighting. */
+/** Converts centered capture geometry to a ground-rooted live model. */
+export function scaleVertexColorModel(mesh: Mesh, renderHeight: number, sourceHeight: number): void {
+  const positions = mesh.getVerticesData("position");
+  if (!positions) throw new Error(`${mesh.name} has no position data.`);
+  const scale = renderHeight / sourceHeight;
+  for (let index = 0; index < positions.length; index += 3) {
+    positions[index] *= scale;
+    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
+    positions[index + 2] *= scale;
+  }
+  mesh.setVerticesData("position", positions);
+  mesh.refreshBoundingInfo({ updatePositionsArray: false });
+  setVertexColorModelHeight(mesh, renderHeight);
+}
+
 export function setVertexColorModelHeight(
   mesh: Mesh,
   modelHeight: number,

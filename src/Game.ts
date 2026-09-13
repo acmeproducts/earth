@@ -384,8 +384,7 @@ export class Game {
     if (this.waterReflectionsEnabled) this.enableWaterReflections(camera);
     this.applyAntialiasing(camera);
 
-    // Load terrain at the active example location. Only the center tile
-    // blocks the loading screen; the rest streams in from the render loop.
+    // Keep the loading screen up until the entire render window is generated.
     await this.startWorld(location, onProgress);
     if (presenceSession.restoredPose) this.playerControls.applyRestoredPose(presenceSession.restoredPose);
     this.publishLocalPlayerPose(true);
@@ -442,20 +441,65 @@ export class Game {
     this.solarLighting?.setLocation(target.lat, target.lon);
     await reportInitializationProgress(onProgress, "Loading terrain elevation", 10);
     const centerTile = worldTileAtLocation(target.lat, target.lon, this.gridLevel);
-    // Only the center tile is awaited; every other tile streams in from the
-    // render loop, nearest first.
+    // Establish the geographic frame and camera before preparing nearby LODs.
     await this.streamTile(
       centerTile,
       true,
       generation,
-      onProgress,
+      (step, progress) => onProgress?.(step, 10 + progress * 0.25),
       () => this.placeCameraAtLocation(target),
     );
+    await this.prepareSpawnWindow(target, generation, onProgress);
+    this.layerFades.finish();
     this.worldLocation.update(target);
     this.sceneControls?.setLocation(target);
     if (this.terrainCoordinateFrame && this.terrainMetersPerUnit) {
       this.playerPresence.setWorldFrame(this.terrainCoordinateFrame, this.terrainMetersPerUnit);
     }
+  }
+
+  /** Generate the same terrain/detail window used by movement streaming. */
+  private async prepareSpawnWindow(
+    target: WorldLocation,
+    generation: number,
+    onProgress?: InitializationProgress,
+  ): Promise<void> {
+    const center = worldTileAtLocation(target.lat, target.lon, this.gridLevel);
+    const scale = 2 ** center.level;
+    const detailWindow = worldTileWindowOffsetsAtLocation(
+      target.lat, target.lon, this.sceneSettings.value.detailTilesAcross, center.level,
+    );
+    const work: Array<{ id: WorldTileId; detail: boolean; distanceSquared: number }> = [];
+    for (let dy = -this.terrainTileRadius; dy <= this.terrainTileRadius; dy++) {
+      const y = center.y + dy;
+      if (y < 0 || y >= scale) continue;
+      for (let dx = -this.terrainTileRadius; dx <= this.terrainTileRadius; dx++) {
+        work.push({
+          id: { level: center.level, x: ((center.x + dx) % scale + scale) % scale, y },
+          detail: dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
+            dy >= detailWindow.minimumY && dy <= detailWindow.maximumY,
+          distanceSquared: dx * dx + dy * dy,
+        });
+      }
+    }
+    work.sort((a, b) => a.distanceSquared - b.distanceSquared);
+    for (const [index, item] of work.entries()) {
+      await reportInitializationProgress(
+        onProgress, `Generating render tiles (${index}/${work.length})`,
+        35 + 61 * index / work.length,
+      );
+      await this.streamTile(item.id, item.detail, generation);
+      const record = this.tiles.get(worldTileKey(item.id));
+      if (generation !== this.streamingGeneration || !record ||
+          (item.detail ? !record.detailed :
+            !record.farTreeField || !record.farBuildings || !record.farRoads)) {
+        throw new Error(`Spawn tile ${worldTileKey(item.id)} did not finish generating.`);
+      }
+      this.layerFades.finish();
+    }
+    await reportInitializationProgress(
+      onProgress, `Render tiles ready (${work.length}/${work.length})`, 96,
+    );
   }
 
   /** Drops movement carried over from the outgoing world's local frame. */
@@ -936,141 +980,75 @@ export class Game {
     );
     const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
 
-    await reportInitializationProgress(onProgress, "Planting trees", 58);
-    trace?.stage("trees and initial LOD");
-    const treeField = await createTreeField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "trees"),
-      speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
-      densityScale: () => actorMix.trees.densityScale,
-      renderMode: this.vegetationModes.trees,
-      includeFallenLogs: true,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      treeField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "treeField", treeField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Planting saplings", 63);
-    trace?.stage("saplings and initial LOD");
-    const saplingField = await createSaplingField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "saplings"),
-      speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
-      densityScale: () => actorMix.trees.densityScale,
-      renderMode: this.vegetationModes.trees,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      saplingField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "saplingField", saplingField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Growing grass", 68);
-    trace?.stage("grass and initial LOD");
-    const grassField = await createGrassField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "grass"),
-      renderMode: this.vegetationModes.grass,
-      densityScale: () => winterGroundCover ? 0 : actorMix.grass.densityScale,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      grassField,
-      this.fieldLodDistance("grassField"),
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "grassField", grassField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Growing wildflowers", 74);
-    trace?.stage("wildflowers and initial LOD");
-    const tallPlantField = await createTallPlantField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "tallPlants"),
-      densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
-      renderMode: this.vegetationModes.grass,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      tallPlantField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "tallPlantField", tallPlantField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Growing wheat", 76);
-    trace?.stage("wheat and initial LOD");
-    const wheatField = await createWheatField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "wheat"),
-      densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
-      renderMode: this.vegetationModes.grass,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      wheatField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "wheatField", wheatField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Adding bushes", 79);
-    trace?.stage("bushes and initial LOD");
-    const bushField = await createBushField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "bushes"),
-      densityScale: () => winterGroundCover ? 0 : actorMix.bushes.densityScale,
-      renderMode: this.vegetationModes.bushes,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      bushField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "bushField", bushField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Growing undergrowth", 83);
-    trace?.stage("ferns and initial LOD");
-    const fernField = await createFernField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "ferns"),
-      densityScale: () => winterGroundCover ? 0 : actorMix.ferns.densityScale,
-      renderMode: this.vegetationModes.grass,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      fernField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(record, "fernField", fernField, generation)) return;
-
-    await reportInitializationProgress(onProgress, "Covering rocky beaches", 85);
-    trace?.stage("rocky beach and initial LOD");
-    const rockyBeachField = await createRockyBeachField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
-      densityScale: () => winterGroundCover ? 0 : actorMix.rocks.densityScale,
-      renderMode: this.vegetationModes.grass,
-    });
-    await this.prepareTileFieldLod(
-      record,
-      rockyBeachField,
-      this.vegetationLodDistanceMeters,
-      yieldControl,
-    );
-    if (!this.stageTileField(
-      record,
-      "rockyBeachField",
-      rockyBeachField,
-      generation,
-    )) return;
+    const fields: { kind: VegetationFieldKind; label: string; progress: number;
+      create: () => Promise<VegetationFieldResult> }[] = [
+      { kind: "treeField", label: "Planting trees", progress: 58,
+        create: () => createTreeField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "trees"),
+          speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+          densityScale: () => actorMix.trees.densityScale,
+          renderMode: this.vegetationModes.trees,
+          includeFallenLogs: true,
+        }) },
+      { kind: "saplingField", label: "Planting saplings", progress: 63,
+        create: () => createSaplingField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "saplings"),
+          speciesSeed: layerSeed(this.worldSeed, "treeSpecies"),
+          densityScale: () => actorMix.trees.densityScale,
+          renderMode: this.vegetationModes.trees,
+        }) },
+      { kind: "grassField", label: "Growing grass", progress: 68,
+        create: () => createGrassField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "grass"),
+          renderMode: this.vegetationModes.grass,
+          densityScale: () => winterGroundCover ? 0 : actorMix.grass.densityScale,
+        }) },
+      { kind: "tallPlantField", label: "Growing wildflowers", progress: 74,
+        create: () => createTallPlantField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "tallPlants"),
+          densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
+          renderMode: this.vegetationModes.grass,
+        }) },
+      { kind: "wheatField", label: "Growing wheat", progress: 76,
+        create: () => createWheatField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "wheat"),
+          densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
+          renderMode: this.vegetationModes.grass,
+        }) },
+      { kind: "bushField", label: "Adding bushes", progress: 79,
+        create: () => createBushField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "bushes"),
+          densityScale: () => winterGroundCover ? 0 : actorMix.bushes.densityScale,
+          renderMode: this.vegetationModes.bushes,
+        }) },
+      { kind: "fernField", label: "Growing undergrowth", progress: 83,
+        create: () => createFernField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "ferns"),
+          densityScale: () => winterGroundCover ? 0 : actorMix.ferns.densityScale,
+          renderMode: this.vegetationModes.grass,
+        }) },
+      { kind: "rockyBeachField", label: "Covering rocky beaches", progress: 85,
+        create: () => createRockyBeachField(this.scene, terrainData, {
+          ...fieldOptions,
+          seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
+          densityScale: () => winterGroundCover ? 0 : actorMix.rocks.densityScale,
+          renderMode: this.vegetationModes.grass,
+        }) },
+    ];
+    for (const { kind, label, progress, create } of fields) {
+      await reportInitializationProgress(onProgress, label, progress);
+      trace?.stage(kind + " and initial LOD");
+      const field = await create();
+      await this.prepareTileFieldLod(record, field, this.fieldLodDistance(kind), yieldControl);
+      if (!this.stageTileField(record, kind, field, generation)) return;
+    }
 
     await reportInitializationProgress(onProgress, "Scattering rocks", 86);
     trace?.stage("rocks and vegetation activation");
@@ -1152,11 +1130,11 @@ export class Game {
     this.refreshShadowCasters();
     trace?.stage("detail complete");
     console.log(
-      `Tile ${record.key}: ${treeField.count} trees, ${saplingField.count} saplings, ` +
-      `${grassField.count} grass, ${tallPlantField.count} wildflower patches, ` +
-      `${wheatField.count} wheat, ` +
-      `${bushField.count} bushes, ` +
-      `${fernField.count} ferns, ${rockyBeachField.count} rocky beach patches, ` +
+      `Tile ${record.key}: ${record.treeField!.count} trees, ${record.saplingField!.count} saplings, ` +
+      `${record.grassField!.count} grass, ${record.tallPlantField!.count} wildflower patches, ` +
+      `${record.wheatField!.count} wheat, ` +
+      `${record.bushField!.count} bushes, ` +
+      `${record.fernField!.count} ferns, ${record.rockyBeachField!.count} rocky beach patches, ` +
       `${rockField.count} rocks, ` +
       `${mapFeatures.counts.buildings} buildings, ` +
       `${mapFeatures.counts.roads} roads, ${plotBoundaryLayer.count} plot boundaries, ` +

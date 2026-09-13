@@ -66,7 +66,7 @@ test("both detail levels render one composite across provider tiles", async () =
   }
 });
 
-test("dense building layers flush merge batches and keep every building detailed", async () => {
+test("dense standalone and mixed map layers preserve batching, staging and detail", async () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
   const outer = [[0.355, 0.425], [0.3551, 0.425], [0.3551, 0.4251], [0.355, 0.4251], [0.355, 0.425]];
@@ -86,23 +86,37 @@ test("dense building layers flush merge batches and keep every building detailed
     // Known-size real buffers isolate the streaming policy from room planning.
     ProceduralBuildingRenderer.createDetailed = () => {
       detailedCalls++;
-      return MeshBuilder.CreateGround("detail", { subdivisions: 180 }, scene);
+      const mesh = MeshBuilder.CreateGround("detail", { subdivisions: 180 }, scene);
+      mesh.setEnabled(false);
+      return mesh;
     };
     ProceduralBuildingRenderer.createFar = () => {
       farCalls++;
       return MeshBuilder.CreateBox("mass", {}, scene);
     };
-    const layer = await OpenStreetMap.createBuildingLayer(scene, [tile], {
+    const terrain = {
       worldTile: buildingOwnerWorldTile({ outer, holes: [] }, 14),
-    }, { meshWidth: 100, meshDepth: 100, metersPerUnit: 1, startDisabled: true },
-    "detailed", async () => { yields++; });
-    assert.equal(layer.count, 16);
-    assert.equal(detailedCalls, 16);
-    assert.equal(farCalls, 0);
-    assert.equal(layer.meshes.length, 16);
-    assert.ok(yields >= 32);
-    assert.ok(layer.meshes.every((mesh) => mesh.parent === layer.root && !mesh.isEnabled()));
-    assert.ok(layer.meshes.every((mesh) => mesh.checkCollisions));
+      bounds: { lonWest: 0.35, lonEast: 0.36, latSouth: 0.42, latNorth: 0.43 },
+    };
+    for (const mixed of [false, true]) {
+      detailedCalls = yields = 0;
+      const options = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
+      const yieldControl = async () => {
+        yields++;
+        assert.ok(scene.meshes.every((mesh) => !mesh.isEnabled()), "no building flashes during a yield");
+      };
+      const layer = mixed
+        ? await OpenStreetMap.createLayer(scene, [tile], terrain, options, yieldControl)
+        : await OpenStreetMap.createBuildingLayer(scene, [tile], terrain, options, "detailed", yieldControl);
+      assert.equal(mixed ? layer.counts.buildings : layer.count, 16);
+      assert.equal(detailedCalls, 16);
+      assert.equal(farCalls, 0);
+      assert.equal(layer.meshes.length, 16);
+      assert.ok(yields >= 32);
+      assert.ok(layer.meshes.every((mesh) => mesh.parent === layer.root && mesh.isEnabled()));
+      assert.ok(layer.meshes.every((mesh) => mesh.checkCollisions));
+      OpenStreetMap.disposeLayer(layer.root);
+    }
   } finally {
     ProceduralBuildingRenderer.createDetailed = originalDetailed;
     ProceduralBuildingRenderer.createFar = originalFar;

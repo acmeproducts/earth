@@ -256,10 +256,6 @@ export class OpenStreetMap {
       trace.stage("layer setup/lakes/building sources");
       const root = new TransformNode("mapFeatures", scene);
       if (options.startDisabled) root.setEnabled(false);
-      const buildings: Mesh[] = [];
-      const buildingChunks: Mesh[] = [];
-      let buildingCount = 0;
-      let chunkVertices = 0;
       const roadMeshes: Record<RoadVisualStyle, Mesh[]> = {
         marked: [],
         paved: [],
@@ -276,11 +272,6 @@ export class OpenStreetMap {
       const junctionCandidates: RoadJunctionCandidate[] = [];
       const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
       const waterways: Mesh[] = [];
-      const renderOptions = {
-        ...options,
-        renderWholeBuildingFootprints: true,
-        neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
-      };
       if (options.planning) {
         trace.stage("planned road/shoulder geometry");
         const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
@@ -300,28 +291,9 @@ export class OpenStreetMap {
         }
       }
 
-      for (const source of compositeBuildingSources(tiles)) {
-        trace.stage("building ownership");
-        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-        trace.stage("frame yield before building");
-        await yieldControl?.();
-        trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
-        const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
-        const mesh = ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-        if (mesh) {
-          buildings.push(mesh);
-          buildingCount++;
-          chunkVertices += mesh.getTotalVertices();
-          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-            const chunk = ProceduralBuildingRenderer.merge(buildings, "buildings", root);
-            if (chunk) buildingChunks.push(chunk);
-            buildings.length = 0;
-            chunkVertices = 0;
-          }
-        }
-        trace.stage("frame yield after building");
-        await yieldControl?.();
-      }
+      const buildings = await createBuildingBatches(
+        scene, tiles, terrain, options, "detailed", root, "buildings", yieldControl,
+      );
       trace.stage("roads/waterways including frame yields");
       for (const tile of tiles) {
         await yieldControl?.();
@@ -378,8 +350,7 @@ export class OpenStreetMap {
 
       trace.stage("final building/road/water merges (inclusive)");
       const meshes = [
-        ...buildingChunks,
-        ProceduralBuildingRenderer.merge(buildings, "buildings", root),
+        ...buildings.meshes,
         mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
         mergeRoads(roadShoulders.unpaved, "unpavedRoadShoulders", "unpavedShoulder", root),
         mergeRoads(bridgeDecks, "bridgeDecks", "bridgeDeck", root),
@@ -402,7 +373,7 @@ export class OpenStreetMap {
         meshes,
         lakePolygons,
         counts: {
-          buildings: buildingCount,
+          buildings: buildings.count,
           roads: Object.values(roadMeshes).reduce((sum, meshes) => sum + meshes.length, 0),
           water: lakePolygons.length + waterways.length,
         },
@@ -522,54 +493,14 @@ export class OpenStreetMap {
     detail: BuildingDetailLevel,
     yieldControl?: () => Promise<void>,
   ): Promise<BuildingFeatureLayer> {
-    return BuildingTrace.runAsync(`tile=${JSON.stringify(terrain.worldTile)} ${detail} building layer`, async (trace) => {
-      trace.stage("layer setup/building sources");
-      const name = detail === "far" ? "farBuildings" : "detailedBuildings";
-      const root = new TransformNode(name, scene);
-      if (options.startDisabled) root.setEnabled(false);
-      const buildings: Mesh[] = [];
-      const meshes: Mesh[] = [];
-      let count = 0;
-      let chunkVertices = 0;
-      const renderOptions = {
-        ...options,
-        renderWholeBuildingFootprints: true,
-        neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
-      };
-      for (const source of compositeBuildingSources(tiles)) {
-        trace.stage("building ownership");
-        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-        trace.stage("frame yield before building");
-        await yieldControl?.();
-        trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
-        const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
-        const mesh = detail === "far"
-          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
-          : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-        if (mesh) {
-          buildings.push(mesh);
-          count++;
-          chunkVertices += mesh.getTotalVertices();
-          // Bound merge copies and GPU uploads instead of duplicating a whole
-          // dense city tile in memory in one uninterrupted merge.
-          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
-            if (chunk) meshes.push(chunk);
-            buildings.length = 0;
-            chunkVertices = 0;
-          }
-        }
-        trace.stage("frame yield after building");
-        await yieldControl?.();
-      }
-
-      trace.stage("final merge (inclusive)");
-      const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
-      if (merged) meshes.push(merged);
-      trace.stage("enable staged meshes");
-      for (const mesh of meshes) mesh.setEnabled(true);
-      return { root, meshes, count };
-    });
+    const name = detail === "far" ? "farBuildings" : "detailedBuildings";
+    const root = new TransformNode(name, scene);
+    if (options.startDisabled) root.setEnabled(false);
+    const buildings = await createBuildingBatches(
+      scene, tiles, terrain, options, detail, root, name, yieldControl,
+    );
+    for (const mesh of buildings.meshes) mesh.setEnabled(true);
+    return { root, ...buildings };
   }
 
   /** Keeps road surfaces visible beyond the full map-feature detail rings. */
@@ -731,6 +662,67 @@ export class OpenStreetMap {
     const { data } = await request;
     return data ? { x, y, zoom, data } : undefined;
   }
+}
+
+async function createBuildingBatches(
+  scene: Scene,
+  tiles: MapTile[],
+  terrain: TerrainData,
+  options: MapLayerOptions,
+  detail: BuildingDetailLevel,
+  root: TransformNode,
+  name: string,
+  yieldControl?: () => Promise<void>,
+): Promise<{ meshes: Mesh[]; count: number }> {
+  return BuildingTrace.runAsync(`tile=${JSON.stringify(terrain.worldTile)} ${detail} building layer`, async (trace) => {
+    trace.stage("layer setup/building sources");
+    const buildings: Mesh[] = [];
+    const meshes: Mesh[] = [];
+    let count = 0;
+    let chunkVertices = 0;
+    const renderOptions = {
+      ...options,
+      renderWholeBuildingFootprints: true,
+      neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
+    };
+    for (const source of compositeBuildingSources(tiles)) {
+      trace.stage("building ownership");
+      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+      trace.stage("frame yield before building");
+      await yieldControl?.();
+      trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
+      const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
+      const mesh = detail === "far"
+        ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
+        : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+      if (mesh) {
+        buildings.push(mesh);
+        count++;
+        chunkVertices += mesh.getTotalVertices();
+        // Bound merge copies and GPU uploads instead of duplicating a whole
+        // dense city tile in memory in one uninterrupted merge.
+        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+          const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+          if (chunk) {
+            chunk.setEnabled(false);
+            meshes.push(chunk);
+          }
+          buildings.length = 0;
+          chunkVertices = 0;
+        }
+      }
+      trace.stage("frame yield after building");
+      await yieldControl?.();
+    }
+
+    trace.stage("final merge (inclusive)");
+    const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
+    if (merged) {
+      merged.setEnabled(false);
+      meshes.push(merged);
+    }
+    return { meshes, count };
+  });
 }
 
 function forEachFeature(

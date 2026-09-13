@@ -2,7 +2,7 @@
 // a low morning sun, measures how much sub-grid relief the native tile under
 // the camera carries, and screenshots the ground from walking height.
 // Run with: node tests/drive-terrain-relief.mjs [label] [time-of-day]
-import { spawn } from "node:child_process";
+import { launchBrowser, sleep } from "./browser-harness.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 const LABEL = process.argv[2] ?? "relief";
@@ -13,7 +13,7 @@ const OUT_DIR = "C:/Users/TobiasElinder/AppData/Local/Temp/earth-repro-relief";
 const APP_URL = `http://localhost:3000/?date=2026-06-21&time=${TIME}`;
 
 mkdirSync(OUT_DIR, { recursive: true });
-const chrome = spawn(CHROME, [
+const { chrome, socket, send, evaluate } = await launchBrowser([
   `--remote-debugging-port=${DEBUG_PORT}`,
   `--user-data-dir=${OUT_DIR}/profile`,
   "--headless=new",
@@ -21,51 +21,15 @@ const chrome = spawn(CHROME, [
   "--enable-unsafe-swiftshader",
   "--no-first-run",
   "about:blank",
-], { stdio: "ignore" });
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function getTarget() {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`);
-      const page = (await response.json()).find((target) => target.type === "page");
-      if (page) return page;
-    } catch {}
-    await sleep(200);
-  }
-  throw new Error("Chrome debug endpoint never came up");
-}
-
-const target = await getTarget();
-const socket = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-let nextId = 1;
-const pending = new Map();
+], CHROME);
 const consoleLogs = [];
 socket.onmessage = (event) => {
   const message = JSON.parse(event.data);
   if (message.method === "Runtime.consoleAPICalled") {
     consoleLogs.push(message.params.args.map((arg) => arg.value ?? arg.description ?? "").join(" "));
   }
-  if (message.id && pending.has(message.id)) {
-    const { resolve, reject } = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) reject(new Error(JSON.stringify(message.error)));
-    else resolve(message.result);
-  }
+
 };
-function send(method, params = {}) {
-  const id = nextId++;
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
-}
-async function evaluate(expression) {
-  const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 800));
-  return result.result?.value;
-}
 async function key(type, keyName, code, keyCode) {
   await send("Input.dispatchKeyEvent", { type, key: keyName, code, windowsVirtualKeyCode: keyCode });
 }

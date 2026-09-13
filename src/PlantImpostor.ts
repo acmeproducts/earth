@@ -1,4 +1,4 @@
-import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
+import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
@@ -6,7 +6,7 @@ import {
 import type { ImpostorAssetLease, ImpostorVariant } from "./Impostor";
 import {
   createVertexColorCaptureMaterial,
-  setVertexColorModelHeight,
+  scaleVertexColorModel,
 } from "./procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "./Random";
 
@@ -504,17 +504,6 @@ export function createPlantModel(
     plantArchetypeForVariant(variantIndex),
   );
   plants.name = "plantModels";
-  const positions = plants.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error("Plant model has no position data.");
-
-  const scale = renderHeight / SOURCE_HEIGHT;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  plants.setVerticesData(VertexBuffer.PositionKind, positions);
-  plants.refreshBoundingInfo({ updatePositionsArray: false });
-  setVertexColorModelHeight(plants, renderHeight);
+  scaleVertexColorModel(plants, renderHeight, SOURCE_HEIGHT);
   return plants;
 }
