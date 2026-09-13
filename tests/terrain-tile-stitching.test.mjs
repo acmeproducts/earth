@@ -42,14 +42,15 @@ function elevationWindow(tile) {
   };
 }
 
-test("uses one shared elevation row and column at a four-tile corner", () => {
-  const northWest = elevationWindow({ level: 16, x: 34_000, y: 20_000 });
-  const northEast = elevationWindow({ level: 16, x: 34_001, y: 20_000 });
-  const southWest = elevationWindow({ level: 16, x: 34_000, y: 20_001 });
-  const southEast = elevationWindow({ level: 16, x: 34_001, y: 20_001 });
+for (const level of [16, 17]) {
+test(`uses shared elevation boundaries at a level-${level} four-tile corner`, () => {
+  const northWest = elevationWindow({ level, x: 34_003, y: 40_003 });
+  const northEast = elevationWindow({ level, x: 34_004, y: 40_003 });
+  const southWest = elevationWindow({ level, x: 34_003, y: 40_004 });
+  const southEast = elevationWindow({ level, x: 34_004, y: 40_004 });
 
-  assert.equal(northWest.width, 129);
-  assert.equal(northWest.height, 129);
+  assert.equal(northWest.width, 256 / 2 ** (level - PROVIDER_LEVEL) + 1);
+  assert.equal(northWest.height, northWest.width);
   assert.equal(northWest.east, northEast.west);
   assert.equal(southWest.east, southEast.west);
   assert.equal(northWest.south, southWest.north);
@@ -60,6 +61,7 @@ test("uses one shared elevation row and column at a four-tile corner", () => {
   assert.equal(`${southWest.east}/${southWest.north}`, corner);
   assert.equal(`${southEast.west}/${southEast.north}`, corner);
 });
+}
 
 test("builds one terrain cell between each pair of elevation samples", () => {
   assert.match(

@@ -1,10 +1,13 @@
 import { ResourceCache } from "./ResourceCache";
 import { BuildingTrace } from "./BuildingDiagnostics";
+import { DIRT_ROAD_EDGE_KIND, DIRT_ROAD_EDGE_ALPHA_GLSL, dirtRoadEdgeCoordinates } from "./DirtRoadEdges";
+import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
 import { mergeOverlappingBuildings } from "./CompositeBuildings";
 import { inferBuildingUse, type BuildingUseContext } from "./BuildingUseInference";
 import type { SharedValueMap } from "./OwnedValueCache";
 import {
   Color3,
+  Material,
   Mesh,
   MeshBuilder,
   MultiMaterial,
@@ -922,6 +925,7 @@ function createPlannedRoadBatch(
   const positions: number[] = [];
   const indices: number[] = [];
   const uvs: number[] = [];
+  const dirtEdges: number[] = [];
   const clearance = clearanceMeters / options.metersPerUnit;
   for (const road of roads) {
     const outline = signedArea(road.outline) >= 0
@@ -944,6 +948,9 @@ function createPlannedRoadBatch(
         positions.push(point.x, point.y, point.z);
         const uv = plannedRoadUv(point, road, options.metersPerUnit, forceWorldUvs);
         uvs.push(uv.x, uv.y);
+        if (road.visualStyle === "dirt") {
+          dirtEdges.push(...dirtRoadEdgeCoordinates(point, road, options.metersPerUnit));
+        }
       }
       const localIndices = earcut(ring.flatMap((point) => [point.x, point.z]));
       for (let index = 0; index < localIndices.length; index += 3) {
@@ -967,6 +974,7 @@ function createPlannedRoadBatch(
   vertexData.uvs = uvs;
   const mesh = new Mesh("plannedRoadSurface", scene);
   vertexData.applyToMesh(mesh, false);
+  if (dirtEdges.length > 0) mesh.setVerticesData(DIRT_ROAD_EDGE_KIND, dirtEdges, false, 3);
   mesh.isPickable = false;
   return stageMapMesh(mesh);
 }
@@ -1171,9 +1179,23 @@ function createRoadMeshes(
       const uvs = visualStyle === "marked"
         ? roadUvs(left, right, options.metersPerUnit, visualStyle)
         : worldPositionRoadUvs(left, right, options.metersPerUnit, visualStyle);
-      meshes.push(stageMapMesh(
-        MeshBuilder.CreateRibbon("road", { pathArray: [left, right], uvs }, scene),
-      ));
+      const mesh = MeshBuilder.CreateRibbon("road", { pathArray: [left, right], uvs }, scene);
+      if (visualStyle === "dirt") {
+        const distances = [0];
+        for (let index = 1; index < left.length; index++) {
+          distances.push(distances[index - 1] + Math.hypot(
+            (left[index].x + right[index].x - left[index - 1].x - right[index - 1].x) / 2,
+            (left[index].z + right[index].z - left[index - 1].z - right[index - 1].z) / 2,
+          ));
+        }
+        const total = distances[distances.length - 1];
+        const width = halfWidth * 2;
+        const edges = [1, -1].flatMap((side) => distances.flatMap((distance) =>
+          total <= width * 2 ? [0, 0, 0] : [side, distance / width, (total - distance) / width]
+        ));
+        mesh.setVerticesData(DIRT_ROAD_EDGE_KIND, edges, false, 3);
+      }
+      meshes.push(stageMapMesh(mesh));
     }
     left = [];
     right = [];
@@ -1522,8 +1544,14 @@ function mergeRoads(
   parent: TransformNode,
 ): Mesh | undefined {
   if (meshes.length === 0) return undefined;
+  // Babylon's standard merge drops custom attributes. Preserve them in the
+  // same vertex order, and give standalone junction meshes solid coverage.
+  const dirtEdges = visualStyle === "dirt" ? meshes.flatMap((mesh) =>
+    Array.from(mesh.getVerticesData(DIRT_ROAD_EDGE_KIND) ?? new Float32Array(mesh.getTotalVertices() * 3))
+  ) : undefined;
   const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
   if (!result) return undefined;
+  if (dirtEdges) result.setVerticesData(DIRT_ROAD_EDGE_KIND, dirtEdges, false, 3);
   result.name = name;
   result.material = createRoadMaterial(result.getScene(), name, visualStyle);
   result.parent = parent;
@@ -1553,7 +1581,9 @@ function mergeWaterways(
   return result;
 }
 function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMaterialStyle): StandardMaterial {
-  const material = new StandardMaterial(`${name}Material`, scene);
+  const material = visualStyle === "dirt"
+    ? createDirtRoadMaterial(scene, `${name}Material`)
+    : new StandardMaterial(`${name}Material`, scene);
   switch (visualStyle) {
     case "dirt": material.diffuseColor = new Color3(0.42, 0.39, 0.33); break;
     case "unpaved": material.diffuseColor = new Color3(0.43, 0.42, 0.38); break;
@@ -1586,6 +1616,20 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
     relief.level = visualStyle === "dirt" ? 0.12 : 0.24;
     material.bumpTexture = relief;
   }
+  return material;
+}
+
+function createDirtRoadMaterial(scene: Scene, name: string): CustomMaterial {
+  const material = new CustomMaterial(name, scene);
+  material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+  material.AddAttribute(DIRT_ROAD_EDGE_KIND);
+  material.Vertex_Definitions(`
+    attribute vec3 ${DIRT_ROAD_EDGE_KIND};
+    varying vec3 vDirtRoadEdge;
+  `);
+  material.Vertex_MainEnd(`vDirtRoadEdge = ${DIRT_ROAD_EDGE_KIND};`);
+  material.Fragment_Definitions("varying vec3 vDirtRoadEdge;");
+  material.Fragment_Custom_Alpha(DIRT_ROAD_EDGE_ALPHA_GLSL);
   return material;
 }
 

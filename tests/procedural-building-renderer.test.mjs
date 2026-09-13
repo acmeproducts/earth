@@ -9,9 +9,11 @@ import {
   Ray,
   Scene,
   TransformNode,
+  UniversalCamera,
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
+import { moveWalkerWithCollisions } from "../src/WalkerCollision.ts";
 
 const { planBuilding } = await import("../src/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
@@ -906,6 +908,100 @@ test("disposing a tile while its interior is queued or building leaves no orphan
     for (const root of roots) root.dispose(false, true);
     for (let frame = 0; frame < 10; frame++) advanceInteriorFrame(scene);
     assert.equal(scene.meshes.length, 0);
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
+test("unfinished interiors stay hidden and block walking and flying until an atomic completion", (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const engine = new NullEngine(), scene = new Scene(engine);
+  try {
+    scene.collisionsEnabled = true;
+    const exterior = ProceduralBuildingRenderer.merge([
+      ProceduralBuildingRenderer.createDetailed(scene,
+        plan(123, { render_height: 12.4, levels: 4 }), terrain, options),
+    ], "buildings", new TransformNode("tile", scene));
+    const gate = scene.getMeshByName("buildingInteriorGate");
+    assert.ok(gate?.checkCollisions && gate.isEnabled());
+    assert.equal(gate.isVisible, false);
+    gate.computeWorldMatrix(true);
+    const camera = new UniversalCamera("walker", new Vector3(0, 11.5, -10), scene);
+    scene.activeCamera = camera;
+    camera.checkCollisions = true;
+    camera.ellipsoid.set(0.3, 0.6, 0.3);
+    // Isolate the new gate from the existing facade collision surfaces.
+    exterior.checkCollisions = false;
+    moveWalkerWithCollisions(camera, 0, 4);
+    assert.ok(camera.position.z < -8.2, `entry gate did not stop the walker: ${camera.position.z}`);
+
+    camera.checkCollisions = false;
+    camera.position.set(0, 11.5, 0);
+    camera.getViewMatrix(true);
+    scene.onBeforeCameraRenderObservable.notifyObservers(camera);
+    assert.ok(Math.abs(camera.position.x) > 15 || Math.abs(camera.position.z) > 8,
+      "fly mode and a saved pose must not enter an unfinished interior");
+    assert.ok(scene.getViewMatrix().equals(camera.getViewMatrix()), "the same frame uses the corrected view");
+    let frames = 0;
+    do {
+      advanceInteriorFrame(scene);
+      const root = scene.getMeshByName("buildingInteriorRoot");
+      assert.ok(root);
+      if (exterior.metadata.loadedInteriorCount === 0) {
+        assert.equal(root.isEnabled(), false);
+        assert.ok(root.getChildMeshes().every((mesh) => !mesh.isEnabled()),
+          "even pre-enabled child batches stay hidden behind their disabled root");
+        assert.equal(gate.isEnabled(), true);
+      }
+      assert.ok(++frames < 20000);
+    } while (exterior.metadata.loadedInteriorCount === 0);
+    assert.ok(frames > 1);
+    const root = scene.getMeshByName("buildingInteriorRoot");
+    assert.equal(root.metadata.interiorReady, true);
+    assert.ok(root.getChildMeshes().every((mesh) => mesh.isEnabled()));
+    assert.equal(gate.isEnabled(), false);
+    camera.position.set(0, 11.5, 0);
+    camera.getViewMatrix(true);
+    scene.onBeforeCameraRenderObservable.notifyObservers(camera);
+    assert.equal(camera.position.x, 0);
+    assert.equal(camera.position.z, 0);
+
+    camera.position.x = 1000;
+    camera.getViewMatrix(true);
+    clock += 150;
+    advanceInteriorFrame(scene);
+    assert.equal(root.isDisposed(), true);
+    assert.equal(gate.isEnabled(), true, "unloading closes entry again");
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
+test("all nearby buildings in one chunk are queued and focus follows their actual footprints", (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const engine = new NullEngine(), scene = new Scene(engine);
+  try {
+    const buildings = [0, 0.35].map((offset, index) => {
+      const polygon = { outer: footprint.outer.map(([x, y]) => [x + offset, y]), holes: [] };
+      return ProceduralBuildingRenderer.createDetailed(scene,
+        planBuilding({ id: `focus-${index}`, polygon, properties: { render_height: 12.4, levels: 4 } }), terrain, options);
+    });
+    const exterior = ProceduralBuildingRenderer.merge(buildings, "buildings", new TransformNode("tile", scene));
+    const camera = new FreeCamera("camera", new Vector3(17, 11.5, 0), scene);
+    scene.activeCamera = camera;
+    camera.getViewMatrix(true);
+    advanceInteriorFrame(scene);
+    assert.equal(exterior.metadata.loadingInteriorCount, 2);
+    const roots = [0, 1].map((index) => scene.meshes.find((mesh) =>
+      mesh.name === "buildingInteriorRoot" && mesh.metadata.buildingId === `focus-${index}`));
+    assert.ok(roots.every(Boolean));
+    advanceInteriorFrame(scene);
+    const firstCount = roots[0].getChildMeshes().length;
+    assert.ok(firstCount > 0);
+    assert.equal(roots[1].getChildMeshes().length, 0);
+    camera.position.x = 18.5;
+    camera.getViewMatrix(true);
+    advanceInteriorFrame(scene);
+    assert.equal(roots[0].getChildMeshes().length, firstCount, "farther building pauses without losing parts");
+    assert.ok(roots[1].getChildMeshes().length > 0, "new nearest building starts within a frame");
+    assert.ok(roots.every((root) => !root.isEnabled()));
   } finally { scene.dispose(); engine.dispose(); }
 });
 

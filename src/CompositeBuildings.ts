@@ -1,5 +1,5 @@
 import polygonClipping from "polygon-clipping";
-import { planBuilding, type BuildingPolygon, type BuildingSource, type LonLat } from "./BuildingPlanner";
+import { planBuilding, type BuildingHeightBand, type BuildingPolygon, type BuildingSource, type LonLat } from "./BuildingPlanner";
 
 /** Merge positive-area overlaps before ownership, layouts, and geometry are planned. */
 export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): BuildingSource[] {
@@ -28,7 +28,7 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
     for (let j = i + 1; j < sorted.length && sorted[j].minX < a.maxX; j++) {
       const b = sorted[j];
       if (b.maxY <= a.minY || b.minY >= a.maxY || b.maxX <= a.minX ||
-          b.bottom >= a.top || a.bottom >= b.top || root(a.index) === root(b.index)) continue;
+          b.bottom > a.top || a.bottom > b.top || root(a.index) === root(b.index)) continue;
       try {
         // Intersection excludes shared walls, point contacts, and courtyard interiors.
         if (polygonClipping.intersection(rings(a.source.polygon), rings(b.source.polygon)).length) {
@@ -58,6 +58,7 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
       const ids = [...new Set(group.map((s) => s.id))];
       return [{
         ...primary,
+        heightBands: buildHeightBands(group),
         id: ids.length === 1 ? ids[0] : `composite:${JSON.stringify(ids)}`,
         polygon: { outer: polygons[0][0], holes: polygons[0].slice(1) },
         properties: {
@@ -71,6 +72,31 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
       return group;
     }
   });
+}
+
+function buildHeightBands(group: BuildingSource[]): BuildingHeightBand[] | undefined {
+  const parts = group.flatMap((source) => source.heightBands ?? [{
+    minimumHeightMeters: planBuilding(source).minimumHeightMeters,
+    heightMeters: planBuilding(source).heightMeters,
+    footprints: [source.polygon],
+  }]);
+  const heights = [...new Set(parts.flatMap((part) => [part.minimumHeightMeters, part.heightMeters]))].sort((a, b) => a - b);
+  const sections = heights.slice(0, -1).map((bottom, index) => {
+    const active = parts.filter((part) => part.minimumHeightMeters <= bottom && part.heightMeters >= heights[index + 1])
+      .flatMap((part) => part.footprints.map(rings));
+    return active.length ? polygonClipping.union(active[0], ...active.slice(1)) : [];
+  });
+  const polygons = (section: LonLat[][][]): BuildingPolygon[] => section.map(([outer, ...holes]) => ({ outer, holes }));
+  // A nested shorter part may introduce a height without changing the shell.
+  // Keep the existing detailed renderer (including interiors) for uniform volumes.
+  if (sections.every((section) => JSON.stringify(section) === JSON.stringify(sections[0]))) return undefined;
+  return sections.flatMap((section, index): BuildingHeightBand[] => section.length ? [{
+    minimumHeightMeters: heights[index],
+    heightMeters: heights[index + 1],
+    footprints: polygons(section),
+    roofs: polygons(polygonClipping.difference(section, sections[index + 1] ?? [])),
+    soffits: polygons(polygonClipping.difference(section, sections[index - 1] ?? [])),
+  }] : []);
 }
 
 function rings(polygon: BuildingPolygon): LonLat[][] {

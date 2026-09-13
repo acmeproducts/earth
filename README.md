@@ -258,16 +258,16 @@ trees and ground cover in place as tiles stream, without a page reload.
 `?clock=automatic` or `?clock=manual` can override the
 persisted mode; supplying `?date` or `?time` selects manual mode by default.
 
-The world uses an application-owned Web Mercator grid at fixed level 16. A tile
+The world uses an application-owned Web Mercator grid at fixed level 17. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
 the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
 coordinates are source implementation details used only to populate the app
 tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
-with latitude (a tile is about 307 m wide around Oslo). Use `?seed=123`
+with latitude (a tile is about 154 m wide around Oslo). Use `?seed=123`
 to select another deterministic world seed.
 
-Terrain streams across a moving 17 by 17 tile window around the camera. The
-inner 3 by 3 tiles include native terrain, map features, and full vegetation;
+Terrain streams across a moving 33 by 33 tile window around the camera. The
+nearest 2 by 2 tiles include native terrain, map features, and full vegetation;
 the outer rings
 use coarse terrain and tree impostors so the visible horizon reaches farther
 without paying the full detail cost. Overlapping elevation, WorldCover, and
@@ -282,7 +282,7 @@ release the pointer and open the settings menu. It can resize both streaming
 windows, adjust cloud density at runtime, set the date and time of day, and load a new
 world location from latitude and longitude. Grass density remains fixed at 1.
 Numeric scene settings are remembered in local storage. The same settings can
-be initialized with `?detail-size=3`, `?terrain-size=17`, and
+be initialized with `?detail-size=2`, `?terrain-size=33`, and
 `?cloud-density=0.5`; explicit URL values override remembered values for that
 page load.
 

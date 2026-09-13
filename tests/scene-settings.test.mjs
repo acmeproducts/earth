@@ -21,8 +21,8 @@ test("loads defaults and normalizes linked terrain sizes", () => {
   const store = new SceneSettingsStore(new URLSearchParams());
   assert.deepEqual(store.value, {
     modelRangeMeters: 50,
-    detailTilesAcross: 3,
-    terrainTilesAcross: 17,
+    detailTilesAcross: 2,
+    terrainTilesAcross: 33,
     cloudDensity: 0.65,
     windSpeedMetersPerSecond: 14,
     showRoofs: true,
@@ -30,7 +30,7 @@ test("loads defaults and normalizes linked terrain sizes", () => {
 
   const reducedTerrain = updateSceneSetting(store.value, "terrainTilesAcross", 3);
   assert.equal(reducedTerrain.terrainTilesAcross, 3);
-  assert.equal(reducedTerrain.detailTilesAcross, 3);
+  assert.equal(reducedTerrain.detailTilesAcross, 2);
 });
 
 test("persists normalized values and restores them", () => {
@@ -63,13 +63,24 @@ test("URL parameters override remembered settings", () => {
 
   assert.equal(store.value.modelRangeMeters, 75);
   assert.equal(store.value.cloudDensity, 0.8);
-  assert.equal(store.value.terrainTilesAcross, 9);
+  assert.equal(store.value.terrainTilesAcross, 17);
   assert.equal(store.value.windSpeedMetersPerSecond, 22);
+});
+
+test("migrates the old far range once and lets explicit tile counts override it", () => {
+  const storage = new MemoryStorage();
+  storage.value = JSON.stringify({ terrainTilesAcross: 17, detailTilesAcross: 2 });
+  const store = new SceneSettingsStore(new URLSearchParams(), storage);
+  assert.equal(store.value.terrainTilesAcross, 33);
+  assert.equal(store.value.detailTilesAcross, 2);
+  store.update("cloudDensity", 0.5);
+  assert.equal(new SceneSettingsStore(new URLSearchParams(), storage).value.terrainTilesAcross, 33);
+  assert.equal(new SceneSettingsStore(new URLSearchParams("terrain-size=9"), storage).value.terrainTilesAcross, 9);
 });
 
 test("ignores malformed stored data", () => {
   const storage = new MemoryStorage();
   storage.value = "not json";
   const store = new SceneSettingsStore(new URLSearchParams(), storage);
-  assert.equal(store.value.detailTilesAcross, 3);
+  assert.equal(store.value.detailTilesAcross, 2);
 });

@@ -168,7 +168,7 @@ const DETAIL_COOLDOWN_MS = 10_000;
 /** One departing row/column may cool down; older off-window tiles are evicted. */
 const RETAINED_TILE_EDGE_SLACK = 2;
 /** Terrain resolution for tiles beyond the detail rings. */
-const FAR_TILE_SUBDIVISIONS = 32;
+const FAR_TILE_SUBDIVISIONS = 16;
 /**
  * Native tiles double the provider raster so procedural relief has vertices to
  * live on: one vertex roughly every 1.2 to 2.4 m instead of 2.5 to 5 m.

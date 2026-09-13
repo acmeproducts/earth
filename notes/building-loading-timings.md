@@ -10,11 +10,32 @@ at most 4,096 vertices (a single indivisible source mesh can exceed that target)
 The final interior stays in those batches; there is no whole-building merge.
 Exterior layout plans are reused instead of being calculated again on approach.
 
-Geometry builds under a disabled root. Once construction finishes, batches are
-enabled incrementally so first draws are spread out too. Windows reveal the
-interior only after activation finishes. Moving away or disposing/disabling the
-tile cancels work and releases staged meshes and materials. Returning can retry
-a cancelled build. Failed builds log an error and are not repeatedly retried.
+Geometry builds under a disabled root. Child enable flags are prepared
+incrementally but no interior batch is visible until the completion callback
+reveals the root and removes its entry blocker together. Windows reveal the
+interior only once that happens. Moving away or disposing/disabling the tile
+cancels work and releases staged meshes and materials. Returning can retry a
+cancelled build. Failed builds log an error and remain closed, without repeated retries.
+
+The scene queue now re-evaluates distance to each building's actual footprint
+every frame, across all nearby candidates in every chunk. When another building
+is closer it pauses the current generator and resumes the nearer one. Partial
+geometry and per-building timing statistics survive these focus changes. A
+0.5 m hysteresis avoids switching repeatedly between nearly equal distances;
+initial selection always chooses the nearest candidate. Resume logging is
+throttled, and progress summaries include current distance and focus-change count.
+
+Each unfinished building has an invisible, collidable footprint volume that
+seals entrances and other openings. A camera guard also keeps fly-mode and saved
+positions outside that volume before drawing the frame. The guard respects tile
+transforms and building height. Completion opens access; unloading restores the
+blocker. This atomic reveal intentionally replaces the earlier partial reveal,
+so first-draw GPU work is no longer staggered visibly before completion.
+
+Focus/access follow-up validation: all 57 targeted headless tests passed, including
+priority/preemption, saved progress, hysteresis, hidden staging, walker collision,
+fly-mode correction in the same rendered view, atomic opening, and relocking on
+unload. TypeScript and `git diff --check` passed.
 
 Filter for `[Building stream]`: one start message, progress at most once every
 two seconds for the active build, and a completion/cancellation/failure message.

@@ -77,6 +77,8 @@ export interface PendingBuildingInterior {
   id: string;
   center: Vector3;
   radiusMeters: number;
+  distanceTo: (position: Vector3) => number;
+  createGate: (parent: TransformNode) => Mesh;
   build: (root: TransformNode) => Generator<string, void, void>;
 }
 

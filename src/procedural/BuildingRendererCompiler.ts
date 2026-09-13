@@ -17,6 +17,7 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
+import { compositeBuildingGeometry } from "./CompositeBuildingGeometry";
 import { BuildingTrace } from "../BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
 import { compactMeshBuffers } from "../CompactMeshBuffers";
@@ -107,6 +108,10 @@ export class ProceduralBuildingRenderer {
 
       trace.stage("appearance/roof planning");
       const appearance = buildingAppearance(plan);
+      if (plan.heightBands?.length) {
+        captureUnplannedBuilding(plan, prepared, options, "Stepped buildings use the exterior shell renderer.");
+        return createCompositeBuilding(scene, plan, prepared, terrain, options, appearance);
+      }
       // Courtyard footprints cannot use the enterable shell: that path builds
       // floors and roofs from the outer ring alone. Keep these buildings as one
       // faithful mass so a real building inside a courtyard does not appear to
@@ -235,6 +240,11 @@ export class ProceduralBuildingRenderer {
             interiorCenter.z,
           ),
           radiusMeters: interiorRadiusMeters,
+          distanceTo: (position: Vector3) => pointInRing(position, prepared.outline) ? 0 :
+            Math.sqrt(nearestFootprintPoint(position, prepared.outline).distanceSquared) * options.metersPerUnit,
+          createGate: (parent: TransformNode) => createInteriorGate(
+            scene, prepared.outline, prepared.baseElevation, wallTopElevation, options, parent,
+          ),
           build: (root: TransformNode) => buildInteriorChunks(interiorParts, root, options),
         } satisfies PendingBuildingInterior,
       };
@@ -253,6 +263,9 @@ export class ProceduralBuildingRenderer {
       trace.stage("footprint/terrain sampling");
       const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
       if (!prepared) return undefined;
+      if (plan.heightBands?.length) {
+        return createCompositeBuilding(scene, plan, prepared, terrain, options, buildingAppearance(plan));
+      }
       const bottomElevation = plan.minimumHeightMeters > 0
         ? prepared.baseElevation + plan.minimumHeightMeters
         : terrain.minElevation - BUILDING_GROUND_OVERLAP_METERS;
@@ -315,7 +328,7 @@ export class ProceduralBuildingRenderer {
           createBuildingShadowCaster(result, parent, shadowRanges);
         }
         trace.stage("register interior streaming");
-        configureLazyInteriors(result, parent, pendingInteriors, metersPerUnit);
+        configureLazyInteriors(result, parent, pendingInteriors);
       }
       return result;
     }, logTiming);
@@ -349,6 +362,42 @@ function captureUnplannedBuilding(
     facadeOpenings: [],
     fallbackReason,
   });
+}
+
+function createCompositeBuilding(
+  scene: Scene,
+  plan: BuildingPlan,
+  prepared: PreparedBuildingFootprint,
+  terrain: TerrainData,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+): Mesh {
+  const geometry = compositeBuildingGeometry(
+    plan.heightBands!,
+    ([lon, lat]) => lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
+    (height) => (prepared.baseElevation + (height === 0 ? -BUILDING_GROUND_OVERLAP_METERS : height)) / options.metersPerUnit,
+    options.showRoofs !== false,
+  );
+  const mesh = stageBuildingMesh(new Mesh("compositeBuilding", scene));
+  const data = new VertexData();
+  data.positions = geometry.positions;
+  data.normals = geometry.normals;
+  data.indices = geometry.indices;
+  // Match ordinary/prism buildings when tile batches merge mixed building types.
+  // Surface shading uses world coordinates and UV2, but Babylon requires UV1 on every input.
+  data.uvs = new Float32Array((geometry.positions.length / 3) * 2);
+  data.applyToMesh(mesh);
+  colorBuildingMass(mesh, {
+    ...appearance,
+    roofSurface: roofSurfaceFor(plan.roofMaterial, "flat", plan.buildingClass),
+  });
+  mesh.metadata = {
+    buildingId: plan.id, buildingClass: plan.buildingClass,
+    enterable: false, complexFootprint: true,
+    heightBandCount: plan.heightBands!.length,
+    metersPerUnit: options.metersPerUnit, skyReflection: options.skyReflection,
+  };
+  return mesh;
 }
 
 function createCourtyardBuilding(
@@ -391,6 +440,7 @@ function* buildInteriorChunks(
   createParts: (parts: Mesh[]) => Generator<string, void, void>,
   root: TransformNode, options: BuildingRenderOptions,
 ): Generator<string, void, void> {
+  root.setEnabled(false);
   const parts: Mesh[] = [];
   const source = createParts(parts);
   const batch: Mesh[] = [];
@@ -426,9 +476,8 @@ function* buildInteriorChunks(
     }
     flush();
     yield "merge/materials";
-    // Let first draws and shader setup spread across frames as well as CPU construction.
-    root.setEnabled(true);
-    yield "activation";
+    // Prepare child enable flags over multiple frames, behind the disabled root.
+    // Only the completion callback may reveal the entire interior and open its gate.
     for (const mesh of root.getChildMeshes()) {
       mesh.setEnabled(true);
       yield "activation";
@@ -1992,13 +2041,13 @@ function configureLazyInteriors(
   exterior: Mesh,
   parent: TransformNode,
   pendingInteriors: PendingBuildingInterior[],
-  metersPerUnit: number,
 ): void {
   if (pendingInteriors.length === 0) return;
   exterior.metadata ??= {};
   delete exterior.metadata.pendingInterior;
   const loadedInteriors: LoadedBuildingInterior[] = [];
   const builds = new Map<PendingBuildingInterior, () => void>();
+  const gates = new Map(pendingInteriors.map((pending) => [pending, pending.createGate(exterior)]));
   let failedBuilds = 0;
   exterior.metadata.loadedInteriors = loadedInteriors;
   let lastCheckMilliseconds = -Infinity;
@@ -2018,7 +2067,7 @@ function configureLazyInteriors(
     );
   };
   const distance = (candidate: PendingBuildingInterior, localCamera = cameraPosition()): number =>
-    localCamera ? interiorDistanceMeters(candidate.center, candidate.radiusMeters, localCamera, metersPerUnit) : Infinity;
+    localCamera ? candidate.distanceTo(localCamera) : Infinity;
   updateCounts();
   // Residency checks only enqueue work. A single scene queue builds after rendering.
   const observer = scene.onAfterRenderObservable.add(() => {
@@ -2035,6 +2084,7 @@ function configureLazyInteriors(
     for (let index = loadedInteriors.length - 1; index >= 0; index--) {
       const loaded = loadedInteriors[index];
       if (distance(loaded.pending, localCamera) > BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS) {
+        gates.get(loaded.pending)?.setEnabled(true);
         BuildingTrace.run(`building=${loaded.pending.id} interior unload`, () => loaded.mesh.dispose(false, true));
         pendingInteriors.push(loaded.pending);
         loadedInteriors.splice(index, 1);
@@ -2042,27 +2092,26 @@ function configureLazyInteriors(
         loaded.mesh.setEnabled(true);
       }
     }
-    // Closest in this chunk first; the scene queue applies one shared budget.
-    let nearestIndex = -1;
-    let nearestDistance = BUILDING_INTERIOR_LOAD_DISTANCE_METERS;
-    for (let index = 0; index < pendingInteriors.length; index++) {
-      const gap = distance(pendingInteriors[index], localCamera);
-      if (gap <= nearestDistance) { nearestIndex = index; nearestDistance = gap; }
-    }
-    if (nearestIndex >= 0) {
-      const candidate = pendingInteriors.splice(nearestIndex, 1)[0];
+    // Admit every nearby candidate so the scene queue can choose globally and switch focus.
+    for (let index = pendingInteriors.length - 1; index >= 0; index--) {
+      if (distance(pendingInteriors[index], localCamera) > BUILDING_INTERIOR_LOAD_DISTANCE_METERS) continue;
+      const candidate = pendingInteriors.splice(index, 1)[0];
       const root = new Mesh("buildingInteriorRoot", scene);
+      root.metadata = { buildingId: candidate.id, interiorReady: false };
       root.parent = parent;
       root.setEnabled(false);
       const cancel = enqueueInteriorBuild(scene, {
         label: `building=${candidate.id} chunk=${parent.name}/${parent.uniqueId}`,
         steps: candidate.build(root),
+        priority: () => distance(candidate),
         valid: () => !exterior.isDisposed() && exterior.isEnabled() && !root.isDisposed() &&
           distance(candidate) <= BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
         complete: () => {
           builds.delete(candidate);
-          // Activation also yields between batches. Windows open only once all are ready.
+          // Publish atomically after rendering: no partial interiors or premature entry.
           root.setEnabled(true);
+          root.metadata.interiorReady = true;
+          gates.get(candidate)?.setEnabled(false);
           loadedInteriors.push({ center: candidate.center, pending: candidate, mesh: root });
           updateCounts();
         },
@@ -2082,20 +2131,63 @@ function configureLazyInteriors(
     scene.onAfterRenderObservable.remove(observer);
     for (const cancel of [...builds.values()]) cancel();
     for (const loaded of loadedInteriors) loaded.mesh.dispose(false, true);
+    for (const gate of gates.values()) gate.dispose(false, true);
   });
 }
 
-function interiorDistanceMeters(
-  center: Vector3,
-  radiusMeters: number,
-  camera: Vector3,
-  metersPerUnit: number,
-): number {
-  const centerDistanceMeters = Math.hypot(
-    center.x - camera.x,
-    center.z - camera.z,
-  ) * metersPerUnit;
-  return Math.max(0, centerDistanceMeters - radiusMeters);
+function nearestFootprintPoint(position: ScenePoint, outline: readonly ScenePoint[]) {
+  let nearest = { x: outline[0].x, z: outline[0].z, distanceSquared: Infinity, edge: 0 };
+  for (let edge = 0; edge < outline.length; edge++) {
+    const a = outline[edge], b = outline[(edge + 1) % outline.length];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const t = Math.max(0, Math.min(1,
+      ((position.x - a.x) * dx + (position.z - a.z) * dz) / (dx * dx + dz * dz || 1)));
+    const x = a.x + t * dx, z = a.z + t * dz;
+    const distanceSquared = (position.x - x) ** 2 + (position.z - z) ** 2;
+    if (distanceSquared < nearest.distanceSquared) nearest = { x, z, distanceSquared, edge };
+  }
+  return nearest;
+}
+
+/** Seal the footprint until ready, including door/window openings and fly-mode entry. */
+function createInteriorGate(
+  scene: Scene, outline: ScenePoint[], bottom: number, top: number,
+  options: BuildingRenderOptions, parent: TransformNode,
+): Mesh {
+  const gate = createBuildingPrism(scene, outline, top, bottom, options);
+  gate.name = "buildingInteriorGate";
+  gate.metadata = { buildingInteriorGate: true };
+  gate.parent = parent;
+  gate.isVisible = false;
+  gate.isPickable = false;
+  gate.checkCollisions = true;
+  gate.setEnabled(true);
+  // Fly mode intentionally skips Babylon collisions. Also recover a saved/spawned
+  // camera inside an unfinished building before that camera renders its view.
+  const observer = scene.onBeforeCameraRenderObservable.add((camera) => {
+    if (camera !== scene.activeCamera || !gate.isEnabled()) return;
+    const world = parent.computeWorldMatrix(true);
+    const local = Vector3.TransformCoordinates(camera.globalPosition, world.clone().invert());
+    if (local.y < bottom / options.metersPerUnit || local.y > top / options.metersPerUnit ||
+        !pointInRing(local, outline)) return;
+    const nearest = nearestFootprintPoint(local, outline);
+    const a = outline[nearest.edge], b = outline[(nearest.edge + 1) % outline.length];
+    const winding = signedArea(outline) >= 0 ? 1 : -1;
+    const direction = nearest.distanceSquared > 1e-10
+      ? new Vector3(nearest.x - local.x, 0, nearest.z - local.z).normalize()
+      : new Vector3((b.z - a.z) * winding, 0, (a.x - b.x) * winding).normalize();
+    const margin = 0.65 / options.metersPerUnit;
+    local.x = nearest.x + direction.x * margin;
+    local.z = nearest.z + direction.z * margin;
+    const corrected = Vector3.TransformCoordinates(local, world);
+    camera.position.copyFrom(camera.parent
+      ? Vector3.TransformCoordinates(corrected, camera.parent.getWorldMatrix().clone().invert()) : corrected);
+    camera.getViewMatrix(true);
+    // Babylon set the scene view before this callback; update it for this same draw.
+    scene.updateTransformMatrix(true);
+  });
+  gate.onDisposeObservable.addOnce(() => scene.onBeforeCameraRenderObservable.remove(observer));
+  return gate;
 }
 
 function createRoofTrim(

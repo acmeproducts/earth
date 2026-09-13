@@ -19,10 +19,10 @@ const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.met
 const gameTime = readFileSync(new URL("../src/GameTime.ts", import.meta.url), "utf8");
 const clockSettings = readFileSync(new URL("../src/ClockSettings.ts", import.meta.url), "utf8");
 
-test("defaults to three by three and allows exact even-sized detail windows", () => {
-  assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 3/);
+test("defaults to two by two and allows exact even-sized detail windows", () => {
+  assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 2/);
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?step: 1/);
-  assert.match(settings, /key: "terrainTilesAcross"[\s\S]*?defaultValue: 17/);
+  assert.match(settings, /key: "terrainTilesAcross"[\s\S]*?defaultValue: 33/);
   assert.match(game, /worldTileWindowOffsetsAtLocation\(/);
   assert.match(game, /dx >= detailWindow\.minimumX[\s\S]*?dy <= detailWindow\.maximumY/);
 });
@@ -151,7 +151,7 @@ test("random location UI reloads a clean scene without number-key shortcuts", ()
 
 test("persists normalized controls through one scene settings store", () => {
   assert.match(settings, /earth\.scene-settings\.v1/);
-  assert.match(settings, /storage\?\.setItem\(STORAGE_KEY, JSON\.stringify\(this\.current\)\)/);
+  assert.match(settings, /storage\?\.setItem\(STORAGE_KEY, JSON\.stringify\(\{[\s\S]*?\.\.\.this\.current,[\s\S]*?worldGridLevel: WORLD_GRID_LEVEL/);
   assert.match(game, /private changeSceneSetting\(key: SceneSettingKey, value: number\)/);
 });
 

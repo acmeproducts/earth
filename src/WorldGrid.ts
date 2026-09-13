@@ -2,7 +2,7 @@ import { wrap } from "./MathUtils";
 import { deriveSeed } from "./Random";
 
 /** The application-owned detailed grid. Provider zooms must not define this value. */
-export const WORLD_GRID_LEVEL = 16;
+export const WORLD_GRID_LEVEL = 17;
 export const DEFAULT_WORLD_SEED = 0x45415254;
 export const WEB_MERCATOR_MAX_LATITUDE = 85.0511287798066;
 export const WEB_MERCATOR_WORLD_WIDTH_METERS = 2 * Math.PI * 6_378_137;

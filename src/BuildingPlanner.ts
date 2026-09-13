@@ -7,7 +7,17 @@ export interface BuildingPolygon {
   holes: LonLat[][];
 }
 
+/** Occupied cross-section between elevations relative to the building base. */
+export interface BuildingHeightBand {
+  minimumHeightMeters: number;
+  heightMeters: number;
+  footprints: BuildingPolygon[];
+  roofs: BuildingPolygon[];
+  soffits: BuildingPolygon[];
+}
+
 export interface BuildingSource {
+  heightBands?: BuildingHeightBand[];
   /** Stable across application-tile rebuilds and independent of load order. */
   id: string;
   polygon: BuildingPolygon;
@@ -47,6 +57,7 @@ export type BuildingRoofShape =
  * may omit detail, but they must not independently reinterpret the OSM source.
  */
 export interface BuildingPlan {
+  heightBands?: BuildingHeightBand[];
   id: string;
   footprint: BuildingPolygon;
   buildingClass: BuildingClass;
@@ -80,6 +91,7 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
   );
 
   return {
+    heightBands: source.heightBands,
     id: source.id,
     footprint: source.polygon,
     buildingClass: mappedClass === "generic" && interiorUse

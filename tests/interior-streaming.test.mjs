@@ -12,6 +12,52 @@ function tick(scene) {
   scene.onAfterRenderObservable.notifyObservers(scene);
 }
 
+test("nearest building takes priority and moving the player pauses and resumes existing work", (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const logs = [];
+  t.mock.method(console, "log", (message) => logs.push(message));
+  const scene = fakeScene();
+  const distances = [10, 2], work = [0, 0], created = [0, 0];
+  const complete = [];
+  for (let id = 0; id < 2; id++) enqueueInteriorBuild(scene, {
+    label: `priority-${id}`, priority: () => distances[id], valid: () => true,
+    steps: (function* () { created[id]++; for (let i = 0; i < 30; i++) { work[id]++; yield "geometry"; } })(),
+    complete: () => complete.push(id), cancel: () => assert.fail("Focus changes must not discard work"),
+  });
+  tick(scene);
+  assert.deepEqual(work, [0, 8], "nearest beats enqueue order");
+  distances[0] = 1; distances[1] = 10;
+  tick(scene);
+  assert.deepEqual(work, [8, 8], "switch without advancing the previous building");
+  distances[0] = 10; distances[1] = 1;
+  tick(scene);
+  assert.deepEqual(work, [8, 16], "resume from saved progress");
+  for (let frame = 0; frame < 10; frame++) tick(scene);
+  assert.deepEqual(work, [30, 30]);
+  assert.deepEqual(created, [1, 1]);
+  assert.deepEqual(complete, [1, 0]);
+  assert.equal(logs.filter((line) => line.includes(" resumed ")).length, 1, "focus logs are throttled");
+});
+
+test("tiny distance changes do not thrash focus between nearly tied buildings", (t) => {
+  t.mock.method(performance, "now", () => 0);
+  t.mock.method(console, "log", () => {});
+  const scene = fakeScene(), work = [0, 0], distances = [2, 4];
+  for (let id = 0; id < 2; id++) enqueueInteriorBuild(scene, {
+    label: `${id}`, priority: () => distances[id], valid: () => true,
+    steps: (function* () { while (true) { work[id]++; yield "geometry"; } })(),
+    complete: () => {}, cancel: () => {},
+  });
+  tick(scene);
+  distances[1] = 1.8;
+  tick(scene);
+  assert.deepEqual(work, [16, 0]);
+  distances[1] = 1;
+  tick(scene);
+  assert.deepEqual(work, [16, 8]);
+  scene.onDisposeObservable.notifyObservers(scene);
+});
+
 test("interior queue shares one budget, limits steps, and never advances twice in one frame", (t) => {
   t.mock.method(performance, "now", () => 0);
   t.mock.method(console, "log", () => {});

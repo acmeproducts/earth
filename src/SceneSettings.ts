@@ -1,3 +1,5 @@
+import { WORLD_GRID_LEVEL } from "./WorldGrid";
+
 export interface SceneSettings {
   modelRangeMeters: number;
   detailTilesAcross: number;
@@ -41,7 +43,7 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     minimum: 1,
     maximum: 9,
     step: 1,
-    defaultValue: 3,
+    defaultValue: 2,
     format: formatTileArea,
   },
   {
@@ -50,9 +52,9 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     ariaLabel: "Far terrain size in tiles",
     queryParameter: "terrain-size",
     minimum: 3,
-    maximum: 25,
+    maximum: 49,
     step: 2,
-    defaultValue: 17,
+    defaultValue: 33,
     format: formatTileArea,
   },
   {
@@ -117,7 +119,10 @@ export class SceneSettingsStore {
 
   private persist(): void {
     try {
-      this.storage?.setItem(STORAGE_KEY, JSON.stringify(this.current));
+      this.storage?.setItem(STORAGE_KEY, JSON.stringify({
+        ...this.current,
+        worldGridLevel: WORLD_GRID_LEVEL,
+      }));
     } catch {
       // Storage may be unavailable in private or embedded browsing contexts.
     }
@@ -157,6 +162,11 @@ function loadSceneSettings(
     const stored = storage?.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
+      // Older settings used level 16. Preserve their far-terrain radius in
+      // meters while retaining the selected number of fully detailed tiles.
+      if (parsed.worldGridLevel === undefined && Number.isFinite(parsed.terrainTilesAcross)) {
+        parsed.terrainTilesAcross = 2 * parsed.terrainTilesAcross - 1;
+      }
       settings = normalizeSettings({ ...settings, ...parsed });
       settings.showRoofs = parsed.showRoofs !== false;
     }
