@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
-const game = source("Game.ts");
+const game = source("app/Game.ts");
 
 test("saplings reuse tree species assets at a smaller rendered height", () => {
-  const saplings = source("SaplingField.ts");
-  const trees = source("TreeField.ts");
+  const saplings = source("vegetation/SaplingField.ts");
+  const trees = source("vegetation/TreeField.ts");
 
   assert.match(saplings, /createTreeField\(scene, terrain/);
   assert.match(saplings, /const SAPLING_HEIGHT_METERS = 3\.5/);
@@ -17,8 +17,8 @@ test("saplings reuse tree species assets at a smaller rendered height", () => {
 });
 
 test("fern undergrowth shares one directional source between its model and impostor", () => {
-  const capture = source("FernImpostor.ts");
-  const field = source("FernField.ts");
+  const capture = source("vegetation/FernImpostor.ts");
+  const field = source("vegetation/FernField.ts");
 
   assert.match(capture, /faces: IMPOSTOR_CUBE_FACES/);
   assert.match(capture, /rotationallySymmetric: false/);
@@ -30,7 +30,7 @@ test("fern undergrowth shares one directional source between its model and impos
 });
 
 test("undergrowth is restricted to plausible WorldCover classes", () => {
-  const field = source("FernField.ts");
+  const field = source("vegetation/FernField.ts");
 
   for (const cover of ["TreeCover", "Shrubland", "Wetland", "Mangrove"]) {
     assert.match(field, new RegExp(`LandCoverClass\\.${cover}`));
@@ -48,8 +48,8 @@ test("undergrowth is restricted to plausible WorldCover classes", () => {
 });
 
 test("fern patches use the supplied foliage image on curved fronds", () => {
-  const capture = source("FernImpostor.ts");
-  const field = source("FernField.ts");
+  const capture = source("vegetation/FernImpostor.ts");
+  const field = source("vegetation/FernField.ts");
 
   assert.match(capture, /assets\/vegetation\/fern\/foliage\.png/);
   assert.match(capture, /data\.uvs = uvs/);
@@ -75,9 +75,9 @@ test("saplings and ferns belong to the detailed tile lifecycle only", () => {
 });
 
 test("mature detailed forests include sparse species-matched fallen logs", () => {
-  const trees = source("TreeField.ts");
+  const trees = source("vegetation/TreeField.ts");
   const proceduralTrees = source("procedural/ProceduralTree.ts");
-  const treeImpostors = source("TreeImpostor.ts");
+  const treeImpostors = source("vegetation/TreeImpostor.ts");
 
   assert.match(proceduralTrees, /interface ProceduralTreeParts \{[\s\S]*?log: Mesh;[\s\S]*?branches: Mesh;/);
   assert.match(treeImpostors, /return \[parts\.log, parts\.branches\]/);

@@ -4,7 +4,7 @@ import {
   SUBMERGED_TERRAIN_CEILING_METERS,
   sinkSubmergedElevation,
   sinkSubmergedTerrain,
-} from "../src/Geo.ts";
+} from "../src/world/Geo.ts";
 
 test("sinks every zero and negative terrain sample below the water", () => {
   const terrain = {

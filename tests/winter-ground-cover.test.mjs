@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const { hasWinterGroundCover } = await import("../src/TreeSeason.ts");
+const { hasWinterGroundCover } = await import("../src/vegetation/TreeSeason.ts");
 
 test("winter ground cover follows the hemisphere", () => {
   assert.equal(hasWinterGroundCover(new Date(2026, 0, 15), 60), true);
@@ -18,7 +18,7 @@ test("tropical and invalid locations do not receive seasonal snow", () => {
 });
 
 test("winter ground cover suppresses seasonal low vegetation and rock patches", async () => {
-  const game = await readFile(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = await readFile(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 
   const seasonalFields = [
     ["createGrassField", "grass"],

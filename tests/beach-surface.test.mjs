@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { readFileSync } from "node:fs";
-import { beachSurfaceColor } from "../src/BeachSurface.ts";
+import { beachSurfaceColor } from "../src/terrain/BeachSurface.ts";
 
 const grass = [0.58, 0.76, 0.36];
 
@@ -41,7 +41,7 @@ test("rendered terrain applies beach tint after smoothing grass colors", async (
     },
   });
   const { NullEngine, Scene, VertexBuffer } = await import("@babylonjs/core");
-  const { createTerrainMesh } = await import("../src/TerrainMesh.ts");
+  const { createTerrainMesh } = await import("../src/terrain/TerrainMesh.ts");
   const engine = new NullEngine();
   const scene = new Scene(engine);
   try {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipShorelineToWater } from '../src/ShorelineWaterBoundary.ts';
-import { signedArea } from '../src/PlanarGeometry.ts';
+import { clipShorelineToWater } from '../src/water/ShorelineWaterBoundary.ts';
+import { signedArea } from '../src/core/PlanarGeometry.ts';
 const ring = (x,z,w,d) => [{x,z},{x:x+w,z},{x:x+w,z:z+d},{x,z:z+d}];
 const geometry = {positions:[-30,5,-30,30,5,-30,30,5,30,-30,5,30],indices:[0,2,1,0,3,2],depths:[-0.3,0.3,0.3,-0.3]};
 const area = g => {let sum=0;for(let i=0;i<g.indices.length;i+=3) sum+=Math.abs(signedArea(g.indices.slice(i,i+3).map(v=>({x:g.positions[v*3],z:g.positions[v*3+2]}))));return sum;};

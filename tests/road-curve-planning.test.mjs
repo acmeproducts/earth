@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { planRoadsAndBuildings, roadGradeAmount } =
-  await import("../src/RoadAndBuildingPlanner.ts");
+  await import("../src/roads/RoadAndBuildingPlanner.ts");
 
 const secondary = {
   roadClass: "secondary",

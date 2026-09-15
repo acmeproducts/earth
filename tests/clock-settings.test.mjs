@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ClockSettingsStore } from "../src/ClockSettings.ts";
+import { ClockSettingsStore } from "../src/app/ClockSettings.ts";
 
-const source = readFileSync(new URL("../src/ClockSettings.ts", import.meta.url), "utf8");
-const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url), "utf8");
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/app/ClockSettings.ts", import.meta.url), "utf8");
+const controls = readFileSync(new URL("../src/app/SceneControls.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 
 test("defaults use today's real date and manual choices survive switching modes", (t) => {
   t.mock.method(Date, "now", () => new Date(2026, 8, 6, 14, 30).getTime());

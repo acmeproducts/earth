@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inferBuildingUse } from "../src/BuildingUseInference.ts";
-import { planBuilding } from "../src/BuildingPlanner.ts";
+import { inferBuildingUse } from "../src/buildings/BuildingUseInference.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
 
 const rectangle = (a, b, c, d) => ({ outer: [[a, b], [c, b], [c, d], [a, d], [a, b]], holes: [] });
 const building = (properties = { class: "yes" }) => ({ id: "test", polygon: rectangle(0, 0, 10, 10), properties });

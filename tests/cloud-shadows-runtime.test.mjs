@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NullEngine, Scene, ShaderMaterial, Vector3 } from "@babylonjs/core";
 
-const { createCloudShadowProjector, bindCloudShadowReceiver, cloudShadowFragmentDeclaration } = await import("../src/CloudShadows.ts");
-const { cloudPlacementsAround } = await import("../src/CloudDistribution.ts");
-const { createTerrainMaterial } = await import("../src/TerrainMaterial.ts");
+const { createCloudShadowProjector, bindCloudShadowReceiver, cloudShadowFragmentDeclaration } = await import("../src/sky/CloudShadows.ts");
+const { cloudPlacementsAround } = await import("../src/sky/CloudDistribution.ts");
+const { createTerrainMaterial } = await import("../src/terrain/TerrainMaterial.ts");
 
 test("nearest cloud footprints bind directly to the terrain receiver", () => {
   const engine = new NullEngine();

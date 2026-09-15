@@ -1,12 +1,12 @@
-import { Game } from './Game';
-import { LoadingActors } from './LoadingActors';
+import { Game } from './app/Game';
+import { LoadingActors } from './app/LoadingActors';
 import {
   createRenderingEngine,
   requestedRenderer,
   RenderingEngineOptions,
-} from './Renderer';
-import { TreeImpostorDemo } from './TreeImpostorDemo';
-import { TreeImpostorValidation } from './TreeImpostorValidation';
+} from './rendering/Renderer';
+import { TreeImpostorDemo } from './demos/TreeImpostorDemo';
+import { TreeImpostorValidation } from './demos/TreeImpostorValidation';
 
 // Wait for DOM to be ready
 window.addEventListener('DOMContentLoaded', () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Color3, NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
 import { planRooftopEquipment, createRooftopEquipment } from "../src/procedural/RooftopEquipment.ts";
-import { distanceToRing, pointInRing } from "../src/PlanarGeometry.ts";
+import { distanceToRing, pointInRing } from "../src/core/PlanarGeometry.ts";
 
 const rectangle = (x, z, width, depth) => [
   { x, z }, { x: x + width, z }, { x: x + width, z: z + depth }, { x, z: z + depth },

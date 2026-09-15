@@ -10,7 +10,7 @@ const hook=registerHooks({resolve(specifier,context,nextResolve){
   if(url.endsWith('.ts'))return {format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8'),{mode:'transform'})};
   return nextLoad(url,context);
 }});
-const { SolarLighting }=await import('../src/SolarLighting.ts');
+const { SolarLighting }=await import('../src/sky/SolarLighting.ts');
 hook.deregister();
 
 test('Oslo clock changes preserve mesh light/sampler layout and extinguish sunlight at night',()=>{

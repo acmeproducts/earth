@@ -6,28 +6,28 @@ import {
   unpackVegetationShadowDepth,
   VEGETATION_SHADOW_RECEIVER_BIAS,
   vegetationShadowVisibilityFromSamples,
-} from "../src/VegetationShadowReceiver.ts";
+} from "../src/vegetation/VegetationShadowReceiver.ts";
 
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const layerFades = readFileSync(new URL("../src/LayerFades.ts", import.meta.url), "utf8");
-const impostors = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const layerFades = readFileSync(new URL("../src/rendering/LayerFades.ts", import.meta.url), "utf8");
+const impostors = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
 const models = readFileSync(
   new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 const receivers = readFileSync(
-  new URL("../src/VegetationShadowReceiver.ts", import.meta.url),
+  new URL("../src/vegetation/VegetationShadowReceiver.ts", import.meta.url),
   "utf8",
 );
 const cloudReceivers = readFileSync(
-  new URL("../src/CloudShadows.ts", import.meta.url),
+  new URL("../src/sky/CloudShadows.ts", import.meta.url),
   "utf8",
 );
 const solarLighting = readFileSync(
-  new URL("../src/SolarLighting.ts", import.meta.url),
+  new URL("../src/sky/SolarLighting.ts", import.meta.url),
   "utf8",
 );
-const grass = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
+const grass = readFileSync(new URL("../src/vegetation/GrassField.ts", import.meta.url), "utf8");
 
 test("keeps low vegetation out of the tree and sapling shadow-caster list", () => {
   assert.match(

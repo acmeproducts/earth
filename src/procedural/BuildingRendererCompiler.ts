@@ -19,31 +19,31 @@ import {
 import earcut from "earcut";
 import polygonClipping from "polygon-clipping";
 import { compositeBuildingGeometry } from "./CompositeBuildingGeometry";
-import { BuildingTrace } from "../BuildingDiagnostics";
+import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
-import { compactMeshBuffers } from "../CompactMeshBuffers";
-import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../Geo";
-import { clamp01 } from "../MathUtils";
-import { averagePoint, clipToBounds, pointInRing, signedArea } from "../PlanarGeometry";
-import { unitFromSeed } from "../Random";
-import type { BuildingPlan, BuildingPolygon, LonLat } from "../BuildingPlanner";
-import { planBuildingLayout, type BuildingLayout } from "../BuildingLayoutPlanner";
-import { planningFrameForPolygon } from "../PlanningFrame.mjs";
+import { compactMeshBuffers } from "../rendering/CompactMeshBuffers";
+import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../world/Geo";
+import { clamp01 } from "../core/MathUtils";
+import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
+import { unitFromSeed } from "../core/Random";
+import type { BuildingPlan, BuildingPolygon, LonLat } from "../buildings/BuildingPlanner";
+import { planBuildingLayout, type BuildingLayout } from "../buildings/BuildingLayoutPlanner";
+import { planningFrameForPolygon } from "../core/PlanningFrame.mjs";
 import {
   maximumMinimumRoomAreaForApartment,
   planApartmentLayout,
   type ApartmentLayout,
-} from "../ApartmentLayoutPlanner";
-import { segmentsIntersect, type Opening2D, type Point2D, type PolygonLayout } from "../FloorPlan";
+} from "../buildings/ApartmentLayoutPlanner";
+import { segmentsIntersect, type Opening2D, type Point2D, type PolygonLayout } from "../buildings/FloorPlan";
 import {
   captureEncounteredBuildingLayout,
   retainCurrentBuildingLayoutCaptures,
-} from "../BuildingLayoutDebugCapture";
-import { buildingWindowStyle, type BuildingWindowStyle } from "../BuildingWindowStyle";
-import { buildingProfile } from "../BuildingProfile";
+} from "../buildings/BuildingLayoutDebugCapture";
+import { buildingWindowStyle, type BuildingWindowStyle } from "../buildings/BuildingWindowStyle";
+import { buildingProfile } from "../buildings/BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
 import { createRooftopEquipment } from "./RooftopEquipment";
-import type { TerrainData } from "../TerrainData";
+import type { TerrainData } from "../terrain/TerrainData";
 import type {
   BuildingAppearance,
   BuildingRenderOptions,

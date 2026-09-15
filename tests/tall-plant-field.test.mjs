@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
 import { Matrix } from "@babylonjs/core";
-import { addProceduralVariantPlacement } from "../src/VegetationPlacement.ts";
+import { addProceduralVariantPlacement } from "../src/vegetation/VegetationPlacement.ts";
 
 const {
   createPlantModel,
   plantArchetypeForVariant,
-} = await import("../src/PlantImpostor.ts");
+} = await import("../src/vegetation/PlantImpostor.ts");
 
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
@@ -61,7 +61,7 @@ test("all plant archetypes have finite geometry and repeatable colors across see
 });
 
 test("tall plants share varied procedural geometry between models and impostors", () => {
-  const capture = source("PlantImpostor.ts");
+  const capture = source("vegetation/PlantImpostor.ts");
 
   assert.match(capture, /const STEM_COUNT = 14/);
   assert.match(capture, /faces: IMPOSTOR_CUBE_FACES/);
@@ -79,7 +79,7 @@ test("tall plants share varied procedural geometry between models and impostors"
 });
 
 test("bloom palettes span more than one hue family", () => {
-  const capture = source("PlantImpostor.ts");
+  const capture = source("vegetation/PlantImpostor.ts");
   const start = capture.indexOf("const BLOOM_PALETTES");
   const blooms = capture.slice(start, capture.indexOf("];", start));
   const brights = [...blooms.matchAll(
@@ -159,7 +159,7 @@ test("generated clumps are deterministic, grounded, and stay inside their captur
 });
 
 test("tall plants form sizeable irregular colonies on plausible land cover", () => {
-  const field = source("TallPlantField.ts");
+  const field = source("vegetation/TallPlantField.ts");
 
   assert.match(field, /const COLONY_SPACING_METERS = 9\.25/);
   assert.match(field, /const COLONY_MIN_COUNT = 7/);
@@ -190,8 +190,8 @@ test("tall plants form sizeable irregular colonies on plausible land cover", () 
 });
 
 test("tall plant colonies use regional variants, wind, exclusions, and model LOD", () => {
-  const field = source("TallPlantField.ts");
-  const game = source("Game.ts");
+  const field = source("vegetation/TallPlantField.ts");
+  const game = source("app/Game.ts");
 
   assert.match(field, /"tallPlants"/);
   assert.match(field, /modelVariantSeed/);

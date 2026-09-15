@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderRoadAndBuildingPlanSvg } from "../src/RoadAndBuildingPlanImage.ts";
-import { planRoadsAndBuildings } from "../src/RoadAndBuildingPlanner.ts";
+import { renderRoadAndBuildingPlanSvg } from "../src/roads/RoadAndBuildingPlanImage.ts";
+import { planRoadsAndBuildings } from "../src/roads/RoadAndBuildingPlanner.ts";
 
 const markedRoad = {
   roadClass: "primary",

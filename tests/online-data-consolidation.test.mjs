@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/world/StreamedTile.ts", import.meta.url), "utf8");
 const elevation = readFileSync(
-  new URL("../src/TerrainElevationSource.ts", import.meta.url),
+  new URL("../src/terrain/TerrainElevationSource.ts", import.meta.url),
   "utf8",
 );
-const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url), "utf8");
+const worldCover = readFileSync(new URL("../src/world/WorldCover.ts", import.meta.url), "utf8");
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
 test("streamed tiles own one provider-backed data bundle", () => {

@@ -4,7 +4,7 @@ import {
   StreamingTrace,
   streamingDiagnosticsSnapshot,
   traceStreamingSynchronous,
-} from "../src/StreamingDiagnostics.ts";
+} from "../src/diagnostics/StreamingDiagnostics.ts";
 
 test("streaming stages retain identity, timestamps and unfinished work", () => {
   const trace = new StreamingTrace("test tile");
@@ -35,6 +35,24 @@ test("synchronous operations preserve return values and failures", () => {
   const snapshot = streamingDiagnosticsSnapshot();
   assert.equal(snapshot.activeStages.length, 0);
   assert.equal(snapshot.stages.find((entry) => entry.label === "throw test").timingKind, "synchronous");
+});
+
+test("stage timing kinds describe the work before the next marker", () => {
+  const trace = new StreamingTrace("mixed terrain");
+  trace.stage("lake levels", "synchronous");
+  assert.equal(streamingDiagnosticsSnapshot().activeStages.find((entry) =>
+    entry.label === "mixed terrain").timingKind, "synchronous");
+  trace.stage("raster with yields");
+  trace.stage("normal computation", "synchronous");
+  trace.finish();
+  const stages = streamingDiagnosticsSnapshot().stages.filter((entry) =>
+    entry.label === "mixed terrain");
+  assert.deepEqual(stages.map(({ stage, timingKind }) => [stage, timingKind]), [
+    ["starting", "wall-clock"],
+    ["lake levels", "synchronous"],
+    ["raster with yields", "wall-clock"],
+    ["normal computation", "synchronous"],
+  ]);
 });
 
 test("history is bounded and remains in completion order after wrapping", () => {

@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { renderRoadAndBuildingPlanSvg } from "../src/RoadAndBuildingPlanImage.ts";
-import { planRoadsAndBuildings } from "../src/RoadAndBuildingPlanner.ts";
+import { renderRoadAndBuildingPlanSvg } from "../src/roads/RoadAndBuildingPlanImage.ts";
+import { planRoadsAndBuildings } from "../src/roads/RoadAndBuildingPlanner.ts";
 
 const paved = {
   roadClass: "primary", widthMeters: 7, shoulderWidthMeters: 1.5,

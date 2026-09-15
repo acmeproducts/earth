@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { createFrameBudgetYielder, waitForNextFrame } = await import("../src/FrameBudget.ts");
+const { createFrameBudgetYielder, waitForNextFrame } = await import("../src/diagnostics/FrameBudget.ts");
 
 function stubDocument(hidden, focused = true) {
   const listeners = new Set();

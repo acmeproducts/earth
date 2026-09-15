@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   horizontalToSceneRotation,
   rotateJ2000Direction,
-} from "../src/CelestialCoordinates.ts";
+} from "../src/sky/CelestialCoordinates.ts";
 
 const require = createRequire(import.meta.url);
 const Astronomy = require("astronomy-engine");

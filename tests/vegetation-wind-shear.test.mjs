@@ -66,19 +66,19 @@ test("the warp anchors to the subject, not to the oversized proxy box", () => {
 });
 
 test("grass and bushes lean by a shear", () => {
-  const wind = source("Wind.ts");
+  const wind = source("vegetation/Wind.ts");
   assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+, tree: [\d.]+ \}/);
   assert.match(wind, /return windShearGradient\(localDirection, bend\) \* \(localPosition\.y - baseY\)/);
   // Nothing about the shear is captured, so it can follow one world direction.
   assert.match(wind, /vec2 windLocalDirection\(vec3 axisX, vec3 axisZ\)/);
-  for (const field of ["GrassField.ts", "BushField.ts"]) {
+  for (const field of ["vegetation/GrassField.ts", "vegetation/BushField.ts"]) {
     assert.match(source(field), /setVegetationWindShear\(/);
     assert.match(source(field), /windShearFraction\("(grass|bush)"\)/);
   }
 });
 
 test("the impostor and the live model lean by the same amount", () => {
-  const impostor = source("TreeField.ts");
+  const impostor = source("vegetation/TreeField.ts");
   const model = source("procedural/ProceduralCaptureMaterial.ts");
   // The impostor warps its lookup; the model moves real vertices. Both are the
   // same gradient times height above the base, so they agree across the LOD.
@@ -95,7 +95,7 @@ test("the impostor and the live model lean by the same amount", () => {
 });
 
 test("shadows remain cached because wind does not affect tree casters", () => {
-  const lighting = source("SolarLighting.ts");
+  const lighting = source("sky/SolarLighting.ts");
   assert.doesNotMatch(lighting, /SHADOW_REFRESH_FRAMES|shadow-refresh|vegetation shadows sway/);
   assert.match(lighting, /RenderTargetTexture\.REFRESHRATE_RENDER_ONCE/);
 });

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const treeSource = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
-const grassFieldSource = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
+const treeSource = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
+const grassFieldSource = readFileSync(new URL("../src/vegetation/GrassField.ts", import.meta.url), "utf8");
 const grassImpostorSource = readFileSync(
-  new URL("../src/GrassImpostor.ts", import.meta.url),
+  new URL("../src/vegetation/GrassImpostor.ts", import.meta.url),
   "utf8",
 );
 
@@ -97,7 +97,7 @@ test("only tall sources pay for the depth proxy", () => {
   assert.match(treeSource, /rootName,\s*\{ depthProxy: true \},/);
   // Low ground cover keeps the cheap flattened plane and its forward pull.
   const renderers = readFileSync(
-    new URL("../src/VegetationFieldRenderers.ts", import.meta.url),
+    new URL("../src/vegetation/VegetationFieldRenderers.ts", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(renderers, /depthProxy/);
@@ -113,6 +113,6 @@ test("stone patches write ground-aligned pixel depth only in the camera pass", (
   assert.match(block, /cameraPosition \+ groundRay \* groundHit/);
   assert.match(block, /gl_FragDepthEXT = 0\.5 \+ 0\.5 \* groundClip\.z \/ groundClip\.w;/);
   assert.match(treeSource, /cross\(finalWorld\[2\]\.xyz, finalWorld\[0\]\.xyz\)/);
-  const renderers = readFileSync(new URL("../src/VegetationFieldRenderers.ts", import.meta.url), "utf8");
+  const renderers = readFileSync(new URL("../src/vegetation/VegetationFieldRenderers.ts", import.meta.url), "utf8");
   assert.match(renderers, /options\.impostorName,\s*options\.depth,/);
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeOverlappingBuildings } from "../src/CompositeBuildings.ts";
-import { planBuilding } from "../src/BuildingPlanner.ts";
+import { mergeOverlappingBuildings } from "../src/buildings/CompositeBuildings.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
 import { compositeBuildingGeometry } from "../src/procedural/CompositeBuildingGeometry.ts";
 
 const rect = (x, z, width, depth) => ({ outer: [[x,z],[x+width,z],[x+width,z+depth],[x,z+depth],[x,z]], holes: [] });
@@ -126,7 +126,7 @@ test("band geometry scales consistently and merging an existing composite retain
 test("detailed and far renderers preserve stepped roofs while only detailed facades are enterable", async () => {
   const { NullEngine, Scene, VertexBuffer } = await import("@babylonjs/core");
   const { ProceduralBuildingRenderer } = await import("../src/procedural/ProceduralBuildingRenderer.ts");
-  const { lonLatToScene } = await import("../src/Geo.ts");
+  const { lonLatToScene } = await import("../src/world/Geo.ts");
   const engine = new NullEngine();
   const scene = new Scene(engine);
   const plan = merged([part("base",rect(0,0,10,10),0,10),part("tower",rect(3,3,4,4),0,30)]);

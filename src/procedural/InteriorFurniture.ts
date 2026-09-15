@@ -1,9 +1,9 @@
 import { Mesh, Scene, VertexData } from "@babylonjs/core";
-import type { ApartmentLayout } from "../ApartmentLayoutPlanner";
-import type { BuildingInteriorUse } from "../BuildingPlanner";
-import { segmentsIntersect, type Point2D } from "../FloorPlan";
+import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
+import type { BuildingInteriorUse } from "../buildings/BuildingPlanner";
+import { segmentsIntersect, type Point2D } from "../buildings/FloorPlan";
 import { setBuildingSurface } from "./BuildingMaterial";
-import { createSeededRandom, hashString } from "../Random";
+import { createSeededRandom, hashString } from "../core/Random";
 
 type FurnitureKind = "toilet" | "sink" | "stove" | "counter" | "fridge" | "dining" | "sofa" | "bookcase" | "painting" | "desk" | "meeting" | "display" | "checkout" | "plant"
   | "bed" | "reception" | "student-desk" | "whiteboard" | "exam-bed" | "medical-cabinet" | "bench" | "rack" | "pallet" | "workbench" | "parking-bay";

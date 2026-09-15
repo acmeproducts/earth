@@ -1,10 +1,10 @@
-import { SimplexNoise2D } from "../SimplexNoise";
+import { SimplexNoise2D } from "../core/SimplexNoise";
 import {
   DEFAULT_WORLD_SEED,
   layerSeed,
   WORLD_GRID_LEVEL,
   type WorldTileId,
-} from "../WorldGrid";
+} from "../world/WorldGrid";
 
 export const PROCEDURAL_ACTOR_FAMILIES = [
   "trees",

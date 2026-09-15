@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const barriers = readFileSync(
-  new URL("../src/OpenStreetMapBarriers.ts", import.meta.url),
+  new URL("../src/world/OpenStreetMapBarriers.ts", import.meta.url),
   "utf8",
 );
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
-const streetLamps = readFileSync(new URL("../src/StreetLamps.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/world/StreamedTile.ts", import.meta.url), "utf8");
+const streetLamps = readFileSync(new URL("../src/roads/StreetLamps.ts", import.meta.url), "utf8");
 const index = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 
 test("does not contact Overpass while streaming map detail", () => {

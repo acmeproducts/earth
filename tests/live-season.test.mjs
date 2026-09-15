@@ -20,7 +20,7 @@ const hook = registerHooks({
   },
 });
 const { NullEngine, Scene, Mesh, VertexBuffer } = await import("@babylonjs/core");
-const { applyDefaultTerrainMaterial, setTerrainSnowCovered } = await import("../src/TerrainMesh.ts");
+const { applyDefaultTerrainMaterial, setTerrainSnowCovered } = await import("../src/terrain/TerrainMesh.ts");
 hook.deregister();
 
 test("live seasons switch existing ground summer to winter and back without rebuilding", () => {

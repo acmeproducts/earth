@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ResourceCache } from "../src/ResourceCache.ts";
+import { ResourceCache } from "../src/core/ResourceCache.ts";
 
 test("travel through thousands of resources stays within the byte budget", async () => {
   const cache = new ResourceCache(32, (value) => value.byteLength);

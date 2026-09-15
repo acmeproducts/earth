@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createShorelineGeometry } from '../src/ShorelineGeometry.ts';
+import { createShorelineGeometry } from '../src/water/ShorelineGeometry.ts';
 
 test('deep ocean and inland terrain produce no shoreline geometry', async () => {
   for (const height of [-10, 10]) {

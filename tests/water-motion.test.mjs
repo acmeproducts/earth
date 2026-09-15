@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { maximumWaterLift, sampleWaterMotion, WATER_PROFILES } from '../src/WaterProfile.ts';
+import { maximumWaterLift, sampleWaterMotion, WATER_PROFILES } from '../src/water/WaterProfile.ts';
 
 test('water rises at the crest and recedes below its mean level afterwards', () => {
   const profile = WATER_PROFILES.ocean;

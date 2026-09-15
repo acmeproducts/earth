@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { planApartmentLayout } from "../src/ApartmentLayoutPlanner.ts";
-import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
-import { renderFloorPlanSvg } from "../src/FloorPlan.ts";
+import { planApartmentLayout } from "../src/buildings/ApartmentLayoutPlanner.ts";
+import { planBuildingLayout } from "../src/buildings/BuildingLayoutPlanner.ts";
+import { renderFloorPlanSvg } from "../src/buildings/FloorPlan.ts";
 
 const outputDirectory = path.resolve(process.argv[2] ?? "data/layout-examples");
 await mkdir(outputDirectory, { recursive: true });

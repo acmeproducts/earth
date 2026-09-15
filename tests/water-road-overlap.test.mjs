@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWaterRoadOverlapFilter } from "../src/WaterRoadOverlap.ts";
-import { planRoad } from "../src/RoadPlanner.ts";
+import { createWaterRoadOverlapFilter } from "../src/water/WaterRoadOverlap.ts";
+import { planRoad } from "../src/roads/RoadPlanner.ts";
 
 const box = (x, z, width, depth) => ({ outline: [
   { x, z }, { x: x + width, z }, { x: x + width, z: z + depth }, { x, z: z + depth },

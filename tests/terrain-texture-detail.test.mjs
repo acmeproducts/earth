@@ -7,7 +7,7 @@ const {
   TERRAIN_ALBEDO_LAYER,
   TERRAIN_DETAIL_LAYER,
   TERRAIN_NORMAL_LAYER,
-} = await import("../src/TerrainTextureData.ts");
+} = await import("../src/terrain/TerrainTextureData.ts");
 
 const LAYERS = [TERRAIN_ALBEDO_LAYER, TERRAIN_NORMAL_LAYER, TERRAIN_DETAIL_LAYER];
 

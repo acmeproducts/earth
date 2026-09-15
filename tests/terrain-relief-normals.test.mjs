@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NullEngine, Scene, Mesh } from '@babylonjs/core';
-import { terrainReliefNormalPixels, attachTerrainReliefNormals } from '../src/TerrainReliefNormals.ts';
+import { terrainReliefNormalPixels, attachTerrainReliefNormals } from '../src/terrain/TerrainReliefNormals.ts';
 
 const raster = (fn) => ({ width: 5, height: 5, groundWidthMeters: 4, groundHeightMeters: 4,
   elevations: Float32Array.from({length: 25}, (_, i) => fn(i % 5, Math.floor(i / 5))) });

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const surface = readFileSync(new URL("../src/TerrainLakeSurface.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const surface = readFileSync(new URL("../src/terrain/TerrainLakeSurface.ts", import.meta.url), "utf8");
 
 test("builds lake surfaces with terrain so coarse tiles render them", () => {
   const terrainBuild = game.slice(

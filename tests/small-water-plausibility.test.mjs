@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conformTerrainToLakePolygons } from "../src/TerrainLakePolygons.ts";
+import { conformTerrainToLakePolygons } from "../src/terrain/TerrainLakePolygons.ts";
 
 function fixture({ halfSize = 5, bank = 10, scale = 1, shift = 0 } = {}) {
   const raw = Float32Array.from({ length: 101 * 101 }, (_, i) => {

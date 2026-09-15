@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { planRoadsAndBuildings } = await import("../src/RoadAndBuildingPlanner.ts");
-const { conformTerrainToPlannedFeatures } = await import("../src/PlannedFeatureTerrain.ts");
+const { planRoadsAndBuildings } = await import("../src/roads/RoadAndBuildingPlanner.ts");
+const { conformTerrainToPlannedFeatures } = await import("../src/terrain/PlannedFeatureTerrain.ts");
 
 const appearance = {
   roadClass: "minor",

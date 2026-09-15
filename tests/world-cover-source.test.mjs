@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url), "utf8");
+const worldCover = readFileSync(new URL("../src/world/WorldCover.ts", import.meta.url), "utf8");
 
 test("uses the globally available ESA WorldCover 2021 classification", () => {
   assert.match(worldCover, /European_Space_Agency_WorldCover_2021_Land_Cover_WGS84_7/);

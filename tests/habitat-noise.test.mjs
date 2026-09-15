@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
-const { habitatField } = await import("../src/HabitatNoise.ts");
+const { habitatField } = await import("../src/vegetation/HabitatNoise.ts");
 
 const WORLD_SEED = 0x45415254;
 const BUSHES = {
@@ -140,7 +140,8 @@ test("no scattered layer seeds a spatial field from its per-tile stream", () => 
   // fields take `modelVariantSeed`/`speciesSeed`. Seeding noise from the tile
   // seed reseeds and rephases the pattern at every tile edge, which is the
   // visible seam this whole module exists to avoid — so it must stay absent.
-  const fields = readdirSync(new URL("../src/", import.meta.url))
+  const fields = readdirSync(new URL("../src/", import.meta.url), { recursive: true })
+    .map((name) => name.replaceAll("\\", "/"))
     .filter((name) => name.endsWith("Field.ts"));
   assert.ok(fields.length >= 8, `expected the field modules, found ${fields}`);
   for (const name of fields) {

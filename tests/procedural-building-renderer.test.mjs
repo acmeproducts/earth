@@ -13,9 +13,9 @@ import {
   Vector3,
   VertexBuffer,
 } from "@babylonjs/core";
-import { moveWalkerWithCollisions } from "../src/WalkerCollision.ts";
+import { moveWalkerWithCollisions } from "../src/app/WalkerCollision.ts";
 
-const { planBuilding } = await import("../src/BuildingPlanner.ts");
+const { planBuilding } = await import("../src/buildings/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
 );

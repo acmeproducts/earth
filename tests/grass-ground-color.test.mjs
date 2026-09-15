@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const fieldSource = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
-const impostorSource = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
+const fieldSource = readFileSync(new URL("../src/vegetation/GrassField.ts", import.meta.url), "utf8");
+const impostorSource = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
 const modelSource = readFileSync(
   new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
@@ -19,7 +19,7 @@ test("grass instances inherit their local rendered ground color", () => {
 
 test("WorldCover exposes a continuous tint across source raster cells", () => {
   const worldCoverSource = readFileSync(
-    new URL("../src/WorldCover.ts", import.meta.url),
+    new URL("../src/world/WorldCover.ts", import.meta.url),
     "utf8",
   );
   assert.match(worldCoverSource, /sampleSurfaceColor\(/);
@@ -53,7 +53,7 @@ test("distant grass dissolves according to the active full-detail distance", () 
 });
 
 test("loaded and newly committed grass fields use the current detail setting", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   assert.match(
     game,
     /kind === "grassField"[\s\S]*?setGrassFieldDetailDistance\([\s\S]*?detailTilesAcross/,

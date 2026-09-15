@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isSurfaceWaterFeature } from "../src/WaterFeatureVisibility.ts";
+import { isSurfaceWaterFeature } from "../src/water/WaterFeatureVisibility.ts";
 
 // Properties observed in OpenFreeMap z14/8681/4766 (central Oslo), 2026-09-09.
 test("hides Oslo's underground Akerselva, Alna and Hovinbekken waterways", () => {

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
-const source = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/rendering/Impostor.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("Impostor.ts", source, ts.ScriptTarget.Latest, true);
 function loadFunction(name, dependencies) {
   const declaration = parsed.statements.find(node => ts.isFunctionDeclaration(node) && node.name.text === name);

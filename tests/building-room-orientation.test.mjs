@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
-import { planApartmentLayout } from "../src/ApartmentLayoutPlanner.ts";
-import { planningFrameForPolygon, pointInPlanningFrame } from "../src/PlanningFrame.mjs";
-import { polygonArea } from "../src/PolygonGeometry.ts";
+import { planBuildingLayout } from "../src/buildings/BuildingLayoutPlanner.ts";
+import { planApartmentLayout } from "../src/buildings/ApartmentLayoutPlanner.ts";
+import { planningFrameForPolygon, pointInPlanningFrame } from "../src/core/PlanningFrame.mjs";
+import { polygonArea } from "../src/core/PolygonGeometry.ts";
 
 for (const angle of [0, 0.47]) {
   test(`apartment walls retain the parent building orientation (${angle})`, () => {

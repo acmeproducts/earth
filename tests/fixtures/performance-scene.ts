@@ -1,6 +1,6 @@
 // Full application exposed only by the standalone performance test bundle.
-import { Game } from '../../src/Game';
-import { createRenderingEngine } from '../../src/Renderer';
+import { Game } from '../../src/app/Game';
+import { createRenderingEngine } from '../../src/rendering/Renderer';
 import { EngineInstrumentation, PassPostProcess, ShadowGenerator } from '@babylonjs/core';
 
 const probe = window as any;

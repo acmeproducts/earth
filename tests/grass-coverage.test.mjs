@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const fieldSource = readFileSync(new URL("../src/GrassField.ts", import.meta.url), "utf8");
+const fieldSource = readFileSync(new URL("../src/vegetation/GrassField.ts", import.meta.url), "utf8");
 
 test("mature grass covers every placement cell", () => {
   assert.match(fieldSource, /GRASS_SPACING_METERS = 1\.3/);
@@ -23,7 +23,7 @@ test("grass clumps overlap with enough jitter to hide field boundaries", () => {
 
 test("grass clump silhouettes taper through an irregular low fringe", () => {
   const impostorSource = readFileSync(
-    new URL("../src/GrassImpostor.ts", import.meta.url),
+    new URL("../src/vegetation/GrassImpostor.ts", import.meta.url),
     "utf8",
   );
   assert.match(

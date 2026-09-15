@@ -21,7 +21,7 @@ registerHooks({
   },
 });
 
-const { WorldCover } = await import("../src/WorldCover.ts");
+const { WorldCover } = await import("../src/world/WorldCover.ts");
 
 function terrain() {
   return {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BuildingTrace } from "../src/BuildingDiagnostics.ts";
-import { creationStats, CREATION_STATS_INTERVAL_MS } from "../src/CreationStats.ts";
-import { StreamingTrace } from "../src/StreamingDiagnostics.ts";
+import { BuildingTrace } from "../src/buildings/BuildingDiagnostics.ts";
+import { creationStats, CREATION_STATS_INTERVAL_MS } from "../src/diagnostics/CreationStats.ts";
+import { StreamingTrace } from "../src/diagnostics/StreamingDiagnostics.ts";
 
 test("building diagnostics preserve sync/async results, failures, and disable behavior", async () => {
   const messages = [];

@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const treeField = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
 
 test("keeps far-tree impostors visible through the native terrain upgrade", () => {
   assert.match(

@@ -2,9 +2,9 @@ import {
   Color3, Color4, Constants, DirectionalLight, Engine, FreeCamera, HemisphericLight,
   MeshBuilder, Scene, SSRRenderingPipeline, StandardMaterial, Vector3, VertexBuffer, VertexData, WebGPUEngine,
 } from '@babylonjs/core';
-import { attachShoreline } from '../../src/Shoreline';
-import { createWaterPlane } from '../../src/Water';
-import { createTerrainLakeLayer } from '../../src/TerrainLakeSurface';
+import { attachShoreline } from '../../src/water/Shoreline';
+import { createWaterPlane } from '../../src/water/Water';
+import { createTerrainLakeLayer } from '../../src/terrain/TerrainLakeSurface';
 
 async function main(): Promise<void> {
   const canvas = document.createElement('canvas');

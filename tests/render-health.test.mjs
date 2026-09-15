@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Mesh, NullEngine, RawTexture, Scene, ShaderMaterial } from "@babylonjs/core";
-import { monitorRenderHealth } from "../src/RenderHealth.ts";
+import { monitorRenderHealth } from "../src/diagnostics/RenderHealth.ts";
 
 test("reports shared texture destruction but ignores normal owner cleanup", async () => {
   const engine = new NullEngine();

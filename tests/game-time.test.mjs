@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getGameDate } from "../src/GameTime.ts";
+import { getGameDate } from "../src/core/GameTime.ts";
 
 const GAME_TIME_EPOCH = new Date(2026, 0, 1).getTime();
 

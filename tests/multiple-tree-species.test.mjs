@@ -6,8 +6,8 @@ const proceduralTrees = readFileSync(
   new URL("../src/procedural/ProceduralTree.ts", import.meta.url),
   "utf8",
 );
-const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
-const impostorCapture = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
+const treeField = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
+const impostorCapture = readFileSync(new URL("../src/rendering/Impostor.ts", import.meta.url), "utf8");
 const captureMaterial = readFileSync(
   new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",

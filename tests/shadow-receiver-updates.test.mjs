@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NullEngine, Scene, UniversalCamera, Vector3, DirectionalLight, ShadowGenerator, ShaderMaterial } from '@babylonjs/core';
-import { bindVegetationShadowReceiver, suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../src/VegetationShadowReceiver.ts';
+import { bindVegetationShadowReceiver, suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../src/vegetation/VegetationShadowReceiver.ts';
 
 test('hundreds of shadow receivers share one lookup and reuse uniform vectors', () => {
   const engine = new NullEngine();

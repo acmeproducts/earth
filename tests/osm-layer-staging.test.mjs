@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
-const roadPlanner = readFileSync(new URL("../src/RoadPlanner.ts", import.meta.url), "utf8");
+const openStreetMap = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
+const roadPlanner = readFileSync(new URL("../src/roads/RoadPlanner.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
   new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
   "utf8",
@@ -50,7 +50,7 @@ test("renders surface roads with decal-style depth bias over terrain", () => {
 });
 
 test("uses one road and building plan before terrain construction", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   assert.match(game, /OpenStreetMap\.planRoadsAndBuildings\(/);
   assert.match(game, /OpenStreetMap\.conformTerrainToPlan\(/);
   assert.doesNotMatch(game, /OpenStreetMap\.conformTerrainTo(?:Buildings|Roads)\(/);

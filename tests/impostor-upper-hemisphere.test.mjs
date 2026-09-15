@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
 test("upper-hemisphere impostors remap side capture and runtime sampling together", () => {
-  const captureSource = source("Impostor.ts");
-  const shaderSource = source("TreeField.ts");
+  const captureSource = source("rendering/Impostor.ts");
+  const shaderSource = source("vegetation/TreeField.ts");
 
   assert.match(captureSource, /upperHemisphereOnly && isSideFace/);
   assert.match(captureSource, /\(fullRangeV \+ 1\) \* 0\.5/);
@@ -16,18 +16,18 @@ test("upper-hemisphere impostors remap side capture and runtime sampling togethe
 
 test("all non-tree vegetation opts in while trees retain the full range", () => {
   for (const name of [
-    "GrassImpostor.ts",
-    "PlantImpostor.ts",
-    "BushImpostor.ts",
-    "FernImpostor.ts",
+    "vegetation/GrassImpostor.ts",
+    "vegetation/PlantImpostor.ts",
+    "vegetation/BushImpostor.ts",
+    "vegetation/FernImpostor.ts",
   ]) {
     assert.match(source(name), /upperHemisphereOnly: true/);
   }
-  assert.doesNotMatch(source("TreeImpostor.ts"), /upperHemisphereOnly: true/);
+  assert.doesNotMatch(source("vegetation/TreeImpostor.ts"), /upperHemisphereOnly: true/);
 });
 
 test("bush impostors preserve their asymmetric regional silhouettes at runtime", () => {
-  const bushSource = source("BushImpostor.ts");
+  const bushSource = source("vegetation/BushImpostor.ts");
 
   assert.match(bushSource, /faces: IMPOSTOR_CUBE_FACES/);
   assert.match(bushSource, /rotationallySymmetric: false/);
@@ -38,13 +38,13 @@ test("bush impostors preserve their asymmetric regional silhouettes at runtime",
 
 test("impostor sampling defaults do not exceed five views per axis", () => {
   for (const name of [
-    "BushImpostor.ts",
-    "FernImpostor.ts",
-    "GrassImpostor.ts",
-    "RockyBeachImpostor.ts",
-    "PlantImpostor.ts",
-    "TreeImpostor.ts",
-    "WheatImpostor.ts",
+    "vegetation/BushImpostor.ts",
+    "vegetation/FernImpostor.ts",
+    "vegetation/GrassImpostor.ts",
+    "vegetation/RockyBeachImpostor.ts",
+    "vegetation/PlantImpostor.ts",
+    "vegetation/TreeImpostor.ts",
+    "vegetation/WheatImpostor.ts",
   ]) {
     const impostorSource = source(name);
     const horizontalDefault = impostorSource.match(/horizontalSamples: \{ default: (\d+),/)?.[1];

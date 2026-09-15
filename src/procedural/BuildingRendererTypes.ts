@@ -1,10 +1,10 @@
 import type { BaseTexture, Color3, Mesh, TransformNode, Vector3 } from "@babylonjs/core";
-import type { BuildingPlan, BuildingPolygon } from "../BuildingPlanner";
-import type { BuildingLayout } from "../BuildingLayoutPlanner";
-import type { ApartmentLayout } from "../ApartmentLayoutPlanner";
-import type { Opening2D, Point2D } from "../FloorPlan";
+import type { BuildingPlan, BuildingPolygon } from "../buildings/BuildingPlanner";
+import type { BuildingLayout } from "../buildings/BuildingLayoutPlanner";
+import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
+import type { Opening2D, Point2D } from "../buildings/FloorPlan";
 import type { BuildingSurface } from "./BuildingMaterial";
-import type { SharedValueMap } from "../OwnedValueCache";
+import type { SharedValueMap } from "../core/OwnedValueCache";
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -68,7 +68,7 @@ export interface PlannedInterior {
 }
 
 export interface InteriorPlanningAttempt {
-  input: Parameters<typeof import("../BuildingLayoutPlanner").planBuildingLayout>[0];
+  input: Parameters<typeof import("../buildings/BuildingLayoutPlanner").planBuildingLayout>[0];
   interior?: PlannedInterior;
   failure?: string;
 }

@@ -7,7 +7,7 @@ const {
   TWINKLE_HORIZON_STRENGTH,
   TWINKLE_ZENITH_PROBABILITY,
   TWINKLE_ZENITH_STRENGTH,
-} = await import("../src/StarTwinkle.ts");
+} = await import("../src/sky/StarTwinkle.ts");
 
 test("stars flicker more often and more strongly toward the horizon", () => {
   const horizon = starTwinkleProfile(0);

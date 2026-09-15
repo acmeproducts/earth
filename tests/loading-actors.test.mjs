@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LoadingActors } from '../src/LoadingActors.ts';
-import { publishGeneratedAsset } from '../src/GeneratedAssetPreview.ts';
+import { LoadingActors } from '../src/app/LoadingActors.ts';
+import { publishGeneratedAsset } from '../src/demos/GeneratedAssetPreview.ts';
 
 test('loading preview uses generated atlas pixels and unsubscribes on disposal', () => {
   const draws = [];

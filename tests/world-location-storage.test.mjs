@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WorldLocationStore } from "../src/Locations.ts";
+import { WorldLocationStore } from "../src/world/Locations.ts";
 
 class MemoryStorage {
   value = null;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Mesh, NullEngine, Scene, VertexBuffer, Ray, Vector3 } from '@babylonjs/core';
-import { compactMeshBuffers } from '../src/CompactMeshBuffers.ts';
+import { compactMeshBuffers } from '../src/rendering/CompactMeshBuffers.ts';
 
 test('compact merge buffers preserve attributes, transforms, bounds and picking', () => {
   const engine = new NullEngine();

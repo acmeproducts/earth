@@ -2,7 +2,7 @@
 // yarn node --import ./tests/register-typescript.mjs tests/bench-shadow-receivers.mjs
 import { performance } from 'node:perf_hooks';
 import { NullEngine, Scene, UniversalCamera, Vector2, Vector3, DirectionalLight, ShadowGenerator, ShaderMaterial } from '@babylonjs/core';
-import { bindVegetationShadowReceiver, isFloatShadowTexture } from '../src/VegetationShadowReceiver.ts';
+import { bindVegetationShadowReceiver, isFloatShadowTexture } from '../src/vegetation/VegetationShadowReceiver.ts';
 
 function create(shared, count) {
   const engine = new NullEngine();

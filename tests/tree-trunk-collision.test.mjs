@@ -6,7 +6,7 @@ import {
   resolveTreeTrunkCollisions,
   TREE_TRUNK_PROFILES,
   TreeTrunkIndex,
-} from "../src/TreeTrunkCollision.ts";
+} from "../src/vegetation/TreeTrunkCollision.ts";
 
 const SPECIES = [
   "acacia", "beech", "birch", "eucalyptus", "fir", "kapok", "mangrove",
@@ -115,12 +115,12 @@ test("the trunk index reach grows with its widest stem", () => {
 });
 
 test("tree placement records a scaled stem for every planted tree", () => {
-  const treeField = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
+  const treeField = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
   assert.match(treeField, /new TreeTrunkIndex\(/);
   assert.match(treeField, /trunks\.add\(\{/);
   assert.match(treeField, /radius: trunkProfile\.radius \* modelScale \* widthScale/);
   assert.match(treeField, /result\.trunks = trunks/);
 
-  const controls = readFileSync(new URL("../src/PlayerControls.ts", import.meta.url), "utf8");
+  const controls = readFileSync(new URL("../src/app/PlayerControls.ts", import.meta.url), "utf8");
   assert.match(controls, /this\.pushOutOfTreeTrunks\(metersPerUnit\)/);
 });

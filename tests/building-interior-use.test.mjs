@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { drainInteriorBuilds } from "./interior-streaming-helpers.mjs";
-import { planBuilding } from "../src/BuildingPlanner.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
 import { FreeCamera, NullEngine, Scene, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
 

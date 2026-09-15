@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { planRoadsAndBuildings } = await import("../src/RoadAndBuildingPlanner.ts");
-const { conformTerrainToPlannedFeatures } = await import("../src/PlannedFeatureTerrain.ts");
-const { TerrainSurface, conformDecalPolygon } = await import("../src/TerrainSurface.ts");
+const { planRoadsAndBuildings } = await import("../src/roads/RoadAndBuildingPlanner.ts");
+const { conformTerrainToPlannedFeatures } = await import("../src/terrain/PlannedFeatureTerrain.ts");
+const { TerrainSurface, conformDecalPolygon } = await import("../src/terrain/TerrainSurface.ts");
 
 const options = { meshWidth: 25, meshDepth: 25, metersPerUnit: 24 };
 const appearance = {

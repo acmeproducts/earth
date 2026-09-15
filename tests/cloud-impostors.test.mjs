@@ -6,18 +6,18 @@ const {
   CLOUD_VARIANT_COUNT,
   cloudPlacementsAround,
   cloudWeatherForSeed,
-} = await import("../src/CloudDistribution.ts");
-const source = readFileSync(new URL("../src/CloudImpostors.ts", import.meta.url), "utf8");
+} = await import("../src/sky/CloudDistribution.ts");
+const source = readFileSync(new URL("../src/sky/CloudImpostors.ts", import.meta.url), "utf8");
 const volumeSource = readFileSync(
-  new URL("../src/CloudVolumeCapture.ts", import.meta.url),
+  new URL("../src/sky/CloudVolumeCapture.ts", import.meta.url),
   "utf8",
 );
 const shadowSource = readFileSync(
-  new URL("../src/CloudShadows.ts", import.meta.url),
+  new URL("../src/sky/CloudShadows.ts", import.meta.url),
   "utf8",
 );
 const terrainMaterialSource = readFileSync(
-  new URL("../src/TerrainMaterial.ts", import.meta.url),
+  new URL("../src/terrain/TerrainMaterial.ts", import.meta.url),
   "utf8",
 );
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { waterFrame, waterMotionSpeed } from '../src/WaterFrame.ts';
-import { setManualWindSpeed } from '../src/Wind.ts';
+import { waterFrame, waterMotionSpeed } from '../src/water/WaterFrame.ts';
+import { setManualWindSpeed } from '../src/vegetation/Wind.ts';
 
 function clock(t, start) {
   let now = start;

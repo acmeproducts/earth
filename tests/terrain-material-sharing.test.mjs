@@ -3,7 +3,7 @@ import test from "node:test";
 import { Mesh, NullEngine, Scene } from "@babylonjs/core";
 
 const { createTerrainMaterial, disposeTerrainMesh, isSharedTerrainMaterial } = await import(
-  "../src/TerrainMaterial.ts"
+  "../src/terrain/TerrainMaterial.ts"
 );
 
 test("terrain tiles reuse scene-owned materials and GPU textures", () => {

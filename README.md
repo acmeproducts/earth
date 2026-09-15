@@ -6,7 +6,7 @@ creation and streaming work. Idle intervals are silent; errors and warnings rema
 immediate. Timing values use milliseconds and include waits unless labelled CPU
 or slice time. Set `globalThis.buildingTimingEnabled = false` to disable building
 and interior timing collection. Adjust `CREATION_STATS_INTERVAL_MS` in
-`src/CreationStats.ts` to change the reporting interval.
+`src/diagnostics/CreationStats.ts` to change the reporting interval.
 
 A walkable, streamed 3D Earth built with Babylon.js and real-world geographic data.
 Fly across terrain, drop to ground level, and explore a changing procedural landscape
@@ -103,7 +103,7 @@ The source family contains deterministic procedural birch, pine, and spruce tree
 tapered branches with runtime-generated bark and textured leaf cards; pine and spruce use distinct
 procedural conifer silhouettes. Forest placements mix all three species in the scene.
 
-`treeDistributionAt(longitude, latitude)` in `src/TreeDistribution.ts` supplies the next-stage
+`treeDistributionAt(longitude, latitude)` in `src/vegetation/TreeDistribution.ts` supplies the next-stage
 geographic species mix. It returns a broad biome, coarse tree-cover potential, and normalized ratios
 for eleven common visual tree groups. Exact forest presence should continue to come from ESA
 WorldCover 2021; the coordinate-only distribution is an offline approximation, not a botanical survey.
@@ -168,7 +168,7 @@ mangroves. Saplings and ferns are created only for the
 fully detailed tile rings; distant tiles retain their cheaper mature-tree layer.
 
 Grass, wildflowers, bushes, and ferns lean in a looping wind cycle; trees remain still.
-`src/Wind.ts` owns the shared cycle and its GLSL shear. Displacement grows
+`src/vegetation/Wind.ts` owns the shared cycle and its GLSL shear. Displacement grows
 linearly with height above the base, so roots stay planted and tips lean
 furthest. Gusts travel across the world, making an instance's position set its
 phase so nearby vegetation reads as one moving air mass.
@@ -199,7 +199,7 @@ Vegetation shadows remain cached and therefore do not animate with wind. The
 shadow map renders once and refreshes when the LOD packing or sun changes;
 redrawing every grass caster continuously would be substantially more expensive.
 
-Impostor capture is model-agnostic. `src/Impostor.ts` owns sampling validation,
+Impostor capture is model-agnostic. `src/rendering/Impostor.ts` owns sampling validation,
 URL overrides, per-scene reuse, source disposal, optional bounds fitting, and
 atlas generation. To add another procedural model, define an
 `ImpostorDefinition` with its geometry factory, capture dimensions, sampling
@@ -359,11 +359,22 @@ earth/
 ├── scripts/                    # Catalog and diagnostic generators
 ├── server/                     # Optional WebSocket/SQLite game server
 ├── src/                        # Scene, simulation, and rendering code
+│   ├── app/                    # Game lifecycle, settings, and player controls
+│   ├── buildings/              # Building and apartment layout planning
+│   ├── core/                   # Shared math, geometry, time, and caches
+│   ├── demos/                  # Asset previews and impostor validation
+│   ├── diagnostics/            # Performance counters and streaming reports
 │   ├── integration/            # Local and server-backed player state
 │   ├── procedural/             # Buildings, trees, and actor distribution
+│   ├── rendering/              # Renderer, antialiasing, and impostor capture
+│   ├── roads/                  # Road and site planning, street lamps
+│   ├── sky/                    # Sun, moon, stars, and clouds
+│   ├── terrain/                # Elevation, terrain meshes, and materials
+│   ├── vegetation/             # Plants, trees, rocks, placement, and wind
+│   ├── water/                  # Water surfaces, coastlines, and shorelines
+│   ├── world/                  # Geography, map providers, and world tiles
 │   ├── index.html              # Application shell
-│   ├── index.ts                # Browser entry point
-│   └── Game.ts                 # World lifecycle and tile streaming
+│   └── index.ts                # Browser entry point
 ├── tests/                      # Node test suite and browser drivers
 ├── package.json
 ├── tsconfig.json
@@ -415,7 +426,7 @@ yarn build
 
 ### Adding Textures
 
-The normal terrain appearance is isolated in `src/TerrainMaterial.ts`. Its
+The normal terrain appearance is isolated in `src/terrain/TerrainMaterial.ts`. Its
 procedural detail texture is tinted with softly blended ESA WorldCover surface
 colors so vegetated ground visually supports the grass, bush, and tree layers.
 Place texture images under `assets/`, resolve them through Webpack, and assign
@@ -474,8 +485,8 @@ smaller than 10 m² and tries the other axis when a proposed wall intersects a
 supplied door or window segment.
 
 ```typescript
-import { planBuildingLayout } from "./BuildingLayoutPlanner";
-import { renderFloorPlanSvg } from "./FloorPlan";
+import { planBuildingLayout } from "./src/buildings/BuildingLayoutPlanner";
+import { renderFloorPlanSvg } from "./src/buildings/FloorPlan";
 
 const layout = planBuildingLayout({
   buildingType: "apartment-building",
@@ -516,7 +527,7 @@ neighboring plot, so adjacent plots share their dividing boundary exactly —
 the attachment line for future hedgerows and fences.
 
 ```typescript
-import { renderRoadAndBuildingPlanSvg } from "./RoadAndBuildingPlanImage";
+import { renderRoadAndBuildingPlanSvg } from "./src/roads/RoadAndBuildingPlanImage";
 
 const svgImage = renderRoadAndBuildingPlanSvg(plan, {
   width: 1000,
@@ -531,7 +542,7 @@ Run `yarn site-plan:example` to write an example to
 
 ### Modifying the Scene
 
-Edit `src/Game.ts` to customize:
+Edit `src/app/Game.ts` to customize:
 - Lighting and colors
 - Camera settings
 - 3D objects and materials

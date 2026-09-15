@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeOverlappingBuildings } from "../src/CompositeBuildings.ts";
-import { planBuilding } from "../src/BuildingPlanner.ts";
-import { buildingOwnerWorldTile } from "../src/BuildingTileOwnership.ts";
+import { mergeOverlappingBuildings } from "../src/buildings/CompositeBuildings.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
+import { buildingOwnerWorldTile } from "../src/buildings/BuildingTileOwnership.ts";
 
 const rectangle = (x, y, width, depth) => [
   [x, y], [x + width, y], [x + width, y + depth], [x, y + depth], [x, y],

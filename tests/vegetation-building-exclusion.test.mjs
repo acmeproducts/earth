@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const { PolygonExclusionMask } = await import("../src/Geo.ts");
+const { PolygonExclusionMask } = await import("../src/world/Geo.ts");
 
 const mask = new PolygonExclusionMask([{
   outer: [
@@ -34,9 +34,9 @@ test("preserves open courtyards until vegetation overlaps their walls", () => {
 });
 
 test("builds the shared vegetation mask from OSM building footprints", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   const openStreetMap = readFileSync(
-    new URL("../src/OpenStreetMap.ts", import.meta.url),
+    new URL("../src/world/OpenStreetMap.ts", import.meta.url),
     "utf8",
   );
   assert.match(game, /OpenStreetMap\.createVegetationExclusionMask\(/);

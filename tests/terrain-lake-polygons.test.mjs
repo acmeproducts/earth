@@ -3,7 +3,7 @@ import test from "node:test";
 
 
 const { conformTerrainToLakePolygons, measureLakeSupport } =
-  await import("../src/TerrainLakePolygons.ts");
+  await import("../src/terrain/TerrainLakePolygons.ts");
 
 function terrain(elevations) {
   return {
@@ -40,6 +40,48 @@ const sourceElevations = [
   50, 40, 40, 40, 50,
   50, 50, 50, 50, 50,
 ];
+
+test("lake timings separate synchronous sampling from yielding raster work", async () => {
+  const { StreamingTrace, streamingDiagnosticsSnapshot } =
+    await import("../src/diagnostics/StreamingDiagnostics.ts");
+  const trace = new StreamingTrace("lake timing fixture");
+  const plain = terrain(new Array(25).fill(50));
+  const traced = terrain(new Array(25).fill(50));
+  const options = { meshWidth: 10, meshDepth: 10, metersPerUnit: 1 };
+  let plainYields = 0;
+  let tracedYields = 0;
+  const expected = await conformTerrainToLakePolygons(
+    plain, Float32Array.from(sourceElevations), [square()], options,
+    async () => { plainYields++; },
+  );
+  let actual;
+  try {
+    actual = await conformTerrainToLakePolygons(
+      traced, Float32Array.from(sourceElevations), [square()], options,
+      async () => {
+        tracedYields++;
+        const active = streamingDiagnosticsSnapshot().activeStages.find((entry) =>
+          entry.label === "lake timing fixture");
+        assert.equal(active.stage, "lake terrain raster shaping");
+        assert.equal(active.timingKind, "wall-clock");
+      }, trace,
+    );
+  } finally {
+    trace.finish();
+  }
+  assert.deepEqual(actual, expected);
+  assert.deepEqual(traced, plain);
+  assert.equal(tracedYields, plainYields);
+  const stages = streamingDiagnosticsSnapshot().stages.filter((entry) =>
+    entry.label === "lake timing fixture");
+  assert.deepEqual(stages.map(({ stage, timingKind }) => [stage, timingKind]), [
+    ["starting", "wall-clock"],
+    ["lake level sampling and plausibility checks", "synchronous"],
+    ["lake shaping preparation", "synchronous"],
+    ["lake terrain raster shaping", "wall-clock"],
+    ["lake elevation range and surface assembly", "synchronous"],
+  ]);
+});
 
 test("uses the OSM outline and one robust interior DEM level", async () => {
   const grid = terrain(new Array(25).fill(50));

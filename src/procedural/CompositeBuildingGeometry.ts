@@ -1,5 +1,5 @@
 import earcut from "earcut";
-import type { BuildingHeightBand, BuildingPolygon, LonLat } from "../BuildingPlanner";
+import type { BuildingHeightBand, BuildingPolygon, LonLat } from "../buildings/BuildingPlanner";
 
 type Point = { x: number; z: number };
 

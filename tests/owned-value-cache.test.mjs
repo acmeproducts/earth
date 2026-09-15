@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OwnedValueCache } from "../src/OwnedValueCache.ts";
+import { OwnedValueCache } from "../src/core/OwnedValueCache.ts";
 
 test("shared values remain until their last streamed owner releases them", () => {
   const cache = new OwnedValueCache();

@@ -11,7 +11,7 @@ const hook = registerHooks({ resolve(specifier, context, next) {
   };
   return next(specifier, context);
 } });
-const { createRegionalVegetationField } = await import("../src/VegetationFieldRenderers.ts");
+const { createRegionalVegetationField } = await import("../src/vegetation/VegetationFieldRenderers.ts");
 hook.deregister();
 
 test("regional fields preserve placements, tints, staging and lease ownership", async () => {

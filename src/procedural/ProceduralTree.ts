@@ -3,9 +3,9 @@ import {
   createVertexColorCaptureMaterial,
   getTreeBarkTexture,
 } from "./ProceduralCaptureMaterial";
-import { lerp } from "../MathUtils";
-import { createSeededRandom, hashString, unitFromSeed } from "../Random";
-import { autumnLeafSamples, autumnLeafTint, type LeafCardPosition, type TreeSeasonAppearance } from "../TreeSeason";
+import { lerp } from "../core/MathUtils";
+import { createSeededRandom, hashString, unitFromSeed } from "../core/Random";
+import { autumnLeafSamples, autumnLeafTint, type LeafCardPosition, type TreeSeasonAppearance } from "../vegetation/TreeSeason";
 
 export const PROCEDURAL_TREE_SOURCE_HEIGHT = 3;
 export const PROCEDURAL_TREE_CAPTURE_DIAMETER = 3.2;

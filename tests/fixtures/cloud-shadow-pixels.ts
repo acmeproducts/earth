@@ -1,7 +1,7 @@
 // Pixel-equivalence check for the cloud-shadow fast paths, on a real GPU.
 import { Engine, Scene, UniversalCamera, Vector3, MeshBuilder, ShaderMaterial, DirectionalLight, ShadowGenerator } from '@babylonjs/core';
-import { bindCloudShadowReceiver, createCloudShadowProjector, cloudShadowFragmentDeclaration, CLOUD_SHADOW_UNIFORMS } from '../../src/CloudShadows';
-import { bindVegetationShadowReceiver, suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../../src/VegetationShadowReceiver';
+import { bindCloudShadowReceiver, createCloudShadowProjector, cloudShadowFragmentDeclaration, CLOUD_SHADOW_UNIFORMS } from '../../src/sky/CloudShadows';
+import { bindVegetationShadowReceiver, suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../../src/vegetation/VegetationShadowReceiver';
 
 void (async () => {
   const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;

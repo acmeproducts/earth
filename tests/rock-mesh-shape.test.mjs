@@ -25,7 +25,7 @@ registerHooks({
 });
 
 const { NullEngine, Scene, VertexBuffer } = await import("@babylonjs/core");
-const { createRockMesh } = await import("../src/RockField.ts");
+const { createRockMesh } = await import("../src/vegetation/RockField.ts");
 
 const engine = new NullEngine();
 const scene = new Scene(engine);

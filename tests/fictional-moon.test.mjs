@@ -5,7 +5,7 @@ const {
   fictionalMoonPhase,
   fictionalMoonSkyVisibility,
   FICTIONAL_MOON_PHASE_EPOCH,
-} = await import("../src/FictionalMoon.ts");
+} = await import("../src/sky/FictionalMoon.ts");
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const atDay = (day) => new Date(FICTIONAL_MOON_PHASE_EPOCH + day * DAY_MILLISECONDS);

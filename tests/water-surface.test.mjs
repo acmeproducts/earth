@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { waterMotionSpeed } from '../src/WaterFrame.ts';
+import { waterMotionSpeed } from '../src/water/WaterFrame.ts';
 
-const water = readFileSync(new URL("../src/Water.ts", import.meta.url), "utf8");
-const worldCover = readFileSync(new URL("../src/WorldCover.ts", import.meta.url), "utf8");
-const terrainData = readFileSync(new URL("../src/TerrainData.ts", import.meta.url), "utf8");
+const water = readFileSync(new URL("../src/water/Water.ts", import.meta.url), "utf8");
+const worldCover = readFileSync(new URL("../src/world/WorldCover.ts", import.meta.url), "utf8");
+const terrainData = readFileSync(new URL("../src/terrain/TerrainData.ts", import.meta.url), "utf8");
 
 test("broad water heave does not need a redundant triangle grid", () => {
   assert.match(water, /subdivisions = 1/);

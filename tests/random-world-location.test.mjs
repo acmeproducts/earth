@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomLandWorldLocation, randomWorldLocation } from "../src/Locations.ts";
+import { randomLandWorldLocation, randomWorldLocation } from "../src/world/Locations.ts";
 
 test("generates deterministic locations within Web Mercator bounds", () => {
   const values = [0.25, 0.75];

@@ -6,7 +6,7 @@ const SOURCE_REVISION = "36b238ffb1964c858b419130e67858ad9adbd24e";
 const SOURCE_ROOT = `https://raw.githubusercontent.com/frostoven/BSC5P-JSON-XYZ/${SOURCE_REVISION}/catalogs`;
 const OUTPUT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../src/star-catalog.json",
+  "../src/sky/star-catalog.json",
 );
 
 const [positionsResponse, photometryResponse] = await Promise.all([

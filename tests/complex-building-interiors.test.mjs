@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FreeCamera, Mesh, NullEngine, Ray, Scene, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
-import { planBuilding } from "../src/BuildingPlanner.ts";
-import { mergeOverlappingBuildings } from "../src/CompositeBuildings.ts";
-import { lonLatToScene } from "../src/Geo.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
+import { mergeOverlappingBuildings } from "../src/buildings/CompositeBuildings.ts";
+import { lonLatToScene } from "../src/world/Geo.ts";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
 import { advanceInteriorFrame, drainInteriorBuilds } from "./interior-streaming-helpers.mjs";
 

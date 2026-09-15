@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
-import { renderFloorPlanSvg } from "../src/FloorPlan.ts";
+import { planBuildingLayout } from "../src/buildings/BuildingLayoutPlanner.ts";
+import { renderFloorPlanSvg } from "../src/buildings/FloorPlan.ts";
 
 const rectangle = {
   outer: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 12 }, { x: 0, y: 12 }],

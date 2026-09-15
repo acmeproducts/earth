@@ -1,10 +1,10 @@
-import { smoothstep, wrap } from "../MathUtils";
-import { deriveSeed } from "../Random";
+import { smoothstep, wrap } from "../core/MathUtils";
+import { deriveSeed } from "../core/Random";
 import {
   DEFAULT_WORLD_SEED,
   WORLD_GRID_LEVEL,
   worldTileCoordinatesAtLocation,
-} from "../WorldGrid";
+} from "../world/WorldGrid";
 
 export type ProceduralRegionFamily =
   | "trees"

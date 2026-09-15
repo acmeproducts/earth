@@ -6,11 +6,11 @@ const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url)
 
 test("every vegetation family assigns placements to its own regional variants", () => {
   for (const [file, family] of [
-    ["TreeField.ts", "trees"],
-    ["BushField.ts", "bushes"],
-    ["GrassField.ts", "grass"],
-    ["FernField.ts", "ferns"],
-    ["TallPlantField.ts", "tallPlants"],
+    ["vegetation/TreeField.ts", "trees"],
+    ["vegetation/BushField.ts", "bushes"],
+    ["vegetation/GrassField.ts", "grass"],
+    ["vegetation/FernField.ts", "ferns"],
+    ["vegetation/TallPlantField.ts", "tallPlants"],
   ]) {
     const field = source(file);
     assert.match(field, new RegExp(`"${family}"`));
@@ -20,7 +20,7 @@ test("every vegetation family assigns placements to its own regional variants", 
 });
 
 test("regional impostor captures are leased, bounded, and serialized", () => {
-  const impostors = source("Impostor.ts");
+  const impostors = source("rendering/Impostor.ts");
   assert.match(impostors, /variant\.key/);
   assert.match(impostors, /variant\.seed \?\? "static"/);
   assert.match(impostors, /MAX_CACHED_IMPOSTOR_VARIANTS = 6/);
@@ -29,7 +29,7 @@ test("regional impostor captures are leased, bounded, and serialized", () => {
 });
 
 test("cooperative captures yield between GPU views and pixel-processing slices", () => {
-  const impostors = source("Impostor.ts");
+  const impostors = source("rendering/Impostor.ts");
   assert.match(impostors, /RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2/);
   assert.match(impostors, /cooperative && viewsThisFrame >= viewsPerSlice/);
   assert.match(impostors, /await binaryImage/);
@@ -38,7 +38,7 @@ test("cooperative captures yield between GPU views and pixel-processing slices",
 });
 
 test("startup and streamed requests share the same atlas sampling", () => {
-  const impostors = source("Impostor.ts");
+  const impostors = source("rendering/Impostor.ts");
   assert.match(
     impostors,
     /const regionalVariant = variant\.key !== DEFAULT_IMPOSTOR_VARIANT\.key;[\s\S]*?const cooperative = requestOptions\.cooperative \?\? regionalVariant;[\s\S]*?const sampling = requestedSampling;/,
@@ -46,16 +46,16 @@ test("startup and streamed requests share the same atlas sampling", () => {
 });
 
 test("initial tree atlases use the fast path while streamed atlases remain cooperative", () => {
-  const game = source("Game.ts");
-  const trees = source("TreeField.ts");
-  const impostors = source("Impostor.ts");
+  const game = source("app/Game.ts");
+  const trees = source("vegetation/TreeField.ts");
+  const impostors = source("rendering/Impostor.ts");
   assert.match(game, /impostorCaptureMode: onProgress \? "fast"[^\n]+: "cooperative"/);
   assert.match(trees, /impostorCaptureMode === "cooperative"/);
   assert.match(impostors, /cooperativeOverride \?\? variant\.key !== DEFAULT_IMPOSTOR_VARIANT\.key/);
 });
 
 test("streamed detail and far trees share one world-level model seed", () => {
-  const game = source("Game.ts");
+  const game = source("app/Game.ts");
   const matches = game.match(/modelVariantSeed: layerSeed\(this\.worldSeed, "proceduralModels"\)/g);
   assert.ok(matches && matches.length >= 2);
 });
@@ -73,7 +73,7 @@ test("tree sister variants alter macro silhouette and foliage character", () => 
 });
 
 test("tree sister variants use a tile-anchored, traversal-scale locality", () => {
-  const field = source("TreeField.ts");
+  const field = source("vegetation/TreeField.ts");
   const selection = field.match(
     /proceduralLocalVariantAtLocation\([\s\S]*?TREE_SISTER_MODELS,([\s\S]*?)\);/,
   );
@@ -84,8 +84,8 @@ test("tree sister variants use a tile-anchored, traversal-scale locality", () =>
 });
 
 test("bush variants and placements avoid repeated radial silhouettes", () => {
-  const bushes = source("BushImpostor.ts");
-  const field = source("BushField.ts");
+  const bushes = source("vegetation/BushImpostor.ts");
+  const field = source("vegetation/BushField.ts");
 
   assert.match(bushes, /const crownRotation = random\(\)/);
   assert.match(bushes, /const lobePhase = random\(\)/);

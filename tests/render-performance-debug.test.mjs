@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const fpsCounter = readFileSync(new URL("../src/FpsCounter.ts", import.meta.url), "utf8");
+const fpsCounter = readFileSync(new URL("../src/diagnostics/FpsCounter.ts", import.meta.url), "utf8");
 
 test("expanded performance diagnostics split CPU render phases from GPU time", () => {
   assert.match(fpsCounter, /captureActiveMeshesEvaluationTime = enabled/);
@@ -23,7 +23,7 @@ test("expensive render instrumentation is disabled with the compact counter", ()
 });
 
 test("render stats can be dumped from the debug keyboard controls", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   assert.match(game, /key === "r"/);
   assert.match(game, /dumpRenderStats\(this\.engine, this\.scene, this\.getRenderStatsContext\(\)\)/);
   assert.match(fpsCounter, /earth-render-stats-\$\{timestamp\}\.json/);
@@ -33,7 +33,7 @@ test("render stats can be dumped from the debug keyboard controls", () => {
 });
 
 test("comparative benchmark measures feature ablations only after streaming settles", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   assert.match(game, /key === "b"/);
   assert.match(game, /startComparativeBenchmark/);
   assert.match(game, /reflections-off/);
@@ -51,7 +51,7 @@ test("render report groups mesh workloads and describes render targets", () => {
 });
 
 test("benchmark isolates shadows and reflections and restores shadows between phases", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   const benchmark = game.slice(game.indexOf("private startRenderBenchmark"),
     game.indexOf("private setVegetationMode"));
   assert.match(benchmark, /name: "shadows-off"/);
@@ -68,7 +68,7 @@ test("benchmark isolates shadows and reflections and restores shadows between ph
 });
 
 test("custom shadow receivers honor scene and light shadow switches", () => {
-  const receiver = readFileSync(new URL("../src/VegetationShadowReceiver.ts", import.meta.url), "utf8");
+  const receiver = readFileSync(new URL("../src/vegetation/VegetationShadowReceiver.ts", import.meta.url), "utf8");
   assert.match(receiver, /!scene\.shadowsEnabled/);
   assert.match(receiver, /!sun\.shadowEnabled/);
   assert.match(receiver, /vegetationShadowEnabled < 0\.5\) return 1\.0/);

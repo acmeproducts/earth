@@ -1,6 +1,6 @@
 # Star catalogue attribution
 
-The generated `src/star-catalog.json` file is derived from
+The generated `src/sky/star-catalog.json` file is derived from
 [BSC5P-JSON-XYZ](https://github.com/frostoven/BSC5P-JSON-XYZ) catalog data,
 copyright 2022 aggregate1166877, licensed under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

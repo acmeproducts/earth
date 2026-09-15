@@ -2,7 +2,7 @@
 // Run: yarn node --import ./tests/register-typescript.mjs scripts/benchmark-building-loading.mjs
 import { performance } from "node:perf_hooks";
 import { FreeCamera, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
-import { planBuilding } from "../src/BuildingPlanner.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
 import { BUILDING_INTERIOR_CHECK_INTERVAL_MS } from "../src/procedural/BuildingRendererConstants.ts";
 import { advanceInteriorFrame } from "../tests/interior-streaming-helpers.mjs";

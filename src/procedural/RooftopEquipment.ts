@@ -1,7 +1,7 @@
 import { Color3, Mesh, MeshBuilder, Scene, VertexBuffer } from "@babylonjs/core";
-import type { BuildingPlan } from "../BuildingPlanner";
-import { distanceToRing, pointBounds, pointInRing, signedArea, type PlanarPoint } from "../PlanarGeometry";
-import { createSeededRandom } from "../Random";
+import type { BuildingPlan } from "../buildings/BuildingPlanner";
+import { distanceToRing, pointBounds, pointInRing, signedArea, type PlanarPoint } from "../core/PlanarGeometry";
+import { createSeededRandom } from "../core/Random";
 import { setBuildingSurface, type BuildingSurface } from "./BuildingMaterial";
 
 export interface RooftopPlacement extends PlanarPoint {

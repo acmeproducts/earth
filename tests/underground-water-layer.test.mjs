@@ -20,7 +20,7 @@ const hook = registerHooks({
     return nextLoad(url, context);
   },
 });
-const { OpenStreetMap } = await import("../src/OpenStreetMap.ts");
+const { OpenStreetMap } = await import("../src/world/OpenStreetMap.ts");
 hook.deregister();
 
 test("underground Oslo river tags produce no surface ribbon or lake terrain source", async () => {

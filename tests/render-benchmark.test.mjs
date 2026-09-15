@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FpsCounter, summarizeBenchmarkPhase, addBenchmarkDeltas } from "../src/FpsCounter.ts";
+import { FpsCounter, summarizeBenchmarkPhase, addBenchmarkDeltas } from "../src/diagnostics/FpsCounter.ts";
 
 const sample = (interval, gpu = 0) => ({
   frameIntervalMilliseconds: interval, gpuFrameMilliseconds: gpu,

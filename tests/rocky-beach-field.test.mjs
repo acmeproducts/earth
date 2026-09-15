@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const field = readFileSync(new URL("../src/RockyBeachField.ts", import.meta.url), "utf8");
+const field = readFileSync(new URL("../src/vegetation/RockyBeachField.ts", import.meta.url), "utf8");
 const impostor = readFileSync(
-  new URL("../src/RockyBeachImpostor.ts", import.meta.url),
+  new URL("../src/vegetation/RockyBeachImpostor.ts", import.meta.url),
   "utf8",
 );
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 
 test("captures a dense procedural rocky-beach patch through the impostor pipeline", () => {
   assert.match(impostor, /createImpostorAssetProvider/);

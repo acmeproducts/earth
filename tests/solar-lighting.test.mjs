@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { shouldUpdateSolarLocation } from "../src/SolarLocation.ts";
+import { shouldUpdateSolarLocation } from "../src/sky/SolarLocation.ts";
 
-const source = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/sky/SolarLighting.ts", import.meta.url), "utf8");
 
 test("does not rebuild celestial render targets at every streamed tile boundary", () => {
   assert.equal(shouldUpdateSolarLocation(52, 13, 52.004, 13.006), false);

@@ -1,5 +1,5 @@
 import type { Scene } from "@babylonjs/core";
-import { creationStats } from "../CreationStats";
+import { creationStats } from "../diagnostics/CreationStats";
 
 export const INTERIOR_WORK_BUDGET_MS = 2;
 export const INTERIOR_STEPS_PER_FRAME = 8;

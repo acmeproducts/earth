@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dirtRoadEdgeCoordinates } from "../src/DirtRoadEdges.ts";
+import { dirtRoadEdgeCoordinates } from "../src/roads/DirtRoadEdges.ts";
 
 const road = {
   centerline: [{ x: 0, z: 0 }, { x: 20, z: 0 }],

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Mesh, NullEngine, Scene, StandardMaterial, VertexBuffer } from "@babylonjs/core";
-import { TreeModelGeometryCache } from "../src/TreeModelGeometryCache.ts";
+import { TreeModelGeometryCache } from "../src/vegetation/TreeModelGeometryCache.ts";
 
 test("tree geometry builds once for concurrent callers and survives tile mutation/disposal", async () => {
   const engine = new NullEngine();

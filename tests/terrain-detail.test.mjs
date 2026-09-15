@@ -24,9 +24,9 @@ registerHooks({
 });
 
 const { applyTerrainDetail, upsampleTerrain, TERRAIN_RELIEF_BANDS } =
-  await import("../src/TerrainDetail.ts");
-const { LandCoverClass } = await import("../src/WorldCover.ts");
-const { worldTileBounds } = await import("../src/WorldGrid.ts");
+  await import("../src/terrain/TerrainDetail.ts");
+const { LandCoverClass } = await import("../src/world/WorldCover.ts");
+const { worldTileBounds } = await import("../src/world/WorldGrid.ts");
 
 const METERS_PER_DEGREE = 111_320;
 // A zoom-16 tile near 47°N: about 415 m across.

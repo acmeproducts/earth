@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 
 test("the configured model range applies to vegetation except short-range mature grass", () => {
   assert.doesNotMatch(game, /lodDistanceCapMeters/);

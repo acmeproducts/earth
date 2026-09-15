@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWaterBuildingOverlapFilter } from "../src/WaterBuildingOverlap.ts";
+import { createWaterBuildingOverlapFilter } from "../src/water/WaterBuildingOverlap.ts";
 
 function box(x, z, width, depth) {
   return { outline: [

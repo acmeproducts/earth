@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planRoad, roadVegetationShoulderMeters } from "../src/RoadPlanner.ts";
+import { planRoad, roadVegetationShoulderMeters } from "../src/roads/RoadPlanner.ts";
 
 test("plans major roads with lane-marking visuals", () => {
   assert.deepEqual(planRoad({ class: "primary", surface: "paved" }), {

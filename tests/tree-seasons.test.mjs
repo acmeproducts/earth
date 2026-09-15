@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const { treeSeasonAt, autumnLeafTint, autumnLeafSamples } = await import("../src/TreeSeason.ts");
+const { treeSeasonAt, autumnLeafTint, autumnLeafSamples } = await import("../src/vegetation/TreeSeason.ts");
 
 test("temperate deciduous seasons follow the calendar and hemisphere", () => {
   const august = new Date(2026, 7, 23);
@@ -37,8 +37,8 @@ test("tropical and evergreen trees retain their crowns", () => {
 });
 
 test("tree models and impostors receive one shared seasonal variant", () => {
-  const field = readFileSync(new URL("../src/TreeField.ts", import.meta.url), "utf8");
-  const impostor = readFileSync(new URL("../src/TreeImpostor.ts", import.meta.url), "utf8");
+  const field = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
+  const impostor = readFileSync(new URL("../src/vegetation/TreeImpostor.ts", import.meta.url), "utf8");
 
   assert.match(field, /key: `\$\{tileRegion\.key\}\/local\/\$\{tileLocalVariant\}\/season\/\$\{season\.key\}`/);
   assert.match(field, /createTreeModels\([\s\S]*?variant\.season/);

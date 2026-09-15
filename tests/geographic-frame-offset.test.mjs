@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   geographicFrameOffset,
   lonLatToScene,
-} from "../src/Geo.ts";
+} from "../src/world/Geo.ts";
 
 test("places shifted terrain windows in one stable scene frame", () => {
   const frame = {

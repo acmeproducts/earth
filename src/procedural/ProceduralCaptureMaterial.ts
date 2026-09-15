@@ -1,4 +1,4 @@
-import { directionalExposureDeclaration, registerExposureCutout } from "../DirectionalExposure";
+import { directionalExposureDeclaration, registerExposureCutout } from "../vegetation/DirectionalExposure";
 import {
   Color3,
   DirectionalLight,
@@ -12,18 +12,18 @@ import {
   Texture,
   Vector3,
 } from "@babylonjs/core";
-import { createSeededRandom } from "../Random";
+import { createSeededRandom } from "../core/Random";
 import {
   bindCloudShadowReceiver,
   cloudShadowFragmentDeclaration,
   cloudShadowVertexDeclaration,
   CLOUD_SHADOW_UNIFORMS,
-} from "../CloudShadows";
+} from "../sky/CloudShadows";
 import {
   bindVegetationShadowReceiver,
   vegetationShadowFragmentDeclaration,
   vegetationShadowVertexDeclaration,
-} from "../VegetationShadowReceiver";
+} from "../vegetation/VegetationShadowReceiver";
 import {
   bindWindPhase,
   setWindShear,
@@ -31,7 +31,7 @@ import {
   windShearVertexDeclaration,
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
-} from "../Wind";
+} from "../vegetation/Wind";
 
 const BARK_TEXTURE_SIZE = 512;
 

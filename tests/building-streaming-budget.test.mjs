@@ -22,10 +22,10 @@ const hook = registerHooks({
     return nextLoad(url, context);
   },
 });
-const { OpenStreetMap } = await import("../src/OpenStreetMap.ts");
+const { OpenStreetMap } = await import("../src/world/OpenStreetMap.ts");
 hook.deregister();
 const { ProceduralBuildingRenderer } = await import("../src/procedural/ProceduralBuildingRenderer.ts");
-const { buildingOwnerWorldTile } = await import("../src/BuildingTileOwnership.ts");
+const { buildingOwnerWorldTile } = await import("../src/buildings/BuildingTileOwnership.ts");
 
 test("both detail levels render one composite across provider tiles", async () => {
   const engine = new NullEngine();

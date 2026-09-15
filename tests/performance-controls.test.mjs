@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const settings = readFileSync(new URL("../src/SceneSettings.ts", import.meta.url), "utf8");
-const controls = readFileSync(new URL("../src/SceneControls.ts", import.meta.url), "utf8");
-const geocoding = readFileSync(new URL("../src/Geocoding.ts", import.meta.url), "utf8");
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const settings = readFileSync(new URL("../src/app/SceneSettings.ts", import.meta.url), "utf8");
+const controls = readFileSync(new URL("../src/app/SceneControls.ts", import.meta.url), "utf8");
+const geocoding = readFileSync(new URL("../src/world/Geocoding.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 const playerControls = readFileSync(
-  new URL("../src/PlayerControls.ts", import.meta.url),
+  new URL("../src/app/PlayerControls.ts", import.meta.url),
   "utf8",
 );
 const playerPresence = readFileSync(
@@ -15,9 +15,9 @@ const playerPresence = readFileSync(
   "utf8",
 );
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
-const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
-const gameTime = readFileSync(new URL("../src/GameTime.ts", import.meta.url), "utf8");
-const clockSettings = readFileSync(new URL("../src/ClockSettings.ts", import.meta.url), "utf8");
+const solarLighting = readFileSync(new URL("../src/sky/SolarLighting.ts", import.meta.url), "utf8");
+const gameTime = readFileSync(new URL("../src/core/GameTime.ts", import.meta.url), "utf8");
+const clockSettings = readFileSync(new URL("../src/app/ClockSettings.ts", import.meta.url), "utf8");
 
 test("defaults to two by two and allows exact even-sized detail windows", () => {
   assert.match(settings, /key: "detailTilesAcross"[\s\S]*?defaultValue: 2/);

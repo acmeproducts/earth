@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { planBuilding } = await import("../src/BuildingPlanner.ts");
+const { planBuilding } = await import("../src/buildings/BuildingPlanner.ts");
 const { buildingWindowStyle, windowRegionAt } = await import(
-  "../src/BuildingWindowStyle.ts"
+  "../src/buildings/BuildingWindowStyle.ts"
 );
 
 function planAt(id, longitude, latitude) {

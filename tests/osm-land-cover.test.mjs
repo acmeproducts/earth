@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const landCover = readFileSync(
-  new URL("../src/OpenStreetMapLandCover.ts", import.meta.url),
+  new URL("../src/world/OpenStreetMapLandCover.ts", import.meta.url),
   "utf8",
 );
 

@@ -8,7 +8,7 @@ import {
   ShaderMaterial,
   StandardMaterial,
 } from "@babylonjs/core";
-import { configureVegetationMaterials } from "../src/VegetationMaterial.ts";
+import { configureVegetationMaterials } from "../src/vegetation/VegetationMaterial.ts";
 
 function recordingShaderMaterial(scene, name) {
   const material = new ShaderMaterial(

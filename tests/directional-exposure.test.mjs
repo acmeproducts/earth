@@ -5,9 +5,9 @@ import { Vector3 } from "@babylonjs/core";
 import {
   bakeExposureGeometry, EXPOSURE_DIRECTIONS,
   packExposureFace,
-} from "../src/DirectionalExposure.ts";
+} from "../src/vegetation/DirectionalExposure.ts";
 
-const impostorSource = readFileSync(new URL("../src/Impostor.ts", import.meta.url), "utf8");
+const impostorSource = readFileSync(new URL("../src/rendering/Impostor.ts", import.meta.url), "utf8");
 
 test("raw exposure captures skip atlas canvases and release runtime canvases early", () => {
   assert.match(impostorSource, /options\.captureRawFace \? \[\] : faces\.map/);

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const { normalizeBuildingClass, planBuilding } = await import("../src/BuildingPlanner.ts");
-const planner = readFileSync(new URL("../src/BuildingPlanner.ts", import.meta.url), "utf8");
-const openStreetMap = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
+const { normalizeBuildingClass, planBuilding } = await import("../src/buildings/BuildingPlanner.ts");
+const planner = readFileSync(new URL("../src/buildings/BuildingPlanner.ts", import.meta.url), "utf8");
+const openStreetMap = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
   new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
   "utf8",

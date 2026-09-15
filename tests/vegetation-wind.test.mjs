@@ -2,31 +2,31 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { NullEngine, Scene, ShaderMaterial } from "@babylonjs/core";
-import { bindWindPhase, currentWindLoopPhase } from "../src/Wind.ts";
+import { bindWindPhase, currentWindLoopPhase } from "../src/vegetation/Wind.ts";
 
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 
-const wind = source("Wind.ts");
+const wind = source("vegetation/Wind.ts");
 
 test("wind affects grass, bushes, fern undergrowth, and tall plants", () => {
   assert.match(wind, /const SHEAR_FRACTIONS = \{ grass: [\d.]+, bush: [\d.]+, tree: [\d.]+ \}/);
-  assert.match(source("GrassField.ts"), /windShearFraction\("grass"\)/);
-  assert.match(source("BushField.ts"), /windShearFraction\("bush"\)/);
-  assert.match(source("OpenStreetMapBarriers.ts"), /windShearFraction\("bush"\)/);
-  assert.match(source("OpenStreetMapBarriers.ts"), /setVegetationWindShear\(/);
-  assert.match(source("FernField.ts"), /windShearFraction\("grass"\)/);
-  assert.match(source("FernField.ts"), /setVegetationWindShear\(\[fern, fernModel\]/);
-  assert.match(source("TallPlantField.ts"), /windShearFraction\("grass"\)/);
-  assert.match(source("TallPlantField.ts"), /setVegetationWindShear\(\[plants, plantModel\]/);
+  assert.match(source("vegetation/GrassField.ts"), /windShearFraction\("grass"\)/);
+  assert.match(source("vegetation/BushField.ts"), /windShearFraction\("bush"\)/);
+  assert.match(source("world/OpenStreetMapBarriers.ts"), /windShearFraction\("bush"\)/);
+  assert.match(source("world/OpenStreetMapBarriers.ts"), /setVegetationWindShear\(/);
+  assert.match(source("vegetation/FernField.ts"), /windShearFraction\("grass"\)/);
+  assert.match(source("vegetation/FernField.ts"), /setVegetationWindShear\(\[fern, fernModel\]/);
+  assert.match(source("vegetation/TallPlantField.ts"), /windShearFraction\("grass"\)/);
+  assert.match(source("vegetation/TallPlantField.ts"), /setVegetationWindShear\(\[plants, plantModel\]/);
 });
 
 test("trees use one static atlas pose and static live geometry", () => {
-  assert.doesNotMatch(source("TreeImpostor.ts"), /wind: \{|treeWind|setVegetationWindSway/);
-  assert.doesNotMatch(source("TreeImpostorValidation.ts"), /setWindPhaseOverride/);
+  assert.doesNotMatch(source("vegetation/TreeImpostor.ts"), /wind: \{|treeWind|setVegetationWindSway/);
+  assert.doesNotMatch(source("demos/TreeImpostorValidation.ts"), /setWindPhaseOverride/);
 });
 
 test("impostor atlases have no obsolete time-sample dimension", () => {
-  for (const file of ["Impostor.ts", "TreeField.ts", "TreeImpostorValidation.ts"]) {
+  for (const file of ["rendering/Impostor.ts", "vegetation/TreeField.ts", "demos/TreeImpostorValidation.ts"]) {
     assert.doesNotMatch(source(file), /timeSamples|time-samples|setTimePhase/);
   }
   assert.doesNotMatch(
@@ -51,7 +51,7 @@ test("gusts travel through the world rather than pulsing in place", () => {
   assert.match(wind, /float windLoopPhase\(vec3 instanceOrigin\)/);
   assert.match(wind, /windPhase \+ dot\(instanceOrigin\.xz, windGustFrequency\)/);
   assert.match(wind, /metersPerUnit \/ GUST_WAVELENGTH_METERS/);
-  assert.match(source("Game.ts"), /configureWindSceneScale\(metersPerUnit\)/);
+  assert.match(source("app/Game.ts"), /configureWindSceneScale\(metersPerUnit\)/);
 });
 
 test("an absent wind parameter is not read as a request for stillness", () => {

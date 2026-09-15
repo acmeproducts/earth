@@ -6,7 +6,7 @@ import { Mesh, MultiMaterial, NullEngine, PBRMaterial, RawTexture, Scene, Shader
 
 // Exercise the actual cleanup method without loading the browser-only map
 // generation dependency graph (including enums unsupported by strip-only Node).
-const source = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
 const method = source.slice(source.indexOf("  static disposeLayer("), source.indexOf("  private static async fetchTile("));
 const OpenStreetMap = new Function("ShaderMaterial", "MultiMaterial", "PBRMaterial", "StandardMaterial",
   `${stripTypeScriptTypes(`class MapCleanup { ${method} }`)}; return MapCleanup;`,

@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { planApartmentLayout } from "../src/ApartmentLayoutPlanner.ts";
-import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
-import { planningFrameForPolygon } from "../src/PlanningFrame.mjs";
-import { renderFloorPlanSvg } from "../src/FloorPlan.ts";
+import { planApartmentLayout } from "../src/buildings/ApartmentLayoutPlanner.ts";
+import { planBuildingLayout } from "../src/buildings/BuildingLayoutPlanner.ts";
+import { planningFrameForPolygon } from "../src/core/PlanningFrame.mjs";
+import { renderFloorPlanSvg } from "../src/buildings/FloorPlan.ts";
 
 const inputPath = process.argv[2];
 if (!inputPath) {

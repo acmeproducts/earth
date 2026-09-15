@@ -3,7 +3,7 @@ import test from "node:test";
 import { Matrix, Vector3 } from "@babylonjs/core";
 
 // node's type stripping cannot resolve without this hook.
-const { createVegetationFieldResult } = await import("../src/VegetationField.ts");
+const { createVegetationFieldResult } = await import("../src/vegetation/VegetationField.ts");
 
 /**
  * Emulates Babylon's thin-instance buffer API closely enough to observe what

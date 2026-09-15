@@ -2,20 +2,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const renderer = readFileSync(new URL("../src/Renderer.ts", import.meta.url), "utf8");
+const renderer = readFileSync(new URL("../src/rendering/Renderer.ts", import.meta.url), "utf8");
 const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-const fpsCounter = readFileSync(new URL("../src/FpsCounter.ts", import.meta.url), "utf8");
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const fpsCounter = readFileSync(new URL("../src/diagnostics/FpsCounter.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 const captureMaterial = readFileSync(
   new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
   "utf8",
 );
 const shadowReceiver = readFileSync(
-  new URL("../src/VegetationShadowReceiver.ts", import.meta.url),
+  new URL("../src/vegetation/VegetationShadowReceiver.ts", import.meta.url),
   "utf8",
 );
-const water = readFileSync(new URL("../src/Water.ts", import.meta.url), "utf8");
-const solarLighting = readFileSync(new URL("../src/SolarLighting.ts", import.meta.url), "utf8");
+const water = readFileSync(new URL("../src/water/Water.ts", import.meta.url), "utf8");
+const solarLighting = readFileSync(new URL("../src/sky/SolarLighting.ts", import.meta.url), "utf8");
 
 test("WebGPU is opt-in and falls back to WebGL", () => {
   assert.match(renderer, /query\.get\("renderer"\).*=== "webgpu" \? "webgpu" : "webgl"/);

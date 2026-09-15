@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { shapeCoastlineElevations } from "../src/Coastline.ts";
+import { shapeCoastlineElevations } from "../src/water/Coastline.ts";
 
 function terrain(elevations) {
   return {
@@ -113,9 +113,9 @@ test("uses shoreline context beyond the terrain tile edge", async () => {
 });
 
 test("preserves the carved profile during terrain interpolation", () => {
-  const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   const terrainMesh = readFileSync(
-    new URL("../src/TerrainMesh.ts", import.meta.url),
+    new URL("../src/terrain/TerrainMesh.ts", import.meta.url),
     "utf8",
   );
   assert.match(

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SpatialReferenceGrid } from "../src/SpatialReferenceGrid.ts";
+import { SpatialReferenceGrid } from "../src/world/SpatialReferenceGrid.ts";
 
 test("spatial grid stores and returns the original references", () => {
   const inside = { name: "inside" };

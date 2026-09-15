@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Observable } from "@babylonjs/core";
 import { enqueueInteriorBuild, INTERIOR_STEPS_PER_FRAME } from "../src/procedural/InteriorStreaming.ts";
-import { creationStats } from "../src/CreationStats.ts";
+import { creationStats } from "../src/diagnostics/CreationStats.ts";
 
 function fakeScene() {
   return { frame: 0, getFrameId() { return this.frame; },

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Matrix, NullEngine, Ray, Scene, Vector3 } from "@babylonjs/core";
-import { planBuilding } from "../src/BuildingPlanner.ts";
-import { lonLatToScene, sampleElevation } from "../src/Geo.ts";
-import { conformTerrainToPlannedFeatures } from "../src/PlannedFeatureTerrain.ts";
-import { planRoadsAndBuildings } from "../src/RoadAndBuildingPlanner.ts";
+import { planBuilding } from "../src/buildings/BuildingPlanner.ts";
+import { lonLatToScene, sampleElevation } from "../src/world/Geo.ts";
+import { conformTerrainToPlannedFeatures } from "../src/terrain/PlannedFeatureTerrain.ts";
+import { planRoadsAndBuildings } from "../src/roads/RoadAndBuildingPlanner.ts";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
 
 for (const scale of [1, 5]) for (const kind of ["ordinary", "courtyard", "composite", "raised"]) {

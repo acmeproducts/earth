@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const { buildingOwnerWorldTile } = await import("../src/BuildingTileOwnership.ts");
-const { worldTileBounds } = await import("../src/WorldGrid.ts");
+const { buildingOwnerWorldTile } = await import("../src/buildings/BuildingTileOwnership.ts");
+const { worldTileBounds } = await import("../src/world/WorldGrid.ts");
 
 test("assigns a cross-boundary building to its first north-west application tile", () => {
   const tile = { level: 16, x: 34_000, y: 20_000 };
@@ -38,13 +38,13 @@ test("building ownership does not depend on polygon traversal order", () => {
 });
 
 test("streamed OSM buildings render whole while terrain planning stays tile-clipped", () => {
-  const source = readFileSync(new URL("../src/OpenStreetMap.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
   const renderer = readFileSync(
     new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
     "utf8",
   );
   const planner = readFileSync(
-    new URL("../src/RoadAndBuildingPlanner.ts", import.meta.url),
+    new URL("../src/roads/RoadAndBuildingPlanner.ts", import.meta.url),
     "utf8",
   );
 

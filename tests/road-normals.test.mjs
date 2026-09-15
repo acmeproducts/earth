@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MeshBuilder, NullEngine, Scene, VertexBuffer, VertexData } from "@babylonjs/core";
-import { TerrainSurface } from "../src/TerrainSurface.ts";
+import { TerrainSurface } from "../src/terrain/TerrainSurface.ts";
 
 test("road normals match ground vertices and remain continuous across triangle seams", () => {
   const engine = new NullEngine();

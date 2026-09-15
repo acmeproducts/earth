@@ -5,17 +5,17 @@ import test from "node:test";
 const {
   providerElevationTileRange,
   providerPixelCrop,
-} = await import("../src/TerrainElevationSource.ts");
+} = await import("../src/terrain/TerrainElevationSource.ts");
 const {
   createTerrainSkirtGeometry,
   stitchTerrainEdges,
   stitchTerrainMeshEdges,
-} = await import("../src/TerrainStitching.ts");
-const { worldTileBounds } = await import("../src/WorldGrid.ts");
+} = await import("../src/terrain/TerrainStitching.ts");
+const { worldTileBounds } = await import("../src/world/WorldGrid.ts");
 
 const PROVIDER_LEVEL = 15;
 const PROVIDER_TILE_SIZE = 256;
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 
 function elevationWindow(tile) {
   const bounds = worldTileBounds(tile);

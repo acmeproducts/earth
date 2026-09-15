@@ -1,13 +1,13 @@
 import { Engine, Scene, UniversalCamera, Vector3, Color4, MeshBuilder,
   StandardMaterial, RawTexture, Texture, DirectionalLight, HemisphericLight, Matrix,
   ShadowGenerator, RenderTargetTexture, TransformNode, SSRRenderingPipeline, Constants } from '@babylonjs/core';
-import { createImpostorPrototypeFromAssets } from '../../src/TreeField';
-import { suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../../src/VegetationShadowReceiver';
-import { captureImpostorAtlases, type ImpostorAssets } from '../../src/Impostor';
-import { monitorRenderHealth } from '../../src/RenderHealth';
-import { createWaterSurfaceMaterial, bindWaterMaterial } from '../../src/Water';
-import { setManualWindSpeed } from '../../src/Wind';
-import { SolarLighting } from '../../src/SolarLighting';
+import { createImpostorPrototypeFromAssets } from '../../src/vegetation/TreeField';
+import { suspendVegetationShadowReceivers, resumeVegetationShadowReceivers } from '../../src/vegetation/VegetationShadowReceiver';
+import { captureImpostorAtlases, type ImpostorAssets } from '../../src/rendering/Impostor';
+import { monitorRenderHealth } from '../../src/diagnostics/RenderHealth';
+import { createWaterSurfaceMaterial, bindWaterMaterial } from '../../src/water/Water';
+import { setManualWindSpeed } from '../../src/vegetation/Wind';
+import { SolarLighting } from '../../src/sky/SolarLighting';
 
 const probe = window as any;
 void (async () => {

@@ -4,7 +4,7 @@ import test from "node:test";
 const {
   sampleWorldTreeSpecies,
   treeDistributionAt,
-} = await import("../src/TreeDistribution.ts");
+} = await import("../src/vegetation/TreeDistribution.ts");
 
 test("returns normalized ratios for representative forest regions", () => {
   for (const [lon, lat] of [[-63, -4], [25, 0], [105, 10], [10, 50], [25, 65]]) {
@@ -74,7 +74,7 @@ function distributionDistance(a, b) {
 }
 
 test("makes the liana-hung kapok the dominant rainforest tree and exposes rainforest influence", async () => {
-  const { rainforestInfluenceAt } = await import("../src/TreeDistribution.ts");
+  const { rainforestInfluenceAt } = await import("../src/vegetation/TreeDistribution.ts");
   const amazon = treeDistributionAt(-63, -4);
   const dominant = amazon.trees.reduce((a, b) => a.ratio > b.ratio ? a : b);
   assert.equal(dominant.species, "kapok");

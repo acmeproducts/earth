@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Mesh, MeshBuilder, NullEngine, Scene, VertexBuffer } from '@babylonjs/core';
-import { attachShoreline } from '../src/Shoreline.ts';
-import { createWaterPlane, disposeWaterPlane } from '../src/Water.ts';
-import { createTerrainLakeLayer, disposeTerrainLakeLayer } from '../src/TerrainLakeSurface.ts';
+import { attachShoreline } from '../src/water/Shoreline.ts';
+import { createWaterPlane, disposeWaterPlane } from '../src/water/Water.ts';
+import { createTerrainLakeLayer, disposeTerrainLakeLayer } from '../src/terrain/TerrainLakeSurface.ts';
 
 test('coastal tiles share one material and release their own geometry', async () => {
   const engine = new NullEngine();

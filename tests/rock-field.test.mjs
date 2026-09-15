@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("../src/RockField.ts", import.meta.url), "utf8");
-const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
-const streamedTile = readFileSync(new URL("../src/StreamedTile.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/vegetation/RockField.ts", import.meta.url), "utf8");
+const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const streamedTile = readFileSync(new URL("../src/world/StreamedTile.ts", import.meta.url), "utf8");
 
 test("builds deterministic bare and mossy thin-instanced rock variants", () => {
   assert.match(source, /createSeededRandom\(seed\)/);

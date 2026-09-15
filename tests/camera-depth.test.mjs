@@ -4,7 +4,7 @@ import {
   adaptiveCameraNearClipMeters,
   MAX_CAMERA_NEAR_CLIP_METERS,
   MIN_CAMERA_NEAR_CLIP_METERS,
-} from "../src/CameraDepth.ts";
+} from "../src/rendering/CameraDepth.ts";
 
 test("keeps a close near plane while walking at eye height", () => {
   assert.equal(adaptiveCameraNearClipMeters(1.8), MIN_CAMERA_NEAR_CLIP_METERS);

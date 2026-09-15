@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decomposeToConvexPolygons } from "../src/PolygonDecomposition.mjs";
-import { planningFrameForPolygon, pointInPlanningFrame } from "../src/PlanningFrame.mjs";
+import { decomposeToConvexPolygons } from "../src/core/PolygonDecomposition.mjs";
+import { planningFrameForPolygon, pointInPlanningFrame } from "../src/core/PlanningFrame.mjs";
 
 const outlines = [
   // Opposing recesses require cuts that terminate at existing vertices.

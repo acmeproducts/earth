@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   SceneSettingsStore,
   updateSceneSetting,
-} from "../src/SceneSettings.ts";
+} from "../src/app/SceneSettings.ts";
 
 class MemoryStorage {
   value = null;

@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
-import { worldTileAtLocation, worldTileKey, worldTileWindowOffsetsAtLocation } from "../src/WorldGrid.ts";
-const fadeSource = readFileSync(new URL("../src/LayerFades.ts", import.meta.url), "utf8");
+import { worldTileAtLocation, worldTileKey, worldTileWindowOffsetsAtLocation } from "../src/world/WorldGrid.ts";
+const fadeSource = readFileSync(new URL("../src/rendering/LayerFades.ts", import.meta.url), "utf8");
 const fadeModule = { exports: {} };
 new Function("exports", ts.transpileModule(fadeSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText)(fadeModule.exports);
 const { LayerFades } = fadeModule.exports;
 
-const source = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("Game.ts", source, ts.ScriptTarget.Latest, true);
 const method = parsed.statements.find(ts.isClassDeclaration).members
   .find((member) => member.name?.getText(parsed) === "prepareSpawnWindow");

@@ -8,7 +8,7 @@ const {
   proceduralRegionSpec,
   proceduralVariantAtLocation,
 } = await import("../src/procedural/ProceduralRegions.ts");
-const { worldTileBounds } = await import("../src/WorldGrid.ts");
+const { worldTileBounds } = await import("../src/world/WorldGrid.ts");
 
 function locationAtTileCoordinate(x, y) {
   const tile = { level: 16, x: Math.floor(x), y: Math.floor(y) };

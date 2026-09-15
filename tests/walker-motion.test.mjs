@@ -13,8 +13,8 @@ import {
   FLY_CAMERA_INERTIA,
   WALK_CAMERA_INERTIA,
   WALKER_JUMP_SPEED_METERS_PER_SECOND,
-} from "../src/WalkerMotion.ts";
-import { moveWalkerWithCollisions } from "../src/WalkerCollision.ts";
+} from "../src/app/WalkerMotion.ts";
+import { moveWalkerWithCollisions } from "../src/app/WalkerCollision.ts";
 
 test("a grounded walker follows ordinary downhill terrain without falling", () => {
   const result = advanceWalkerVerticalMotion({

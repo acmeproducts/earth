@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { clamp, clamp01, smoothstep } = await import("../src/MathUtils.ts");
+const { clamp, clamp01, smoothstep } = await import("../src/core/MathUtils.ts");
 
 test("shared numeric helpers preserve normalized arithmetic", () => {
   assert.equal(clamp(-2, -1, 3), -1);

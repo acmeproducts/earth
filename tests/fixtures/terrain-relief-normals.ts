@@ -1,8 +1,8 @@
 import { Engine, Scene, UniversalCamera, Vector3, MeshBuilder, DirectionalLight, Color3, VertexBuffer } from '@babylonjs/core';
-import { createTerrainMaterial } from '../../src/TerrainMaterial';
-import { attachTerrainReliefNormals } from '../../src/TerrainReliefNormals';
-import { createCloudShadowProjector } from '../../src/CloudShadows';
-import type { TerrainData } from '../../src/TerrainData';
+import { createTerrainMaterial } from '../../src/terrain/TerrainMaterial';
+import { attachTerrainReliefNormals } from '../../src/terrain/TerrainReliefNormals';
+import { createCloudShadowProjector } from '../../src/sky/CloudShadows';
+import type { TerrainData } from '../../src/terrain/TerrainData';
 
 const probe = window as any;
 void (async () => {

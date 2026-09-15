@@ -12,7 +12,7 @@ const {
   worldTileCoordinatesAtLocation,
   worldTileSeed,
   worldTileWindowOffsetsAtLocation,
-} = await import("../src/WorldGrid.ts");
+} = await import("../src/world/WorldGrid.ts");
 test("maps a location into the fixed application-owned grid", () => {
   const latitude = 59.8888085995981;
   const longitude = 10.593090176648504;

@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   formatCalendarDate,
   parseCalendarDate,
-} from "../src/CalendarDate.ts";
+} from "../src/core/CalendarDate.ts";
 
 test("parses valid local calendar dates", () => {
   assert.deepEqual(parseCalendarDate("2024-02-29"), {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planApartmentLayout } from "../src/ApartmentLayoutPlanner.ts";
-import { planBuildingLayout } from "../src/BuildingLayoutPlanner.ts";
-import { polygonMinimumMeanWidth, polygonArea } from "../src/PolygonGeometry.ts";
+import { planApartmentLayout } from "../src/buildings/ApartmentLayoutPlanner.ts";
+import { planBuildingLayout } from "../src/buildings/BuildingLayoutPlanner.ts";
+import { polygonMinimumMeanWidth, polygonArea } from "../src/core/PolygonGeometry.ts";
 
 const planningFrame = { origin: { x: 0, y: 0 }, xAxis: { x: 1, y: 0 }, yAxis: { x: 0, y: 1 } };
 

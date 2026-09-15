@@ -5,8 +5,8 @@ import {
   Scene,
   StandardMaterial,
 } from "@babylonjs/core";
-import { lonLatToScene, sceneToLonLat } from "../Geo";
-import type { SceneGeographicFrame } from "../Geo";
+import { lonLatToScene, sceneToLonLat } from "../world/Geo";
+import type { SceneGeographicFrame } from "../world/Geo";
 import type { GameConnection } from "./GameConnection";
 import { createBrowserGameConnection } from "./BrowserGameConnection";
 import type {

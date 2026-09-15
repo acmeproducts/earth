@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
-import { createBushModel } from "../src/BushImpostor.ts";
+import { createBushModel } from "../src/vegetation/BushImpostor.ts";
 
 test("bush foliage has directional occlusion that survives cached model scaling", async (t) => {
   const originalFrame = globalThis.requestAnimationFrame;
