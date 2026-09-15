@@ -1,6 +1,7 @@
-import { creationStats } from "./CreationStats";
+import { creationStats, SLOW_OPERATION_THRESHOLD_MS } from "./CreationStats";
 
 const HISTORY_SIZE = 2048;
+const SLOW_HISTORY_SIZE = 256;
 interface StageTiming {
   traceId: number;
   label: string;
@@ -11,6 +12,8 @@ interface StageTiming {
   completed: boolean;
 }
 const history: StageTiming[] = [];
+const slowHistory: StageTiming[] = [];
+let slowHistoryCursor = 0;
 const active = new Map<number, StreamingTrace>();
 let nextTraceId = 0;
 let historyCursor = 0;
@@ -21,6 +24,10 @@ export function streamingDiagnosticsSnapshot() {
     timeOrigin: "performance.now",
     note: "Wall-clock stages include network and frame waits. Nested stages overlap; durations must not be added together. Synchronous timings are elapsed time, not CPU samples.",
     capacity: HISTORY_SIZE,
+    slowOperationThresholdMilliseconds: SLOW_OPERATION_THRESHOLD_MS,
+    slowOperationCapacity: SLOW_HISTORY_SIZE,
+    slowOperations: [...slowHistory.slice(slowHistoryCursor), ...slowHistory.slice(0, slowHistoryCursor)]
+      .map((entry) => ({ ...entry })),
     stages: [...history.slice(historyCursor), ...history.slice(0, historyCursor)]
       .map((entry) => ({ ...entry })),
     activeStages: [...active.values()].map((trace) => trace.snapshot(now, false)),
@@ -40,9 +47,11 @@ export class StreamingTrace {
   constructor(
     label: string,
     timingKind: StageTiming["timingKind"] = "wall-clock",
+    stageName = "starting",
   ) {
     this.label = label;
     this.timingKind = timingKind;
+    this.stageName = stageName;
     active.set(this.id, this);
   }
 
@@ -68,6 +77,15 @@ export class StreamingTrace {
       historyCursor = (historyCursor + 1) % HISTORY_SIZE;
     }
     creationStats.record(`streaming.stage.${this.stageName}.ms`, now - this.stageStarted);
+    // Keep blocking outliers independently of the high-volume stage history.
+    if (entry.timingKind === "synchronous" && entry.durationMilliseconds > SLOW_OPERATION_THRESHOLD_MS) {
+      if (slowHistory.length < SLOW_HISTORY_SIZE) slowHistory.push(entry);
+      else {
+        slowHistory[slowHistoryCursor] = entry;
+        slowHistoryCursor = (slowHistoryCursor + 1) % SLOW_HISTORY_SIZE;
+      }
+      creationStats.recordSlowOperation(`streaming.stage.${this.stageName}`, entry.durationMilliseconds);
+    }
     this.stageName = name;
     this.stageStarted = now;
     this.timingKind = timingKind;
@@ -82,8 +100,8 @@ export class StreamingTrace {
   }
 }
 
-export function traceStreamingSynchronous<T>(label: string, operation: () => T): T {
-  const trace = new StreamingTrace(label, "synchronous");
+export function traceStreamingSynchronous<T>(label: string, operation: () => T, stageName = "starting"): T {
+  const trace = new StreamingTrace(label, "synchronous", stageName);
   try {
     return operation();
   } finally {

@@ -44,6 +44,7 @@ import { buildingProfile } from "../buildings/BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
 import { createRooftopEquipment } from "./RooftopEquipment";
 import type { TerrainData } from "../terrain/TerrainData";
+import { buildingGroundElevation } from "../terrain/BuildingGroundElevation";
 import type {
   BuildingAppearance,
   BuildingRenderOptions,
@@ -1769,7 +1770,10 @@ function prepareBuildingFootprint(
   return {
     outline,
     holes,
-    baseElevation: options.sharedBuildingElevations?.get(buildingId) ?? Math.max(...elevations),
+    baseElevation: Math.max(
+      options.sharedBuildingElevations?.get(buildingId) ?? Math.max(...elevations),
+      buildingGroundElevation(terrain, outline, holes, options.meshWidth, options.meshDepth),
+    ),
   };
 }
 

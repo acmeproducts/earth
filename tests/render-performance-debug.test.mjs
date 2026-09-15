@@ -4,6 +4,14 @@ import test from "node:test";
 
 const fpsCounter = readFileSync(new URL("../src/diagnostics/FpsCounter.ts", import.meta.url), "utf8");
 
+test("performance view includes persistent slow-operation summaries", () => {
+  assert.match(fpsCounter, /const slow = creationStats\.slowOperationsSnapshot\(\)/);
+  assert.match(fpsCounter, /Slow operations >/);
+  assert.match(fpsCounter, /No slow operations recorded/);
+  assert.match(fpsCounter, /operation\.maximumMilliseconds\.toFixed/);
+  assert.match(fpsCounter, /operation\.latestMilliseconds\.toFixed/);
+});
+
 test("expanded performance diagnostics split CPU render phases from GPU time", () => {
   assert.match(fpsCounter, /captureActiveMeshesEvaluationTime = enabled/);
   assert.match(fpsCounter, /captureRenderTargetsRenderTime = enabled/);

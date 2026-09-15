@@ -8,11 +8,12 @@ import {
   SceneInstrumentation,
 } from "@babylonjs/core";
 import { streamingDiagnosticsSnapshot } from "./StreamingDiagnostics";
+import { creationStats, SLOW_OPERATION_THRESHOLD_MS } from "./CreationStats";
 
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 6;
+const REPORT_VERSION = 7;
 const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
 const BENCHMARK_WARMUP_FRAMES = 60;
 const BENCHMARK_SAMPLE_FRAMES = 120;
@@ -212,6 +213,7 @@ export class FpsCounter {
     const config = this.configuration
       ? `scale ${this.configuration.renderScale.toFixed(2)}`
       : "";
+    const slow = creationStats.slowOperationsSnapshot();
     this.element.textContent = [
       `${fps}  ${frameMs.toFixed(1)} ms frame`,
       `pacing ${intervalAverage.toFixed(1)} avg / ` +
@@ -256,6 +258,14 @@ export class FpsCounter {
       [memory ? `${formatBytes(memory.usedJSHeapSize)} heap` : "", config]
         .filter(Boolean)
         .join("  "),
+      `\nSlow operations > ${SLOW_OPERATION_THRESHOLD_MS} ms (${slow.sampleCount}/${slow.capacity} retained)`,
+      slow.operations.length ? "worst / latest | count | last seen" : "No slow operations recorded",
+      ...slow.operations.map((operation) => {
+        const ageSeconds = Math.max(0, Math.floor((now - operation.recordedAtMilliseconds) / 1000));
+        const name = operation.category.replace(/^streaming\.stage\./, "");
+        return `${name}\n  ${operation.maximumMilliseconds.toFixed(1)} / ` +
+          `${operation.latestMilliseconds.toFixed(1)} ms | ${operation.count}x | ${ageSeconds}s ago`;
+      }),
     ].filter(Boolean).join("\n");
     this.resetInterval();
   }
@@ -374,6 +384,10 @@ export class FpsCounter {
     }
     const expectedCadenceMilliseconds = this.cadenceMilliseconds ?? 1000 / 60;
     const callbackMilliseconds = sample.gameMilliseconds + sample.renderMilliseconds;
+    creationStats.recordSlowOperation("frame.callback", callbackMilliseconds);
+    creationStats.recordSlowOperation("frame.game", sample.gameMilliseconds);
+    creationStats.recordSlowOperation("frame.render", sample.renderMilliseconds);
+    creationStats.recordSlowOperation("frame.vegetation", sample.vegetationMilliseconds);
     const unattributedMilliseconds = Math.max(
       0,
       frameIntervalMilliseconds - expectedCadenceMilliseconds - callbackMilliseconds,
@@ -624,6 +638,7 @@ export class FpsCounter {
       schema: "babylon-earth/render-stats",
       version: REPORT_VERSION,
       streamingDiagnostics: streamingDiagnosticsSnapshot(),
+      slowOperations: creationStats.slowOperationsSnapshot(),
       capturedAt: new Date().toISOString(),
       pageUptimeMilliseconds: performance.now(),
       application,

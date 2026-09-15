@@ -1,5 +1,6 @@
 import type { RoadPlan, RoadSurface, RoadVisualStyle } from "./RoadPlanner";
 import earcut from "earcut";
+import { traceStreamingSynchronous } from "../diagnostics/StreamingDiagnostics";
 import { hashString } from "../core/Random";
 import {
   averagePoint,
@@ -178,28 +179,26 @@ export function planRoadsAndBuildings(
   options: RoadAndBuildingPlanningOptions,
   lampInputs: readonly PlanningLampInput[] = [],
 ): RoadAndBuildingPlan {
+  const measure = <T>(stage: string, operation: () => T): T =>
+    traceStreamingSynchronous("road/building planner", operation, stage);
   const bounds = {
     minX: -options.meshWidth / 2,
     maxX: options.meshWidth / 2,
     minZ: -options.meshDepth / 2,
     maxZ: options.meshDepth / 2,
   };
-  const { surfaceCandidates, outerCandidates } = buildRoadNetworkCandidates(
+  const { surfaceCandidates, outerCandidates } = measure("planner road network construction", () => buildRoadNetworkCandidates(
     roadInputs,
     options,
-  );
+  ));
 
-  const roads = mergeCompatiblePolygons(partitionCandidates(
-    triangulateCandidates(surfaceCandidates),
-    bounds,
-    options,
-  ));
-  const shoulders = mergeCompatiblePolygons(partitionCandidates(
-    triangulateCandidates(outerCandidates),
-    bounds,
-    options,
-  ));
-  const buildingSites = buildingInputs.flatMap((building) => {
+  const surfaceTriangles = measure("planner road triangulation", () => triangulateCandidates(surfaceCandidates));
+  const surfacePartitions = measure("planner road partitioning", () => partitionCandidates(surfaceTriangles, bounds, options));
+  const roads = measure("planner road merging", () => mergeCompatiblePolygons(surfacePartitions));
+  const shoulderTriangles = measure("planner shoulder triangulation", () => triangulateCandidates(outerCandidates));
+  const shoulderPartitions = measure("planner shoulder partitioning", () => partitionCandidates(shoulderTriangles, bounds, options));
+  const shoulders = measure("planner shoulder merging", () => mergeCompatiblePolygons(shoulderPartitions));
+  const buildingSites = measure("planner building clipping", () => buildingInputs.flatMap((building) => {
     const outline = clipToBounds(withoutClosingPoint(building.outline), bounds);
     if (outline.length < 3) return [];
     return [{
@@ -209,17 +208,17 @@ export function planRoadsAndBuildings(
         .map((hole) => clipToBounds(withoutClosingPoint(hole), bounds))
         .filter((hole) => hole.length >= 3),
     }];
-  });
+  }));
 
-  const streetLamps = planStreetLamps(roadInputs, lampInputs, buildingSites, shoulders, bounds, options);
-  const plots = planBuildingPlots(buildingSites, outerCandidates, bounds, options);
-  const plotBoundaries = planPlotBoundaries(
+  const streetLamps = measure("planner street lamps", () => planStreetLamps(roadInputs, lampInputs, buildingSites, shoulders, bounds, options));
+  const plots = measure("planner building plots", () => planBuildingPlots(buildingSites, outerCandidates, bounds, options));
+  const plotBoundaries = measure("planner plot boundaries", () => planPlotBoundaries(
     plots,
     buildingSites,
     outerCandidates,
     bounds,
     options,
-  );
+  ));
   return { bounds, roads, shoulders, buildingSites, streetLamps, plots, plotBoundaries };
 }
 

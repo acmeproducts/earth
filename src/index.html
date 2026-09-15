@@ -63,8 +63,16 @@
     }
 
     #fpsCounter.expanded {
-      min-width: 310px;
+      box-sizing: border-box;
+      min-width: 0;
+      width: min(560px, calc(100vw - 24px));
+      max-height: calc(100dvh - 24px);
       height: auto;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      pointer-events: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
       padding: 7px 9px;
       line-height: 17px;
       text-align: left;

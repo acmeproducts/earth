@@ -16,6 +16,21 @@ const appearance = {
 };
 const options = { meshWidth: 12, meshDepth: 12, metersPerUnit: 1 };
 
+test("planner records each synchronous phase without a caller trace", async () => {
+  const { streamingDiagnosticsSnapshot } = await import("../src/diagnostics/StreamingDiagnostics.ts");
+  const before = Math.max(0, ...streamingDiagnosticsSnapshot().stages.map((entry) => entry.traceId));
+  planRoadsAndBuildings([], [], options);
+  const entries = streamingDiagnosticsSnapshot().stages.filter((entry) => entry.traceId > before);
+  assert.deepEqual(entries.map((entry) => entry.stage), [
+    "planner road network construction",
+    "planner road triangulation", "planner road partitioning", "planner road merging",
+    "planner shoulder triangulation", "planner shoulder partitioning", "planner shoulder merging",
+    "planner building clipping", "planner street lamps", "planner building plots", "planner plot boundaries",
+  ]);
+  assert.ok(entries.every((entry) => entry.completed && entry.timingKind === "synchronous"));
+  assert.equal(streamingDiagnosticsSnapshot().activeStages.length, 0);
+});
+
 test("plans crossing roads as connected polygons without overlapping area", () => {
   const plan = planRoadsAndBuildings([
     { id: "east-west", paths: [[{ x: -5, z: 0 }, { x: 5, z: 0 }]], appearance },
