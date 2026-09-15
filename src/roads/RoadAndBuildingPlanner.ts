@@ -178,9 +178,9 @@ export function planRoadsAndBuildings(
   buildingInputs: readonly PlanningBuildingInput[],
   options: RoadAndBuildingPlanningOptions,
   lampInputs: readonly PlanningLampInput[] = [],
+  measure: <T>(stage: string, operation: () => T) => T = (stage, operation) =>
+    traceStreamingSynchronous("road/building planner", operation, stage),
 ): RoadAndBuildingPlan {
-  const measure = <T>(stage: string, operation: () => T): T =>
-    traceStreamingSynchronous("road/building planner", operation, stage);
   const bounds = {
     minX: -options.meshWidth / 2,
     maxX: options.meshWidth / 2,

@@ -66,6 +66,8 @@ import {
 } from "../world/Geo";
 import type { SceneGeographicFrame } from "../world/Geo";
 import { OpenStreetMap } from "../world/OpenStreetMap";
+import { RoadPlanningWorker } from "../roads/RoadPlanningWorker";
+import type { RoadAndBuildingPlan } from "../roads/RoadAndBuildingPlanner";
 import { OwnedValueCache } from "../core/OwnedValueCache";
 import type { MapTile } from "../world/OpenStreetMap";
 import { OpenStreetMapBarriers } from "../world/OpenStreetMapBarriers";
@@ -202,6 +204,7 @@ export class Game {
   private readonly buildingElevations = new OwnedValueCache<string, number>();
   private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
+  private readonly roadPlanningWorker = new RoadPlanningWorker();
   /** Streaming CPU work yields when it has consumed its frame slice. */
   private readonly streamingYielder = createFrameBudgetYielder();
   private cameraTileKey?: string;
@@ -431,6 +434,7 @@ export class Game {
     onProgress?: InitializationProgress,
   ): Promise<void> {
     const generation = ++this.streamingGeneration;
+    this.roadPlanningWorker.reset();
     this.resetCameraForWorldChange();
     this.cloudLayer?.dispose();
     this.cloudLayer = undefined;
@@ -731,13 +735,23 @@ export class Game {
       trace?.stage("planning progress wait");
       await reportInitializationProgress(onProgress, "Planning roads and building sites", 34);
     }
+    if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("road/building planning and terrain shaping");
-    const roadAndBuildingPlan = OpenStreetMap.planRoadsAndBuildings(
+    const planningInput = OpenStreetMap.prepareRoadAndBuildingInputs(
       lakeTiles,
       terrainData,
       { meshWidth, meshDepth, metersPerUnit },
       trace,
     );
+    trace?.stage("road and building worker wait");
+    let roadAndBuildingPlan: RoadAndBuildingPlan;
+    try {
+      roadAndBuildingPlan = await this.roadPlanningWorker.plan(planningInput, `tile=${key}`);
+    } catch (error) {
+      if (generation !== this.streamingGeneration) return undefined;
+      throw error;
+    }
+    if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("planned terrain shaping");
     if (native) {
       await OpenStreetMap.conformTerrainToPlan(
@@ -1924,6 +1938,7 @@ export class Game {
   private invalidateScenery(): void {
     this.sceneryRevision++;
     this.streamingGeneration++;
+    this.roadPlanningWorker.reset();
     this.requestStreamingUpdate();
   }
 
@@ -2316,6 +2331,8 @@ export class Game {
   }
 
   dispose(): void {
+    this.streamingGeneration++;
+    this.roadPlanningWorker.dispose();
     window.removeEventListener("pagehide", this.handlePageHide);
     this.playerControls?.dispose();
     this.playerPresence.dispose();

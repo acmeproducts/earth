@@ -67,14 +67,14 @@ test("renders any polygon layout as a standalone labeled SVG", () => {
   assert.match(svg, /aria-label="Floor plan"/);
 });
 
-test("rejects geometry outside the initial planner's documented scope", () => {
-  assert.throws(
-    () => planBuildingLayout({
-      buildingPolygon: { ...rectangle, holes: [[{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 2, y: 2 }]] },
-      buildingType: "apartment-building",
-    }),
-    /does not support polygon holes/,
-  );
+test("preserves courtyard holes while planning apartment shells", () => {
+  const hole = [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 2, y: 2 }];
+  const layout = planBuildingLayout({
+    buildingPolygon: { ...rectangle, holes: [hole] }, buildingType: "apartment-building",
+  });
+  assert.equal(layout.boundary.holes.length, 1);
+  assert.ok(Math.abs(layout.rooms.reduce((sum, room) => sum + polygonArea(room.polygon.outer), 0) -
+    (polygonArea(rectangle.outer) - polygonArea(hole))) < 1e-6);
 });
 
 test("only adds common circulation above the 120 square meter threshold", () => {

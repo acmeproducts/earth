@@ -26,6 +26,7 @@ import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../world/Geo";
 import { clamp01 } from "../core/MathUtils";
 import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
 import { unitFromSeed } from "../core/Random";
+import { overlappingSegment } from "../core/PolygonGeometry";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../buildings/BuildingPlanner";
 import { planBuildingLayout, type BuildingLayout } from "../buildings/BuildingLayoutPlanner";
 import { planningFrameForPolygon } from "../core/PlanningFrame.mjs";
@@ -34,7 +35,7 @@ import {
   planApartmentLayout,
   type ApartmentLayout,
 } from "../buildings/ApartmentLayoutPlanner";
-import { segmentsIntersect, type Opening2D, type Point2D, type PolygonLayout } from "../buildings/FloorPlan";
+import { segmentsIntersect, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "../buildings/FloorPlan";
 import {
   captureEncounteredBuildingLayout,
   retainCurrentBuildingLayoutCaptures,
@@ -286,7 +287,7 @@ export class ProceduralBuildingRenderer {
       trace.stage("compact buffers/metadata");
       meshes.forEach(compactMeshBuffers);
       const buildingIds = meshes
-        .map((mesh) => mesh.metadata?.buildingId)
+        .flatMap((mesh) => mesh.metadata?.layoutCaptureIds ?? [mesh.metadata?.buildingId])
         .filter((id): id is string => typeof id === "string");
       const metersPerUnit = Number(meshes[0].metadata?.metersPerUnit);
       const skyReflection = meshes.find((mesh) => mesh.metadata?.skyReflection)?.metadata
@@ -329,35 +330,6 @@ export class ProceduralBuildingRenderer {
       return result;
     }, logTiming);
   }
-}
-
-function captureUnplannedBuilding(
-  plan: BuildingPlan,
-  prepared: PreparedBuildingFootprint,
-  options: BuildingRenderOptions,
-  fallbackReason: string,
-): void {
-  const project = (point: ScenePoint): Point2D => ({
-    x: point.x * options.metersPerUnit,
-    y: point.z * options.metersPerUnit,
-  });
-  captureEncounteredBuildingLayout({
-    id: plan.id,
-    buildingClass: plan.buildingClass,
-    heightMeters: plan.heightMeters,
-    levels: plan.levels,
-    geographicFootprint: plan.footprint,
-    plannerInput: {
-      buildingType: "house",
-      buildingPolygon: {
-        outer: prepared.outline.map(project),
-        holes: prepared.holes.map((hole) => hole.map(project)),
-      },
-      openings: [],
-    },
-    facadeOpenings: [],
-    fallbackReason,
-  });
 }
 
 function createCompositeBuilding(
@@ -406,6 +378,8 @@ type InteriorSection = {
   incoming: StairLayout[];
   outgoing: StairLayout[];
   openings: Opening2D[];
+  facadeOpenings: Opening2D[];
+  interior?: PlannedInterior;
 };
 
 function sectionRings(section: Pick<InteriorSection, "outline" | "holes">): LonLat[][] {
@@ -460,6 +434,7 @@ function createComplexEnterableBuilding(
       }
       const bandPlan = { ...plan, footprint, levels: floors };
       const openings: Opening2D[] = [];
+      const facadeOpenings: Opening2D[] = [];
       for (const ring of [polygon.outline, ...polygon.holes]) {
         const facade = createEnterableBuilding(scene, bandPlan, ring, bottom, top, options,
           appearance, "exterior", ring === polygon.outline
@@ -467,29 +442,37 @@ function createComplexEnterableBuilding(
         parts.push(...facade.parts);
         windowCount += facade.windowCount;
         openings.push(...plannedEntranceOpenings(ring, facade.entranceEdgeIndex, buildingWindowStyle(plan), options));
+        facadeOpenings.push(...plannedFacadeOpenings(bandPlan, ring, storyHeight,
+          facade.entranceEdgeIndex, buildingWindowStyle(plan), options, undefined,
+          ring === polygon.outline ? findSharedFacadeEdges(plan.footprint, ring, terrain, options) : new Set()));
       }
       for (let floor = 0; floor < floors; floor++) {
         sections.push({ ...polygon, bottom: bottom + floor * storyHeight,
           top: bottom + (floor + 1) * storyHeight, incoming: [], outgoing: [],
-          openings: floor === 0 ? openings : [] });
+          openings: floor === 0 ? openings : [], facadeOpenings });
       }
     }
   }
-  // Each overlap component gets a connection, including separate towers above one podium.
-  for (const lower of sections) {
-    for (const upper of sections) {
-      if (Math.abs(lower.top - upper.bottom) > 1e-6) continue;
-      const overlaps = polygonClipping.intersection(sectionRings(lower), sectionRings(upper));
-      for (const overlap of overlaps) {
-        const polygon = scenePolygon(overlap);
-        const stair = findStairLayouts(polygon.outline, options,
-          { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1,
-          plan.detailSeed, [...polygon.holes, ...lower.openings.map((opening) => doorwayClearance(opening, options))])[0];
-        if (!stair) continue;
-        lower.outgoing.push(stair);
-        upper.incoming.push(stair);
-      }
+  connectInteriorSections(sections, plan, options);
+  const interiorUse = resolvedInteriorUse(plan);
+  for (const section of sections) {
+    if (profile.interiorLayout !== "rooms") continue;
+    const attempt = createPlannedInterior(section.outline, section.openings, options, section.holes,
+      [...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options)));
+    section.interior = attempt.interior;
+    if (section.interior) {
+      const apartments = planInteriorApartments(section.interior.building, section.facadeOpenings,
+        plan.detailSeed, interiorUse);
+      section.interior.apartments = apartments.apartments;
+      attempt.failure = apartments.failure;
     }
+    captureEncounteredBuildingLayout({
+      id: `${plan.id}:floor:${sections.indexOf(section)}`, buildingClass: plan.buildingClass,
+      heightMeters: section.top - section.bottom, levels: 1, geographicFootprint: plan.footprint,
+      plannerInput: attempt.input, facadeOpenings: section.facadeOpenings,
+      buildingLayout: section.interior?.building, apartmentLayouts: section.interior?.apartments,
+      fallbackReason: attempt.failure,
+    });
   }
   // Keep the exact exposed horizontal faces of the distant shell; its solid walls
   // must not survive behind the new doors and windows.
@@ -519,7 +502,6 @@ function createComplexEnterableBuilding(
     return Math.sqrt(Math.min(...[section.outline, ...section.holes].map((ring) =>
       nearestFootprintPoint(position, ring).distanceSquared))) * options.metersPerUnit;
   }));
-  captureUnplannedBuilding(plan, prepared, options, "Open interiors follow the building's height bands and courtyard boundaries.");
   mesh.metadata = {
     buildingId: plan.id,
     buildingClass: plan.buildingClass,
@@ -535,7 +517,10 @@ function createComplexEnterableBuilding(
       y: section.top / options.metersPerUnit,
       z: stair.start.z + stair.direction.z * stair.runMeters / (2 * options.metersPerUnit),
     }))),
-    plannedInterior: false,
+    plannedInterior: sections.some((section) => section.interior !== undefined),
+    interiorRoomCount: sections.reduce((sum, section) => sum +
+      (section.interior?.apartments.reduce((count, apartment) => count + apartment.rooms.length, 0) ?? 0), 0),
+    layoutCaptureIds: sections.map((_, index) => `${plan.id}:floor:${index}`),
     interiorsLoaded: false,
     metersPerUnit: options.metersPerUnit,
     skyReflection: options.skyReflection,
@@ -558,11 +543,29 @@ function createComplexEnterableBuilding(
   return mesh;
 }
 
+function connectInteriorSections(sections: InteriorSection[], plan: BuildingPlan, options: BuildingRenderOptions): void {
+  if (!buildingProfile(plan.buildingClass).hasStairs) return;
+  // Each overlap component gets a connection, including separate towers above one podium.
+  for (const lower of sections) for (const upper of sections) {
+    if (Math.abs(lower.top - upper.bottom) > 1e-6) continue;
+    for (const overlap of polygonClipping.intersection(sectionRings(lower), sectionRings(upper))) {
+      const polygon = scenePolygon(overlap);
+      const stair = findStairLayouts(polygon.outline, options,
+        { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1, plan.detailSeed,
+        [...polygon.holes, ...lower.openings.map((opening) => doorwayClearance(opening, options))])[0];
+      if (!stair) continue;
+      lower.outgoing.push(stair);
+      upper.incoming.push(stair);
+    }
+  }
+}
+
 function* createComplexInteriorParts(
   parts: Mesh[], scene: Scene, plan: BuildingPlan, sections: InteriorSection[],
   options: BuildingRenderOptions, appearance: BuildingAppearance,
 ): Generator<string, void, void> {
   const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
+  const elevations = [...new Set(sections.map((item) => item.bottom))].sort((a, b) => a - b);
   for (const section of sections) {
     const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
     const floors = openings.length ? polygonClipping.difference(sectionRings(section), ...openings) : [sectionRings(section)];
@@ -578,18 +581,10 @@ function* createComplexInteriorParts(
       createStairFlight(parts, scene, stair, section.bottom, section.top - section.bottom, options, floorColor);
       yield "complex stair flights";
     }
-    const meters = (ring: ScenePoint[]) => ring.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit }));
-    const boundary = { outer: meters(section.outline), holes: [
-      ...section.holes, ...[...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options)),
-    ].map(meters) };
-    const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
-      openings: section.openings };
-    const use = section.bottom === sections[0].bottom ? plan.groundFloorUse ?? plan.interiorUse : plan.interiorUse;
-    const seed = plan.detailSeed + Math.round(section.bottom * 100) * 7919;
-    const furniture = planInteriorFurniture(layout, seed, use ?? (plan.buildingClass === "commercial" ? "office" : "residential"));
-    yield "complex furniture planning";
-    yield* createFurnitureParts(parts, scene, furniture, section.bottom + BUILDING_FLOOR_THICKNESS_METERS,
-      options.metersPerUnit, section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, seed);
+    yield* createFloorContents(parts, scene, plan, section.outline, section.bottom, options, appearance,
+      elevations.indexOf(section.bottom), elevations.length, section.top - section.bottom,
+      section.interior, section.openings, section.facadeOpenings, resolvedInteriorUse(plan),
+      [...section.holes, ...[...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options))]);
   }
 }
 
@@ -710,61 +705,71 @@ function* createInteriorParts(
     }
   }
 
+  for (let floor = 0; floor < floorCount; floor++) {
+    yield* createFloorContents(parts, scene, plan, outline, baseElevation + floor * storyHeight,
+      options, appearance, floor, floorCount, storyHeight, plannedInterior, entranceOpenings,
+      facadeOpenings, interiorUse, [stairs[floor - 1], stairs[floor]]
+        .filter((stair): stair is StairLayout => stair !== undefined).map((stair) => stairClearance(stair, options)));
+  }
+}
+
+function* createFloorContents(
+  parts: Mesh[], scene: Scene, plan: BuildingPlan, outline: ScenePoint[],
+  floorElevation: number, options: BuildingRenderOptions, appearance: BuildingAppearance,
+  floor: number, floorCount: number, storyHeight: number, plannedInterior: PlannedInterior | undefined,
+  entranceOpenings: Opening2D[], facadeOpenings: Opening2D[],
+  interiorUse: NonNullable<BuildingPlan["interiorUse"]>, holes: ScenePoint[][] = [],
+): Generator<string, void, void> {
   if (plannedInterior) {
     const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
-    for (let floor = 0; floor < floorCount; floor++) {
-      // One ground-floor suite serves as reception; upper floors retain their rooms.
-      const floorUse = floor === 0 ? plan.groundFloorUse ?? interiorUse : interiorUse;
-      const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
-        (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
-      const entrance = entranceOpenings[0]?.start;
-      const receptionIndex = entrance ? plannedInterior.apartments.reduce((best, apartment, index, apartments) => {
-        const gap = (layout: ApartmentLayout): number => Math.min(...layout.boundary.outer.map((p) => Math.hypot(p.x - entrance.x, p.y - entrance.y)));
-        return gap(apartment) < gap(apartments[best]) ? index : best;
-      }, 0) : 0;
-      const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
-        (floor === 0 && plan.groundFloorUse) || (hasReception && index === receptionIndex) ? {
-          ...apartment,
-          rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
-          openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
-        } : apartment) };
-      const furniture: FurniturePlacement[] = [];
-      for (let index = 0; index < floorInterior.apartments.length; index++) {
-        const apartment = floorInterior.apartments[index];
-        for (const room of apartment.rooms) {
-          furniture.push(...planInteriorFurniture({ ...apartment, rooms: [room] },
-            plan.detailSeed + floor * 7919 + index * 101,
-            hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : floorUse));
-          yield "furniture planning";
-        }
+    // One ground-floor suite serves as reception; upper floors retain their rooms.
+    const floorUse = floor === 0 ? plan.groundFloorUse ?? interiorUse : interiorUse;
+    const hasReception = floor === 0 && (interiorUse === "hotel" || interiorUse === "medical") &&
+      (plannedInterior.apartments.length > 1 || (interiorUse === "hotel" && floorCount > 1));
+    const entrance = entranceOpenings[0]?.start;
+    const receptionIndex = entrance ? plannedInterior.apartments.reduce((best, apartment, index, apartments) => {
+      const gap = (layout: ApartmentLayout): number => Math.min(...layout.boundary.outer.map((p) => Math.hypot(p.x - entrance.x, p.y - entrance.y)));
+      return gap(apartment) < gap(apartments[best]) ? index : best;
+    }, 0) : 0;
+    const floorInterior = { ...plannedInterior, apartments: plannedInterior.apartments.map((apartment, index): ApartmentLayout =>
+      (floor === 0 && plan.groundFloorUse) || (hasReception && index === receptionIndex) ? {
+        ...apartment,
+        rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
+        openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
+      } : apartment) };
+    const furniture: FurniturePlacement[] = [];
+    for (let index = 0; index < floorInterior.apartments.length; index++) {
+      const apartment = floorInterior.apartments[index];
+      for (const room of apartment.rooms) {
+        furniture.push(...planInteriorFurniture({ ...apartment, rooms: [room] },
+          plan.detailSeed + floor * 7919 + index * 101,
+          hasReception && index === receptionIndex ? (interiorUse === "hotel" ? "lobby" : "waiting") : floorUse));
+        yield "furniture planning";
       }
-      yield* addPlannedInteriorWalls(
-        parts,
-        scene,
-        floorInterior,
-        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-        storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
-        options,
-        wallColor,
-      );
-      yield* createFurnitureParts(parts, scene, furniture,
-        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-        options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
-        plan.detailSeed + floor);
     }
+    yield* addPlannedInteriorWalls(
+      parts,
+      scene,
+      floorInterior,
+      floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
+      storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+      options,
+      wallColor,
+    );
+    yield* createFurnitureParts(parts, scene, furniture,
+      floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
+      options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
+      plan.detailSeed + floor);
   } else if (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage") {
-    const boundary = { outer: outline.map((p) => ({ x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit })) };
+    const boundary = floorPolygon(outline, holes, options);
     const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
       openings: [...entranceOpenings, ...facadeOpenings] };
-    for (let floor = 0; floor < floorCount; floor++) {
-      const furniture = planInteriorFurniture(layout, plan.detailSeed + floor * 7919, interiorUse);
-      yield "furniture planning";
-      yield* createFurnitureParts(parts, scene, furniture,
-        baseElevation + floor * storyHeight + BUILDING_FLOOR_THICKNESS_METERS,
-        options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
-    }
+    const furniture = planInteriorFurniture(layout, plan.detailSeed + floor * 7919, interiorUse);
+    yield "furniture planning";
+    yield* createFurnitureParts(parts, scene, furniture,
+      floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
+      options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
   }
-
 }
 
 function* createFurnitureParts(
@@ -852,7 +857,7 @@ function createEnterableBuilding(
       plannedInterior = undefined;
       if (planningAttempt) planningAttempt.failure = "The stair core has no accessible flight; using an open interior with perimeter stairs.";
     }
-    const interiorUse = plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
+    const interiorUse = resolvedInteriorUse(plan);
     trace.stage("facade opening planning");
     const facadeOpenings = plannedFacadeOpenings(
       plan, outline, storyHeight, entranceEdge, windowStyle, options,
@@ -861,20 +866,8 @@ function createEnterableBuilding(
     );
     trace.stage("apartment layout planners");
     if (plannedInterior) {
-      const apartmentPlanning = interiorUse !== "residential" && interiorUse !== "hotel" ? {
-        // Keep commercial suites open, preserving the shared corridor and stair core.
-        apartments: plannedInterior.building.rooms.filter((room) => room.type === "apartment").map((room): ApartmentLayout => ({
-          boundary: room.polygon,
-          rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
-          openings: [...(plannedInterior.building.openings ?? []), ...facadeOpenings]
-            .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
-        })),
-        failure: undefined,
-      } : planApartmentLayouts(
-        plannedInterior.building,
-        facadeOpenings,
-        plan.detailSeed,
-      );
+      const apartmentPlanning = planInteriorApartments(plannedInterior.building,
+        facadeOpenings, plan.detailSeed, interiorUse);
       plannedInterior.apartments = apartmentPlanning.apartments;
       if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
     }
@@ -1135,8 +1128,12 @@ function createPlannedInterior(
   outline: readonly ScenePoint[],
   facadeOpenings: readonly Opening2D[],
   options: BuildingRenderOptions,
+  holes: ScenePoint[][] = [],
+  circulation: ScenePoint[][] = [],
 ): InteriorPlanningAttempt {
   const input = plannerInputFromOutline(outline, facadeOpenings, options);
+  input.buildingPolygon = floorPolygon(outline, holes, options);
+  input.circulation = circulation.map((ring) => floorPolygon(ring, [], options));
   try {
     const building = planBuildingLayout(input);
     return {
@@ -1144,10 +1141,31 @@ function createPlannedInterior(
       interior: { building, apartments: [] },
     };
   } catch (error) {
-    // Courtyards and malformed or unusually narrow footprints retain the
-    // proven open interior until their topology receives a dedicated planner.
+    // Invalid or unusually narrow footprints retain their structural floors and stairs.
     return { input, failure: errorMessage(error) };
   }
+}
+
+function resolvedInteriorUse(plan: BuildingPlan): NonNullable<BuildingPlan["interiorUse"]> {
+  return plan.interiorUse ?? (plan.buildingClass === "commercial" ? "office" : "residential");
+}
+
+function floorPolygon(outline: readonly ScenePoint[], holes: ScenePoint[][], options: BuildingRenderOptions): Polygon2D {
+  const meters = (ring: readonly ScenePoint[]): Point2D[] => ring.map((p) => ({
+    x: p.x * options.metersPerUnit, y: p.z * options.metersPerUnit,
+  }));
+  return { outer: meters(outline), holes: holes.map(meters) };
+}
+
+function planInteriorApartments(building: BuildingLayout, facadeOpenings: readonly Opening2D[],
+  seed: number, use: NonNullable<BuildingPlan["interiorUse"]>,
+): { apartments: ApartmentLayout[]; failure?: string } {
+  if (use === "residential" || use === "hotel") return planApartmentLayouts(building, facadeOpenings, seed);
+  return { apartments: building.rooms.filter((room) => room.type === "apartment").map((room) => ({
+    boundary: room.polygon, rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
+    openings: [...(building.openings ?? []), ...facadeOpenings]
+      .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
+  })) };
 }
 
 function planApartmentLayouts(
@@ -1423,7 +1441,8 @@ function* addLayoutWalls(
     for (let index = 0; index < polygon.length; index++) {
       const start = polygon[index];
       const end = polygon[(index + 1) % polygon.length];
-      if (segmentOnPolygonBoundary(start, end, layout.boundary.outer)) continue;
+      if ([layout.boundary.outer, ...(layout.boundary.holes ?? [])].some((ring) =>
+        segmentOnPolygonBoundary(start, end, ring))) continue;
       const key = canonicalSegmentKey(start, end);
       if (!edges.has(key)) edges.set(key, [start, end]);
     }
@@ -1474,31 +1493,27 @@ function addInteriorWall(
         pointOnSegment2D(opening.end, start, end)))) return;
   const direction = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
   const doors = openings
-    .filter((opening) => opening.type === "door" &&
-      pointOnSegment2D(opening.start, start, end) && pointOnSegment2D(opening.end, start, end))
-    .map((opening) => {
-      const first = (opening.start.x - start.x) * direction.x +
-        (opening.start.y - start.y) * direction.y;
-      const second = (opening.end.x - start.x) * direction.x +
-        (opening.end.y - start.y) * direction.y;
-      return { minimum: Math.max(0, Math.min(first, second)), maximum: Math.min(length, Math.max(first, second)) };
+    .flatMap((opening) => {
+      const overlap = opening.type === "door" && overlappingSegment(start, end, opening.start, opening.end);
+      if (!overlap) return [];
+      const project = (p: Point2D) => (p.x - start.x) * direction.x + (p.y - start.y) * direction.y;
+      const first = project(overlap[0]), second = project(overlap[1]);
+      return [{ minimum: Math.max(0, Math.min(first, second)), maximum: Math.min(length, Math.max(first, second)),
+        height: opening.fullHeight ? heightMeters : Math.min(BUILDING_DOOR_HEIGHT_METERS, heightMeters - 0.12) }];
     })
     .filter((door) => door.maximum - door.minimum > 0.2)
     .sort((a, b) => a.minimum - b.minimum);
   const sceneStart = { x: start.x / options.metersPerUnit, z: start.y / options.metersPerUnit };
   const sceneEnd = { x: end.x / options.metersPerUnit, z: end.y / options.metersPerUnit };
-  let cursor = 0;
-  const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, heightMeters - 0.12);
-  for (const door of doors) {
-    addFacadePanel(parts, scene, sceneStart, sceneEnd, length, cursor,
-      door.minimum - cursor, bottomElevation, heightMeters, options, color);
-    addFacadePanel(parts, scene, sceneStart, sceneEnd, length, door.minimum,
-      door.maximum - door.minimum, bottomElevation + doorHeight,
-      heightMeters - doorHeight, options, color);
-    cursor = Math.max(cursor, door.maximum);
+  const cuts = [...new Set([0, length, ...doors.flatMap((door) => [door.minimum, door.maximum])])].sort((a, b) => a - b);
+  for (let index = 0; index < cuts.length - 1; index++) {
+    const from = cuts[index], to = cuts[index + 1];
+    const midpoint = (from + to) / 2;
+    const openingHeight = Math.max(0, ...doors.filter((door) => door.minimum <= midpoint && door.maximum >= midpoint)
+      .map((door) => door.height));
+    addFacadePanel(parts, scene, sceneStart, sceneEnd, length, from,
+      to - from, bottomElevation + openingHeight, heightMeters - openingHeight, options, color);
   }
-  addFacadePanel(parts, scene, sceneStart, sceneEnd, length, cursor,
-    length - cursor, bottomElevation, heightMeters, options, color);
 }
 
 function addFacadeCorners(

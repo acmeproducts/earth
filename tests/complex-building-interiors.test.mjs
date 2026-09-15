@@ -96,6 +96,9 @@ for (const [name, parts] of Object.entries(fixtures)) for (const scale of [1,10]
     try {
       assert.equal(mesh.metadata.enterable,true);
       assert.ok(mesh.metadata.pendingInterior);
+      assert.equal(mesh.metadata.plannedInterior, true);
+      assert.ok(mesh.metadata.interiorRoomCount > mesh.metadata.interiorFloorCount,
+        "complex floors must contain planned rooms, not one open room per floor");
       assert.ok(mesh.metadata.windowCount > 0);
       assert.equal(mesh.metadata.interiorFloorCount,4);
       assert.ok(mesh.metadata.stairFlightCount >= (name === "towers" ? 5 : 3));
@@ -123,6 +126,14 @@ for (const [name, parts] of Object.entries(fixtures)) for (const scale of [1,10]
       const children = root.getChildMeshes();
       assert.ok(children.length);
       assert.ok(children.every((child) => child.checkCollisions));
+      let partitionHits = 0;
+      for (let t = baseMin + 0.03; t < baseMax - 0.03; t += 0.03) {
+        const a = point(baseMin + 0.015, t, 12.6);
+        const b = point(baseMax - 0.015, t, 12.6);
+        const direction = b.subtract(a);
+        partitionHits += hits(children, a, direction.normalizeToNew(), direction.length()).length;
+      }
+      assert.ok(partitionHits > 0, "streamed interiors must contain physical room partitions");
       for (const center of connections) {
         assert.equal(hits(children,new Vector3(center.x,center.y-0.04/scale,center.z),
           new Vector3(0,1,0),0.3/scale).length,0,"stairs must pierce the upper floor slab");

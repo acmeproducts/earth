@@ -1,6 +1,7 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "../core/PlanningFrame.mjs";
 import { decomposeToConvexPolygons, isConvexPolygon } from "../core/PolygonDecomposition.mjs";
+import polygonClipping from "polygon-clipping";
 import {
   clipPolygonAtAxis,
   cutSegment,
@@ -41,6 +42,8 @@ export interface BuildingPlannerInput {
   buildingPolygon: Polygon2D;
   buildingType: BuildingLayoutType;
   openings?: readonly Opening2D[];
+  /** Floor connections and their landings, kept free of partitions and furniture. */
+  circulation?: readonly Polygon2D[];
 }
 
 export interface BuildingLayout extends PolygonLayout<BuildingRoomType> {
@@ -66,8 +69,16 @@ export function planBuildingLayout(input: BuildingPlannerInput): BuildingLayout 
       start: toLocal(opening.start),
       end: toLocal(opening.end),
     })),
+    circulation: input.circulation?.map((polygon) => ({
+      outer: polygon.outer.map(toLocal),
+      holes: polygon.holes?.map((hole) => hole.map(toLocal)),
+    })),
   });
-  const boundary = { outer: layout.boundary.outer.map(toWorld) };
+  const transform = (polygon: Polygon2D): Polygon2D => ({
+    outer: polygon.outer.map(toWorld),
+    holes: polygon.holes?.map((hole) => hole.map(toWorld)),
+  });
+  const boundary = transform(layout.boundary);
   return {
     ...layout,
     boundary,
@@ -75,7 +86,7 @@ export function planBuildingLayout(input: BuildingPlannerInput): BuildingLayout 
       ...room,
       polygon: room.polygon === layout.boundary
         ? boundary
-        : { outer: room.polygon.outer.map(toWorld) },
+        : transform(room.polygon),
     })),
     openings: layout.openings?.map((opening) => ({
       ...opening,
@@ -86,6 +97,9 @@ export function planBuildingLayout(input: BuildingPlannerInput): BuildingLayout 
 }
 
 function planBuildingLayoutInLocalFrame(input: BuildingPlannerInput): BuildingLayout {
+  if (input.buildingPolygon.holes?.length || input.circulation?.length) {
+    return constrainedBuildingPlan(input);
+  }
   const boundary = validatedConvexPolygon(input.buildingPolygon, "building");
   const openings = validatedOpenings(input.openings);
   if (!isConvexPolygon(boundary.outer) && polygonArea(boundary.outer) > MAXIMUM_APARTMENT_AREA_SQUARE_METERS) {
@@ -114,6 +128,51 @@ function planBuildingLayoutInLocalFrame(input: BuildingPlannerInput): BuildingLa
     boundary,
     ...apartmentBuildingPlan(boundary, openings),
   };
+}
+
+/** Apply floor voids and existing connections before apartment rooms are planned. */
+function constrainedBuildingPlan(input: BuildingPlannerInput): BuildingLayout {
+  const outer = validatedConvexPolygon({ outer: input.buildingPolygon.outer }, "building");
+  const boundary: Polygon2D = { ...outer, holes: input.buildingPolygon.holes?.map((hole) =>
+    validatedConvexPolygon({ outer: hole }, "courtyard").outer) };
+  const rings = (polygon: Polygon2D): polygonClipping.Polygon =>
+    [polygon.outer, ...(polygon.holes ?? [])].map((ring) => ring.map((p) => [p.x, p.y]));
+  const fromRing = (ring: polygonClipping.Ring): Point2D[] =>
+    ring.slice(0, -1).map(([x, y]) => ({ x, y }));
+  // Cut through each remaining hole in the planning frame, never along mesh triangles.
+  const simplePieces = (polygon: polygonClipping.Polygon): Point2D[][] => {
+    if (polygon.length === 1) return [fromRing(polygon[0])];
+    const bounds = polygonBounds(fromRing(polygon[0]));
+    const hole = polygonBounds(fromRing(polygon[1]));
+    const y = (hole.minY + hole.maxY) / 2;
+    return [[bounds.minY - 1, y], [y, bounds.maxY + 1]].flatMap(([bottom, top]) =>
+      polygonClipping.intersection(polygon, [[
+        [bounds.minX - 1, bottom], [bounds.maxX + 1, bottom],
+        [bounds.maxX + 1, top], [bounds.minX - 1, top], [bounds.minX - 1, bottom],
+      ]]).flatMap(simplePieces));
+  };
+  const reserved = (input.circulation ?? []).map(rings);
+  const circulation = reserved.length
+    ? polygonClipping.intersection(rings(boundary), polygonClipping.union(reserved[0], ...reserved.slice(1))) : [];
+  const base = planBuildingLayoutInLocalFrame({ ...input, buildingPolygon: outer, circulation: undefined });
+  const rooms: LayoutRoom<BuildingRoomType>[] = base.rooms.flatMap((room) => {
+    const clipped = polygonClipping.intersection(rings(room.polygon), rings(boundary));
+    const available = circulation.length ? polygonClipping.difference(clipped, circulation) : clipped;
+    return available.flatMap(simplePieces).filter((piece) => polygonArea(piece) > 0.01)
+      .map((piece, index) => ({ ...room, id: `${room.id}-${index}`, polygon: { outer: piece },
+        type: reserved.length && room.type === "stairs" ? "hallway" as const : room.type }));
+  });
+  rooms.push(...circulation.flatMap(simplePieces).map((piece, index) => ({
+    id: `circulation-${index}`, type: "hallway" as const, polygon: { outer: piece },
+  })));
+  const clearances: Opening2D[] = circulation.flatMap((polygon, polygonIndex) => polygon.flatMap((ring, ringIndex) =>
+    ring.slice(0, -1).map(([x, y], index) => ({
+      id: `circulation-${polygonIndex}-${ringIndex}-${index}`, type: "door" as const,
+      fullHeight: true,
+      start: { x, y }, end: { x: ring[index + 1][0], y: ring[index + 1][1] },
+    }))));
+  return { ...base, boundary, rooms,
+    openings: [...(base.openings ?? []), ...connectedApartmentDoors(rooms), ...clearances] };
 }
 
 function concaveBuildingPlan(

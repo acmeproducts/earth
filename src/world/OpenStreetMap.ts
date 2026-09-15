@@ -70,6 +70,7 @@ import {
   type RoadAndBuildingPlan,
 } from "../roads/RoadAndBuildingPlanner";
 import { conformTerrainToPlannedFeatures } from "../terrain/PlannedFeatureTerrain";
+import type { RoadPlanningInput } from "../roads/RoadPlanningTask";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 import { clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
 import { conformDecalPolygon } from "../terrain/TerrainSurface";
@@ -389,6 +390,18 @@ export class OpenStreetMap {
     options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
     trace?: StreamingTrace,
   ): RoadAndBuildingPlan {
+    const input = this.prepareRoadAndBuildingInputs(tiles, terrain, options, trace);
+    trace?.stage("road and building planner", "synchronous");
+    return planRoadsAndBuildings(input.roads, input.buildings, input.options);
+  }
+
+  /** Only projected, cloneable geometry crosses the worker boundary. */
+  static prepareRoadAndBuildingInputs(
+    tiles: readonly MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    trace?: StreamingTrace,
+  ): RoadPlanningInput {
     trace?.stage("road source projection and clipping", "synchronous");
     const project = ([lon, lat]: LonLat) =>
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
@@ -413,8 +426,9 @@ export class OpenStreetMap {
       outline: source.polygon.outer.map(project),
       holes: source.polygon.holes.map((hole) => hole.map(project)),
     }));
-    trace?.stage("road and building planner", "synchronous");
-    return planRoadsAndBuildings(roads, buildings, options);
+    return { roads, buildings, options: {
+      meshWidth: options.meshWidth, meshDepth: options.meshDepth, metersPerUnit: options.metersPerUnit,
+    } };
   }
 
   static conformTerrainToPlan(

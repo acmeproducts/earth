@@ -18,6 +18,8 @@ export interface Opening2D {
   type: OpeningType;
   start: Point2D;
   end: Point2D;
+  /** An unobstructed passage, including the space above normal door height. */
+  fullHeight?: boolean;
 }
 
 export interface LayoutRoom<RoomType extends string = string> {

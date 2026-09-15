@@ -51,7 +51,8 @@ test("renders surface roads with decal-style depth bias over terrain", () => {
 
 test("uses one road and building plan before terrain construction", () => {
   const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
-  assert.match(game, /OpenStreetMap\.planRoadsAndBuildings\(/);
+  assert.match(game, /OpenStreetMap\.prepareRoadAndBuildingInputs\(/);
+  assert.match(game, /await this\.roadPlanningWorker\.plan\(/);
   assert.match(game, /OpenStreetMap\.conformTerrainToPlan\(/);
   assert.doesNotMatch(game, /OpenStreetMap\.conformTerrainTo(?:Buildings|Roads)\(/);
 });

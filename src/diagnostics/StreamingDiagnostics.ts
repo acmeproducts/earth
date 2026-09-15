@@ -9,6 +9,7 @@ interface StageTiming {
   startTimeMilliseconds: number;
   durationMilliseconds: number;
   timingKind: "wall-clock" | "synchronous";
+  executionThread: "main" | "worker";
   completed: boolean;
 }
 const history: StageTiming[] = [];
@@ -22,7 +23,7 @@ export function streamingDiagnosticsSnapshot() {
   const now = performance.now();
   return {
     timeOrigin: "performance.now",
-    note: "Wall-clock stages include network and frame waits. Nested stages overlap; durations must not be added together. Synchronous timings are elapsed time, not CPU samples.",
+    note: "Wall-clock stages include network and frame waits. Nested stages overlap; durations must not be added together. Synchronous timings are elapsed time, not CPU samples. Worker stages do not block the main thread; their timestamps are aligned to the page time origin.",
     capacity: HISTORY_SIZE,
     slowOperationThresholdMilliseconds: SLOW_OPERATION_THRESHOLD_MS,
     slowOperationCapacity: SLOW_HISTORY_SIZE,
@@ -32,6 +33,36 @@ export function streamingDiagnosticsSnapshot() {
       .map((entry) => ({ ...entry })),
     activeStages: [...active.values()].map((trace) => trace.snapshot(now, false)),
   };
+}
+
+function recordStage(entry: StageTiming): void {
+  if (history.length < HISTORY_SIZE) history.push(entry);
+  else {
+    history[historyCursor] = entry;
+    historyCursor = (historyCursor + 1) % HISTORY_SIZE;
+  }
+  const category = entry.executionThread === "worker" ? `worker.stage.${entry.stage}` : `streaming.stage.${entry.stage}`;
+  creationStats.record(`${category}.ms`, entry.durationMilliseconds);
+  if (entry.timingKind === "synchronous" && entry.durationMilliseconds > SLOW_OPERATION_THRESHOLD_MS) {
+    if (slowHistory.length < SLOW_HISTORY_SIZE) slowHistory.push(entry);
+    else {
+      slowHistory[slowHistoryCursor] = entry;
+      slowHistoryCursor = (slowHistoryCursor + 1) % SLOW_HISTORY_SIZE;
+    }
+    creationStats.recordSlowOperation(category, entry.durationMilliseconds);
+  }
+}
+
+export function recordWorkerStages(
+  label: string,
+  stages: readonly { stage: string; startTimeMilliseconds: number; durationMilliseconds: number }[],
+  workerTimeOrigin: number,
+): void {
+  const traceId = ++nextTraceId;
+  const offset = workerTimeOrigin - performance.timeOrigin;
+  for (const stage of stages) recordStage({ ...stage, traceId, label,
+    startTimeMilliseconds: offset + stage.startTimeMilliseconds,
+    executionThread: "worker", timingKind: "synchronous", completed: true });
 }
 
 /** Wall-clock timings include frame yields, network waits, and GPU waits. */
@@ -63,6 +94,7 @@ export class StreamingTrace {
       startTimeMilliseconds: this.stageStarted,
       durationMilliseconds: now - this.stageStarted,
       timingKind: this.timingKind,
+      executionThread: "main",
       completed,
     };
   }
@@ -71,21 +103,7 @@ export class StreamingTrace {
     const now = performance.now();
     if (this.finished) return;
     const entry = this.snapshot(now, true);
-    if (history.length < HISTORY_SIZE) history.push(entry);
-    else {
-      history[historyCursor] = entry;
-      historyCursor = (historyCursor + 1) % HISTORY_SIZE;
-    }
-    creationStats.record(`streaming.stage.${this.stageName}.ms`, now - this.stageStarted);
-    // Keep blocking outliers independently of the high-volume stage history.
-    if (entry.timingKind === "synchronous" && entry.durationMilliseconds > SLOW_OPERATION_THRESHOLD_MS) {
-      if (slowHistory.length < SLOW_HISTORY_SIZE) slowHistory.push(entry);
-      else {
-        slowHistory[slowHistoryCursor] = entry;
-        slowHistoryCursor = (slowHistoryCursor + 1) % SLOW_HISTORY_SIZE;
-      }
-      creationStats.recordSlowOperation(`streaming.stage.${this.stageName}`, entry.durationMilliseconds);
-    }
+    recordStage(entry);
     this.stageName = name;
     this.stageStarted = now;
     this.timingKind = timingKind;
