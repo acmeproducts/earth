@@ -11,6 +11,7 @@ import type { VegetationFieldResult } from "./VegetationField";
 import type { WorldTileId } from "./WorldGrid";
 import type { WorldCover } from "./WorldCover";
 import type { HorizontalExclusionMask } from "./Geo";
+import { traceStreamingSynchronous } from "./StreamingDiagnostics";
 
 export const VEGETATION_FIELD_KINDS = [
   "treeField",
@@ -86,6 +87,10 @@ export function setTransformNodeOffset(root: TransformNode, x: number, z: number
 }
 
 export function disposeTileDetail(record: StreamedTile): void {
+  traceStreamingSynchronous(`tile=${record.key} dispose detail`, () => disposeTileDetailResources(record));
+}
+
+function disposeTileDetailResources(record: StreamedTile): void {
   for (const kind of VEGETATION_FIELD_KINDS) {
     record[kind]?.root.dispose(false, false);
     record[kind] = undefined;
@@ -99,6 +104,10 @@ export function disposeTileDetail(record: StreamedTile): void {
 }
 
 export function disposeStreamedTile(record: StreamedTile): void {
+  traceStreamingSynchronous(`tile=${record.key} dispose tile`, () => disposeStreamedTileResources(record));
+}
+
+function disposeStreamedTileResources(record: StreamedTile): void {
   record.releaseSharedElevations();
   disposeTileDetail(record);
   record.farTreeField?.root.dispose(false, false);

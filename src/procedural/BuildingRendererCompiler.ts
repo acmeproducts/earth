@@ -145,6 +145,10 @@ export class ProceduralBuildingRenderer {
       );
       trace.stage("roof geometry/equipment");
       const parts = detailed.parts;
+      if (plan.minimumHeightMeters === 0) {
+        parts.push(createBuildingFoundation(scene, prepared.outline, prepared.holes,
+          prepared.baseElevation, terrain, options, appearance));
+      }
       const showRoofs = options.showRoofs !== false;
       // The trim is a solid slab, not a perimeter band. Flat roofs already have
       // a cap here; layering both exposes competing triangulations at distance.
@@ -366,7 +370,9 @@ function createCompositeBuilding(
   const geometry = compositeBuildingGeometry(
     plan.heightBands!,
     ([lon, lat]) => lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
-    (height) => (prepared.baseElevation + (height === 0 ? -BUILDING_GROUND_OVERLAP_METERS : height)) / options.metersPerUnit,
+    (height) => (height === 0
+      ? Math.min(prepared.baseElevation, terrain.minElevation) - BUILDING_GROUND_OVERLAP_METERS
+      : prepared.baseElevation + height) / options.metersPerUnit,
     options.showRoofs !== false,
   );
   const mesh = stageBuildingMesh(new Mesh("compositeBuilding", scene));
@@ -447,6 +453,10 @@ function createComplexEnterableBuilding(
       const polygon = projectPolygon(footprint);
       const bottom = prepared.baseElevation + band.minimumHeightMeters;
       const top = prepared.baseElevation + band.heightMeters;
+      if (band.minimumHeightMeters === 0) {
+        parts.push(createBuildingFoundation(scene, polygon.outline, polygon.holes,
+          prepared.baseElevation, terrain, options, appearance));
+      }
       const bandPlan = { ...plan, footprint, levels: floors };
       const openings: Opening2D[] = [];
       for (const ring of [polygon.outline, ...polygon.holes]) {
@@ -1810,6 +1820,24 @@ function findSharedFacadeEdges(
     }
   }
   return blocked;
+}
+
+function createBuildingFoundation(
+  scene: Scene,
+  outline: ScenePoint[],
+  holes: ScenePoint[][],
+  baseElevation: number,
+  terrain: TerrainData,
+  options: BuildingRenderOptions,
+  appearance: BuildingAppearance,
+): Mesh {
+  // Road grading and neighboring pads can lower any point along a facade.
+  // The raster minimum bounds even dips between footprint sampling points.
+  const foundation = createBuildingPrism(scene, outline, baseElevation,
+    Math.min(baseElevation, terrain.minElevation) - BUILDING_GROUND_OVERLAP_METERS,
+    options, holes);
+  colorBuildingMass(foundation, appearance);
+  return foundation;
 }
 
 function createBuildingPrism(

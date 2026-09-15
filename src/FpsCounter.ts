@@ -7,11 +7,12 @@ import {
   Scene,
   SceneInstrumentation,
 } from "@babylonjs/core";
+import { streamingDiagnosticsSnapshot } from "./StreamingDiagnostics";
 
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 4;
+const REPORT_VERSION = 5;
 const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
 const BENCHMARK_WARMUP_FRAMES = 60;
 const BENCHMARK_SAMPLE_FRAMES = 120;
@@ -622,6 +623,7 @@ export class FpsCounter {
     return {
       schema: "babylon-earth/render-stats",
       version: REPORT_VERSION,
+      streamingDiagnostics: streamingDiagnosticsSnapshot(),
       capturedAt: new Date().toISOString(),
       pageUptimeMilliseconds: performance.now(),
       application,
