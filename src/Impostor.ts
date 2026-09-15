@@ -1,3 +1,4 @@
+import { creationStats } from "./CreationStats";
 import {
   Color4,
   Constants,
@@ -411,7 +412,7 @@ async function captureDefinition(
         throw error;
       }
     }
-    console.log(`${definition.name}: capture complete; procedural source disposed`);
+    creationStats.record("impostor.capturesCompleted");
     return assets;
   } finally {
     const materials = new Set(meshes.map((mesh) => mesh.material).filter((material) => material !== null));
@@ -507,11 +508,7 @@ export async function captureImpostorAtlases(
       `${name} atlas ${atlasWidth}x${atlasHeight}px exceeds the GPU limit of ${maxTextureSize}px.`,
     );
   }
-  console.log(
-    `${name}: capturing ${faces.length * gridWidth * gridHeight} views ` +
-    `(${gridWidth}x${gridHeight} directions per face) ` +
-    `at ${resolutionWidth}x${resolutionHeight}`,
-  );
+  creationStats.record("impostor.views", faces.length * gridWidth * gridHeight);
 
   // Raw exposure passes pack GPU readbacks directly and never consume a 2D
   // canvas. Avoid allocating six atlas-sized backing stores for each band.

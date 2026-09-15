@@ -707,6 +707,8 @@ export function createVertexColorCaptureMaterial(
       },
       () => {
         material.setFloat("leafTextureEnabled", 0);
+        // ShaderMaterial checks every bound texture even when sampling is disabled.
+        material.setTexture("leafTexture", fallbackTexture);
         leafTexture.dispose();
         resolveTextureReadiness?.();
         resolveTextureReadiness = undefined;
@@ -756,7 +758,7 @@ export function createVertexColorCaptureMaterial(
   return material;
 }
 
-/** Waits for optional cutout textures before a hidden source is atlas-captured. */
+/** Waits for optional cutout textures before capture or live model publication. */
 export async function waitForVertexColorTextures(meshes: readonly Mesh[]): Promise<void> {
   await Promise.all(meshes.map((mesh) => (
     mesh.material instanceof ShaderMaterial

@@ -1,9 +1,9 @@
 import type { Scene } from "@babylonjs/core";
+import { creationStats } from "../CreationStats";
 
 export const INTERIOR_WORK_BUDGET_MS = 2;
 export const INTERIOR_STEPS_PER_FRAME = 8;
 export const INTERIOR_MERGE_VERTEX_BUDGET = 4096;
-const PROGRESS_INTERVAL_MS = 2000;
 const FOCUS_HYSTERESIS_METERS = 0.5;
 
 export interface InteriorBuildJob {
@@ -18,15 +18,10 @@ export interface InteriorBuildJob {
 
 class BuildProgress {
   started?: number;
-  lastProgress = 0;
   cpuMs = 0;
-  maxSliceMs = 0;
   maxStepMs = 0;
-  maxStepStage = "none";
-  slices = 0;
   steps = 0;
   stage = "queued";
-  readonly stages = new Map<string, number>();
   readonly job: InteriorBuildJob;
   constructor(job: InteriorBuildJob) { this.job = job; }
 }
@@ -36,8 +31,6 @@ class InteriorBuildQueue {
   private readonly jobs: BuildProgress[] = [];
   private current?: BuildProgress;
   private lastFrame = -1;
-  private lastFocusLog = -Infinity;
-  private focusChanges = 0;
 
   constructor(scene: Scene) {
     scene.onAfterRenderObservable.add(() => this.advance(scene.getFrameId()));
@@ -91,15 +84,11 @@ class InteriorBuildQueue {
     const entry = selected;
     const job = entry.job;
     const now = performance.now();
-    if (previous && previous !== entry) this.focusChanges++;
+    if (previous && previous !== entry) this.record("focusChanges");
     if (entry.started === undefined) {
-      entry.started = entry.lastProgress = now;
-      this.log(entry, "started");
-    } else if (previous !== entry && now - this.lastFocusLog >= PROGRESS_INTERVAL_MS) {
-      this.log(entry, "resumed");
-      this.lastFocusLog = now;
+      entry.started = now;
+      this.record("started");
     }
-    if (previous !== entry) entry.lastProgress = now;
     const start = performance.now();
     let done = false;
     let failed = false;
@@ -109,9 +98,8 @@ class InteriorBuildQueue {
         const next = job.steps.next();
         const stepMs = performance.now() - stepStart;
         const stage = next.done ? "finish" : next.value;
-        if (stepMs > entry.maxStepMs) { entry.maxStepMs = stepMs; entry.maxStepStage = stage; }
+        entry.maxStepMs = Math.max(entry.maxStepMs, stepMs);
         entry.stage = stage;
-        entry.stages.set(stage, (entry.stages.get(stage) ?? 0) + stepMs);
         entry.steps++;
         if (next.done) {
           done = true;
@@ -127,28 +115,25 @@ class InteriorBuildQueue {
     } finally {
       const elapsed = performance.now() - start;
       entry.cpuMs += elapsed;
-      entry.maxSliceMs = Math.max(entry.maxSliceMs, elapsed);
-      entry.slices++;
+      this.record("slice.ms", elapsed);
     }
     if (done || failed) {
       this.log(entry, failed ? "failed" : "complete");
       this.remove(entry);
-    } else if (performance.now() - entry.lastProgress >= PROGRESS_INTERVAL_MS) {
-      this.log(entry, "progress");
-      entry.lastProgress = performance.now();
     }
   }
 
-  private log(entry: BuildProgress, status: string): void {
+  private record(name: string, value = 1): void {
     if ((globalThis as typeof globalThis & { buildingTimingEnabled?: boolean }).buildingTimingEnabled === false) return;
-    const summary = status === "complete" || status === "failed"
-      ? ` stages=${[...entry.stages].map(([name, ms]) => `${name}:${ms.toFixed(1)}ms`).join(", ")}` : "";
-    console.log(`[Building stream] ${entry.job.label} ${status} stage=${entry.stage} ` +
-      `wall=${(performance.now() - (entry.started ?? performance.now())).toFixed(0)}ms cpu=${entry.cpuMs.toFixed(1)}ms ` +
-      `frames=${entry.slices} steps=${entry.steps} maxSlice=${entry.maxSliceMs.toFixed(2)}ms ` +
-      `worstStep=${entry.maxStepStage}:${entry.maxStepMs.toFixed(2)}ms ` +
-      `distance=${(entry.job.priority?.() ?? 0).toFixed(1)}m focusChanges=${this.focusChanges} ` +
-      `queued=${Math.max(0, this.jobs.length - 1)}${summary}`);
+    creationStats.record(`interior.${name}`, value);
+  }
+
+  private log(entry: BuildProgress, status: string): void {
+    this.record(status);
+    this.record("wall.ms", performance.now() - (entry.started ?? performance.now()));
+    this.record("cpu.ms", entry.cpuMs);
+    this.record("steps", entry.steps);
+    this.record("maxStep.ms", entry.maxStepMs);
   }
 }
 

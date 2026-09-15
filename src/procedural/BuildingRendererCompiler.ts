@@ -188,7 +188,7 @@ export class ProceduralBuildingRenderer {
         if (equipment) parts.push(equipment);
       }
 
-      trace.stage(`compact buffers parts=${parts.length}`);
+      trace.stage("compact buffers");
       parts.forEach(compactMeshBuffers);
       trace.stage("merge/upload");
       const merged = Mesh.MergeMeshes(parts, false, true);
@@ -292,7 +292,7 @@ export class ProceduralBuildingRenderer {
       trace.stage("merge/upload/dispose");
       const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
       if (!result) return undefined;
-      trace.stage(`solid material/activation vertices=${result.getTotalVertices()}`);
+      trace.stage("solid material/activation");
       const material = createBuildingSolidMaterial(
         `${name}Material`, result.getScene(), Number.isFinite(metersPerUnit) ? metersPerUnit : 1,
       );
@@ -998,10 +998,10 @@ function createEnterableBuilding(
       }
     }
 
-    trace.stage(`window mesh/upload windows=${windowCount}`);
+    trace.stage("window mesh/upload");
     const windowMesh = createWindowMesh(scene, windows);
     if (windowMesh) parts.push(windowMesh);
-    trace.stage(`surface attributes parts=${parts.length}`);
+    trace.stage("surface attributes");
     for (const mesh of parts) {
       if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) {
         setBuildingSurface(mesh, part === "exterior" ? appearance.wallSurface : "plaster");

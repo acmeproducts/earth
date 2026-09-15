@@ -1,4 +1,6 @@
-/** One compact log per operation; stages are inclusive wall time, not GPU time.
+import { creationStats } from "./CreationStats";
+
+/** Periodic aggregate timings; stages are inclusive wall time, not GPU time.
  * Set globalThis.buildingTimingEnabled = false to disable building diagnostics.
  */
 export class BuildingTrace {
@@ -7,15 +9,13 @@ export class BuildingTrace {
   private readonly started = performance.now();
   private stageStarted = this.started;
   private stageName = "setup";
-  private readonly timings: string[] = [];
-  private slowest = { name: "setup", ms: 0 };
+  private readonly timings = new Map<string, number>();
 
   stage(name: string): void {
     if (!this.enabled) return;
     const now = performance.now();
     const ms = now - this.stageStarted;
-    this.timings.push(`${this.stageName}=${ms.toFixed(2)}ms`);
-    if (ms > this.slowest.ms) this.slowest = { name: this.stageName, ms };
+    this.timings.set(this.stageName, (this.timings.get(this.stageName) ?? 0) + ms);
     this.stageName = name;
     this.stageStarted = now;
   }
@@ -44,12 +44,11 @@ export class BuildingTrace {
     }
   }
 
-  private finish(label: string, failed: boolean): void {
+  private finish(_label: string, failed: boolean): void {
     if (!this.enabled) return;
     this.stage("finished");
     const total = performance.now() - this.started;
-    console.log(`[Building timing] ${label} status=${failed ? "error" : "ok"} ` +
-      `total=${total.toFixed(2)}ms slowest=${this.slowest.name}:${this.slowest.ms.toFixed(2)}ms ` +
-      this.timings.join(" | "));
+    for (const [name, ms] of this.timings) creationStats.record(`building.stage.${name}.ms`, ms);
+    creationStats.record(`building.${failed ? "failed" : "completed"}.ms`, total);
   }
 }

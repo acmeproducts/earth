@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Observable } from "@babylonjs/core";
 import { enqueueInteriorBuild, INTERIOR_STEPS_PER_FRAME } from "../src/procedural/InteriorStreaming.ts";
+import { creationStats } from "../src/CreationStats.ts";
 
 function fakeScene() {
   return { frame: 0, getFrameId() { return this.frame; },
@@ -36,7 +37,7 @@ test("nearest building takes priority and moving the player pauses and resumes e
   assert.deepEqual(work, [30, 30]);
   assert.deepEqual(created, [1, 1]);
   assert.deepEqual(complete, [1, 0]);
-  assert.equal(logs.filter((line) => line.includes(" resumed ")).length, 1, "focus logs are throttled");
+  assert.equal(logs.length, 0, "focus changes do not log per building");
 });
 
 test("tiny distance changes do not thrash focus between nearly tied buildings", (t) => {
@@ -78,7 +79,8 @@ test("interior queue shares one budget, limits steps, and never advances twice i
   assert.deepEqual(completed, [0, 1]);
 });
 
-test("time budget stops a slice, progress logs are throttled, and completion reports timings", (t) => {
+test("time budget stops a slice and completion contributes aggregate timings", (t) => {
+  creationStats.flush();
   let clock = 0, work = 0;
   const logs = [];
   t.mock.method(performance, "now", () => clock);
@@ -91,13 +93,18 @@ test("time budget stops a slice, progress logs are throttled, and completion rep
   });
   tick(scene);
   assert.equal(work, 1, "a slow atomic step must end this frame's work");
-  assert.equal(logs.length, 1);
+  assert.equal(logs.length, 0);
   clock += 2000;
   tick(scene);
-  assert.equal(logs.filter((line) => line.includes(" progress ")).length, 1);
+  assert.equal(logs.length, 0);
   for (let i = 0; i < 10; i++) tick(scene);
-  assert.equal(logs.length, 3, "only start, throttled progress and completion");
-  assert.match(logs.at(-1), /complete.*cpu=24\.0ms.*maxSlice=3\.00ms.*geometry:24\.0ms/);
+  assert.equal(logs.length, 0);
+  let report;
+  t.mock.method(console, "log", (_message, stats) => { report = stats; });
+  creationStats.flush();
+  assert.equal(report["interior.complete"].count, 1);
+  assert.equal(report["interior.cpu.ms"].total, 24);
+  assert.equal(report["interior.slice.ms"].max, 3);
 });
 
 test("cancelling active and queued jobs cleans up exactly once", (t) => {

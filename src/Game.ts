@@ -104,6 +104,7 @@ import {
 } from "./StreamedTile";
 import type { StreamedTile, VegetationFieldKind } from "./StreamedTile";
 import { StreamingTrace } from "./StreamingDiagnostics";
+import { creationStats } from "./CreationStats";
 import {
   VegetationFieldResult,
   VegetationLodDebugStats,
@@ -650,9 +651,7 @@ export class Game {
           density: this.cloudDensity,
         });
       }
-      console.log(
-        `World frame anchored at tile ${key} (1 unit = ${metersPerUnit.toFixed(1)}m)`,
-      );
+      creationStats.record("worldFrame.metersPerUnit", metersPerUnit);
     }
     const frame = this.terrainCoordinateFrame;
     const metersPerUnit = this.terrainMetersPerUnit;
@@ -1131,17 +1130,15 @@ export class Game {
     trace?.stage("refresh shadow casters");
     this.refreshShadowCasters();
     trace?.stage("detail complete");
-    console.log(
-      `Tile ${record.key}: ${record.treeField!.count} trees, ${record.saplingField!.count} saplings, ` +
-      `${record.grassField!.count} grass, ${record.tallPlantField!.count} wildflower patches, ` +
-      `${record.wheatField!.count} wheat, ` +
-      `${record.bushField!.count} bushes, ` +
-      `${record.fernField!.count} ferns, ${record.rockyBeachField!.count} rocky beach patches, ` +
-      `${rockField.count} rocks, ` +
-      `${mapFeatures.counts.buildings} buildings, ` +
-      `${mapFeatures.counts.roads} roads, ${plotBoundaryLayer.count} plot boundaries, ` +
-      `${streetLampLayer.count} street lamps (${streetLampLayer.mappedCount} mapped)`,
-    );
+    creationStats.record("tiles.detailed");
+    for (const kind of VEGETATION_FIELD_KINDS) {
+      creationStats.record(`created.${kind}`, record[kind]?.count ?? 0);
+    }
+    creationStats.record("created.rocks", rockField.count);
+    creationStats.record("created.buildings", mapFeatures.counts.buildings);
+    creationStats.record("created.roads", mapFeatures.counts.roads);
+    creationStats.record("created.plotBoundaries", plotBoundaryLayer.count);
+    creationStats.record("created.streetLamps", streetLampLayer.count);
   }
 
   /**
@@ -2033,7 +2030,6 @@ export class Game {
     const now = performance.now();
     if (now - this.lastVegetationLodDebugLogMilliseconds < 2_000) return;
     this.lastVegetationLodDebugLogMilliseconds = now;
-    StreamingTrace.logActive();
     const fields: VegetationFieldResult[] = [];
     for (const record of this.tiles.values()) {
       for (const kind of VEGETATION_FIELD_KINDS) {
@@ -2047,15 +2043,13 @@ export class Game {
     );
     if (stats.updates === 0) return;
     const averageProcessed = Math.round(stats.processedInstances / stats.updates);
-    console.log(
-      `[Vegetation LOD / 2s] total=${stats.totalInstances.toLocaleString()} ` +
-      `grid-now=${stats.currentGridCandidates.toLocaleString()} ` +
-      `transition-now=${stats.currentTransitionInstances.toLocaleString()} ` +
-      `processed-avg=${averageProcessed.toLocaleString()}/update ` +
-      `processed-peak=${stats.peakProcessedInstances.toLocaleString()} ` +
-      `slot-crossings=${stats.membershipChanges.toLocaleString()} ` +
-      `full-rebuilds=${stats.fullRebuilds}`,
-    );
+    creationStats.record("vegetation.totalInstances", stats.totalInstances);
+    creationStats.record("vegetation.gridCandidates", stats.currentGridCandidates);
+    creationStats.record("vegetation.transitions", stats.currentTransitionInstances);
+    creationStats.record("vegetation.processedPerUpdate", averageProcessed);
+    creationStats.record("vegetation.processedPeak", stats.peakProcessedInstances);
+    creationStats.record("vegetation.slotCrossings", stats.membershipChanges);
+    creationStats.record("vegetation.fullRebuilds", stats.fullRebuilds);
   }
 
   /** Persists a destination, then rebuilds all scene-owned state. */

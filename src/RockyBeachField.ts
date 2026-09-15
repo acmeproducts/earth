@@ -90,6 +90,18 @@ export async function createRockyBeachField(
         if (submerged ? shoreNeighbours.land === 0 : shoreNeighbours.water === 0) continue;
 
         const character = rockyBeachCharacter(location.lon, location.lat, modelVariantSeed);
+        const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
+        const latitudeRadians = location.lat * Math.PI / 180;
+        const eastMeters = location.lon * 111_320 * Math.cos(latitudeRadians);
+        const northMeters = location.lat * 110_540;
+        const shoreVariation = 0.5 + 0.28 * Math.sin(eastMeters / 9 + northMeters / 13)
+          + 0.22 * Math.sin(eastMeters / 4 - northMeters / 7);
+        const waterAllowance = ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS
+          * (0.6 + shoreVariation * 0.9);
+        // Thin submerged patches before their varying footprint limit is reached.
+        const shoreCoverage = Math.max(0, Math.min(1,
+          (elevation - waterLineMeters + waterAllowance) / (waterAllowance + 0.35),
+        ));
         const mappedRockySurface = cover === LandCoverClass.Bare;
         const threshold = mappedRockySurface ? 0.24 : 0.62;
         if (character < threshold) continue;
@@ -98,7 +110,7 @@ export async function createRockyBeachField(
           ((mappedRockySurface ? 0.72 : 0.28) +
             (character - threshold) * (mappedRockySurface ? 0.82 : 0.64) +
             shoreNeighbours.water * 0.04) *
-            Math.max(0, densityScale?.(x, z) ?? 1),
+            Math.max(0, densityScale?.(x, z) ?? 1) * shoreCoverage,
         );
         if (random() > occupancy) continue;
         if (exclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
@@ -110,7 +122,7 @@ export async function createRockyBeachField(
           maximumHalfWidth,
           meshWidth,
           meshDepth,
-          waterLineMeters - ROCK_WATER_FOOTPRINT_ALLOWANCE_METERS,
+          waterLineMeters - waterAllowance,
         )) continue;
 
         const normal = sampleTerrainNormal(
@@ -122,7 +134,6 @@ export async function createRockyBeachField(
           Quaternion.RotationAxis(Vector3.Up(), random() * Math.PI * 2),
         );
         const widthScale = 0.82 + random() * 0.42;
-        const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
         const matrix = Matrix.Compose(
           new Vector3(
             widthScale,

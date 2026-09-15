@@ -12,6 +12,7 @@ import {
 } from "./procedural/ProceduralTree";
 import {
   setVertexColorModelHeight,
+  waitForVertexColorTextures,
 } from "./procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
@@ -140,9 +141,13 @@ export async function createTreeModels(
   material.options.attributes.push("sunExposureLow", "sunExposureHigh");
   const renderScale = renderHeight / treeDefinition.sourceHeight;
   for (const mesh of meshes) {
+    mesh.isVisible = false;
     mesh.material = material;
     scaleTreeMesh(mesh, renderScale, renderHeight / 2, renderHeight);
   }
+  // A fading impostor must have a drawable model to replace it.
+  await waitForVertexColorTextures(meshes);
+  meshes.forEach((mesh) => { mesh.isVisible = true; });
   return meshes;
 }
 

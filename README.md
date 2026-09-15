@@ -1,5 +1,13 @@
 # Earth
 
+Creation diagnostics produce one `[Creation stats / 10s]` console report every
+10 seconds while active, with counts, totals, averages, minimums and peaks for
+creation and streaming work. Idle intervals are silent; errors and warnings remain
+immediate. Timing values use milliseconds and include waits unless labelled CPU
+or slice time. Set `globalThis.buildingTimingEnabled = false` to disable building
+and interior timing collection. Adjust `CREATION_STATS_INTERVAL_MS` in
+`src/CreationStats.ts` to change the reporting interval.
+
 A walkable, streamed 3D Earth built with Babylon.js and real-world geographic data.
 Fly across terrain, drop to ground level, and explore a changing procedural landscape
 of roads, buildings, water, vegetation, weather, seasons, stars, and a fictional moon.

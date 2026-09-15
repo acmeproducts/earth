@@ -17,13 +17,16 @@ import { createSeededRandom } from "./Random";
 
 const SOURCE_HEIGHT = 0.62;
 const CAPTURE_DIAMETER = 6.2;
-const STONE_COUNT = 236;
+const STONE_COUNT = 480;
 const STONE_COLORS: ReadonlyArray<readonly [number, number, number]> = [
   [0.38, 0.39, 0.39],
   [0.44, 0.44, 0.43],
   [0.33, 0.35, 0.36],
   [0.47, 0.46, 0.44],
   [0.29, 0.31, 0.31],
+  [0.52, 0.53, 0.51],
+  [0.36, 0.38, 0.41],
+  [0.43, 0.40, 0.37],
 ];
 
 export function rockyBeachRenderedCaptureSize(renderHeight: number): number {
@@ -73,32 +76,42 @@ function createRockyBeachSource(
   const positions: number[] = [];
   const indices: number[] = [];
   const colors: number[] = [];
-  for (let stone = 0; stone < STONE_COUNT; stone++) {
+  const patchPhase = random() * Math.PI * 2;
+  const patchSize = 0.8 + random() * 0.3;
+  const patchBrightness = 0.9 + random() * 0.2;
+  const stoneCount = Math.round(STONE_COUNT * (0.85 + random() * 0.3));
+  for (let stone = 0; stone < stoneCount; stone++) {
     const angle = random() * Math.PI * 2;
-    const radius = Math.sqrt(random()) * (CAPTURE_DIAMETER * 0.43);
+    // A dense center and sparse, lobed fringe hide the repeated card footprint.
+    const edge = 0.83 + 0.1 * Math.sin(angle * 3 + patchPhase)
+      + 0.07 * Math.sin(angle * 5 - patchPhase * 1.7);
+    const radius = Math.pow(random(), 0.7) * (CAPTURE_DIAMETER * 0.44) * edge;
     const centerX = Math.cos(angle) * radius;
     const centerZ = Math.sin(angle) * radius;
-    const large = random() < 0.08;
+    const large = random() < 0.035;
     const stoneRadius = large
-      ? 0.15 + random() * 0.18
-      : 0.035 + Math.pow(random(), 1.8) * 0.125;
-    const scaleX = stoneRadius * (0.78 + random() * 0.55);
-    const scaleY = stoneRadius * (0.38 + random() * 0.38);
-    const scaleZ = stoneRadius * (0.78 + random() * 0.55);
+      ? 0.12 + random() * 0.13
+      : 0.025 + Math.pow(random(), 1.65) * 0.09;
+    const scaleX = stoneRadius * patchSize * (0.65 + random() * 0.85);
+    const scaleY = stoneRadius * patchSize * (0.28 + random() * 0.55);
+    const scaleZ = stoneRadius * patchSize * (0.65 + random() * 0.85);
     const yaw = random() * Math.PI * 2;
     const cosine = Math.cos(yaw);
     const sine = Math.sin(yaw);
     const vertexOffset = positions.length / 3;
     const palette = STONE_COLORS[Math.floor(random() * STONE_COLORS.length)];
-    const brightness = 0.82 + random() * 0.3;
+    const brightness = (0.78 + random() * 0.4) * patchBrightness;
+    const irregularity = 0.04 + random() * 0.16;
+    const leanX = (random() - 0.5) * 0.35;
+    const leanZ = (random() - 0.5) * 0.35;
 
     for (let index = 0; index < basePositions.length; index += 3) {
       const sourceX = basePositions[index];
       const sourceY = basePositions[index + 1];
       const sourceZ = basePositions[index + 2];
-      const localX = sourceX * scaleX;
-      const localZ = sourceZ * scaleZ;
-      const warp = 1 + 0.08 * Math.sin(sourceX * 5.1 + sourceZ * 7.3 + stone);
+      const localX = (sourceX + sourceY * leanX) * scaleX;
+      const localZ = (sourceZ + sourceY * leanZ) * scaleZ;
+      const warp = 1 + irregularity * Math.sin(sourceX * 5.1 + sourceZ * 7.3 + stone);
       positions.push(
         centerX + (localX * cosine - localZ * sine) * warp,
         -SOURCE_HEIGHT / 2 + scaleY * (0.48 + sourceY * 0.72),

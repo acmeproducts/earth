@@ -1,4 +1,5 @@
 import type { TerrainData } from "./TerrainData";
+import { creationStats } from "./CreationStats";
 import { ResourceCache } from "./ResourceCache";
 import type { TileBounds, WorldTileArea } from "./WorldGrid";
 
@@ -102,7 +103,7 @@ export class TerrainElevationSource {
     elevations: Float32Array,
     width: number,
     height: number,
-    description: string,
+    _description: string,
     yieldControl?: () => Promise<void>,
   ): Promise<Pick<TerrainData, "elevations" | "minElevation" | "maxElevation" | "width" | "height">> {
     let minElevation = Infinity;
@@ -113,7 +114,8 @@ export class TerrainElevationSource {
       if ((i & 4095) === 4095) await yieldControl?.();
     }
 
-    console.log(`${description}: elevation range ${minElevation.toFixed(1)}m to ${maxElevation.toFixed(1)}m`);
+    creationStats.record("terrain.minElevation.m", minElevation);
+    creationStats.record("terrain.maxElevation.m", maxElevation);
 
     return { elevations, minElevation, maxElevation, width, height };
   }

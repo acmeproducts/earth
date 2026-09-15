@@ -12,7 +12,7 @@ const game = readFileSync(new URL("../src/Game.ts", import.meta.url), "utf8");
 test("captures a dense procedural rocky-beach patch through the impostor pipeline", () => {
   assert.match(impostor, /createImpostorAssetProvider/);
   assert.match(impostor, /queryPrefix: "rocky-beach-impostor"/);
-  assert.match(impostor, /STONE_COUNT = 236/);
+  assert.match(impostor, /STONE_COUNT = 480/);
   assert.match(impostor, /CreateIcoSphere/);
   assert.match(impostor, /createVertexColorCaptureMaterial/);
   assert.match(impostor, /upperHemisphereOnly: true/);
