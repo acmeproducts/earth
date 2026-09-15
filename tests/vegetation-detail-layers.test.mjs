@@ -83,7 +83,7 @@ test("mature detailed forests include sparse species-matched fallen logs", () =>
   assert.match(treeImpostors, /return \[parts\.log, parts\.branches\]/);
   assert.match(treeImpostors, /export async function createTreeLogModel/);
   assert.match(trees, /depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH/);
-  assert.match(trees, /random\(\) < FALLEN_LOG_CHANCE/);
+  assert.match(trees, /logRandom\(\) < FALLEN_LOG_CHANCE/);
   assert.match(
     trees,
     /createTreeLogModel\(scene, treeHeight, species, variant\.seed, variant\.season\)/,

@@ -4,7 +4,7 @@ import {
   type PlanarPoint,
 } from "../core/PlanarGeometry";
 
-interface Footprint {
+export interface Footprint {
   outline: readonly PlanarPoint[];
   holes: ReadonlyArray<readonly PlanarPoint[]>;
 }

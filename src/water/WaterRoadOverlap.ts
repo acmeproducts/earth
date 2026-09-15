@@ -2,7 +2,7 @@ import type { PlanarPoint } from "../core/PlanarGeometry";
 import type { RoadPlan } from "../roads/RoadPlanner";
 import { createWaterBuildingOverlapFilter } from "./WaterBuildingOverlap";
 
-interface WaterRoad {
+export interface WaterRoad {
   paths: ReadonlyArray<readonly PlanarPoint[]>;
   appearance: RoadPlan;
 }

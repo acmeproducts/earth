@@ -21,6 +21,13 @@ test("expanded performance diagnostics split CPU render phases from GPU time", (
   assert.match(fpsCounter, /render GPU:/);
 });
 
+test("frame history retains aligned render phases only with detailed instrumentation", () => {
+  assert.match(fpsCounter, /renderPhases: this\.expanded \? \{/);
+  assert.match(fpsCounter, /drawSubmission: this\.instrumentation\.renderTimeCounter\.current/);
+  assert.match(fpsCounter, /cameraRender: this\.instrumentation\.cameraRenderTimeCounter\.current/);
+  assert.match(fpsCounter, /creationStats\.recordSlowOperation\(`frame\.\$\{phase\}`, milliseconds\)/);
+});
+
 test("expensive render instrumentation is disabled with the compact counter", () => {
   const appearance = fpsCounter.slice(
     fpsCounter.indexOf("private updateAppearance"),

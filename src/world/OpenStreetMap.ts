@@ -1,8 +1,10 @@
 import { ResourceCache } from "../core/ResourceCache";
 import { BuildingTrace } from "../buildings/BuildingDiagnostics";
+import type { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
+import { createFrameBudgetYielder } from "../diagnostics/FrameBudget";
 import { DIRT_ROAD_EDGE_KIND, DIRT_ROAD_EDGE_ALPHA_GLSL, dirtRoadEdgeCoordinates } from "../roads/DirtRoadEdges";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
-import { mergeOverlappingBuildings } from "../buildings/CompositeBuildings";
+import { mergeBuildingSourceGroups } from "../buildings/CompositeBuildings";
 import { inferBuildingUse, type BuildingUseContext } from "../buildings/BuildingUseInference";
 import type { SharedValueMap } from "../core/OwnedValueCache";
 import {
@@ -72,14 +74,13 @@ import {
 import { conformTerrainToPlannedFeatures } from "../terrain/PlannedFeatureTerrain";
 import type { RoadPlanningInput } from "../roads/RoadPlanningTask";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
-import { clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
+import { clipToBounds, signedArea } from "../core/PlanarGeometry";
 import { conformDecalPolygon } from "../terrain/TerrainSurface";
 import type { TerrainSurface } from "../terrain/TerrainSurface";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "../terrain/TerrainLakePolygons";
-import { createWaterBuildingOverlapFilter } from "../water/WaterBuildingOverlap";
-import { createWaterRoadOverlapFilter } from "../water/WaterRoadOverlap";
+import { collectPreparedLakePolygons, prepareLakeCandidate, type LakeCollectionInput } from "../water/LakeCollectionTask";
 import { isSurfaceWaterFeature } from "../water/WaterFeatureVisibility";
 
 export interface MapTile {
@@ -125,6 +126,8 @@ const compositeBuildingSourceCache = new WeakMap<readonly MapTile[], readonly Bu
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
 interface MapLayerOptions {
+  buildingPlanningWorker?: Pick<BuildingPlanningWorker, "plan">;
+  isCancelled?: () => boolean;
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
@@ -295,7 +298,13 @@ export class OpenStreetMap {
 
       const buildings = await createBuildingBatches(
         scene, tiles, terrain, options, "detailed", root, "buildings", yieldControl,
-      );
+      ).catch((error) => {
+        for (const mesh of [...Object.values(roadMeshes).flat(), ...Object.values(roadShoulders).flat()]) {
+          if (!mesh.isDisposed()) mesh.dispose();
+        }
+        root.dispose();
+        throw error;
+      });
       trace.stage("roads/waterways including frame yields");
       for (const tile of tiles) {
         await yieldControl?.();
@@ -453,7 +462,15 @@ export class OpenStreetMap {
       clipPadding?: number;
     },
   ): TerrainLakeSource[] {
-    const results: TerrainLakeSource[] = [];
+    return collectPreparedLakePolygons(this.prepareLakeCollection(tiles, terrain, options));
+  }
+
+  static prepareLakeCollection(
+    tiles: readonly MapTile[],
+    terrain: TerrainData,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth"> & { clipPadding?: number },
+  ): LakeCollectionInput {
+    const candidates: LakeCollectionInput["candidates"][number][] = [];
     const clipPadding = Math.max(0, options.clipPadding ?? 0);
     const clipBounds = {
       minX: -options.meshWidth / 2 - clipPadding,
@@ -464,45 +481,33 @@ export class OpenStreetMap {
     const project = ([lon, lat]: LonLat) =>
       lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
     const cellSize = Math.max(options.meshWidth, options.meshDepth) / 8;
-    const overlapsBuildings = createWaterBuildingOverlapFilter(
-      compositeBuildingSources(tiles).map(({ polygon }) => ({
-        outline: polygon.outer.map(project),
-        holes: polygon.holes.map((hole) => hole.map(project)),
-      })),
-      cellSize,
-      0.15,
-    );
-    const overlapsRoads = createWaterRoadOverlapFilter(
-      tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
-        const appearance = planRoad(source.properties);
-        return appearance ? [{ paths: source.paths.map((path) => path.map(project)), appearance }] : [];
-      })),
-      terrain.groundWidthMeters / options.meshWidth,
-      cellSize,
-    );
     for (const tile of tiles) {
       forEachFeature(tile, "water", (feature, featureIndex) => {
         if (feature.properties.class === "ocean" || !isSurfaceWaterFeature(feature.properties)) return;
         const waterPolygons = polygonRings(feature, tile);
         for (let polygonIndex = 0; polygonIndex < waterPolygons.length; polygonIndex++) {
           const rings = waterPolygons[polygonIndex];
-          // Test the full provider polygon, before application-tile clipping.
           const water = {
+            sourceId: waterFeatureSourceId(feature, tile, featureIndex, polygonIndex),
             outline: withoutClosingPoint(rings[0]).map(project),
             holes: rings.slice(1).map((ring) => withoutClosingPoint(ring).map(project)),
           };
-          if (overlapsBuildings(water) || overlapsRoads(water)) continue;
-          const outline = clipToBounds(water.outline, clipBounds);
-          if (outline.length < 3) continue;
-          const sourceId = waterFeatureSourceId(feature, tile, featureIndex, polygonIndex);
-          const holes = rings.slice(1)
-            .map((ring) => clipToBounds(withoutClosingPoint(ring).map(project), clipBounds))
-            .filter((ring) => ring.length >= 3 && pointInRing(ring[0], outline));
-          results.push({ sourceId, outline, holes });
+          const candidate = prepareLakeCandidate(water, clipBounds);
+          if (candidate) candidates.push(candidate);
         }
       });
     }
-    return results;
+    // Most terrain tiles contain no lake. Avoid decoding/projecting obstacles at all for those tiles.
+    return {
+      candidates, cellSize, metersPerUnit: terrain.groundWidthMeters / options.meshWidth,
+      buildings: candidates.length ? compositeBuildingSources(tiles).map(({ polygon }) => ({
+        outline: polygon.outer.map(project), holes: polygon.holes.map((hole) => hole.map(project)),
+      })) : [],
+      roads: candidates.length ? tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
+        const appearance = planRoad(source.properties);
+        return appearance ? [{ paths: source.paths.map((path) => path.map(project)), appearance }] : [];
+      })) : [],
+    };
   }
 
   static async createBuildingLayer(
@@ -518,7 +523,10 @@ export class OpenStreetMap {
     if (options.startDisabled) root.setEnabled(false);
     const buildings = await createBuildingBatches(
       scene, tiles, terrain, options, detail, root, name, yieldControl,
-    );
+    ).catch((error) => {
+      root.dispose();
+      throw error;
+    });
     for (const mesh of buildings.meshes) mesh.setEnabled(true);
     return { root, ...buildings };
   }
@@ -705,43 +713,53 @@ async function createBuildingBatches(
       renderWholeBuildingFootprints: true,
       neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
     };
-    for (const source of compositeBuildingSources(tiles)) {
-      trace.stage("building ownership");
-      if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
-      trace.stage("frame yield before building");
-      await yieldControl?.();
-      trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
-      const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
-      const mesh = detail === "far"
-        ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
-        : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
-      if (mesh) {
-        buildings.push(mesh);
-        count++;
-        chunkVertices += mesh.getTotalVertices();
-        // Bound merge copies and GPU uploads instead of duplicating a whole
-        // dense city tile in memory in one uninterrupted merge.
-        if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-          const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
-          if (chunk) {
-            chunk.setEnabled(false);
-            meshes.push(chunk);
+    const yieldBuilding = yieldControl ?? createFrameBudgetYielder();
+    try {
+      for (const source of compositeBuildingSources(tiles)) {
+        if (options.isCancelled?.()) throw new DOMException("Building layer cancelled", "AbortError");
+        trace.stage("building ownership");
+        if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
+        trace.stage("frame yield before building");
+        await yieldControl?.();
+        trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
+        const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
+        const mesh = detail === "far"
+          ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
+          : options.buildingPlanningWorker
+            ? await ProceduralBuildingRenderer.createDetailedAsync(scene, plan, terrain, renderOptions,
+              options.buildingPlanningWorker, yieldBuilding, options.isCancelled)
+            : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
+        if (mesh) {
+          buildings.push(mesh);
+          count++;
+          chunkVertices += mesh.getTotalVertices();
+          // Bound merge copies and GPU uploads instead of duplicating a whole
+          // dense city tile in memory in one uninterrupted merge.
+          if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
+            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+            if (chunk) {
+              chunk.setEnabled(false);
+              meshes.push(chunk);
+            }
+            buildings.length = 0;
+            chunkVertices = 0;
           }
-          buildings.length = 0;
-          chunkVertices = 0;
         }
+        trace.stage("frame yield after building");
+        await yieldControl?.();
       }
-      trace.stage("frame yield after building");
-      await yieldControl?.();
-    }
 
-    trace.stage("final merge (inclusive)");
-    const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
-    if (merged) {
-      merged.setEnabled(false);
-      meshes.push(merged);
+      trace.stage("final merge (inclusive)");
+      const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
+      if (merged) {
+        merged.setEnabled(false);
+        meshes.push(merged);
+      }
+      return { meshes, count };
+    } catch (error) {
+      for (const mesh of [...buildings, ...meshes]) if (!mesh.isDisposed()) mesh.dispose();
+      throw error;
     }
-    return { meshes, count };
   });
 }
 
@@ -760,9 +778,9 @@ function compositeBuildingSources(tiles: readonly MapTile[]): readonly BuildingS
   if (cached) return cached;
   return BuildingTrace.run(`provider tiles=${tiles.map((tile) => `${tile.zoom}/${tile.x}/${tile.y}`).join(",")} sources`, (trace) => {
     trace.stage("decode/features/use inference");
-    const rawSources = tiles.flatMap((tile) => buildingSources(tile));
-    trace.stage(`merge overlapping footprints count=${rawSources.length}`);
-    const sources = mergeOverlappingBuildings(rawSources);
+    const groups = tiles.map((tile) => buildingSources(tile));
+    trace.stage(`merge overlapping footprints count=${groups.reduce((count, group) => count + group.length, 0)}`);
+    const sources = mergeBuildingSourceGroups(groups);
     compositeBuildingSourceCache.set(tiles, sources);
     return sources;
   });

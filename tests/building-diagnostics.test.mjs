@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BuildingTrace } from "../src/buildings/BuildingDiagnostics.ts";
 import { creationStats, CREATION_STATS_INTERVAL_MS } from "../src/diagnostics/CreationStats.ts";
-import { StreamingTrace } from "../src/diagnostics/StreamingDiagnostics.ts";
+import { StreamingTrace, streamingDiagnosticsSnapshot } from "../src/diagnostics/StreamingDiagnostics.ts";
 
 test("building diagnostics preserve sync/async results, failures, and disable behavior", async () => {
   const messages = [];
@@ -82,4 +82,32 @@ test("streaming aggregates across tiles and records completion only once", (t) =
   assert.equal(messages.length, 1);
   assert.equal(messages[0][1]["streaming.finished.ms"].count, 100);
   assert.equal(messages[0][1]["streaming.stage.terrain.ms"].total, 500);
+});
+
+test("synchronous building stages retain building identity and finish after errors", () => {
+  const error = new Error("geometry failure");
+  assert.throws(() => BuildingTrace.run("building=test-identity", (trace) => {
+    trace.stage("stair layout");
+    throw error;
+  }), (caught) => caught === error);
+  const snapshot = streamingDiagnosticsSnapshot();
+  const stage = snapshot.stages.find((entry) => entry.label === "building=test-identity" &&
+    entry.stage === "building stair layout");
+  assert.ok(stage);
+  assert.equal(stage.timingKind, "synchronous");
+  assert.equal(stage.executionThread, "main");
+  assert.equal(stage.completed, true);
+  assert.ok(!snapshot.activeStages.some((entry) => entry.label === "building=test-identity"));
+});
+
+test("async building traces do not report scheduled waits as synchronous work", async () => {
+  await BuildingTrace.runAsync("building=async-wait", async (trace) => {
+    trace.stage("frame yield");
+    await Promise.resolve();
+  });
+  BuildingTrace.run("building=unlogged", () => {}, false);
+  const snapshot = streamingDiagnosticsSnapshot();
+  assert.ok(!snapshot.stages.some((entry) =>
+    entry.label === "building=async-wait" || entry.label === "building=unlogged"));
+  assert.ok(!snapshot.activeStages.some((entry) => entry.label === "building=unlogged"));
 });

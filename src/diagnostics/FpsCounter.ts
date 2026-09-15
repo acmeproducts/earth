@@ -13,7 +13,7 @@ import { creationStats, SLOW_OPERATION_THRESHOLD_MS } from "./CreationStats";
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 8;
+const REPORT_VERSION = 9;
 const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
 const BENCHMARK_WARMUP_FRAMES = 60;
 const BENCHMARK_SAMPLE_FRAMES = 120;
@@ -95,6 +95,8 @@ interface MemoryPerformance extends Performance {
 }
 
 interface FrameHistorySample extends CpuFrameSample {
+  /** Inclusive render phases from this callback, only when detailed instrumentation is enabled. */
+  renderPhases?: { activeMeshEvaluation: number; renderTargets: number; cameraRender: number; drawSubmission: number };
   recordedAtMilliseconds: number;
   frameIntervalMilliseconds: number;
   callbackMilliseconds: number;
@@ -421,6 +423,12 @@ export class FpsCounter {
     this.latestStreaming = sample;
     const historySample = {
       ...sample,
+      renderPhases: this.expanded ? {
+        activeMeshEvaluation: this.instrumentation.activeMeshesEvaluationTimeCounter.current,
+        renderTargets: this.instrumentation.renderTargetsRenderTimeCounter.current,
+        cameraRender: this.instrumentation.cameraRenderTimeCounter.current,
+        drawSubmission: this.instrumentation.renderTimeCounter.current,
+      } : undefined,
       recordedAtMilliseconds,
       frameIntervalMilliseconds,
       callbackMilliseconds,
@@ -428,6 +436,11 @@ export class FpsCounter {
       frameBudgetMilliseconds,
       stutter,
     };
+    if (historySample.renderPhases) {
+      for (const [phase, milliseconds] of Object.entries(historySample.renderPhases)) {
+        creationStats.recordSlowOperation(`frame.${phase}`, milliseconds);
+      }
+    }
     if (this.frameHistory.length < FRAME_HISTORY_SIZE) {
       this.frameHistory.push(historySample);
     } else {

@@ -1,6 +1,30 @@
 import polygonClipping from "polygon-clipping";
 import { planBuilding, type BuildingHeightBand, type BuildingPolygon, type BuildingSource, type LonLat } from "./BuildingPlanner";
 
+interface SourceGroupCacheNode {
+  children: WeakMap<readonly BuildingSource[], SourceGroupCacheNode>;
+  sources?: readonly BuildingSource[];
+}
+
+const sourceGroupCache: SourceGroupCacheNode = { children: new WeakMap() };
+
+/** Reuse compositions across fresh tile arrays without retaining evicted provider sources. */
+export function mergeBuildingSourceGroups(
+  groups: readonly (readonly BuildingSource[])[],
+): readonly BuildingSource[] {
+  let node = sourceGroupCache;
+  for (const group of groups) {
+    let child = node.children.get(group);
+    if (!child) {
+      child = { children: new WeakMap() };
+      node.children.set(group, child);
+    }
+    node = child;
+  }
+  // Order and group identity are significant: new decoded data must be recomposed.
+  return node.sources ??= mergeOverlappingBuildings(groups.flat());
+}
+
 /** Merge positive-area overlaps before ownership, layouts, and geometry are planned. */
 export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): BuildingSource[] {
   const entries = sources.map((source, index) => {

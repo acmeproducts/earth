@@ -36,7 +36,7 @@ import {
   VegetationFieldResult,
 } from "./VegetationField";
 import { LandCoverClass } from "../world/WorldCover";
-import { cellRandom, createSeededRandom } from "../core/Random";
+import { cellRandom, createSeededRandom, deriveSeed } from "../core/Random";
 import {
   TREE_LOW_LIGHT_BRIGHTNESS,
   TREE_SPECIES,
@@ -754,7 +754,6 @@ export async function createTreeField(
     trace.stage("placement setup");
     const root = new TransformNode(rootName, scene);
     if (startDisabled) root.setEnabled(false);
-    const random = createSeededRandom(seed);
     const speciesNoise = new SimplexNoise2D(speciesSeed ^ 0x54524545);
     const speciesDetailNoise = new SimplexNoise2D(speciesSeed ^ 0x434c5553);
     // Variant identity is a property of the terrain tile, not each individual
@@ -826,6 +825,9 @@ export async function createTreeField(
         for (let column = 0; column < columns; column++) {
           const index = row * columns + column;
           if (!forestMask[index]) continue;
+
+          // Excluding another cell or changing detail must not move this tree.
+          const random = createSeededRandom(deriveSeed(seed, "treeCell", column, row));
 
           const x = -meshWidth / 2 + (column + 0.2 + random() * 0.6) * cellWidth;
           const z = meshDepth / 2 - (row + 0.2 + random() * 0.6) * cellDepth;
@@ -923,20 +925,21 @@ export async function createTreeField(
             variantBuckets.set(bucketKey, bucket);
           }
           bucket.matrices.push(matrix);
+          const logRandom = createSeededRandom(deriveSeed(seed, "treeLog", column, row));
           if (includeFallenLogs && depth >= FALLEN_LOG_MINIMUM_INTERIOR_DEPTH &&
-              random() < FALLEN_LOG_CHANCE) {
-            const logYaw = random() * Math.PI * 2;
-            const offsetDistance = (0.7 + random() * 0.9) / metersPerUnit;
+              logRandom() < FALLEN_LOG_CHANCE) {
+            const logYaw = logRandom() * Math.PI * 2;
+            const offsetDistance = (0.7 + logRandom() * 0.9) / metersPerUnit;
             const logX = x + Math.cos(logYaw + Math.PI / 2) * offsetDistance;
             const logZ = z + Math.sin(logYaw + Math.PI / 2) * offsetDistance;
             const logElevation = elevationSampler
               ? elevationSampler(logX, logZ)
               : sampleElevation(terrain, logX, logZ, meshWidth, meshDepth);
-            const lengthScale = (0.48 + random() * 0.3) * speciesScale;
-            const thicknessScale = (0.82 + random() * 0.3) * speciesScale;
+            const lengthScale = (0.48 + logRandom() * 0.3) * speciesScale;
+            const thicknessScale = (0.82 + logRandom() * 0.3) * speciesScale;
             bucket.fallenLogMatrices.push(Matrix.Compose(
               new Vector3(thicknessScale, lengthScale, thicknessScale),
-              new Vector3(0, logYaw, Math.PI / 2 + (random() - 0.5) * 0.08).toQuaternion(),
+              new Vector3(0, logYaw, Math.PI / 2 + (logRandom() - 0.5) * 0.08).toQuaternion(),
               new Vector3(
                 logX + positionOffset.x,
                 (logElevation + 0.14) / metersPerUnit + positionOffset.y,

@@ -679,6 +679,8 @@ function remainingIntervals(
 function sharedRoomEntranceDoors(
   rooms: readonly LayoutRoom<BuildingRoomType>[],
 ): Opening2D[] {
+  const sharedSegment = createSharedSegmentLookup();
+  const connections = createRoomConnections(rooms, sharedSegment);
   const hallway = rooms.find((room) => room.id === "hallway-1");
   if (!hallway) return [];
   const doors = rooms
@@ -688,7 +690,7 @@ function sharedRoomEntranceDoors(
     .filter((room) => room.type === "apartment" || room.type === "stairs" ||
       (room.type === "hallway" && room.id !== "hallway-1"))
     .flatMap((room) => {
-      const shared = longestSharedSegment(
+      const shared = sharedSegment(
         room.polygon.outer,
         hallway.polygon.outer,
       );
@@ -722,10 +724,8 @@ function sharedRoomEntranceDoors(
       length: number;
     } | undefined;
     for (const source of rooms.filter((room) => connected.has(room.id))) {
-      for (const room of rooms.filter((candidate) => !connected.has(candidate.id))) {
-        const segment = longestSharedSegment(source.polygon.outer, room.polygon.outer);
-        if (!segment) continue;
-        const length = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y);
+      for (const { room, segment, length } of connections(source)) {
+        if (connected.has(room.id)) continue;
         if (length >= 0.8 && (!best || length > best.length)) best = { room, segment, length };
       }
     }
@@ -753,16 +753,15 @@ function sharedRoomEntranceDoors(
 /** Keeps every convex piece of a concave footprint reachable from its entrance. */
 function connectedApartmentDoors(rooms: readonly LayoutRoom<BuildingRoomType>[]): Opening2D[] {
   if (rooms.length < 2) return [];
+  const sharedSegment = createSharedSegmentLookup();
+  const connections = createRoomConnections(rooms, sharedSegment);
   const connected = new Set<number>([0]);
   const doors: Opening2D[] = [];
   while (connected.size < rooms.length) {
     let best: { target: number; segment: readonly [Point2D, Point2D]; length: number } | undefined;
     for (const source of connected) {
-      for (let target = 0; target < rooms.length; target++) {
+      for (const { target, segment, length } of connections(rooms[source])) {
         if (connected.has(target)) continue;
-        const segment = longestSharedSegment(rooms[source].polygon.outer, rooms[target].polygon.outer);
-        if (!segment) continue;
-        const length = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y);
         if (!best || length > best.length) best = { target, segment, length };
       }
     }
@@ -786,6 +785,44 @@ function connectedApartmentDoors(rooms: readonly LayoutRoom<BuildingRoomType>[])
     });
   }
   return doors;
+}
+
+function createRoomConnections(
+  rooms: readonly LayoutRoom<BuildingRoomType>[],
+  sharedSegment: typeof longestSharedSegment,
+) {
+  type Connection = { room: LayoutRoom<BuildingRoomType>; target: number;
+    segment: readonly [Point2D, Point2D]; length: number };
+  const cache = new Map<LayoutRoom<BuildingRoomType>, Connection[]>();
+  return (source: LayoutRoom<BuildingRoomType>): readonly Connection[] => {
+    let connections = cache.get(source);
+    if (!connections) {
+      connections = [];
+      rooms.forEach((room, target) => {
+        if (room === source) return;
+        const segment = sharedSegment(source.polygon.outer, room.polygon.outer);
+        if (segment) connections!.push({ room, target, segment,
+          length: Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y) });
+      });
+      cache.set(source, connections);
+    }
+    return connections;
+  };
+}
+
+function createSharedSegmentLookup(): typeof longestSharedSegment {
+  // Room polygons stay fixed while connectivity grows. Cache misses as well as
+  // shared edges, and keep pair direction to preserve endpoint/tie ordering.
+  const cache = new Map<readonly Point2D[], Map<readonly Point2D[], ReturnType<typeof longestSharedSegment>>>();
+  return (first, second) => {
+    let targets = cache.get(first);
+    if (!targets) {
+      targets = new Map();
+      cache.set(first, targets);
+    }
+    if (!targets.has(second)) targets.set(second, longestSharedSegment(first, second));
+    return targets.get(second);
+  };
 }
 
 function longestSharedSegment(

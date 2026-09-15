@@ -18,6 +18,7 @@ import {
 } from "@babylonjs/core";
 import earcut from "earcut";
 import polygonClipping from "polygon-clipping";
+import { intersectInteriorSections } from "./InteriorSectionIntersection";
 import { compositeBuildingGeometry } from "./CompositeBuildingGeometry";
 import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
@@ -28,13 +29,13 @@ import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/Pla
 import { unitFromSeed } from "../core/Random";
 import { overlappingSegment } from "../core/PolygonGeometry";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../buildings/BuildingPlanner";
-import { planBuildingLayout, type BuildingLayout } from "../buildings/BuildingLayoutPlanner";
-import { planningFrameForPolygon } from "../core/PlanningFrame.mjs";
+import type { planBuildingLayout, BuildingLayout } from "../buildings/BuildingLayoutPlanner";
+import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
 import {
-  maximumMinimumRoomAreaForApartment,
-  planApartmentLayout,
-  type ApartmentLayout,
-} from "../buildings/ApartmentLayoutPlanner";
+  runBuildingPlanning, openingTouchesBoundary,
+  type BuildingPlanningInput, type BuildingPlanningResult, type ApartmentPlanningResult,
+} from "../buildings/BuildingPlanningTask";
+import type { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
 import { segmentsIntersect, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "../buildings/FloorPlan";
 import {
   captureEncounteredBuildingLayout,
@@ -96,6 +97,65 @@ import {
 
 export type { BuildingRenderOptions } from "./BuildingRendererTypes";
 
+type BuildingCompileSteps<T> = Generator<string | BuildingPlanningInput, T, BuildingPlanningResult | undefined>;
+let compilingMeshes: Set<Mesh> | undefined;
+
+function advanceBuilding<T>(
+  owned: Set<Mesh>, id: string, stage: string,
+  steps: BuildingCompileSteps<T>, response?: BuildingPlanningResult,
+): IteratorResult<string | BuildingPlanningInput, T> {
+  // Staging is synchronous. Restore the collector before any worker/frame await,
+  // so interleaved tile builds never acquire each other's meshes.
+  const previous = compilingMeshes;
+  compilingMeshes = owned;
+  try {
+    return BuildingTrace.run(`building=${id} compile chunk`, (trace) => {
+      trace.stage(stage);
+      return steps.next(response);
+    });
+  } finally {
+    compilingMeshes = previous;
+  }
+}
+
+function compileBuildingSynchronously(
+  id: string, steps: BuildingCompileSteps<Mesh | undefined>,
+): Mesh | undefined {
+  const owned = new Set<Mesh>();
+  let complete = false;
+  let response: BuildingPlanningResult | undefined;
+  let stage = "setup";
+  try {
+    for (;;) {
+      const next = advanceBuilding(owned, id, stage, steps, response);
+      if (next.done) { complete = true; return next.value; }
+      stage = typeof next.value === "string" ? next.value : `${next.value.kind} layout result`;
+      response = typeof next.value === "string" ? undefined : runBuildingPlanning(next.value);
+    }
+  } finally {
+    steps.return(undefined);
+    if (!complete) for (const mesh of owned) if (!mesh.isDisposed()) mesh.dispose();
+  }
+}
+
+function* mergeDetailedParts(parts: Mesh[], disposeMaterials = false): BuildingCompileSteps<Mesh> {
+  const chunks: Mesh[] = [];
+  // Babylon merge/disposal cost grows with the number of source meshes.
+  for (let start = 0; start < parts.length; start += 64) {
+    yield "compact/merge geometry batch";
+    const batch = parts.slice(start, start + 64);
+    batch.forEach(compactMeshBuffers);
+    const merged = Mesh.MergeMeshes(batch, false, true);
+    if (!merged) throw new Error("Building geometry merge failed");
+    chunks.push(stageBuildingMesh(merged));
+    for (const mesh of batch) mesh.dispose(false, disposeMaterials);
+  }
+  yield "final building geometry merge";
+  const merged = chunks.length === 1 ? chunks[0] : Mesh.MergeMeshes(chunks, true, true);
+  if (!merged) throw new Error("Building geometry merge failed");
+  return stageBuildingMesh(merged);
+}
+
 /** Compiles semantic building plans into deterministic Babylon geometry. */
 export class ProceduralBuildingRenderer {
   static createDetailed(
@@ -104,7 +164,39 @@ export class ProceduralBuildingRenderer {
     terrain: TerrainData,
     options: BuildingRenderOptions,
   ): Mesh | undefined {
-    return BuildingTrace.run(`building=${plan.id} exterior vertices=${plan.footprint.outer.length}`, (trace) => {
+    return compileBuildingSynchronously(plan.id, this.createDetailedSteps(scene, plan, terrain, options));
+  }
+
+  static async createDetailedAsync(
+    scene: Scene, plan: BuildingPlan, terrain: TerrainData, options: BuildingRenderOptions,
+    worker: Pick<BuildingPlanningWorker, "plan">,
+    yieldControl: () => Promise<void>,
+    isCancelled: () => boolean = () => false,
+  ): Promise<Mesh | undefined> {
+    const steps = this.createDetailedSteps(scene, plan, terrain, options);
+    const owned = new Set<Mesh>();
+    let complete = false;
+    let response: BuildingPlanningResult | undefined;
+    let stage = "setup";
+    try {
+      for (;;) {
+        await yieldControl();
+        if (isCancelled() || scene.isDisposed) throw new DOMException("Building cancelled", "AbortError");
+        const next = advanceBuilding(owned, plan.id, stage, steps, response);
+        if (next.done) { complete = true; return next.value; }
+        stage = typeof next.value === "string" ? next.value : `${next.value.kind} layout result`;
+        response = typeof next.value === "string" ? undefined : await worker.plan(next.value, `building=${plan.id}`);
+      }
+    } finally {
+      steps.return(undefined);
+      if (!complete) for (const mesh of owned) if (!mesh.isDisposed()) mesh.dispose();
+    }
+  }
+
+  private static *createDetailedSteps(
+    scene: Scene, plan: BuildingPlan, terrain: TerrainData, options: BuildingRenderOptions,
+  ): BuildingCompileSteps<Mesh | undefined> {
+    return yield* BuildingTrace.runSteps(`building=${plan.id} exterior vertices=${plan.footprint.outer.length}`, function* (trace): BuildingCompileSteps<Mesh | undefined> {
       trace.stage("footprint/terrain sampling");
       const prepared = prepareBuildingFootprint(plan.id, plan.footprint, terrain, options);
       if (!prepared) return undefined;
@@ -112,7 +204,7 @@ export class ProceduralBuildingRenderer {
       trace.stage("appearance/roof planning");
       const appearance = buildingAppearance(plan);
       if (plan.heightBands?.length || prepared.holes.length > 0) {
-        return createComplexEnterableBuilding(scene, plan, prepared, terrain, options, appearance);
+        return yield* createComplexEnterableBuilding(scene, plan, prepared, terrain, options, appearance);
       }
       const areaSquareMeters = Math.abs(signedArea(prepared.outline)) * options.metersPerUnit ** 2;
       const roofShape = resolvedRoofShape(plan, prepared.outline, areaSquareMeters);
@@ -134,7 +226,7 @@ export class ProceduralBuildingRenderer {
       );
       const roofEaveElevation = wallTopElevation + BUILDING_ROOF_EAVE_CLEARANCE_METERS;
       trace.stage("exterior geometry (inclusive)");
-      const detailed = createEnterableBuilding(
+      const detailed = yield* createEnterableBuilding(
         scene,
         plan,
         prepared.outline,
@@ -191,19 +283,11 @@ export class ProceduralBuildingRenderer {
         const equipment = createRooftopEquipment(scene, plan, prepared.outline, [],
           wallTopElevation + flatRoofThickness(areaSquareMeters) / 2,
           options.metersPerUnit, appearance.wall);
-        if (equipment) parts.push(equipment);
+        if (equipment) parts.push(stageBuildingMesh(equipment));
       }
 
       trace.stage("compact buffers");
-      parts.forEach(compactMeshBuffers);
-      trace.stage("merge/upload");
-      const merged = Mesh.MergeMeshes(parts, false, true);
-      if (!merged) {
-        for (const part of parts) part.dispose(false, true);
-        return undefined;
-      }
-      trace.stage("dispose source meshes");
-      for (const part of parts) part.dispose(false, true);
+      const merged = yield* mergeDetailedParts(parts, true);
       trace.stage("metadata/staging");
       const interiorCenter = averagePoint(prepared.outline);
       const interiorRadiusMeters = Math.max(...prepared.outline.map((point) =>
@@ -397,14 +481,14 @@ function scenePolygon([outer, ...holes]: LonLat[][]): Pick<InteriorSection, "out
 }
 
 /** Hollow band facades and open floors preserve terraces, overhangs and courtyard voids. */
-function createComplexEnterableBuilding(
+function* createComplexEnterableBuilding(
   scene: Scene,
   plan: BuildingPlan,
   prepared: PreparedBuildingFootprint,
   terrain: TerrainData,
   options: BuildingRenderOptions,
   appearance: BuildingAppearance,
-): Mesh {
+): BuildingCompileSteps<Mesh> {
   const bands = plan.heightBands ?? [{ minimumHeightMeters: plan.minimumHeightMeters,
     heightMeters: plan.heightMeters, footprints: [plan.footprint], roofs: [plan.footprint], soffits: [plan.footprint] }];
   const project = ([lon, lat]: LonLat) => lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
@@ -436,7 +520,7 @@ function createComplexEnterableBuilding(
       const openings: Opening2D[] = [];
       const facadeOpenings: Opening2D[] = [];
       for (const ring of [polygon.outline, ...polygon.holes]) {
-        const facade = createEnterableBuilding(scene, bandPlan, ring, bottom, top, options,
+        const facade = yield* createEnterableBuilding(scene, bandPlan, ring, bottom, top, options,
           appearance, "exterior", ring === polygon.outline
             ? findSharedFacadeEdges(plan.footprint, ring, terrain, options) : new Set(), true);
         parts.push(...facade.parts);
@@ -453,15 +537,16 @@ function createComplexEnterableBuilding(
       }
     }
   }
-  connectInteriorSections(sections, plan, options);
+  yield "complex stair connections";
+  yield* connectInteriorSections(sections, plan, options);
   const interiorUse = resolvedInteriorUse(plan);
   for (const section of sections) {
     if (profile.interiorLayout !== "rooms") continue;
-    const attempt = createPlannedInterior(section.outline, section.openings, options, section.holes,
+    const attempt = yield* createPlannedInterior(section.outline, section.openings, options, section.holes,
       [...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options)));
     section.interior = attempt.interior;
     if (section.interior) {
-      const apartments = planInteriorApartments(section.interior.building, section.facadeOpenings,
+      const apartments = yield* planInteriorApartments(section.interior.building, section.facadeOpenings,
         plan.detailSeed, interiorUse);
       section.interior.apartments = apartments.apartments;
       attempt.failure = apartments.failure;
@@ -476,6 +561,7 @@ function createComplexEnterableBuilding(
   }
   // Keep the exact exposed horizontal faces of the distant shell; its solid walls
   // must not survive behind the new doors and windows.
+  yield "complex roof cap geometry";
   const caps = compositeBuildingGeometry(bands, project,
     (height) => (prepared.baseElevation + height) / options.metersPerUnit,
     options.showRoofs !== false, false);
@@ -489,13 +575,13 @@ function createComplexEnterableBuilding(
   colorBuildingMass(capMesh, { ...appearance, roofSurface: roofSurfaceFor(plan.roofMaterial, "flat", plan.buildingClass) });
   parts.push(capMesh);
   if (options.showRoofs !== false && !plan.heightBands?.length) for (const band of bands) for (const roof of band.roofs) {
+    yield "complex rooftop equipment";
     const polygon = projectPolygon(roof);
     const equipment = createRooftopEquipment(scene, plan, polygon.outline, polygon.holes,
       prepared.baseElevation + band.heightMeters, options.metersPerUnit, appearance.wall);
-    if (equipment) parts.push(equipment);
+    if (equipment) parts.push(stageBuildingMesh(equipment));
   }
-  parts.forEach(compactMeshBuffers);
-  const mesh = stageBuildingMesh(Mesh.MergeMeshes(parts, true, true)!);
+  const mesh = yield* mergeDetailedParts(parts);
   const center = averagePoint(prepared.outline);
   const distanceTo = (position: Vector3): number => Math.min(...sections.map((section) => {
     if (pointInRing(position, section.outline) && !section.holes.some((hole) => pointInRing(position, hole))) return 0;
@@ -543,12 +629,13 @@ function createComplexEnterableBuilding(
   return mesh;
 }
 
-function connectInteriorSections(sections: InteriorSection[], plan: BuildingPlan, options: BuildingRenderOptions): void {
+function* connectInteriorSections(sections: InteriorSection[], plan: BuildingPlan, options: BuildingRenderOptions): BuildingCompileSteps<void> {
   if (!buildingProfile(plan.buildingClass).hasStairs) return;
   // Each overlap component gets a connection, including separate towers above one podium.
   for (const lower of sections) for (const upper of sections) {
     if (Math.abs(lower.top - upper.bottom) > 1e-6) continue;
-    for (const overlap of polygonClipping.intersection(sectionRings(lower), sectionRings(upper))) {
+    yield "complex stair overlap";
+    for (const overlap of intersectInteriorSections(sectionRings(lower), sectionRings(upper), options.metersPerUnit)) {
       const polygon = scenePolygon(overlap);
       const stair = findStairLayouts(polygon.outline, options,
         { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1, plan.detailSeed,
@@ -788,7 +875,7 @@ function* createFurnitureParts(
  * and doorway apertures, while floor slabs make the volume read as an interior
  * from both the entrance and the windows.
  */
-function createEnterableBuilding(
+function* createEnterableBuilding(
   scene: Scene,
   plan: BuildingPlan,
   outline: ScenePoint[],
@@ -799,8 +886,8 @@ function createEnterableBuilding(
   part: "exterior" | "interior",
   blockedFacadeEdges: ReadonlySet<number> = new Set(),
   shellOnly = false,
-): DetailedBuildingParts {
-  return BuildingTrace.run(`building=${plan.id} ${part} planning/parts`, (trace) => {
+): BuildingCompileSteps<DetailedBuildingParts> {
+  return yield* BuildingTrace.runSteps(`building=${plan.id} ${part} planning/parts`, function* (trace): BuildingCompileSteps<DetailedBuildingParts> {
     trace.stage("profile/entrance");
     const usableHeight = Math.max(0, topElevation - baseElevation);
     const profile = buildingProfile(plan.buildingClass);
@@ -843,7 +930,7 @@ function createEnterableBuilding(
     );
     trace.stage("building layout planner");
     const planningAttempt = !shellOnly && profile.interiorLayout === "rooms"
-      ? createPlannedInterior(outline, entranceOpenings, options)
+      ? yield* createPlannedInterior(outline, entranceOpenings, options)
       : undefined;
     let plannedInterior = planningAttempt?.interior;
     trace.stage("stair layout");
@@ -866,7 +953,7 @@ function createEnterableBuilding(
     );
     trace.stage("apartment layout planners");
     if (plannedInterior) {
-      const apartmentPlanning = planInteriorApartments(plannedInterior.building,
+      const apartmentPlanning = yield* planInteriorApartments(plannedInterior.building,
         facadeOpenings, plan.detailSeed, interiorUse);
       plannedInterior.apartments = apartmentPlanning.apartments;
       if (apartmentPlanning.failure && planningAttempt) planningAttempt.failure = apartmentPlanning.failure;
@@ -914,6 +1001,7 @@ function createEnterableBuilding(
     if (part === "exterior") {
       trace.stage("facade corner geometry");
       for (let floor = 0; floor < floorCount; floor++) {
+        yield "facade corners";
         addFacadeCorners(
           parts,
           scene,
@@ -928,6 +1016,7 @@ function createEnterableBuilding(
 
     trace.stage("facade wall/window geometry");
     for (let edgeIndex = 0; part === "exterior" && edgeIndex < outline.length; edgeIndex++) {
+      yield "facade edge";
       const start = outline[edgeIndex];
       const end = outline[(edgeIndex + 1) % outline.length];
       const edgeLengthMeters = pointDistance(start, end) * options.metersPerUnit;
@@ -1124,26 +1213,17 @@ function openingAlongSceneEdge(
   return { id, type, start: point(offsetMeters), end: point(offsetMeters + widthMeters) };
 }
 
-function createPlannedInterior(
+function* createPlannedInterior(
   outline: readonly ScenePoint[],
   facadeOpenings: readonly Opening2D[],
   options: BuildingRenderOptions,
   holes: ScenePoint[][] = [],
   circulation: ScenePoint[][] = [],
-): InteriorPlanningAttempt {
+): BuildingCompileSteps<InteriorPlanningAttempt> {
   const input = plannerInputFromOutline(outline, facadeOpenings, options);
   input.buildingPolygon = floorPolygon(outline, holes, options);
   input.circulation = circulation.map((ring) => floorPolygon(ring, [], options));
-  try {
-    const building = planBuildingLayout(input);
-    return {
-      input,
-      interior: { building, apartments: [] },
-    };
-  } catch (error) {
-    // Invalid or unusually narrow footprints retain their structural floors and stairs.
-    return { input, failure: errorMessage(error) };
-  }
+  return (yield { kind: "building", input }) as InteriorPlanningAttempt;
 }
 
 function resolvedInteriorUse(plan: BuildingPlan): NonNullable<BuildingPlan["interiorUse"]> {
@@ -1157,62 +1237,10 @@ function floorPolygon(outline: readonly ScenePoint[], holes: ScenePoint[][], opt
   return { outer: meters(outline), holes: holes.map(meters) };
 }
 
-function planInteriorApartments(building: BuildingLayout, facadeOpenings: readonly Opening2D[],
+function* planInteriorApartments(building: BuildingLayout, facadeOpenings: readonly Opening2D[],
   seed: number, use: NonNullable<BuildingPlan["interiorUse"]>,
-): { apartments: ApartmentLayout[]; failure?: string } {
-  if (use === "residential" || use === "hotel") return planApartmentLayouts(building, facadeOpenings, seed);
-  return { apartments: building.rooms.filter((room) => room.type === "apartment").map((room) => ({
-    boundary: room.polygon, rooms: [{ id: room.id, type: "room", polygon: room.polygon }],
-    openings: [...(building.openings ?? []), ...facadeOpenings]
-      .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
-  })) };
-}
-
-function planApartmentLayouts(
-  building: BuildingLayout,
-  facadeOpenings: readonly Opening2D[],
-  buildingSeed: number,
-): { apartments: ApartmentLayout[]; failure?: string } {
-  const failures: string[] = [];
-  const planningFrame = planningFrameForPolygon(building.boundary.outer);
-  const apartments = building.rooms
-    .filter((room) => room.type === "apartment")
-    .flatMap((room, apartmentIndex) => {
-      try {
-        return [planApartmentLayout({
-          apartmentPolygon: room.polygon,
-          planningFrame,
-          minimumRoomAreaSquareMeters: apartmentRoomAreaTarget(
-            buildingSeed,
-            apartmentIndex,
-            room.polygon,
-          ),
-          openings: [...(building.openings ?? []), ...facadeOpenings]
-            .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)),
-        })];
-      } catch (error) {
-        failures.push(`${room.id}: ${errorMessage(error)}`);
-        return [];
-      }
-    });
-  return {
-    apartments,
-    failure: failures.length > 0
-      ? `Apartment planning failed for ${failures.join("; ")}`
-      : undefined,
-  };
-}
-
-function apartmentRoomAreaTarget(
-  buildingSeed: number,
-  apartmentIndex: number,
-  apartmentPolygon: BuildingLayout["rooms"][number]["polygon"],
-): number {
-  // Keep the 12-60 m² variation bounded and deterministic: room proportions change by
-  // building and apartment, but a rebuild never produces a different layout.
-  const variation = unitFromSeed(buildingSeed ^ (apartmentIndex * 0x1f123bb5) ^ 0x3c6ef372);
-  const maximum = maximumMinimumRoomAreaForApartment(apartmentPolygon);
-  return 12 + variation * (maximum - 12);
+): BuildingCompileSteps<ApartmentPlanningResult> {
+  return (yield { kind: "apartments", building, facadeOpenings, seed, use }) as ApartmentPlanningResult;
 }
 
 function plannerInputFromOutline(
@@ -1232,10 +1260,6 @@ function plannerInputFromOutline(
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function plannedInteriorBlocksOpening(
   interior: PlannedInterior,
   opening: Opening2D,
@@ -1251,16 +1275,6 @@ function plannedInteriorBlocksOpening(
       return segmentsIntersect(start, end, opening.start, opening.end);
     });
   }));
-}
-
-function openingTouchesBoundary(opening: Opening2D, polygon: readonly Point2D[]): boolean {
-  const center = {
-    x: (opening.start.x + opening.end.x) / 2,
-    y: (opening.start.y + opening.end.y) / 2,
-  };
-  return polygon.some((start, index) =>
-    pointOnSegment2D(center, start, polygon[(index + 1) % polygon.length])
-  );
 }
 
 function facadeOpeningServesApartment(opening: Opening2D, layout: BuildingLayout): boolean {
@@ -2891,6 +2905,7 @@ function varyColor(color: Color3, tone: number, warmth: number): Color3 {
 }
 
 function stageBuildingMesh<T extends Mesh>(mesh: T): T {
+  compilingMeshes?.add(mesh);
   mesh.setEnabled(false);
   return mesh;
 }

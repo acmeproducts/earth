@@ -33,7 +33,7 @@ import {
   LAKE_TERRAIN_CONTEXT_METERS,
   measureLakeSupport,
 } from "../terrain/TerrainLakePolygons";
-import type { TerrainLakePolygon } from "../terrain/TerrainLakePolygons";
+import type { TerrainLakePolygon, TerrainLakeSource } from "../terrain/TerrainLakePolygons";
 import { createTreeField } from "../vegetation/TreeField";
 import {
   resolveTreeTrunkCollisions,
@@ -67,6 +67,8 @@ import {
 import type { SceneGeographicFrame } from "../world/Geo";
 import { OpenStreetMap } from "../world/OpenStreetMap";
 import { RoadPlanningWorker } from "../roads/RoadPlanningWorker";
+import { LakeCollectionWorker } from "../water/LakeCollectionWorker";
+import { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
 import type { RoadAndBuildingPlan } from "../roads/RoadAndBuildingPlanner";
 import { OwnedValueCache } from "../core/OwnedValueCache";
 import type { MapTile } from "../world/OpenStreetMap";
@@ -178,13 +180,6 @@ const FAR_TILE_SUBDIVISIONS = 16;
  * live on: one vertex roughly every 1.2 to 2.4 m instead of 2.5 to 5 m.
  */
 const NATIVE_TERRAIN_UPSAMPLE_FACTOR = 2;
-/**
- * Distant tree layers use wider spacing with raised occupancy, matching the
- * detail rings' trees per square meter at a quarter of the instance count.
- */
-const FAR_TREE_SPACING_METERS = 5;
-const FAR_TREE_OCCUPANCY = 1;
-const FAR_TREE_EDGE_OCCUPANCY = 0.24;
 const TERRAIN_STREAMING_CHECK_INTERVAL_MS = 250;
 /** No stem is wider than this, so tiles farther away cannot touch the walker. */
 const TREE_TRUNK_REACH_METERS = 2;
@@ -205,6 +200,8 @@ export class Game {
   private readonly layerFades: LayerFades;
   private streamingGeneration = 0;
   private readonly roadPlanningWorker = new RoadPlanningWorker();
+  private readonly lakeCollectionWorker = new LakeCollectionWorker();
+  private readonly buildingPlanningWorker = new BuildingPlanningWorker();
   /** Streaming CPU work yields when it has consumed its frame slice. */
   private readonly streamingYielder = createFrameBudgetYielder();
   private cameraTileKey?: string;
@@ -435,6 +432,8 @@ export class Game {
   ): Promise<void> {
     const generation = ++this.streamingGeneration;
     this.roadPlanningWorker.reset();
+    this.lakeCollectionWorker.reset();
+    this.buildingPlanningWorker.reset();
     this.resetCameraForWorldChange();
     this.cloudLayer?.dispose();
     this.cloudLayer = undefined;
@@ -691,14 +690,14 @@ export class Game {
     ));
     const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
     if (generation !== this.streamingGeneration) return undefined;
-    trace?.stage("lake surface polygon collection", "synchronous");
-    const surfaceLakeSources = OpenStreetMap.collectLakePolygons(
+    trace?.stage("lake surface source preparation", "synchronous");
+    const surfaceLakeInput = OpenStreetMap.prepareLakeCollection(
       lakeTiles,
       terrainData,
       { meshWidth, meshDepth },
     );
-    trace?.stage("lake context polygon collection", "synchronous");
-    const lakeSources = OpenStreetMap.collectLakePolygons(
+    trace?.stage("lake context source preparation", "synchronous");
+    const contextLakeInput = OpenStreetMap.prepareLakeCollection(
       contextTiles,
       terrainData,
       {
@@ -707,6 +706,19 @@ export class Game {
         clipPadding: LAKE_TERRAIN_CONTEXT_METERS / metersPerUnit,
       },
     );
+    trace?.stage("lake collection worker wait");
+    let surfaceLakeSources: TerrainLakeSource[];
+    let lakeSources: TerrainLakeSource[];
+    try {
+      [surfaceLakeSources, lakeSources] = await Promise.all([
+        this.lakeCollectionWorker.collect(surfaceLakeInput, `tile=${key} lake surface`),
+        this.lakeCollectionWorker.collect(contextLakeInput, `tile=${key} lake context`),
+      ]);
+    } catch (error) {
+      if (generation !== this.streamingGeneration) return undefined;
+      throw error;
+    }
+    if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("lake terrain shaping");
     const lakePolygons: TerrainLakePolygon[] = await conformTerrainToLakePolygons(
       terrainData,
@@ -950,6 +962,8 @@ export class Game {
     );
 
     const mapOptions = {
+      buildingPlanningWorker: this.buildingPlanningWorker,
+      isCancelled: () => generation !== this.streamingGeneration,
       meshWidth: record.meshWidth,
       meshDepth: record.meshDepth,
       metersPerUnit,
@@ -1182,17 +1196,28 @@ export class Game {
       mapWays,
       record.landCover,
     );
-    const exclusionMask = await OpenStreetMap.createVegetationExclusionMask(
+    const placementOptions = {
+      meshWidth: record.meshWidth,
+      meshDepth: record.meshDepth,
+      metersPerUnit,
+      planning: record.roadAndBuildingPlan,
+      terrainSurface: TerrainSurface.fromGroundMesh(
+        record.terrain, record.meshWidth, record.meshDepth,
+      ),
+    };
+    const mappedExclusionMask = await OpenStreetMap.createVegetationExclusionMask(
       mapWays,
       record.terrainData,
-      {
-        meshWidth: record.meshWidth,
-        meshDepth: record.meshDepth,
-        metersPerUnit,
-        planning: record.roadAndBuildingPlan,
-      },
+      placementOptions,
       this.streamingYielder,
     );
+    const exclusionMask = combineHorizontalExclusionMasks([
+      mappedExclusionMask,
+      OpenStreetMapBarriers.createPlannedExclusionMask(
+        record.roadAndBuildingPlan.plotBoundaries,
+        placementOptions,
+      ),
+    ]);
     if (generation !== this.streamingGeneration) return;
     const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
     const treeField = await createTreeField(this.scene, record.terrainData, {
@@ -1206,9 +1231,7 @@ export class Game {
       seasonalDate: this.vegetationDate,
       landCover: placementLandCover,
       exclusionMask,
-      spacingMeters: FAR_TREE_SPACING_METERS,
-      occupancy: FAR_TREE_OCCUPANCY,
-      edgeOccupancy: FAR_TREE_EDGE_OCCUPANCY,
+      // Match detailed-tree placement; only the representation changes with range.
       includeModels: false,
       forceLowestImpostorLod: true,
       renderMode: "impostors",
@@ -1939,6 +1962,8 @@ export class Game {
     this.sceneryRevision++;
     this.streamingGeneration++;
     this.roadPlanningWorker.reset();
+    this.lakeCollectionWorker.reset();
+    this.buildingPlanningWorker.reset();
     this.requestStreamingUpdate();
   }
 
@@ -2333,6 +2358,8 @@ export class Game {
   dispose(): void {
     this.streamingGeneration++;
     this.roadPlanningWorker.dispose();
+    this.lakeCollectionWorker.dispose();
+    this.buildingPlanningWorker.dispose();
     window.removeEventListener("pagehide", this.handlePageHide);
     this.playerControls?.dispose();
     this.playerPresence.dispose();
