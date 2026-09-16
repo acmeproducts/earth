@@ -176,6 +176,8 @@ uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform float captureCenterY;
 uniform float impostorDepthPull;
+uniform float distanceFadeNear;
+uniform float distanceFadeFar;
 uniform vec3 sunDirection;
 ${vegetationShadowVertexDeclaration}
 ${cloudShadowVertexDeclaration}
@@ -190,6 +192,8 @@ varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
 varying vec3 vCenterWorld;
+varying vec3 vInstanceScale;
+varying float vDistanceFade;
 #ifdef IMPOSTOR_GROUND_PLANE
 varying vec3 vGroundRayPoint;
 varying vec4 vGroundPlane;
@@ -198,6 +202,20 @@ varying vec4 vGroundPlane;
 void main(void) {
   #include<instancesVertex>
   vec3 instanceOrigin = finalWorld[3].xyz;
+  // Low ground cover thins out before its streamed detail ring ends. Rather
+  // than dissolving pixels through a screen-door mask, each clump shrinks
+  // toward its root as it recedes, so the field visibly thins instead of
+  // leaving a fixed dot pattern over whatever lies behind it. The whole
+  // instance shares one distance so a clump never tears between its corners.
+  vDistanceFade = 1.0 - smoothstep(
+    distanceFadeNear,
+    distanceFadeFar,
+    length(cameraPosition - instanceOrigin)
+  );
+  float fadeScale = max(vDistanceFade, 0.001);
+  finalWorld[0].xyz *= fadeScale;
+  finalWorld[1].xyz *= fadeScale;
+  finalWorld[2].xyz *= fadeScale;
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
 #ifdef IMPOSTOR_GROUND_PLANE
   vGroundRayPoint = worldPosition.xyz;
@@ -226,6 +244,14 @@ void main(void) {
 
   vCenterWorld = center;
   vLocalPosition = position - vec3(0.0, captureCenterY, 0.0);
+  // Placement scales each instance per axis, but the atlas and the proxy box
+  // both describe the unscaled source. The fragment stage divides by this to
+  // bring the camera into the same local units as the vertex it is shading.
+  vInstanceScale = max(vec3(
+    length(finalWorld[0].xyz),
+    length(finalWorld[1].xyz),
+    length(finalWorld[2].xyz)
+  ), vec3(0.0001));
   vViewDirection = vec3(
     dot(worldViewDirection, axisX),
     dot(worldViewDirection, axisY),
@@ -274,6 +300,8 @@ varying vec3 vInstanceColor;
 varying float vInstanceLodBlend;
 varying vec3 vWindShear;
 varying vec3 vCenterWorld;
+varying vec3 vInstanceScale;
+varying float vDistanceFade;
 #ifdef IMPOSTOR_GROUND_PLANE
 varying vec3 vGroundRayPoint;
 varying vec4 vGroundPlane;
@@ -319,6 +347,7 @@ uniform float distanceGroundBlend;
 uniform vec3 distanceGroundColor;
 uniform float impostorAmbientUpward;
 uniform float impostorColorContrast;
+uniform float crownLightStrength;
 uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
@@ -396,10 +425,8 @@ float bayer4(vec2 pixel) {
   return (4.0 * lowValue + highValue) / 16.0;
 }
 
-// The longer distance dissolve needs more coverage steps than the compact
-// masks used by LOD swaps. Expanding the same ordered pattern to 8 by 8 keeps
-// it stable in screen space while making individual steps and repeats much
-// less apparent.
+// Alpha selection uses a finer ordered mask than the compact 4 by 4 used for
+// LOD swaps, keeping coverage steps stable in screen space with fewer repeats.
 float bayer8(vec2 pixel) {
   vec2 p = mod(floor(pixel), 8.0);
   vec2 low = mod(p, 2.0);
@@ -418,20 +445,19 @@ void main(void) {
   // Whole-field dither lets streamed tiles fade their vegetation in and out
   // without the depth-sorting problems of true transparency.
   if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
-  // Low ground cover dissolves before its streamed detail ring ends. Dithered
-  // coverage stays depth-safe while avoiding a visible wall of transparency.
-  float distanceFade = 1.0 - smoothstep(
-    distanceFadeNear,
-    distanceFadeFar,
-    length(vViewDirection)
-  );
-  if (distanceFade < 0.999 &&
-      bayer8(gl_FragCoord.xy + vec2(3.0, 2.0)) >= distanceFade) discard;
+  // Low ground cover has already shrunk toward its root in the vertex stage;
+  // once it has collapsed entirely there is nothing left worth shading.
+  float distanceFade = vDistanceFade;
+  if (distanceFade <= 0.001) discard;
   // Select the captured silhouette from the light during shadow rendering.
+  // Camera offset in the source's own units. World lengths would make the
+  // per-fragment ray meet the image plane at the wrong point on every
+  // instance that placement scaled, moving the image away from the model.
+  vec3 localCameraOffset = vViewDirection / vInstanceScale;
   #if SM_DIRECTIONINLIGHTDATA == 1
   vec3 direction = normalize(vLocalSunDirection);
   #else
-  vec3 direction = normalize(vViewDirection);
+  vec3 direction = normalize(localCameraOffset);
   #endif
   vec3 absoluteDirection = abs(direction);
   vec3 captureDirection = direction;
@@ -500,7 +526,7 @@ void main(void) {
   vec3 projectedPosition = vLocalPosition;
   #if SM_DIRECTIONINLIGHTDATA != 1
   if (cameraOrthographic < 0.5) {
-    vec3 cameraOffset = vViewDirection;
+    vec3 cameraOffset = localCameraOffset;
     vec3 ray = vLocalPosition - cameraOffset;
     float rayDenominator = dot(ray, direction);
     if (abs(rayDenominator) < 0.0001) discard;
@@ -617,12 +643,12 @@ void main(void) {
   // recovers a per-fragment depth: pinched to the axis at the base, bulging
   // toward the camera across the canopy.
   vec3 proxyRadii = 0.5 * vec3(captureDimensions.x, captureDimensions.y, captureDimensions.x);
-  vec3 towardFragment = vLocalPosition - vViewDirection;
+  vec3 towardFragment = vLocalPosition - localCameraOffset;
   // An orthographic view has no per-fragment ray to intersect, and the capture
   // and validation cameras are the only ones that use it.
   if (cameraOrthographic < 0.5 && length(towardFragment) > 0.0001) {
     vec3 rayStep = normalize(towardFragment);
-    vec3 scaledOrigin = vViewDirection / proxyRadii;
+    vec3 scaledOrigin = localCameraOffset / proxyRadii;
     vec3 scaledStep = rayStep / proxyRadii;
     float a = dot(scaledStep, scaledStep);
     float b = 2.0 * dot(scaledOrigin, scaledStep);
@@ -637,7 +663,10 @@ void main(void) {
       : -b / (2.0 * a);
     // Only movement along the view axis changes depth, and the axis through
     // the center is the one the flattened plane already agrees with.
-    float depthOffset = dot(vViewDirection + rayStep * hitDistance, direction);
+    // The hit is in local units; scaling it back per axis and projecting onto
+    // the world view axis gives the world distance the depth needs.
+    vec3 localHit = localCameraOffset + rayStep * hitDistance;
+    float depthOffset = dot(localHit * vInstanceScale, normalize(vViewDirection));
     vec3 towardCamera = cameraPosition - vCenterWorld;
     vec3 depthPoint = vCenterWorld +
       towardCamera * (depthOffset / max(length(towardCamera), 0.0001));
@@ -703,9 +732,11 @@ void main(void) {
     vec3(1.25)
   );
 
-  // Open sky lights the crown more strongly than the lower foliage.
+  // Open sky lights the crown more strongly than the lower foliage. Low, wide
+  // ground patches (grass, beach stones) disable the gradient: here it reads
+  // card height rather than world height and would mismatch the live model.
   float height01 = clamp((vLocalPosition.y / captureCenterY + 1.0) * 0.5, 0.0, 1.0);
-  float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, height01));
+  float crownLight = mix(1.0, mix(0.62, 1.10, smoothstep(0.08, 0.92, height01)), crownLightStrength);
   // Preserve enough ambient response for foliage to remain readable after sunset.
   lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
   lighting *= vegetationCloudShadowVisibility();
@@ -1309,7 +1340,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "impostorDepthPull", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "impostorColorContrast", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "impostorDepthPull", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "impostorColorContrast", "crownLightStrength", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler", "cloudShadowAtlas"],
       // Writing depth costs the early depth test, so the dense low vegetation
       // that never needed it compiles without the proxy at all.
@@ -1380,6 +1411,7 @@ export function createImpostorMaterial(
   material.setColor3("distanceGroundColor", Color3.White());
   material.setFloat("impostorAmbientUpward", 1);
   material.setFloat("impostorColorContrast", 1);
+  material.setFloat("crownLightStrength", 1);
   for (let index = 0; index < 5; index++) {
     material.setTexture(`atlas${index}`, assets.textures[Math.min(index, assets.textures.length - 1)]);
     material.setTexture(

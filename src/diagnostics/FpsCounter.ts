@@ -13,13 +13,8 @@ import { creationStats, SLOW_OPERATION_THRESHOLD_MS } from "./CreationStats";
 const UPDATE_INTERVAL_MS = 500;
 const FRAME_HISTORY_SIZE = 300;
 const STALL_HISTORY_SIZE = 50;
-const REPORT_VERSION = 9;
+const REPORT_VERSION = 10;
 const MAX_CADENCE_SAMPLE_MILLISECONDS = 100;
-const BENCHMARK_WARMUP_FRAMES = 60;
-const BENCHMARK_SAMPLE_FRAMES = 120;
-const BENCHMARK_WARMUP_MS = 1500;
-const BENCHMARK_SAMPLE_MS = 3000;
-
 export interface CpuFrameSample {
   gameMilliseconds: number;
   vegetationMilliseconds: number;
@@ -28,52 +23,6 @@ export interface CpuFrameSample {
   terrainTiles: number;
   detailTiles: number;
   activeLayerFades?: number;
-}
-
-export interface RenderBenchmarkPhase {
-  name: string;
-  apply: () => void;
-  captureContext?: () => RenderStatsContext;
-}
-
-interface RenderBenchmarkSample {
-  frameIntervalMilliseconds: number;
-  gameMilliseconds: number;
-  renderMilliseconds: number;
-  gpuFrameMilliseconds: number;
-  drawCalls: number;
-  activeTriangles: number;
-}
-
-interface RenderBenchmarkResult {
-  name: string;
-  samples: number;
-  gpuSamples: number;
-  context?: RenderStatsContext;
-  baselinePhaseIndex?: number;
-  frameInterval: Record<string, number> | null;
-  fps: Record<string, number> | null;
-  gpuFrame: Record<string, number> | null;
-  game: Record<string, number> | null;
-  renderCall: Record<string, number> | null;
-  drawCalls: Record<string, number> | null;
-  activeTriangles: Record<string, number> | null;
-  relativeToBaseline?: {
-    averageFpsPercent: number;
-    averageFrameTimePercent: number;
-    averageGpuTimePercent: number | null;
-  };
-}
-
-interface ActiveRenderBenchmark {
-  phases: readonly RenderBenchmarkPhase[];
-  phaseIndex: number;
-  warmupFrames: number;
-  warmupMilliseconds: number;
-  lastGpuSampleCount: number;
-  samples: RenderBenchmarkSample[];
-  results: RenderBenchmarkResult[];
-  onComplete: () => void;
 }
 
 interface LongFrameEntry extends PerformanceEntry {
@@ -149,8 +98,6 @@ export class FpsCounter {
   private readonly frameHistory: FrameHistorySample[] = [];
   private frameHistoryCursor = 0;
   private readonly stallHistory: StallSample[] = [];
-  private benchmark?: ActiveRenderBenchmark;
-  private benchmarkResults?: RenderBenchmarkResult[];
 
   constructor(
     scene: Scene,
@@ -172,7 +119,7 @@ export class FpsCounter {
   }
 
   update(engine: AbstractEngine, scene?: Scene, cpu?: CpuFrameSample): void {
-    if (cpu) this.recordCpuSample(cpu, scene);
+    if (cpu) this.recordCpuSample(cpu);
     const now = performance.now();
     if (now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
 
@@ -249,10 +196,6 @@ export class FpsCounter {
         : "",
       `${triangles}  ${formatCount(scene.getActiveMeshes().length)} meshes  ` +
         `${Math.round(drawCalls)} draws`,
-      this.benchmark
-        ? `benchmark ${this.benchmark.phaseIndex + 1}/${this.benchmark.phases.length}: ` +
-          `${this.benchmark.phases[this.benchmark.phaseIndex].name}`
-        : "",
       streaming
         ? `stream ${streaming.activeTileBuilds} build  ${streaming.terrainTiles} terrain  ` +
           `${streaming.detailTiles} detail`
@@ -273,39 +216,9 @@ export class FpsCounter {
   }
 
   toggleExpanded(): void {
-    if (this.benchmark) return;
     this.expanded = !this.expanded;
     this.lastUpdate = 0;
     this.updateAppearance();
-  }
-
-  startComparativeBenchmark(
-    phases: readonly RenderBenchmarkPhase[],
-    onComplete: () => void,
-  ): boolean {
-    if (this.benchmark || phases.length < 2) return false;
-    if (!this.expanded) {
-      this.expanded = true;
-      this.updateAppearance();
-    }
-    this.benchmarkResults = undefined;
-    this.benchmark = {
-      phases,
-      phaseIndex: 0,
-      warmupFrames: BENCHMARK_WARMUP_FRAMES,
-      warmupMilliseconds: 0,
-      lastGpuSampleCount: this.engineInstrumentation.gpuFrameTimeCounter?.count ?? 0,
-      samples: [],
-      results: [],
-      onComplete,
-    };
-    phases[0].apply();
-    this.lastUpdate = 0;
-    return true;
-  }
-
-  get benchmarkRunning(): boolean {
-    return this.benchmark !== undefined;
   }
 
   dispose(): void {
@@ -370,10 +283,7 @@ export class FpsCounter {
     this.engineInstrumentation.captureShaderCompilationTime = enabled;
   }
 
-  private recordCpuSample(
-    sample: CpuFrameSample,
-    scene?: Scene,
-  ): void {
+  private recordCpuSample(sample: CpuFrameSample): void {
     const recordedAtMilliseconds = performance.now();
     const frameIntervalMilliseconds = this.lastFrameRecordedAt === undefined
       ? 0
@@ -447,64 +357,6 @@ export class FpsCounter {
       this.frameHistory[this.frameHistoryCursor] = historySample;
     }
     this.frameHistoryCursor = (this.frameHistoryCursor + 1) % FRAME_HISTORY_SIZE;
-    this.recordBenchmarkSample(sample, frameIntervalMilliseconds, scene);
-  }
-
-  private recordBenchmarkSample(
-    sample: CpuFrameSample,
-    frameIntervalMilliseconds: number,
-    scene?: Scene,
-  ): void {
-    const benchmark = this.benchmark;
-    if (!benchmark || !scene || frameIntervalMilliseconds <= 0) return;
-    // Streaming and cross-fades change the workload independently of the
-    // feature under test. Wait for them instead of contaminating a phase.
-    const gpuCounter = this.engineInstrumentation.gpuFrameTimeCounter;
-    const gpuCount = gpuCounter?.count ?? 0;
-    const freshGpuSample = gpuCount > benchmark.lastGpuSampleCount;
-    benchmark.lastGpuSampleCount = gpuCount;
-    if (document.hidden || sample.activeTileBuilds > 0 || (sample.activeLayerFades ?? 0) > 0) {
-      benchmark.warmupFrames = BENCHMARK_WARMUP_FRAMES;
-      benchmark.warmupMilliseconds = 0;
-      benchmark.samples.length = 0;
-      return;
-    }
-    if (benchmark.warmupFrames > 0 || benchmark.warmupMilliseconds < BENCHMARK_WARMUP_MS) {
-      benchmark.warmupFrames--;
-      benchmark.warmupMilliseconds += frameIntervalMilliseconds;
-      return;
-    }
-    const gpuNanoseconds = freshGpuSample ? gpuCounter?.current ?? 0 : 0;
-    benchmark.samples.push({
-      frameIntervalMilliseconds,
-      gameMilliseconds: sample.gameMilliseconds,
-      renderMilliseconds: sample.renderMilliseconds,
-      gpuFrameMilliseconds: gpuNanoseconds / 1_000_000,
-      drawCalls: this.instrumentation.drawCallsCounter.current,
-      activeTriangles: scene.getActiveIndices() / 3,
-    });
-    if (benchmark.samples.length < BENCHMARK_SAMPLE_FRAMES ||
-      benchmark.samples.reduce((sum, entry) => sum + entry.frameIntervalMilliseconds, 0) < BENCHMARK_SAMPLE_MS) return;
-
-    benchmark.results.push(summarizeBenchmarkPhase(
-      benchmark.phases[benchmark.phaseIndex].name,
-      benchmark.samples,
-    ));
-    benchmark.results[benchmark.results.length - 1].context =
-      benchmark.phases[benchmark.phaseIndex].captureContext?.();
-    benchmark.phaseIndex++;
-    if (benchmark.phaseIndex < benchmark.phases.length) {
-      benchmark.samples = [];
-      benchmark.warmupFrames = BENCHMARK_WARMUP_FRAMES;
-      benchmark.warmupMilliseconds = 0;
-      benchmark.phases[benchmark.phaseIndex].apply();
-      this.lastUpdate = 0;
-      return;
-    }
-
-    this.benchmarkResults = addBenchmarkDeltas(benchmark.results);
-    this.benchmark = undefined;
-    benchmark.onComplete();
   }
 
   private frameBudgetMilliseconds(): number {
@@ -522,11 +374,6 @@ export class FpsCounter {
   }
 
   private readonly resetFrameCadence = (): void => {
-    if (this.benchmark) {
-      this.benchmark.warmupFrames = BENCHMARK_WARMUP_FRAMES;
-      this.benchmark.warmupMilliseconds = 0;
-      this.benchmark.samples.length = 0;
-    }
     this.lastFrameRecordedAt = undefined;
     this.cadenceMilliseconds = undefined;
   };
@@ -733,19 +580,6 @@ export class FpsCounter {
         stutterSamples: frameHistory.filter((sample) => sample.stutter),
         samples: frameHistory,
       },
-      comparativeBenchmark: {
-        status: this.benchmark ? "running" : this.benchmarkResults ? "complete" : "not-run",
-        warmupFramesPerPhase: BENCHMARK_WARMUP_FRAMES,
-        sampleFramesPerPhase: BENCHMARK_SAMPLE_FRAMES,
-        minimumWarmupMilliseconds: BENCHMARK_WARMUP_MS,
-        minimumSampleMilliseconds: BENCHMARK_SAMPLE_MS,
-        comparisonMethod: "Each variant compared with its preceding baseline; two rounds in opposite order",
-        fpsMethod: "1000 / mean frame interval; other FPS statistics are instantaneous",
-        gpuMethod: "Only newly completed GPU queries; asynchronous results may lag rendering",
-        snapshotPhase: this.benchmarkResults?.at(-1)?.name,
-        recentFramesScope: "Rolling history may include multiple benchmark phases; use phase summaries for comparisons",
-        phases: this.benchmarkResults ?? [],
-      },
       stalls: {
         observer: this.stallKind ?? "unavailable",
         retainedEntries: this.stallHistory.length,
@@ -828,57 +662,6 @@ export class FpsCounter {
       ...this.frameHistory.slice(0, this.frameHistoryCursor),
     ];
   }
-}
-
-export function addBenchmarkDeltas(results: RenderBenchmarkResult[]): RenderBenchmarkResult[] {
-  let baselinePhaseIndex = 0;
-  return results.map((result, index) => {
-    if (result.name === "baseline") baselinePhaseIndex = index;
-    const baseline = results[baselinePhaseIndex];
-    const baselineFps = baseline?.fps?.average;
-    const baselineFrame = baseline?.frameInterval?.average;
-    const baselineGpu = baseline?.gpuFrame?.average;
-    return {
-      ...result,
-      baselinePhaseIndex,
-      relativeToBaseline: {
-        averageFpsPercent: percentChange(result.fps?.average, baselineFps),
-        averageFrameTimePercent: percentChange(result.frameInterval?.average, baselineFrame),
-        averageGpuTimePercent: result.gpuFrame?.average && baselineGpu
-          ? percentChange(result.gpuFrame.average, baselineGpu)
-          : null,
-      },
-    };
-  });
-}
-
-function percentChange(value: number | undefined, baseline: number | undefined): number {
-  if (value === undefined || baseline === undefined || baseline === 0) return 0;
-  return ((value - baseline) / baseline) * 100;
-}
-
-export function summarizeBenchmarkPhase(
-  name: string,
-  samples: readonly RenderBenchmarkSample[],
-): RenderBenchmarkResult {
-  const frameIntervals = samples.map((sample) => sample.frameIntervalMilliseconds);
-  const frameInterval = summarizeSamples(frameIntervals);
-  const fps = summarizeSamples(frameIntervals.map((milliseconds) => 1000 / milliseconds));
-  if (fps && frameInterval) fps.average = 1000 / frameInterval.average;
-  return {
-    name,
-    samples: samples.length,
-    gpuSamples: samples.filter((sample) => sample.gpuFrameMilliseconds > 0).length,
-    frameInterval,
-    fps,
-    gpuFrame: summarizeSamples(
-      samples.map((sample) => sample.gpuFrameMilliseconds).filter((milliseconds) => milliseconds > 0),
-    ),
-    game: summarizeSamples(samples.map((sample) => sample.gameMilliseconds)),
-    renderCall: summarizeSamples(samples.map((sample) => sample.renderMilliseconds)),
-    drawCalls: summarizeSamples(samples.map((sample) => sample.drawCalls)),
-    activeTriangles: summarizeSamples(samples.map((sample) => sample.activeTriangles)),
-  };
 }
 
 function groupMeshWorkloads(

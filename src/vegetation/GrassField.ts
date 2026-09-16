@@ -266,6 +266,12 @@ function configureGrassRenderers(
       groundColorBlend: GRASS_GROUND_COLOR_BLEND,
       vegetationShadowAtInstanceRoot: 1,
       vegetationShadowDarkness: GRASS_SHADOW_DARKNESS,
+      // The crown gradient suits tall, narrow plants. A grass clump is three
+      // times wider than it is tall, so the impostor's height term reads the
+      // proxy entry height rather than blade height and lit whole clumps as
+      // canopy tops (1.10) while the live model darkened its low fringe
+      // (0.62). Light both LODs flat so they match.
+      crownLightStrength: 0,
     },
     colors: { distanceGroundColor },
   });

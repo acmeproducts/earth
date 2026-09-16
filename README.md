@@ -301,15 +301,6 @@ can be combined, for example:
 
 `?render-scale=0.75&vegetation=impostors&performance-debug`
 
-With performance diagnostics enabled, press `B` and leave the camera still to
-run a controlled render benchmark. It waits for tile builds and layer fades,
-then measures the baseline, reflections disabled, individual vegetation
-categories forced to impostors, and the combined inexpensive configuration.
-After the final phase it restores the original settings and downloads a JSON
-report containing frame-time, GPU-time, draw-call, and triangle percentiles and
-percentage changes relative to baseline. Press `R` for an immediate snapshot
-without running the comparison.
-
 WebGL remains the default renderer. Use `?renderer=webgpu` to try Babylon's
 WebGPU engine; unsupported devices or initialization failures automatically
 fall back to WebGL. Combine it with `?performance-debug` and press `R` to

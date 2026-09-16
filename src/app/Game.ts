@@ -1759,7 +1759,6 @@ export class Game {
     this.scene.onKeyboardObservable.add((kbInfo) => {
       if (kbInfo.type !== KeyboardEventTypes.KEYDOWN || (kbInfo.event as KeyboardEvent).repeat) return;
       if (this.sceneControls?.isOpen) return;
-      if (this.fpsCounter.benchmarkRunning) return;
 
       if (kbInfo.event.key === "v" || kbInfo.event.key === "V") {
         const nextMode: VegetationRenderMode = this.vegetationModes.trees === "auto"
@@ -1772,140 +1771,8 @@ export class Game {
         this.fpsCounter.toggleExpanded();
       } else if (kbInfo.event.key === "r" || kbInfo.event.key === "R") {
         this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
-      } else if (kbInfo.event.key === "b" || kbInfo.event.key === "B") {
-        this.startRenderBenchmark();
       }
     });
-  }
-
-  /** Runs controlled feature ablations at one camera position, then downloads the measurements. */
-  private startRenderBenchmark(): void {
-    if (this.fpsCounter.benchmarkRunning) return;
-    const camera = this.flyCamera;
-    if (!camera) return;
-    const originalModes = { ...this.vegetationModes };
-    const reflections = this.screenSpaceReflections;
-    const originalReflectionsEnabled = reflections?.isEnabled ?? false;
-    const originalShadowsEnabled = this.scene.shadowsEnabled;
-    const shadowPassCounts = new Map<RenderTargetTexture, number>();
-    const shadowObservers = this.scene.lights.flatMap((light) =>
-      [...(light.getShadowGenerators()?.values() ?? [])].flatMap((generator) => {
-        const target = generator.getShadowMap();
-        if (!target || shadowPassCounts.has(target)) return [];
-        shadowPassCounts.set(target, 0);
-        const observer = target.onBeforeBindObservable.add(() => {
-          shadowPassCounts.set(target, (shadowPassCounts.get(target) ?? 0) + 1);
-        });
-        return [{ target, observer }];
-      }));
-    const restoreVegetation = (): void => {
-      this.setVegetationMode("trees", originalModes.trees);
-      this.setVegetationMode("grass", originalModes.grass);
-      this.setVegetationMode("bushes", originalModes.bushes);
-      for (const record of this.tiles.values()) record.barrierField?.setRenderMode("auto");
-    };
-    const setSingleImpostorCategory = (category: VegetationCategory): void => {
-      restoreVegetation();
-      this.setVegetationMode(category, "impostors");
-    };
-    const phases = [
-      { name: "baseline", apply: () => { if (reflections) reflections.isEnabled = originalReflectionsEnabled; } },
-      ...(originalShadowsEnabled ? [{
-        name: "shadows-off",
-        apply: () => { this.scene.shadowsEnabled = false; },
-      }] : []),
-      ...(originalReflectionsEnabled && reflections ? [{
-        name: "reflections-off",
-        apply: () => { reflections.isEnabled = false; },
-      }] : []),
-      ...(originalShadowsEnabled && originalReflectionsEnabled && reflections ? [{
-        name: "shadows-off-and-reflections-off",
-        apply: () => {
-          this.scene.shadowsEnabled = false;
-          reflections.isEnabled = false;
-        },
-      }] : []),
-      {
-        name: "trees-impostors",
-        apply: () => {
-          if (reflections) reflections.isEnabled = originalReflectionsEnabled;
-          setSingleImpostorCategory("trees");
-        },
-      },
-      { name: "grass-impostors", apply: () => setSingleImpostorCategory("grass") },
-      { name: "bushes-impostors", apply: () => setSingleImpostorCategory("bushes") },
-      {
-        name: "all-vegetation-impostors",
-        apply: () => {
-          this.setAllVegetationModes("impostors");
-          for (const record of this.tiles.values()) record.barrierField?.setRenderMode("impostors");
-        },
-      },
-      ...(originalReflectionsEnabled && reflections ? [{
-        name: "reflections-off-and-all-vegetation-impostors",
-        apply: () => {
-          reflections.isEnabled = false;
-          this.setAllVegetationModes("impostors");
-          for (const record of this.tiles.values()) record.barrierField?.setRenderMode("impostors");
-        },
-      }] : []),
-    ];
-    const restore = (): void => {
-      this.scene.shadowsEnabled = originalShadowsEnabled;
-      for (const target of shadowPassCounts.keys()) shadowPassCounts.set(target, 0);
-      if (reflections) reflections.isEnabled = originalReflectionsEnabled;
-      restoreVegetation();
-    };
-    const variants = phases.slice(1);
-    variants.push({
-      name: "hedges-impostors",
-      apply: () => {
-        for (const record of this.tiles.values()) record.barrierField?.setRenderMode("impostors");
-      },
-    });
-    const captureContext = (): Record<string, unknown> => ({
-      ...this.getRenderStatsContext(),
-      actualReflectionsEnabled: reflections?.isEnabled ?? false,
-      actualShadowsEnabled: this.scene.shadowsEnabled,
-      shadowMapPassesIncludingWarmup: [...shadowPassCounts].map(([target, passes]) => ({
-        name: target.name, passes, refreshRate: target.refreshRate,
-      })),
-      activePostProcesses: camera._postProcesses.filter((pass) => pass !== null)
-        .map((pass) => pass.name),
-      prePassEnabled: this.scene.prePassRenderer?.enabled ?? false,
-      cameraPosition: camera.position.asArray(),
-      cameraRotation: camera.rotation.asArray(),
-      activeMeshes: this.scene.getActiveMeshes().data
-        .slice(0, this.scene.getActiveMeshes().length)
-        .map((mesh) => ({ name: mesh.name, indices: mesh.getTotalIndices(),
-          thinInstances: mesh instanceof Mesh ? mesh.thinInstanceCount : 0 })),
-    });
-    const comparisons = [variants, [...variants].reverse()].flatMap((round) =>
-      round.flatMap((phase) => [
-        { name: "baseline", apply: restore, captureContext },
-        { name: phase.name, apply: () => { restore(); phase.apply(); }, captureContext },
-      ]));
-    comparisons.push({ name: "baseline", apply: restore, captureContext });
-    camera.detachControl();
-    camera.cameraDirection.setAll(0);
-    camera.cameraRotation.setAll(0);
-    const started = this.fpsCounter.startComparativeBenchmark(comparisons, () => {
-      try {
-        // The last phase measures the restored baseline, so settings and mesh
-        // buffers already agree when the scene snapshot is exported.
-        this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
-      } finally {
-        restore();
-        for (const { target, observer } of shadowObservers) target.onBeforeBindObservable.remove(observer);
-        camera.attachControl(this.canvas, true);
-      }
-    });
-    if (!started) {
-      restore();
-      for (const { target, observer } of shadowObservers) target.onBeforeBindObservable.remove(observer);
-      camera.attachControl(this.canvas, true);
-      console.warn("[Render benchmark] A benchmark is already running.");
-    }
   }
 
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
@@ -1930,7 +1797,6 @@ export class Game {
   }
 
   private changeSceneSetting(key: SceneSettingKey, value: number): void {
-    if (this.fpsCounter.benchmarkRunning) return;
     const previous = this.sceneSettings.value;
     const next = this.sceneSettings.update(key, value);
     this.sceneControls?.setSettings(next);
@@ -2333,7 +2199,7 @@ export class Game {
   run(): void {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
-      if (!this.fpsCounter.benchmarkRunning) this.playerControls?.updateMovement();
+      this.playerControls?.updateMovement();
       this.refreshSeasonalScenery();
       this.updateTerrainStreaming();
       this.layerFades.update();

@@ -476,6 +476,7 @@ export function createVertexColorCaptureMaterial(
         uniform float barkTextureEnabled;
         uniform float lowLightAlbedoScale;
         uniform float rockTextureStrength;
+        uniform float crownLightStrength;
         uniform float instanceColorCoverage;
         uniform float fieldFade;
         uniform float groundColorBlend;
@@ -594,7 +595,9 @@ export function createVertexColorCaptureMaterial(
             vec3(0.0),
             vec3(1.25)
           );
-          float crownLight = mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01));
+          // Ground patches opt out of the crown gradient so the live model matches
+          // its impostor, which cannot measure world height per pixel.
+          float crownLight = mix(1.0, mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01)), crownLightStrength);
           // Keep live vegetation readable when direct sunlight has faded out.
           lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
           lighting = mix(vec3(1.0), lighting, lightingEnabled);
@@ -639,6 +642,7 @@ export function createVertexColorCaptureMaterial(
         "barkTextureEnabled",
         "lowLightAlbedoScale",
         "rockTextureStrength",
+        "crownLightStrength",
         "instanceColorCoverage",
         "fieldFade",
         "groundColorBlend",
@@ -682,6 +686,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("rockTextureStrength", 0);
+  material.setFloat("crownLightStrength", 1);
   material.setFloat("instanceColorCoverage", 0);
   // Species opt into wind explicitly; trees remain still.
   setWindShear(material, 0);

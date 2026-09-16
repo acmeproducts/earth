@@ -233,6 +233,10 @@ function configureRockyBeachRenderers(
       groundColorBlend: 0.1,
       vegetationShadowAtInstanceRoot: 1,
       vegetationShadowDarkness: 0.42,
+      // A flat pebble patch has no crown. The live model measures height from
+      // the ground (stones sit at the dark 0.62 end) while the impostor reads
+      // card height (mid curve), which made the impostor visibly brighter.
+      crownLightStrength: 0,
     },
     colors: { distanceGroundColor: new Color3(0.43, 0.42, 0.39) },
   });

@@ -37,7 +37,7 @@ test("grass applies the tint consistently to models and impostors", () => {
   assert.match(modelSource, /setFloat\("instanceColorCoverage", 0\)/);
 });
 
-test("distant grass dissolves according to the active full-detail distance", () => {
+test("distant grass shrinks according to the active full-detail distance", () => {
   assert.match(fieldSource, /distanceFadeNear/);
   assert.match(fieldSource, /distanceFadeFar/);
   assert.match(fieldSource, /grassDistanceFadeRange\(/);
@@ -48,7 +48,14 @@ test("distant grass dissolves according to the active full-detail distance", () 
     impostorSource,
     /distanceGroundColor \* vInstanceColor,[\s\S]*?mix\(groundColorBlend, distanceGroundBlend, 1\.0 - distanceFade\)/,
   );
-  assert.match(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
+  // Clumps shrink toward their root per instance instead of dissolving through
+  // a screen-space dither, so no fixed dot pattern is left over the distance.
+  assert.match(
+    impostorSource,
+    /vDistanceFade = 1\.0 - smoothstep\(\s*distanceFadeNear,\s*distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/,
+  );
+  assert.match(impostorSource, /float fadeScale = max\(vDistanceFade, 0\.001\);[\s\S]*?finalWorld\[1\]\.xyz \*= fadeScale;/);
+  assert.doesNotMatch(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
 });
 

@@ -47,39 +47,11 @@ test("render stats can be dumped from the debug keyboard controls", () => {
   assert.match(fpsCounter, /capabilities: primitiveProperties\(caps\)/);
 });
 
-test("comparative benchmark measures feature ablations only after streaming settles", () => {
-  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
-  assert.match(game, /key === "b"/);
-  assert.match(game, /startComparativeBenchmark/);
-  assert.match(game, /reflections-off/);
-  assert.match(game, /all-vegetation-impostors/);
-  assert.match(fpsCounter, /sample\.activeTileBuilds > 0/);
-  assert.match(fpsCounter, /comparativeBenchmark:/);
-  assert.match(fpsCounter, /gpuFrameMilliseconds/);
-});
-
 test("render report groups mesh workloads and describes render targets", () => {
   assert.match(fpsCounter, /meshWorkloads/);
   assert.match(fpsCounter, /groupMeshWorkloads/);
   assert.match(fpsCounter, /renderTargets/);
   assert.match(fpsCounter, /renderListMeshes/);
-});
-
-test("benchmark isolates shadows and reflections and restores shadows between phases", () => {
-  const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
-  const benchmark = game.slice(game.indexOf("private startRenderBenchmark"),
-    game.indexOf("private setVegetationMode"));
-  assert.match(benchmark, /name: "shadows-off"/);
-  assert.match(benchmark, /name: "shadows-off-and-reflections-off"/);
-  assert.match(benchmark, /this\.scene\.shadowsEnabled = false/);
-  assert.match(benchmark, /this\.scene\.shadowsEnabled = originalShadowsEnabled/);
-  assert.match(benchmark, /restore\(\); phase\.apply\(\)/);
-  assert.match(benchmark, /\[variants, \[\.\.\.variants\]\.reverse\(\)\]/);
-  assert.match(benchmark, /shadowMapPassesIncludingWarmup/);
-  assert.match(benchmark, /onBeforeBindObservable\.add/);
-  assert.match(benchmark, /onBeforeBindObservable\.remove/);
-  assert.match(benchmark, /activePostProcesses:/);
-  assert.match(benchmark, /prePassEnabled:/);
 });
 
 test("custom shadow receivers honor scene and light shadow switches", () => {

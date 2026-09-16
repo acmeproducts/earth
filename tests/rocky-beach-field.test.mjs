@@ -52,3 +52,16 @@ test("restores contrast lost when stone normals are flattened into an impostor",
   assert.match(field, /impostorColorContrast: 1\.2/);
   assert.doesNotMatch(field, /model\.material\.setFloat\("impostorColorContrast"/);
 });
+
+test("disables the crown-light height gradient on both LODs so the impostor matches the model", () => {
+  assert.match(field, /crownLightStrength: 0/);
+  const impostorShader = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
+  const captureMaterial = readFileSync(
+    new URL("../src/procedural/ProceduralCaptureMaterial.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(impostorShader, /uniform float crownLightStrength;/);
+  assert.match(impostorShader, /mix\(1\.0, mix\(0\.62, 1\.10, smoothstep\(0\.08, 0\.92, height01\)\), crownLightStrength\)/);
+  assert.match(captureMaterial, /uniform float crownLightStrength;/);
+  assert.match(captureMaterial, /mix\(1\.0, mix\(0\.62, 1\.10, smoothstep\(0\.08, 0\.92, vHeight01\)\), crownLightStrength\)/);
+});
