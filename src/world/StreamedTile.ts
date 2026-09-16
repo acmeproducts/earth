@@ -1,4 +1,4 @@
-import type { Mesh, TransformNode } from "@babylonjs/core";
+import type { AbstractMesh, Mesh, TransformNode } from "@babylonjs/core";
 import { OpenStreetMap } from "./OpenStreetMap";
 import type { MapTile } from "./OpenStreetMap";
 import type { RockFieldResult } from "../vegetation/RockField";
@@ -67,12 +67,23 @@ export function setMapLayerFade(root: TransformNode, fade: number): void {
   for (const mesh of root.getChildMeshes(false)) mesh.visibility = fade;
 }
 
+/**
+ * Meshes that opted out of Babylon's bounding sync (thin-instance LOD fields)
+ * keep their local bounds, but the world-space copy used for frustum culling
+ * must still follow the mesh whenever its world matrix changes.
+ */
+function syncUnmanagedBoundingInfo(mesh: AbstractMesh): void {
+  if (!mesh.doNotSyncBoundingInfo) return;
+  mesh.getBoundingInfo().update(mesh.getWorldMatrix());
+}
+
 export function setFrozenMeshOffset(mesh: Mesh, x: number, z: number): void {
   const wasFrozen = mesh.isWorldMatrixFrozen;
   if (wasFrozen) mesh.unfreezeWorldMatrix();
   mesh.position.x = x;
   mesh.position.z = z;
   mesh.computeWorldMatrix(true);
+  syncUnmanagedBoundingInfo(mesh);
   if (wasFrozen) mesh.freezeWorldMatrix();
 }
 
@@ -82,7 +93,10 @@ export function setTransformNodeOffset(root: TransformNode, x: number, z: number
   root.position.x = x;
   root.position.z = z;
   root.computeWorldMatrix(true);
-  root.getChildMeshes(false).forEach((mesh) => mesh.computeWorldMatrix(true));
+  root.getChildMeshes(false).forEach((mesh) => {
+    mesh.computeWorldMatrix(true);
+    syncUnmanagedBoundingInfo(mesh);
+  });
   frozenChildren.forEach((mesh) => mesh.freezeWorldMatrix());
 }
 

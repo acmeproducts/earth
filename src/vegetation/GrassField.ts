@@ -281,7 +281,11 @@ function configureGrassRenderers(
       impostorLodFar: 80,
       distanceFadeNear: fade.near,
       distanceFadeFar: fade.far,
-      distanceGroundBlend: 1,
+      // The far band now fades through alpha rather than a dither, so the
+      // clumps must keep their colour. Pulling them toward the flat reference
+      // green here removed the atlas' blade shadowing and lit up the whole
+      // transition as a bright band between the near grass and the bare ground.
+      distanceGroundBlend: GRASS_GROUND_COLOR_BLEND,
       impostorAmbientUpward: GRASS_AMBIENT_UPWARD,
       // A grass clump is three times wider than it is tall, so the impostor's
       // height term reads the proxy entry height rather than blade height and

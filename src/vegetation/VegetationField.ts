@@ -609,6 +609,13 @@ async function initializeMeshes(
     mesh.thinInstanceRefreshBoundingInfo(true);
     // The bounds were computed from every source instance and remain a safe
     // superset while LOD packing changes the active prefix of the buffers.
+    // Babylon otherwise re-derives thin-instance bounds from the *current*
+    // thinInstanceCount on every world matrix recompute (for example when the
+    // tile root is offset while the model count is still 0), which leaves a
+    // stale or degenerate box behind and frustum-culls the whole mesh from
+    // some camera directions. Freeze the superset instead; StreamedTile keeps
+    // the world-space copy in step when the tile root moves.
+    mesh.doNotSyncBoundingInfo = true;
     mesh.alwaysSelectAsActiveMesh = false;
     mesh.freezeWorldMatrix();
   }
