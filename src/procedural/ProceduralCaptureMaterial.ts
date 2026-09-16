@@ -396,6 +396,7 @@ export function createVertexColorCaptureMaterial(
         #endif
         uniform mat4 viewProjection;
         uniform float modelHeight;
+        uniform float modelBaseY;
         #ifdef TREE_EXPOSURE
         attribute vec4 sunExposureLow;
         attribute vec4 sunExposureHigh;
@@ -432,7 +433,7 @@ export function createVertexColorCaptureMaterial(
           vUv = uv;
           vWorldNormal = normalize(rotation * normal);
           vObjectPosition = position / max(modelHeight, 0.0001);
-          vHeight01 = clamp(position.y / max(modelHeight, 0.0001), 0.0, 1.0);
+          vHeight01 = clamp((position.y - modelBaseY) / max(modelHeight, 0.0001), 0.0, 1.0);
           #ifdef THIN_INSTANCES
           vInstanceColor = vegetationColor;
           vInstanceLodBlend = instanceLodBlend;
@@ -477,6 +478,7 @@ export function createVertexColorCaptureMaterial(
         uniform float lowLightAlbedoScale;
         uniform float rockTextureStrength;
         uniform float crownLightStrength;
+        uniform float bakeCrownLight;
         uniform float instanceColorCoverage;
         uniform float fieldFade;
         uniform float groundColorBlend;
@@ -600,7 +602,10 @@ export function createVertexColorCaptureMaterial(
           float crownLight = mix(1.0, mix(0.62, 1.10, smoothstep(0.08, 0.92, vHeight01)), crownLightStrength);
           // Keep live vegetation readable when direct sunlight has faded out.
           lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
-          lighting = mix(vec3(1.0), lighting, lightingEnabled);
+          // Atlas captures are unlit, but a source may bake the crown gradient
+          // into its albedo: it depends only on geometry height, which the
+          // impostor cannot recover per pixel at render time.
+          lighting = mix(vec3(mix(1.0, crownLight, bakeCrownLight)), lighting, lightingEnabled);
           lighting *= mix(1.0, vegetationCloudShadowVisibility(), lightingEnabled);
           float sceneBrightness = max(
             max(skyColor.r, max(skyColor.g, skyColor.b)),
@@ -638,11 +643,13 @@ export function createVertexColorCaptureMaterial(
         "lightingEnabled",
         "exposureCaptureBand",
         "modelHeight",
+        "modelBaseY",
         "leafTextureEnabled",
         "barkTextureEnabled",
         "lowLightAlbedoScale",
         "rockTextureStrength",
         "crownLightStrength",
+        "bakeCrownLight",
         "instanceColorCoverage",
         "fieldFade",
         "groundColorBlend",
@@ -682,11 +689,13 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("exposureCaptureBand", 0);
   registerExposureCutout(material, leafTextureUrl);
   material.setFloat("modelHeight", 1);
+  material.setFloat("modelBaseY", 0);
   material.setFloat("leafTextureEnabled", 0);
   material.setFloat("barkTextureEnabled", barkTexture ? 1 : 0);
   material.setFloat("lowLightAlbedoScale", lowLightAlbedoScale);
   material.setFloat("rockTextureStrength", 0);
   material.setFloat("crownLightStrength", 1);
+  material.setFloat("bakeCrownLight", 0);
   material.setFloat("instanceColorCoverage", 0);
   // Species opt into wind explicitly; trees remain still.
   setWindShear(material, 0);

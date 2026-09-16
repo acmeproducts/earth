@@ -3,6 +3,7 @@ import {
   Matrix,
   Quaternion,
   Scene,
+  Constants,
   ShaderMaterial,
   TransformNode,
   Vector3,
@@ -266,12 +267,6 @@ function configureGrassRenderers(
       groundColorBlend: GRASS_GROUND_COLOR_BLEND,
       vegetationShadowAtInstanceRoot: 1,
       vegetationShadowDarkness: GRASS_SHADOW_DARKNESS,
-      // The crown gradient suits tall, narrow plants. A grass clump is three
-      // times wider than it is tall, so the impostor's height term reads the
-      // proxy entry height rather than blade height and lit whole clumps as
-      // canopy tops (1.10) while the live model darkened its low fringe
-      // (0.62). Light both LODs flat so they match.
-      crownLightStrength: 0,
     },
     colors: { distanceGroundColor },
   });
@@ -288,9 +283,29 @@ function configureGrassRenderers(
       distanceFadeFar: fade.far,
       distanceGroundBlend: 1,
       impostorAmbientUpward: GRASS_AMBIENT_UPWARD,
+      // A grass clump is three times wider than it is tall, so the impostor's
+      // height term reads the proxy entry height rather than blade height and
+      // lit whole clumps as canopy tops. The gradient is baked into the grass
+      // atlas at capture instead (see GrassImpostor), matching the live model.
+      crownLightStrength: 0,
     },
   });
   setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
+  enableSubtleDistanceFade(grass);
+}
+
+/**
+ * Lets the far grass fade out as plain translucency instead of a screen-door
+ * dither. Depth still writes so the clumps keep occluding the terrain behind
+ * them; the only cost is that overlapping faded clumps are drawn in instance
+ * order, which is imperceptible on a low carpet seen from a distance.
+ */
+function enableSubtleDistanceFade(grass: import("@babylonjs/core").Mesh): void {
+  const material = grass.material;
+  if (!(material instanceof ShaderMaterial)) return;
+  material.options.needAlphaBlending = true;
+  material.forceDepthWrite = true;
+  material.alphaMode = Constants.ALPHA_COMBINE;
 }
 
 /**

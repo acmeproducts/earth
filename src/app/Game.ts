@@ -1155,6 +1155,11 @@ export class Game {
     }
     plotBoundaryLayer.root.parent = mapFeatures.root;
     streetLampLayer.root.parent = mapFeatures.root;
+    // Both layers honour startDisabled on their own root, so parenting alone
+    // leaves them hidden once the map root is enabled. Visibility is gated by
+    // the map root from here on.
+    plotBoundaryLayer.root.setEnabled(true);
+    streetLampLayer.root.setEnabled(true);
     trace?.stage("map commit frame wait");
     await this.streamingYielder.nextFrame();
     trace?.stage("map world matrices/offset");

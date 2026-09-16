@@ -37,7 +37,7 @@ test("grass applies the tint consistently to models and impostors", () => {
   assert.match(modelSource, /setFloat\("instanceColorCoverage", 0\)/);
 });
 
-test("distant grass shrinks according to the active full-detail distance", () => {
+test("distant grass fades according to the active full-detail distance", () => {
   assert.match(fieldSource, /distanceFadeNear/);
   assert.match(fieldSource, /distanceFadeFar/);
   assert.match(fieldSource, /grassDistanceFadeRange\(/);
@@ -48,14 +48,15 @@ test("distant grass shrinks according to the active full-detail distance", () =>
     impostorSource,
     /distanceGroundColor \* vInstanceColor,[\s\S]*?mix\(groundColorBlend, distanceGroundBlend, 1\.0 - distanceFade\)/,
   );
-  // Clumps shrink toward their root per instance instead of dissolving through
-  // a screen-space dither, so no fixed dot pattern is left over the distance.
+  // Far grass fades as plain translucency per instance instead of dissolving
+  // through a screen-space dither, so no fixed dot pattern is left behind.
   assert.match(
     impostorSource,
     /vDistanceFade = 1\.0 - smoothstep\(\s*distanceFadeNear,\s*distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/,
   );
-  assert.match(impostorSource, /float fadeScale = max\(vDistanceFade, 0\.001\);[\s\S]*?finalWorld\[1\]\.xyz \*= fadeScale;/);
+  assert.match(impostorSource, /gl_FragColor = vec4\([\s\S]*?, distanceFade\);/);
   assert.doesNotMatch(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
+  assert.match(fieldSource, /material\.options\.needAlphaBlending = true;[\s\S]*?material\.forceDepthWrite = true;/);
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
 });
 

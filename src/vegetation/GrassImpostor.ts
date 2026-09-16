@@ -161,6 +161,14 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
     "grassImpostorSourceMaterial",
     liveLighting,
   );
+  if (!liveLighting) {
+    // Bake the height-based crown light into the atlas so the impostor shows
+    // the same darker fringe and brighter tips as the live model. The capture
+    // source is centred on the origin, so its base sits half a height below.
+    material.setFloat("modelHeight", SOURCE_HEIGHT);
+    material.setFloat("modelBaseY", -SOURCE_HEIGHT / 2);
+    material.setFloat("bakeCrownLight", 1);
+  }
   grass.material = material;
   return grass;
 }

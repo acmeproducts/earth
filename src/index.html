@@ -96,6 +96,35 @@
       pointer-events: none;
     }
 
+    .menu-key-hint {
+      color: rgba(243, 245, 247, 0.68);
+      font: 500 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .menu-key-hint kbd {
+      display: inline-block;
+      padding: 2px 5px 1px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-bottom-width: 2px;
+      border-radius: 3px;
+      font: inherit;
+      color: rgba(243, 245, 247, 0.8);
+    }
+
+    #menuHint {
+      position: fixed;
+      left: 12px;
+      bottom: 66px;
+      z-index: 30;
+      pointer-events: none;
+      text-shadow: 0 1px 2px #000;
+      transition: opacity 180ms ease;
+    }
+
+    #menuHint.hidden { opacity: 0; }
+
     #sceneControls {
       position: fixed;
       inset: 0 auto 0 0;
@@ -123,6 +152,10 @@
 
     #sceneControls:focus { outline: none; }
     #sceneControls h1 {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
       margin: 0 0 24px;
       color: #fff;
       font-size: 20px;

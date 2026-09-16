@@ -50,6 +50,7 @@ export class SceneControls {
   private readonly clockTimer: number;
   private readonly rangeControls = new Map<SceneSettingKey, RangeControl>();
   private readonly onMenuOpenChange: (isOpen: boolean) => void;
+  private readonly menuHint: HTMLElement;
   private isAutomaticClock = true;
   private manualDate = "";
   private manualTimeOfDay = 12;
@@ -73,7 +74,18 @@ export class SceneControls {
 
     const heading = document.createElement("h1");
     heading.textContent = "Settings";
+    const closeHint = document.createElement("span");
+    closeHint.className = "menu-key-hint";
+    closeHint.innerHTML = "<kbd>Esc</kbd> to close";
+    heading.appendChild(closeHint);
     this.element.appendChild(heading);
+
+    // A quiet reminder in the corner while the menu is closed.
+    this.menuHint = document.createElement("div");
+    this.menuHint.id = "menuHint";
+    this.menuHint.className = "menu-key-hint";
+    this.menuHint.innerHTML = "<kbd>Esc</kbd> Settings";
+    this.menuHint.setAttribute("aria-hidden", "true");
 
     const sceneGroup = this.createGroup("Scene");
     const weatherGroup = this.createGroup("Weather");
@@ -253,6 +265,7 @@ export class SceneControls {
     this.element.appendChild(locationGroup);
 
     document.body.appendChild(this.element);
+    document.body.appendChild(this.menuHint);
     document.addEventListener("keydown", this.handleKeyDown, true);
     this.setLocation(options.initialLocation);
     this.manualDate = options.clockSettings.manualDate;
@@ -276,6 +289,7 @@ export class SceneControls {
     window.clearInterval(this.clockTimer);
     document.removeEventListener("keydown", this.handleKeyDown, true);
     this.element.remove();
+    this.menuHint.remove();
   }
 
   setSettings(settings: Readonly<SceneSettings>): void {
@@ -296,6 +310,7 @@ export class SceneControls {
     this.element.classList.toggle("open", isOpen);
     this.element.setAttribute("aria-hidden", String(!isOpen));
     this.element.inert = !isOpen;
+    this.menuHint.classList.toggle("hidden", isOpen);
     this.onMenuOpenChange(isOpen);
     if (isOpen) this.element.focus({ preventScroll: true });
   }

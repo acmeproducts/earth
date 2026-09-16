@@ -202,20 +202,15 @@ varying vec4 vGroundPlane;
 void main(void) {
   #include<instancesVertex>
   vec3 instanceOrigin = finalWorld[3].xyz;
-  // Low ground cover thins out before its streamed detail ring ends. Rather
-  // than dissolving pixels through a screen-door mask, each clump shrinks
-  // toward its root as it recedes, so the field visibly thins instead of
-  // leaving a fixed dot pattern over whatever lies behind it. The whole
-  // instance shares one distance so a clump never tears between its corners.
+  // Low ground cover fades out before its streamed detail ring ends. The
+  // fragment stage writes this as plain coverage so fields that opt into alpha
+  // blending fade smoothly rather than dissolving through a screen-door mask.
+  // The whole instance shares one distance so a clump never tears internally.
   vDistanceFade = 1.0 - smoothstep(
     distanceFadeNear,
     distanceFadeFar,
     length(cameraPosition - instanceOrigin)
   );
-  float fadeScale = max(vDistanceFade, 0.001);
-  finalWorld[0].xyz *= fadeScale;
-  finalWorld[1].xyz *= fadeScale;
-  finalWorld[2].xyz *= fadeScale;
   vec4 worldPosition = finalWorld * vec4(position, 1.0);
 #ifdef IMPOSTOR_GROUND_PLANE
   vGroundRayPoint = worldPosition.xyz;
@@ -445,10 +440,9 @@ void main(void) {
   // Whole-field dither lets streamed tiles fade their vegetation in and out
   // without the depth-sorting problems of true transparency.
   if (fieldFade < 0.999 && bayer4(gl_FragCoord.xy + vec2(1.0, 3.0)) >= fieldFade) discard;
-  // Low ground cover has already shrunk toward its root in the vertex stage;
-  // once it has collapsed entirely there is nothing left worth shading.
+  // Fully faded ground cover contributes nothing, so skip its shading.
   float distanceFade = vDistanceFade;
-  if (distanceFade <= 0.001) discard;
+  if (distanceFade <= 0.0) discard;
   // Select the captured silhouette from the light during shadow rendering.
   // Camera offset in the source's own units. World lengths would make the
   // per-fragment ray meet the image plane at the wrong point on every
@@ -605,7 +599,9 @@ void main(void) {
   softShadowAlpha += frame(
     face, selectedTile, clamp(imageUV - vec2(0.0, shadowTexel.y), 0.0, 1.0), lodBlend
   ).a * 0.125;
-  color.a = clamp(softShadowAlpha * 0.9 - 0.02, 0.0, 1.0);
+  // Fading ground cover thins its shadow coverage at the same rate; inside the
+  // shadow map the ordered mask is filtered away rather than seen directly.
+  color.a = clamp(softShadowAlpha * 0.9 - 0.02, 0.0, 1.0) * distanceFade;
   float alphaChoice = bayer8(gl_FragCoord.xy + vec2(1.0, 2.0));
   #else
   float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
@@ -741,7 +737,9 @@ void main(void) {
   lighting = clamp(lighting * crownLight, vec3(0.18), vec3(1.25));
   lighting *= vegetationCloudShadowVisibility();
   float fog = smoothstep(fogStart, fogEnd, length(vViewDirection));
-  gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), 1.0);
+  // Coverage only takes effect on materials that enable alpha blending; the
+  // opaque tree impostors keep writing full coverage as before.
+  gl_FragColor = vec4(mix(straightColor * lighting, fogColor, fog), distanceFade);
 }`;
 
 /** Creates fixed cube impostors within ESA WorldCover tree-cover cells. */
