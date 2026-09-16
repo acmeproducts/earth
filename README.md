@@ -548,6 +548,47 @@ Edit `src/app/Game.ts` to customize:
 - 3D objects and materials
 - Animations
 
+## Oslo walking performance test
+
+Run `yarn test:oslo-walk` on Windows with Chrome installed. It builds an isolated
+test bundle, spawns at 59.9116, 10.7334 in central Oslo, and holds forward in
+walking mode facing west until horizontal displacement reaches 100 meters.
+Normal collisions, streaming, scene detail, and rendering remain active. The
+test starts after initialization without waiting for far terrain to settle.
+
+Each run writes `artifacts/oslo-walk/<timestamp>/results.json`, `errors.json`,
+`browser.log`, and `finish.png`. Failures after the walk runner starts retain
+`failure.json`; earlier browser-launch/navigation failures retain diagnostics
+in the printed temporary build/profile directories.
+The JSON retains every walking frame, positions, CPU timings, new shader effects,
+browser stalls, streaming diagnostics, settings, GPU identity, and a summary.
+The command fails for an incomplete/blocked route, browser errors, an unfocused
+page, or any frame interval over **33.33 ms**. A 10-second lack of progress ends
+a blocked route. This is a machine-dependent performance check, separate from
+the unit suite; a passing run only certifies this route and configuration.
+The application's adaptive stutter flags are also counted separately: a fixed
+33.33 ms pass does not mean perfectly uniform frame pacing.
+
+Diagnostic options:
+
+- `--metrics`: enable the application's detailed renderer/GPU instrumentation.
+  Default validation keeps the normal HUD state while still recording every
+  frame interval and the game's CPU timings.
+- `--profile`: save a Chrome CPU profile as `walk.cpuprofile`.
+- `--trace`: save `trace.json` for Chrome/Perfetto timeline inspection.
+- `--trace --trace-gpu`: trace individual GPU calls for roughly the first two
+  seconds (higher overhead); frame measurements still cover the entire walk.
+- `--max-frame-ms=50`: explicitly change the failure limit; the limit is recorded.
+- `--no-direct-composition`: Windows compositor comparison only; changes the
+  browser presentation path and must not be reported as an application fix.
+- `--bundle=<absolute-directory>`: reuse an already compiled test bundle for
+  controlled comparisons. Omit this after changing application source.
+
+Profiling can affect timings. Run validation without profiling, with other
+performance tests and builds stopped. Chrome gets its own temporary profile,
+debugging port and tab; the test closes its browser on completion.
+Compilation runs in a separate process that exits before Chrome starts.
+
 ## Tech Stack
 
 - **[Babylon.js](https://www.babylonjs.com/)** - 3D rendering engine

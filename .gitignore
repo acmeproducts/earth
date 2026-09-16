@@ -39,6 +39,7 @@ data/
 
 # Coverage
 coverage/
+artifacts/oslo-walk/
 
 # Local browser validation artifacts
 .chrome-validation/

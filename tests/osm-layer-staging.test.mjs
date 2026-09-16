@@ -4,6 +4,7 @@ import test from "node:test";
 
 const openStreetMap = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
 const roadPlanner = readFileSync(new URL("../src/roads/RoadPlanner.ts", import.meta.url), "utf8");
+const roadTextures = readFileSync(new URL("../src/world/RoadTexturePixels.ts", import.meta.url), "utf8");
 const proceduralBuildings = readFileSync(
   new URL("../src/procedural/BuildingRendererCompiler.ts", import.meta.url),
   "utf8",
@@ -95,7 +96,7 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
   assert.match(openStreetMap, /\* dirtEdge\)/);
   assert.match(openStreetMap, /material\.bumpTexture = relief/);
   assert.match(openStreetMap, /LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6\.7/);
-  assert.match(openStreetMap, /tiledValueNoise\(x, y, ROAD_TEXTURE_SIZE/);
+  assert.match(roadTextures, /tiledValueNoise\(x, y, ROAD_TEXTURE_SIZE/);
   assert.match(openStreetMap, /relief\.level = visualStyle === "dirt" \? 0\.12 : 0\.24/);
 });
 

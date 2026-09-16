@@ -17,6 +17,8 @@ import {
   KeyboardEventTypes,
 } from "@babylonjs/core";
 import type { TerrainData } from "../terrain/TerrainData";
+import { enableTerrainCollisions } from "../terrain/TerrainCollision";
+import { prepareSceneForReveal } from "../rendering/SceneReadiness";
 import { loadAntialiasing, saveAntialiasing } from "../rendering/Antialiasing";
 import type { AntialiasingMode } from "../rendering/Antialiasing";
 import { TerrainElevationSource } from "../terrain/TerrainElevationSource";
@@ -69,6 +71,7 @@ import { OpenStreetMap } from "../world/OpenStreetMap";
 import { RoadPlanningWorker } from "../roads/RoadPlanningWorker";
 import { LakeCollectionWorker } from "../water/LakeCollectionWorker";
 import { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
+import { BuildingCompositionWorker } from "../buildings/BuildingCompositionWorker";
 import type { RoadAndBuildingPlan } from "../roads/RoadAndBuildingPlanner";
 import { OwnedValueCache } from "../core/OwnedValueCache";
 import type { MapTile } from "../world/OpenStreetMap";
@@ -202,6 +205,7 @@ export class Game {
   private readonly roadPlanningWorker = new RoadPlanningWorker();
   private readonly lakeCollectionWorker = new LakeCollectionWorker();
   private readonly buildingPlanningWorker = new BuildingPlanningWorker();
+  private readonly buildingCompositionWorker = new BuildingCompositionWorker();
   /** Streaming CPU work yields when it has consumed its frame slice. */
   private readonly streamingYielder = createFrameBudgetYielder();
   private cameraTileKey?: string;
@@ -422,6 +426,8 @@ export class Game {
       onMenuOpenChange: (isOpen) => this.setMenuOpen(isOpen),
     });
     this.setupDebugControls();
+    await reportInitializationProgress(onProgress, "Preparing the first frame", 99);
+    await prepareSceneForReveal(this.scene);
     await reportInitializationProgress(onProgress, "Ready", 100);
   }
 
@@ -434,6 +440,7 @@ export class Game {
     this.roadPlanningWorker.reset();
     this.lakeCollectionWorker.reset();
     this.buildingPlanningWorker.reset();
+    this.buildingCompositionWorker.reset();
     this.resetCameraForWorldChange();
     this.cloudLayer?.dispose();
     this.cloudLayer = undefined;
@@ -749,6 +756,15 @@ export class Game {
     }
     if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("road/building planning and terrain shaping");
+    trace?.stage("building composition worker wait");
+    try {
+      await OpenStreetMap.prepareBuildingComposition(lakeTiles,
+        sources => this.buildingCompositionWorker.compose(sources, `tile=${key}`));
+    } catch (error) {
+      if (generation !== this.streamingGeneration) return undefined;
+      throw error;
+    }
+    if (generation !== this.streamingGeneration) return undefined;
     const planningInput = OpenStreetMap.prepareRoadAndBuildingInputs(
       lakeTiles,
       terrainData,
@@ -811,7 +827,7 @@ export class Game {
       return undefined;
     }
     setFrozenMeshOffset(terrain, offset.x, offset.z);
-    terrain.checkCollisions = true;
+    enableTerrainCollisions(terrain);
     terrain.setEnabled(false);
 
     trace?.stage("lake surfaces and terrain commit");
@@ -1964,6 +1980,7 @@ export class Game {
     this.roadPlanningWorker.reset();
     this.lakeCollectionWorker.reset();
     this.buildingPlanningWorker.reset();
+    this.buildingCompositionWorker.reset();
     this.requestStreamingUpdate();
   }
 
@@ -2360,6 +2377,7 @@ export class Game {
     this.roadPlanningWorker.dispose();
     this.lakeCollectionWorker.dispose();
     this.buildingPlanningWorker.dispose();
+    this.buildingCompositionWorker.dispose();
     window.removeEventListener("pagehide", this.handlePageHide);
     this.playerControls?.dispose();
     this.playerPresence.dispose();

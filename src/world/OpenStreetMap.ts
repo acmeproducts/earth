@@ -41,9 +41,8 @@ import {
   sampleElevation,
   SEA_LEVEL_METERS,
 } from "./Geo";
-import { cellRandom } from "../core/Random";
+import { ROAD_TEXTURE_SIZE, roadTexturePixels, type RoadMaterialStyle } from "./RoadTexturePixels";
 import type { TerrainData } from "../terrain/TerrainData";
-import { tiledValueNoise } from "../core/ValueNoise";
 import { worldTileAtLocation, type TileBounds } from "./WorldGrid";
 import { buildingBelongsToWorldTile } from "../buildings/BuildingTileOwnership";
 import {
@@ -74,8 +73,8 @@ import {
 import { conformTerrainToPlannedFeatures } from "../terrain/PlannedFeatureTerrain";
 import type { RoadPlanningInput } from "../roads/RoadPlanningTask";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
-import { clipToBounds, signedArea } from "../core/PlanarGeometry";
-import { conformDecalPolygon } from "../terrain/TerrainSurface";
+import { clipToBounds, signedArea, pointBounds, type PlanarBounds, type PlanarPoint } from "../core/PlanarGeometry";
+import { conformDecalPolygon, conformDecalPolygonAsync } from "../terrain/TerrainSurface";
 import type { TerrainSurface } from "../terrain/TerrainSurface";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
@@ -107,13 +106,9 @@ const BRIDGE_WATER_CLEARANCE_METERS = 3;
 // to clear the exact terrain surface. Keeping this below the carriageway's
 // physical clearance also gives roads deterministic precedence at crossings.
 const WATERWAY_SURFACE_CLEARANCE_METERS = 0.02;
-const ROAD_TEXTURE_SIZE = 128;
-/** Non-repeating per-pixel grain, distinct from the seamless octaves. */
-const ROAD_GRAIN_SEED = 0x726f6164;
+
 /** A deliberately non-round span keeps gravel repeats from lining up with road sampling. */
 const LOOSE_ROAD_TEXTURE_REPEAT_METERS = 6.7;
-
-type RoadMaterialStyle = RoadVisualStyle | "pavedShoulder" | "unpavedShoulder" | "bridgeDeck";
 
 interface RoadSource {
   id: string;
@@ -122,7 +117,12 @@ interface RoadSource {
 }
 
 const buildingSourceCache = new WeakMap<VectorTile, readonly BuildingSource[]>();
-const compositeBuildingSourceCache = new WeakMap<readonly MapTile[], readonly BuildingSource[]>();
+interface BuildingSourceCacheNode {
+  children: WeakMap<VectorTile, BuildingSourceCacheNode>;
+  sources?: readonly BuildingSource[];
+  pending?: Promise<void>;
+}
+const compositeBuildingSourceCache: BuildingSourceCacheNode = { children: new WeakMap() };
 const roadSourceCache = new WeakMap<VectorTile, readonly RoadSource[]>();
 
 interface MapLayerOptions {
@@ -277,23 +277,30 @@ export class OpenStreetMap {
       const junctionCandidates: RoadJunctionCandidate[] = [];
       const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
       const waterways: Mesh[] = [];
-      if (options.planning) {
-        trace.stage("planned road/shoulder geometry");
-        const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
-        for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
-          const mesh = plannedMeshes[visualStyle];
-          if (mesh) roadMeshes[visualStyle].push(mesh);
+      try {
+        if (options.planning) {
+          trace.stage("planned road/shoulder geometry");
+          const plannedMeshes = await createPlannedRoadMeshes(scene, options.planning.roads, terrain, options, yieldControl);
+          for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
+            const mesh = plannedMeshes[visualStyle];
+            if (mesh) roadMeshes[visualStyle].push(mesh);
+          }
+          const plannedShoulders = await createPlannedShoulderMeshes(
+            scene,
+            options.planning.shoulders,
+            terrain,
+            options,
+            yieldControl,
+          );
+          for (const surface of Object.keys(plannedShoulders) as RoadSurface[]) {
+            const mesh = plannedShoulders[surface];
+            if (mesh) roadShoulders[surface].push(mesh);
+          }
         }
-        const plannedShoulders = createPlannedShoulderMeshes(
-          scene,
-          options.planning.shoulders,
-          terrain,
-          options,
-        );
-        for (const surface of Object.keys(plannedShoulders) as RoadSurface[]) {
-          const mesh = plannedShoulders[surface];
-          if (mesh) roadShoulders[surface].push(mesh);
-        }
+      } catch (error) {
+        for (const mesh of [...Object.values(roadMeshes).flat(), ...Object.values(roadShoulders).flat()]) mesh.dispose();
+        root.dispose();
+        throw error;
       }
 
       const buildings = await createBuildingBatches(
@@ -440,6 +447,20 @@ export class OpenStreetMap {
     } };
   }
 
+  static async prepareBuildingComposition(
+    tiles: readonly MapTile[],
+    compose: (sources: readonly BuildingSource[]) => Promise<readonly BuildingSource[]>,
+  ): Promise<void> {
+    const cached = buildingCompositionCacheNode(tiles);
+    if (cached.sources) return;
+    if (!cached.pending) {
+      cached.pending = compose(tiles.flatMap(tile => buildingSources(tile))).then(sources => {
+        cached.sources = sources;
+      }).finally(() => { cached.pending = undefined; });
+    }
+    await cached.pending;
+  }
+
   static conformTerrainToPlan(
     planning: RoadAndBuildingPlan,
     terrain: TerrainData,
@@ -497,15 +518,27 @@ export class OpenStreetMap {
         }
       });
     }
+    // Test against full water outlines, not the tile-clipped portion: overlap
+    // fractions in the worker deliberately describe the entire provider polygon.
+    const waterBounds = candidates.map(({ water }) => pointBounds(water.outline));
+    const metersPerUnit = terrain.groundWidthMeters / options.meshWidth;
     // Most terrain tiles contain no lake. Avoid decoding/projecting obstacles at all for those tiles.
     return {
-      candidates, cellSize, metersPerUnit: terrain.groundWidthMeters / options.meshWidth,
-      buildings: candidates.length ? compositeBuildingSources(tiles).map(({ polygon }) => ({
-        outline: polygon.outer.map(project), holes: polygon.holes.map((hole) => hole.map(project)),
-      })) : [],
+      candidates, cellSize, metersPerUnit,
+      // The worker subtracts footprints cumulatively, so overlaps and duplicates
+      // already count once. Composing entire provider tiles here adds a long
+      // main-thread polygon union (and building-use inference) for no benefit.
+      buildings: candidates.length ? tiles.flatMap((tile) => lakeBuildingFootprints(tile)
+        .filter((polygon) => sourceOverlapsWater(polygon[0], project, waterBounds))
+        .map((polygon) => ({
+        outline: polygon[0].map(project), holes: polygon.slice(1).map((hole) => hole.map(project)),
+      }))) : [],
       roads: candidates.length ? tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
         const appearance = planRoad(source.properties);
-        return appearance ? [{ paths: source.paths.map((path) => path.map(project)), appearance }] : [];
+        if (!appearance || appearance.structure !== "surface" || appearance.layer !== 0) return [];
+        const halfWidth = appearance.widthMeters / (2 * metersPerUnit);
+        const paths = source.paths.filter((path) => sourceOverlapsWater(path, project, waterBounds, halfWidth));
+        return paths.length ? [{ paths: paths.map((path) => path.map(project)), appearance }] : [];
       })) : [],
     };
   }
@@ -551,7 +584,8 @@ export class OpenStreetMap {
     };
     let count = 0;
     if (options.planning) {
-      const plannedMeshes = createPlannedRoadMeshes(scene, options.planning.roads, terrain, options);
+      const plannedMeshes = await createPlannedRoadMeshes(scene, options.planning.roads, terrain, options, yieldControl)
+        .catch((error) => { root.dispose(); throw error; });
       for (const visualStyle of Object.keys(plannedMeshes) as RoadVisualStyle[]) {
         const mesh = plannedMeshes[visualStyle];
         if (mesh) roadMeshes[visualStyle].push(mesh);
@@ -773,15 +807,73 @@ function forEachFeature(
   for (let index = 0; index < layer.length; index++) visit(layer.feature(index), index);
 }
 
-function compositeBuildingSources(tiles: readonly MapTile[]): readonly BuildingSource[] {
-  const cached = compositeBuildingSourceCache.get(tiles);
+const lakeBuildingFootprintCache = new WeakMap<VectorTile, LonLat[][][]>();
+const sourceCornerCache = new WeakMap<readonly LonLat[], readonly [LonLat, LonLat]>();
+
+/** Mercator projection is monotonic on each axis. Two cached geographic
+ * corners suffice to reject unrelated obstacles before allocating/projecting
+ * all their vertices and cloning those vertices into the lake worker.
+ */
+function sourceOverlapsWater(
+  path: readonly LonLat[], project: (point: LonLat) => PlanarPoint,
+  waterBounds: readonly PlanarBounds[], padding = 0,
+): boolean {
+  if (!path.length) return false;
+  let corners = sourceCornerCache.get(path);
+  if (!corners) {
+    let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    for (const [lon, lat] of path) {
+      minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+      minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+    }
+    corners = [[minLon, minLat], [maxLon, maxLat]];
+    sourceCornerCache.set(path, corners);
+  }
+  const a = project(corners[0]), b = project(corners[1]);
+  const minX = Math.min(a.x, b.x) - padding, maxX = Math.max(a.x, b.x) + padding;
+  const minZ = Math.min(a.z, b.z) - padding, maxZ = Math.max(a.z, b.z) + padding;
+  return waterBounds.some((water) => minX <= water.maxX && maxX >= water.minX &&
+    minZ <= water.maxZ && maxZ >= water.minZ);
+}
+
+function lakeBuildingFootprints(tile: MapTile): LonLat[][][] {
+  const cached = lakeBuildingFootprintCache.get(tile.data);
   if (cached) return cached;
+  const polygons: LonLat[][][] = [];
+  forEachFeature(tile, "building", (feature) => {
+    if (truthy(feature.properties.hide_3d)) return;
+    for (const rings of polygonRings(feature, tile)) {
+      if (rings.length) polygons.push(rings);
+    }
+  });
+  lakeBuildingFootprintCache.set(tile.data, polygons);
+  return polygons;
+}
+
+function buildingCompositionCacheNode(tiles: readonly MapTile[]): BuildingSourceCacheNode {
+  // Each application tile receives a fresh provider-array wrapper. Key by the
+  // immutable data sequence so adjacent tiles reuse the expensive composition.
+  let cached = compositeBuildingSourceCache;
+  for (const tile of tiles) {
+    let next = cached.children.get(tile.data);
+    if (!next) {
+      next = { children: new WeakMap() };
+      cached.children.set(tile.data, next);
+    }
+    cached = next;
+  }
+  return cached;
+}
+
+function compositeBuildingSources(tiles: readonly MapTile[]): readonly BuildingSource[] {
+  const cached = buildingCompositionCacheNode(tiles);
+  if (cached.sources) return cached.sources;
   return BuildingTrace.run(`provider tiles=${tiles.map((tile) => `${tile.zoom}/${tile.x}/${tile.y}`).join(",")} sources`, (trace) => {
     trace.stage("decode/features/use inference");
     const groups = tiles.map((tile) => buildingSources(tile));
     trace.stage(`merge overlapping footprints count=${groups.reduce((count, group) => count + group.length, 0)}`);
     const sources = mergeBuildingSourceGroups(groups);
-    compositeBuildingSourceCache.set(tiles, sources);
+    cached.sources = sources;
     return sources;
   });
 }
@@ -890,12 +982,13 @@ function lines(feature: VectorTileFeature, tile: MapTile): LonLat[][] {
 }
 
 /** Batches disjoint planned polygons so their shared edges cannot z-fight. */
-function createPlannedRoadMeshes(
+async function createPlannedRoadMeshes(
   scene: Scene,
   roads: readonly PlannedRoadPolygon[],
   terrain: TerrainData,
   options: MapLayerOptions,
-): Partial<Record<RoadVisualStyle, Mesh>> {
+  yieldControl?: () => Promise<void>,
+): Promise<Partial<Record<RoadVisualStyle, Mesh>>> {
   const byStyle: Record<RoadVisualStyle, PlannedRoadPolygon[]> = {
     marked: [],
     paved: [],
@@ -908,20 +1001,27 @@ function createPlannedRoadMeshes(
     if (road.structure !== "bridge") byStyle[road.visualStyle].push(road);
   }
   const result: Partial<Record<RoadVisualStyle, Mesh>> = {};
-  for (const style of Object.keys(byStyle) as RoadVisualStyle[]) {
-    if (byStyle[style].length > 0) {
-      result[style] = createPlannedRoadBatch(scene, byStyle[style], terrain, options);
+  try {
+    for (const style of Object.keys(byStyle) as RoadVisualStyle[]) {
+      if (byStyle[style].length > 0) {
+        result[style] = await createPlannedRoadBatch(scene, byStyle[style], terrain, options,
+          ROAD_SURFACE_CLEARANCE_METERS, false, yieldControl);
+      }
     }
+  } catch (error) {
+    for (const mesh of Object.values(result)) mesh?.dispose();
+    throw error;
   }
   return result;
 }
 
-function createPlannedShoulderMeshes(
+async function createPlannedShoulderMeshes(
   scene: Scene,
   roads: readonly PlannedRoadPolygon[],
   terrain: TerrainData,
   options: MapLayerOptions,
-): Partial<Record<RoadSurface, Mesh>> {
+  yieldControl?: () => Promise<void>,
+): Promise<Partial<Record<RoadSurface, Mesh>>> {
   const bySurface: Record<RoadSurface, PlannedRoadPolygon[]> = { paved: [], unpaved: [] };
   for (const road of roads) {
     if (road.structure !== "bridge" && road.visualStyle !== "dirt") {
@@ -929,29 +1029,36 @@ function createPlannedShoulderMeshes(
     }
   }
   const result: Partial<Record<RoadSurface, Mesh>> = {};
-  for (const surface of Object.keys(bySurface) as RoadSurface[]) {
-    if (bySurface[surface].length > 0) {
-      result[surface] = createPlannedRoadBatch(
-        scene,
-        bySurface[surface],
-        terrain,
-        options,
-        ROAD_SHOULDER_CLEARANCE_METERS,
-        true,
-      );
+  try {
+    for (const surface of Object.keys(bySurface) as RoadSurface[]) {
+      if (bySurface[surface].length > 0) {
+        result[surface] = await createPlannedRoadBatch(
+          scene,
+          bySurface[surface],
+          terrain,
+          options,
+          ROAD_SHOULDER_CLEARANCE_METERS,
+          true,
+          yieldControl,
+        );
+      }
     }
+  } catch (error) {
+    for (const mesh of Object.values(result)) mesh?.dispose();
+    throw error;
   }
   return result;
 }
 
-function createPlannedRoadBatch(
+async function createPlannedRoadBatch(
   scene: Scene,
   roads: readonly PlannedRoadPolygon[],
   terrain: TerrainData,
   options: MapLayerOptions,
   clearanceMeters = ROAD_SURFACE_CLEARANCE_METERS,
   forceWorldUvs = false,
-): Mesh {
+  yieldControl?: () => Promise<void>,
+): Promise<Mesh> {
   const positions: number[] = [];
   const indices: number[] = [];
   const uvs: number[] = [];
@@ -959,6 +1066,7 @@ function createPlannedRoadBatch(
   const groundNormalVertices: number[] = [];
   const clearance = clearanceMeters / options.metersPerUnit;
   for (const road of roads) {
+    await yieldControl?.();
     const outline = signedArea(road.outline) >= 0
       ? road.outline
       : [...road.outline].reverse();
@@ -966,14 +1074,16 @@ function createPlannedRoadBatch(
     const grade = plannedRoadGrade(road, terrain, options);
     // Splitting the carriageway along the ground's own triangles keeps the
     // road surface from ever cutting through the terrain it decorates.
-    const rings = conformDecalPolygon(
+    const rings = await conformDecalPolygonAsync(
       outline,
       (point) => grade(point) / options.metersPerUnit,
       clearance,
       options.terrainSurface,
       road.structure === "surface" || road.structure === "ford",
+      yieldControl,
     );
     for (const ring of rings) {
+      await yieldControl?.();
       const vertexOffset = positions.length / 3;
       for (const point of ring) {
         if (options.terrainSurface && (road.structure === "surface" || road.structure === "ford")) {
@@ -1000,10 +1110,12 @@ function createPlannedRoadBatch(
     }
   }
   const normals: number[] = [];
+  await yieldControl?.();
   VertexData.ComputeNormals(positions, indices, normals);
   // Fragment vertices are duplicated for UVs and polygon boundaries. Sampling
   // one ground normal field keeps lighting continuous across all road batches.
   for (const vertex of groundNormalVertices) {
+    if (vertex % 128 === 0) await yieldControl?.();
     const offset = vertex * 3;
     const normal = options.terrainSurface!.normalAt({ x: positions[offset], z: positions[offset + 2] });
     normals[offset] = normal.x;
@@ -1015,6 +1127,7 @@ function createPlannedRoadBatch(
   vertexData.indices = indices;
   vertexData.normals = normals;
   vertexData.uvs = uvs;
+  await yieldControl?.();
   const mesh = new Mesh("plannedRoadSurface", scene);
   vertexData.applyToMesh(mesh, false);
   if (dirtEdges.length > 0) mesh.setVerticesData(DIRT_ROAD_EDGE_KIND, dirtEdges, false, 3);
@@ -1683,53 +1796,7 @@ function createRoadTexture(
   visualStyle: RoadMaterialStyle,
   gammaSpace: boolean,
 ): RawTexture {
-  const pixels = new Uint8Array(ROAD_TEXTURE_SIZE * ROAD_TEXTURE_SIZE * 4);
-  for (let y = 0; y < ROAD_TEXTURE_SIZE; y++) {
-    for (let x = 0; x < ROAD_TEXTURE_SIZE; x++) {
-      const offset = (y * ROAD_TEXTURE_SIZE + x) * 4;
-      const fine = cellRandom(ROAD_GRAIN_SEED, x, y);
-      const coarse = cellRandom(ROAD_GRAIN_SEED, Math.floor(x / 4), Math.floor(y / 4));
-      // Periodic value noise crosses the wrapped edges smoothly. Several
-      // incommensurate scales read as varied aggregate without the old square
-      // four-pixel clumps advertising each texture tile.
-      const gravelBroad = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 7, 0x45d9f3b);
-      const gravelCluster = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 23, 0x119de1f3);
-      const gravelGrain = tiledValueNoise(x, y, ROAD_TEXTURE_SIZE, 53, 0x3449f5);
-      const centerMark = visualStyle === "marked" &&
-        Math.abs(y - (ROAD_TEXTURE_SIZE - 1) / 2) <= 1.25 &&
-        x < ROAD_TEXTURE_SIZE * 0.58;
-      const value = centerMark
-        ? 235
-        : visualStyle === "marked"
-          ? 55 + Math.round((fine - 0.5) * 10)
-          : visualStyle === "dirt"
-            ? 174 + Math.round(
-              (gravelBroad - 0.5) * 22 +
-              (gravelCluster - 0.5) * 10 +
-              (fine - 0.5) * 6
-            )
-          : visualStyle === "unpaved" || visualStyle === "unpavedShoulder"
-            ? 164 + Math.round(
-              (gravelBroad - 0.5) * 14 +
-              (gravelCluster - 0.5) * 24 +
-              (gravelGrain - 0.5) * 12
-            )
-            : visualStyle === "pedestrian"
-              ? 185 + Math.round((fine - 0.5) * 18 + (coarse - 0.5) * 8)
-              : visualStyle === "ford"
-                ? 132 + Math.round((fine - 0.5) * 28 + (coarse - 0.5) * 12)
-                : visualStyle === "pavedShoulder"
-                  ? 148 + Math.round((fine - 0.5) * 28 + (coarse - 0.5) * 10)
-                  : visualStyle === "bridgeDeck"
-                    ? 118 + Math.round((fine - 0.5) * 16)
-                    : 175 + Math.round((fine - 0.5) * 24);
-      pixels[offset] = value;
-      pixels[offset + 1] = value;
-      pixels[offset + 2] = value;
-      // Opaque coverage avoids faded rims on joins and small circular pieces.
-      pixels[offset + 3] = 255;
-    }
-  }
+  const pixels = roadTexturePixels(visualStyle);
   const texture = RawTexture.CreateRGBATexture(
     pixels,
     ROAD_TEXTURE_SIZE,

@@ -3,9 +3,26 @@ import assert from "node:assert/strict";
 
 const { planRoadsAndBuildings } = await import("../src/roads/RoadAndBuildingPlanner.ts");
 const { conformTerrainToPlannedFeatures } = await import("../src/terrain/PlannedFeatureTerrain.ts");
-const { TerrainSurface, conformDecalPolygon } = await import("../src/terrain/TerrainSurface.ts");
+const { TerrainSurface, conformDecalPolygon, conformDecalPolygonAsync } = await import("../src/terrain/TerrainSurface.ts");
 
 const options = { meshWidth: 25, meshDepth: 25, metersPerUnit: 24 };
+
+test("streaming terrain clipping preserves geometry and yields across empty diagonal cells", async () => {
+  const surface = renderedSurface(ruggedTerrain(33), 128);
+  const outline = [{ x: -12, z: -12 }, { x: -11.9, z: -12 }, { x: 12, z: 11.9 }, { x: 12, z: 12 }];
+  const grade = ({ x }) => 5 + x / 10;
+  for (const followGround of [false, true]) {
+    let yields = 0;
+    const actual = await conformDecalPolygonAsync(outline, grade, 0.01, surface, followGround, async () => { yields++; });
+    assert.deepEqual(actual, conformDecalPolygon(outline, grade, 0.01, surface, followGround));
+    assert.ok(yields > 400, "empty bounding-box cells must also allow yielding");
+  }
+  let slices = 0;
+  await assert.rejects(conformDecalPolygonAsync(outline, grade, 0.01, surface, true, async () => {
+    if (++slices === 3) throw new Error("cancelled");
+  }), /cancelled/);
+  assert.equal(slices, 3);
+});
 const appearance = {
   roadClass: "minor",
   widthMeters: 4,

@@ -47,6 +47,10 @@ class OpenStreetMapLandCover implements LandCoverSampler {
   }
 }
 
+// Provider tiles are immutable. Terrain and vegetation repeatedly wrap the same
+// tile data; retain decoded polygons only as long as that data remains alive.
+const regionCache = new WeakMap<VectorTile, { key: string; regions: CoverRegion[] }>();
+
 /** Overlays precise mapped surface polygons on the global satellite classification. */
 export function createOpenStreetMapLandCover(
   tiles: readonly LandCoverMapTile[],
@@ -58,12 +62,18 @@ export function createOpenStreetMapLandCover(
   const regionsByTile = new Map<string, CoverRegion[]>();
   for (const tile of tiles) {
     if (tile.zoom !== zoom) continue;
-    const regions: CoverRegion[] = [];
-    appendLayerRegions(tile, "landuse", 1, regions);
-    appendLayerRegions(tile, "landcover", 2, regions);
-    // Broad polygons are tested first so smaller, more specific polygons win.
-    regions.sort((a, b) => a.priority - b.priority || b.area - a.area);
-    if (regions.length > 0) regionsByTile.set(`${tile.zoom}/${tile.x}/${tile.y}`, regions);
+    const key = `${tile.zoom}/${tile.x}/${tile.y}`;
+    let cached = regionCache.get(tile.data);
+    if (cached?.key !== key) {
+      const regions: CoverRegion[] = [];
+      appendLayerRegions(tile, "landuse", 1, regions);
+      appendLayerRegions(tile, "landcover", 2, regions);
+      // Broad polygons are tested first so smaller, more specific polygons win.
+      regions.sort((a, b) => a.priority - b.priority || b.area - a.area);
+      cached = { key, regions };
+      regionCache.set(tile.data, cached);
+    }
+    if (cached.regions.length > 0) regionsByTile.set(key, cached.regions);
   }
   return regionsByTile.size === 0
     ? fallback

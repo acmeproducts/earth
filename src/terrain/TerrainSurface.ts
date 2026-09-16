@@ -143,7 +143,16 @@ export class TerrainSurface {
    */
   splitByGroundTriangles(polygon: readonly PlanarPoint[]): TerrainSurfacePiece[] {
     const pieces: TerrainSurfacePiece[] = [];
-    if (polygon.length < 3) return pieces;
+    for (const piece of this.groundTrianglePieces(polygon)) if (piece) pieces.push(piece);
+    return pieces;
+  }
+
+  /** Undefined marks a bounded work slice, including cells outside the polygon.
+   * Streaming consumers can yield even while scanning a long diagonal's empty
+   * bounding-box cells; synchronous callers retain the exact same geometry.
+   */
+  *groundTrianglePieces(polygon: readonly PlanarPoint[]): Generator<TerrainSurfacePiece | undefined> {
+    if (polygon.length < 3) return;
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -158,8 +167,10 @@ export class TerrainSurface {
     const lastColumn = clampCell(Math.ceil(this.columnAt(maxX)) - 1, this.subdivisions);
     const firstRow = clampCell(Math.floor(this.rowAt(maxZ)), this.subdivisions);
     const lastRow = clampCell(Math.ceil(this.rowAt(minZ)) - 1, this.subdivisions);
+    let cells = 0;
     for (let row = firstRow; row <= lastRow; row++) {
       for (let column = firstColumn; column <= lastColumn; column++) {
+        if ((cells++ & 31) === 0) yield undefined;
         const cell = clipToBounds(polygon, {
           minX: this.xAt(column),
           maxX: this.xAt(column + 1),
@@ -172,11 +183,10 @@ export class TerrainSurface {
         for (const upper of [true, false]) {
           const outline = clipHalfPlane(cell, corner, opposite, upper);
           if (outline.length < 3 || polygonArea(outline) <= AREA_EPSILON) continue;
-          pieces.push({ outline, height: this.planeAt(column, row, upper) });
+          yield { outline, height: this.planeAt(column, row, upper) };
         }
       }
     }
-    return pieces;
   }
 
   /** True on the triangle holding the cell's north-east corner. */
@@ -253,17 +263,37 @@ export function conformDecalPolygon(
     : [{ outline: [...outline], height: () => -Infinity }];
   const rings: DecalVertex[][] = [];
   for (const piece of pieces) {
-    const ring = signedArea(piece.outline) >= 0
-      ? piece.outline
-      : [...piece.outline].reverse();
-    if (ring.length < 3) continue;
-    rings.push(ring.map((point) => ({
-      x: point.x,
-      y: (followGround && surface
-        ? piece.height(point)
-        : Math.max(plannedHeight(point), piece.height(point))) + clearance,
-      z: point.z,
-    })));
+    if (piece.outline.length >= 3) rings.push(conformDecalPiece(piece, plannedHeight, clearance, followGround && !!surface));
   }
   return rings;
+}
+
+/** Same decal as the synchronous path, with bounded terrain-cell slices. */
+export async function conformDecalPolygonAsync(
+  outline: readonly PlanarPoint[],
+  plannedHeight: (point: PlanarPoint) => number,
+  clearance: number,
+  surface?: TerrainSurface,
+  followGround = false,
+  yieldControl?: () => Promise<void>,
+): Promise<DecalVertex[][]> {
+  if (!surface || !yieldControl) return conformDecalPolygon(outline, plannedHeight, clearance, surface, followGround);
+  const rings: DecalVertex[][] = [];
+  for (const piece of surface.groundTrianglePieces(outline)) {
+    if (!piece) await yieldControl();
+    else if (piece.outline.length >= 3) rings.push(conformDecalPiece(piece, plannedHeight, clearance, followGround));
+  }
+  return rings;
+}
+
+function conformDecalPiece(
+  piece: TerrainSurfacePiece, plannedHeight: (point: PlanarPoint) => number,
+  clearance: number, followGround: boolean,
+): DecalVertex[] {
+  const ring = signedArea(piece.outline) >= 0 ? piece.outline : [...piece.outline].reverse();
+  return ring.map((point) => ({
+    x: point.x,
+    y: (followGround ? piece.height(point) : Math.max(plannedHeight(point), piece.height(point))) + clearance,
+    z: point.z,
+  }));
 }

@@ -1,5 +1,6 @@
 import { Color3, Mesh, Scene, StandardMaterial, VertexBuffer } from "@babylonjs/core";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
+import { shareCustomShader } from "../rendering/SharedCustomShader";
 import type { BuildingClass, BuildingRoofShape } from "../buildings/BuildingPlanner";
 
 // UV2 survives Babylon's Mesh.MergeMeshes path; the building geometry does not
@@ -200,5 +201,6 @@ export function createBuildingSolidMaterial(
     }
     result *= buildingShade;
   `);
+  shareCustomShader(material);
   return material;
 }

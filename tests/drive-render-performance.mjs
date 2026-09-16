@@ -1,31 +1,28 @@
 // Isolated headless Chrome profile: does not connect to the user's browser.
 // yarn node tests/drive-render-performance.mjs [--no-aa] [--uncapped]
 // yarn node tests/drive-render-performance.mjs --pixels
-import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
-import webpack from 'webpack';
+import { fileURLToPath } from 'node:url';
+import { runOsloWalk } from './oslo-walk.mjs';
 
-const output = mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
+const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
+const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
 const pixelTest = process.argv.includes('--pixels');
+const osloWalk = process.argv.includes('--oslo-walk');
 console.log('Artifacts:', output);
-const compiler = webpack({ mode: 'development', devtool: false,
-  entry: new URL(pixelTest ? './fixtures/cloud-shadow-pixels.ts' : './fixtures/performance-scene.ts', import.meta.url).pathname.replace(/^\/(\w:)/, '$1'),
-  output: { path: output, filename: 'fixture.js' },
-  resolve: { extensions: ['.ts', '.js'] },
-  module: { rules: [
-    { test: /\.ts$/, use: { loader: 'ts-loader', options: { transpileOnly: true, compilerOptions: { rootDir: process.cwd() } } } },
-    { test: /\.png$/, type: 'asset/resource' },
-    { test: /\.wasm$/, type: 'asset/resource', generator: { filename: 'lerc-wasm.wasm' } },
-  ] },
+if (!reuseBundle) await new Promise((resolve, reject) => {
+  const build = spawn(process.execPath, [
+    ...process.execArgv,
+    fileURLToPath(new URL('./build-render-performance.mjs', import.meta.url)), output,
+    ...(pixelTest ? ['--pixels'] : []),
+  ], { stdio: 'inherit', windowsHide: true });
+  build.on('error', reject);
+  build.on('exit', code => code === 0 ? resolve() : reject(new Error(`Performance fixture build exited ${code}`)));
 });
-await new Promise((resolve, reject) => compiler.run((error, stats) => {
-  compiler.close(() => {});
-  if (error || stats.hasErrors()) reject(error ?? new Error(stats.toString('errors-only')));
-  else resolve();
-}));
 const server = createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   if (pathname === '/') {
@@ -39,20 +36,35 @@ const server = createServer((request, response) => {
   }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const port = 9359;
+const profileDirectory = mkdtempSync(join(tmpdir(), 'earth-walk-browser-'));
+let port;
 const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
-  `--remote-debugging-port=${port}`, `--user-data-dir=${output}/profile`,
+  '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`,
   '--headless=new', '--window-size=1100,850', '--no-first-run',
+  '--disable-extensions', '--disable-default-apps',
+  ...(process.argv.includes('--no-direct-composition') ? ['--disable-direct-composition'] : []),
+  ...(process.argv.includes('--trace-gpu') ? ['--enable-gpu-service-tracing'] : []),
   ...(process.argv.includes('--uncapped') ? ['--disable-frame-rate-limit', '--disable-gpu-vsync'] : []),
   '--disable-background-timer-throttling', '--disable-renderer-backgrounding', 'about:blank',
-], { stdio: 'ignore', windowsHide: true });
+], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+const browserLog = join(profileDirectory, 'browser.log');
+chrome.stderr.on('data', chunk => appendFileSync(browserLog, chunk));
+chrome.on('exit', (code, signal) => appendFileSync(browserLog, `\nBrowser exit: code=${code}, signal=${signal}\n`));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let socket;
+let send;
+let traceStream;
 const errors = [];
 try {
   let target;
   for (let i = 0; i < 50; i++) {
-    try { target = (await (await fetch(`http://localhost:${port}/json`)).json()).find(t => t.type === 'page'); } catch {}
+    try {
+      port = Number(readFileSync(join(profileDirectory, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
+      // Own a new target: Chrome's startup tabs can be replaced during launch.
+      target = await (await fetch(`http://localhost:${port}/json/new?about:blank`, {
+        method: 'PUT', signal: AbortSignal.timeout(2000),
+      })).json();
+    } catch {}
     if (target) break;
     await sleep(200);
   }
@@ -63,8 +75,10 @@ try {
   const pending = new Map();
   socket.onmessage = event => {
     const message = JSON.parse(event.data);
+    if (message.method === 'Tracing.tracingComplete') traceStream = message.params.stream;
     if (message.id) {
       const request = pending.get(message.id); pending.delete(message.id);
+      clearTimeout(request?.timer);
       if (message.error) request?.reject(new Error(JSON.stringify(message.error)));
       else request?.resolve(message.result);
     }
@@ -74,8 +88,15 @@ try {
       errors.push(error); console.log('Browser error:', JSON.stringify(error).slice(0,600));
     }
   };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
-    pending.set(++id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params }));
+  socket.onclose = () => {
+    for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('Test browser closed')); }
+    pending.clear();
+  };
+  send = (method, params = {}) => new Promise((resolve, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) { reject(new Error('Test browser is not connected')); return; }
+    const requestId = ++id;
+    const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`${method} timed out`)); }, 60000);
+    pending.set(requestId, { resolve, reject, timer }); socket.send(JSON.stringify({ id: requestId, method, params }));
   });
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -84,8 +105,27 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
-  await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?terrain-size=3&detail-size=1&clouds=off&seed=1161908820&clock=manual&date=2026-09-05&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
-  if (pixelTest) {
+  if (osloWalk) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=2026-09-05&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
+  if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
+  if (osloWalk) {
+    await runOsloWalk({ evaluate, send, output, errors, browserLog, readTrace: async (stop = true) => {
+      if (stop) await send('Tracing.end');
+      const deadline = Date.now() + 60000;
+      while (!traceStream) {
+        if (Date.now() > deadline) throw new Error('Browser trace timed out');
+        await sleep(100);
+      }
+      let data = '';
+      for (;;) {
+        const chunk = await send('IO.read', { handle: traceStream });
+        data += chunk.base64Encoded ? Buffer.from(chunk.data, 'base64').toString() : chunk.data;
+        if (chunk.eof) break;
+      }
+      await send('IO.close', { handle: traceStream });
+      return data;
+    } });
+  } else if (pixelTest) {
     for (let i=0;i<120;i++) {
       const state=await evaluate(`({done:window.pixelComplete,error:window.pixelError,results:window.pixelResults})`);
       if(state.error)throw new Error(state.error);
@@ -159,5 +199,19 @@ try {
   }
 } finally {
   writeFileSync(join(output, 'errors.json'), JSON.stringify(errors,null,2));
-  socket?.close(); chrome.kill(); server.close();
+  // Kill the owned Windows tree while its root still exists; closing the root
+  // first can leave no parent PID for taskkill to use for the GPU children.
+  let stopped = false;
+  if (process.platform === 'win32' && chrome.pid && chrome.exitCode === null) {
+    const killed = spawnSync('taskkill', ['/PID', String(chrome.pid), '/T', '/F'], {
+      windowsHide: true, stdio: 'ignore', timeout: 10000,
+    });
+    stopped = killed.status === 0;
+  }
+  if (!stopped && socket?.readyState === WebSocket.OPEN) {
+    await Promise.race([send('Browser.close').catch(() => {}), sleep(2000)]);
+  }
+  socket?.close();
+  if (!stopped) chrome.kill();
+  server.closeAllConnections(); server.close();
 }
