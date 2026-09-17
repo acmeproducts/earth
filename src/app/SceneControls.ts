@@ -211,7 +211,7 @@ export class SceneControls {
     this.placeInput.type = "search";
     this.placeInput.required = true;
     this.placeInput.autocomplete = "street-address";
-    this.placeInput.placeholder = "Oslo, Norway";
+    this.placeInput.placeholder = "Resö, Sweden";
     this.placeInput.setAttribute("aria-label", "Place or address");
     placeForm.appendChild(this.wrapLocationInput("Place or address", this.placeInput, "place-field"));
 
