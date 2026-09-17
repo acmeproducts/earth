@@ -27,14 +27,16 @@ import type { LandCoverSampler } from "../world/WorldCover";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
-import { hasWinterGroundCover } from "./TreeSeason";
+import { setMeshSnowCover, SnowCoverPlugin } from "../rendering/SnowCover";
+import { simulateSnowfall } from "../rendering/SnowFall";
 
 export interface RockFieldResult {
   root: TransformNode;
   meshes: Mesh[];
   count: number;
   setFade(fade: number): void;
-  setSnowCovered(snowCovered: boolean): void;
+  /** Snow depth in [0, 1] settling on the upper faces of every rock. */
+  setSnowCover(snowCover: number): void;
 }
 
 /** Three rounded, weathered shapes followed by two blocky, fractured ones. */
@@ -251,6 +253,16 @@ export async function createRockField(
       const matrices = buckets[variant * 2 + mossIndex];
       if (matrices.length === 0) continue;
       const rock = createRockMesh(scene, variant, mossIndex === 1);
+      const snowCover = options.snowCover ?? 0;
+      if (snowCover > 0) {
+        // The stone is unit-radius and scaled per instance, so the blanket
+        // scales with each rock: a knee-high boulder carries a hand-deep crown.
+        simulateSnowfall(rock, {
+          cellSize: 0.28,
+          depth: 0.18 * (0.4 + 0.6 * snowCover),
+          amount: snowCover,
+        });
+      }
       rock.parent = root;
       rock.material = material ??= createRockMaterial(scene);
       rock.isPickable = false;
@@ -269,27 +281,18 @@ export async function createRockField(
     }
   }
 
-  const setSnowCovered = (snowCovered: boolean): void => {
-    for (const mesh of meshes) mesh.useVertexColors = !snowCovered;
-    if (!material) return;
-    material.unfreeze();
-    material.diffuseColor = snowCovered ? new Color3(0.9, 0.94, 0.98) : Color3.White();
-    material.specularColor = snowCovered
-      ? new Color3(0.16, 0.18, 0.2)
-      : new Color3(0.055, 0.06, 0.05);
-    material.specularPower = snowCovered ? 48 : 18;
-    material.freeze();
+  // The snow plugin reads the depth per mesh at bind time, so the moss and
+  // stone vertex colors stay in place and show through thin cover.
+  const setSnowCover = (snowCover: number): void => {
+    for (const mesh of meshes) setMeshSnowCover(mesh, snowCover, metersPerUnit);
   };
-  setSnowCovered(hasWinterGroundCover(
-    options.seasonalDate,
-    (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
-  ));
+  setSnowCover(options.snowCover ?? 0);
 
   return {
     root,
     meshes,
     count,
-    setSnowCovered,
+    setSnowCover,
     setFade: (fade: number) => {
       const visibility = Math.max(0, Math.min(1, fade));
       for (const mesh of meshes) mesh.visibility = visibility;
@@ -425,6 +428,7 @@ function addRock(
 
 function createRockMaterial(scene: Scene): StandardMaterial {
   const material = new StandardMaterial("rockMaterial", scene);
+  new SnowCoverPlugin(material);
   material.diffuseColor = Color3.White();
   material.ambientColor = new Color3(0.16, 0.17, 0.14);
   material.specularColor = new Color3(0.055, 0.06, 0.05);

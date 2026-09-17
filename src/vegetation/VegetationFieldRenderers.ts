@@ -1,5 +1,7 @@
 import { Mesh, Scene, TransformNode } from "@babylonjs/core";
-import type { ImpostorAssetLease, ImpostorAssets } from "../rendering/Impostor";
+import { snowCoveredVariant, type ImpostorAssetLease, type ImpostorAssets } from "../rendering/Impostor";
+import { applyVegetationSnowfall } from "../rendering/SnowFall";
+import { configureVegetationMaterials } from "./VegetationMaterial";
 import { createImpostorPrototypeFromAssets, type ImpostorDepthOptions } from "./TreeField";
 import { combineVegetationFieldResults, createVegetationFieldResult, type VegetationFieldResult } from "./VegetationField";
 import { packInstanceMatrices, proceduralBucketSuffix, type ProceduralPlacementBucket, type VegetationPlacementOptions } from "./VegetationPlacement";
@@ -12,6 +14,8 @@ interface VegetationFieldRendererOptions {
   depth?: ImpostorDepthOptions;
   loadAssets: () => Promise<ImpostorAssets | ImpostorAssetLease>;
   createModel: () => Mesh | Promise<Mesh>;
+  /** Snow depth baked into the live model; the atlas variant carries its own. */
+  snowCover?: number;
 }
 
 export interface VegetationFieldRenderers {
@@ -27,15 +31,21 @@ export async function createRegionalVegetationField(
   root: TransformNode,
   buckets: Iterable<ProceduralPlacementBucket>,
   instanceMatrices: Float32Array,
-  { metersPerUnit, renderMode = "auto", yieldControl }: Pick<VegetationPlacementOptions, "metersPerUnit" | "renderMode" | "yieldControl">,
+  { metersPerUnit, renderMode = "auto", yieldControl, snowCover = 0 }: Pick<VegetationPlacementOptions, "metersPerUnit" | "renderMode" | "yieldControl" | "snowCover">,
   describe: (bucket: ProceduralPlacementBucket, suffix: string) => VegetationFieldRendererOptions & {
     configure: (impostor: Mesh, model: Mesh) => void;
   },
 ): Promise<VegetationFieldResult> {
   const fields: VegetationFieldResult[] = [];
-  for (const bucket of buckets) {
+  for (const placed of buckets) {
+    // The snow tier is part of the atlas identity, so a snowed field never
+    // reuses a bare atlas and the live model bakes the same tier depth.
+    const bucket = { ...placed, variant: snowCoveredVariant(placed.variant, snowCover) };
     const options = describe(bucket, proceduralBucketSuffix(bucket));
-    const renderers = await createVegetationFieldRenderers(scene, options);
+    const renderers = await createVegetationFieldRenderers(scene, {
+      ...options,
+      snowCover: bucket.variant.snowCover ?? 0,
+    });
     renderers.root.parent = root;
     options.configure(renderers.impostor, renderers.model);
     fields.push(await createVegetationFieldResult(
@@ -72,6 +82,12 @@ export async function createVegetationFieldRenderers(
     const model = await options.createModel();
     model.parent = root;
     model.isPickable = false;
+    if (options.snowCover) {
+      // The impostor only needs to know snow is baked in, to leave it untinted.
+      configureVegetationMaterials([prototype.mesh], { floats: { snowAmount: options.snowCover } });
+      // The atlas was captured from a source with the same snow geometry.
+      if (assets.snowfall) applyVegetationSnowfall([model], options.renderHeight, options.snowCover);
+    }
 
     // Do not force-dispose textures: vegetation materials bind the scene-owned
     // shadow map, which must survive individual streamed fields.

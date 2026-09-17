@@ -4,6 +4,7 @@ import type { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker
 import { createFrameBudgetYielder } from "../diagnostics/FrameBudget";
 import { DIRT_ROAD_EDGE_KIND, DIRT_ROAD_EDGE_ALPHA_GLSL, dirtRoadEdgeCoordinates } from "../roads/DirtRoadEdges";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
+import { SnowCoverPlugin } from "../rendering/SnowCover";
 import { mergeBuildingSourceGroups } from "../buildings/CompositeBuildings";
 import { inferBuildingUse, type BuildingUseContext } from "../buildings/BuildingUseInference";
 import type { SharedValueMap } from "../core/OwnedValueCache";
@@ -133,6 +134,8 @@ interface MapLayerOptions {
   metersPerUnit: number;
   skyReflection?: BaseTexture | null;
   showRoofs?: boolean;
+  /** Snow depth in [0, 1] on the tile; roofs grow slabs of matching thickness. */
+  snowCover?: number;
   /** Provider elevations retained before coastline shaping for bridge clearance. */
   preCarvingElevations?: Float32Array;
   /** Creates the layer hidden so partially built meshes never flash on screen. */
@@ -772,7 +775,7 @@ async function createBuildingBatches(
           // Bound merge copies and GPU uploads instead of duplicating a whole
           // dense city tile in memory in one uninterrupted merge.
           if (chunkVertices >= BUILDING_MERGE_VERTEX_BUDGET) {
-            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root);
+            const chunk = ProceduralBuildingRenderer.merge(buildings, name, root, true, options.snowCover ?? 0);
             if (chunk) {
               chunk.setEnabled(false);
               meshes.push(chunk);
@@ -786,7 +789,7 @@ async function createBuildingBatches(
       }
 
       trace.stage("final merge (inclusive)");
-      const merged = ProceduralBuildingRenderer.merge(buildings, name, root);
+      const merged = ProceduralBuildingRenderer.merge(buildings, name, root, true, options.snowCover ?? 0);
       if (merged) {
         merged.setEnabled(false);
         meshes.push(merged);
@@ -1742,6 +1745,9 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
   const material = visualStyle === "dirt"
     ? createDirtRoadMaterial(scene, `${name}Material`)
     : new StandardMaterial(`${name}Material`, scene);
+  // Roads are not plowed: they take the same snow as the ground around them
+  // and rise with it, so they stay flush with the raised terrain.
+  new SnowCoverPlugin(material, { displace: true });
   switch (visualStyle) {
     case "dirt": material.diffuseColor = new Color3(0.42, 0.39, 0.33); break;
     case "unpaved": material.diffuseColor = new Color3(0.43, 0.42, 0.38); break;

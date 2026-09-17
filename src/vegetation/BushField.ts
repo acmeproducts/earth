@@ -160,7 +160,7 @@ export async function createBushField(
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   return createRegionalVegetationField(
     scene, root, variantBuckets.values(), matrixData,
-    { metersPerUnit, renderMode, yieldControl },
+    { metersPerUnit, renderMode, yieldControl, snowCover: options.snowCover },
     (bucket, suffix) => ({
       rootName: `bushField-${suffix}`,
       impostorName: `bushImpostors-${suffix}`,

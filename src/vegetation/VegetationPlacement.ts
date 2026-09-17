@@ -18,6 +18,8 @@ export interface VegetationPlacementOptions {
   modelVariantSeed?: number;
   /** Calendar snapshot used by procedural vegetation generated for this world. */
   seasonalDate?: Date;
+  /** Snow depth in [0, 1] lying on the tile; baked into models and atlases. */
+  snowCover?: number;
   spacingMeters?: number;
   waterLineMeters?: number;
   landCover?: LandCoverSampler;

@@ -578,6 +578,9 @@ export function createVertexColorCaptureMaterial(
             float pixelTurn = clamp(turn * (0.55 + 1.5 * leafLuma), 0.0, 1.0);
             surfaceColor = mix(greenLeaf, turnedLeaf, pixelTurn);
           }
+          // Snow blankets from SnowFall mark themselves with uv.x = -2. They
+          // carry their color in the vertices and are never tinted by land cover.
+          float snowVertex = step(vUv.x, -1.5);
           vec3 normal = normalize(vWorldNormal);
           if (normal.y < 0.0) normal = -normal;
           // A foliage card's normal describes the arbitrary plane used to hold
@@ -630,7 +633,7 @@ export function createVertexColorCaptureMaterial(
             * lightingEnabled;
           surfaceColor *= mix(1.0, lowLightAlbedoScale, lowLightBlend);
           float petalMask = smoothstep(0.68, 0.86, min(surfaceColor.r, min(surfaceColor.g, surfaceColor.b)));
-          float instanceColorMask = max(petalMask, instanceColorCoverage);
+          float instanceColorMask = max(petalMask, instanceColorCoverage) * (1.0 - snowVertex);
           vec3 instanceColor = mix(surfaceColor, surfaceColor * vInstanceColor, instanceColorMask);
           instanceColor = mix(
             instanceColor,
@@ -728,17 +731,18 @@ export function createVertexColorCaptureMaterial(
     : Promise.resolve();
   textureReadiness.set(material, ready);
   if (leafTextureUrl) {
+    const onTextureReady = (): void => {
+      material.setFloat("leafTextureEnabled", 1);
+      resolveTextureReadiness?.();
+      resolveTextureReadiness = undefined;
+    };
     const leafTexture = new Texture(
       leafTextureUrl,
       scene,
       false,
       false,
       Texture.TRILINEAR_SAMPLINGMODE,
-      () => {
-        material.setFloat("leafTextureEnabled", 1);
-        resolveTextureReadiness?.();
-        resolveTextureReadiness = undefined;
-      },
+      onTextureReady,
       () => {
         material.setFloat("leafTextureEnabled", 0);
         // ShaderMaterial checks every bound texture even when sampling is disabled.
@@ -751,6 +755,9 @@ export function createVertexColorCaptureMaterial(
     leafTexture.wrapU = Texture.CLAMP_ADDRESSMODE;
     leafTexture.wrapV = Texture.CLAMP_ADDRESSMODE;
     material.setTexture("leafTexture", leafTexture);
+    // Babylon defers cached-texture callbacks through a timer. Hidden tabs can
+    // throttle that notification long after the GPU texture is already ready.
+    if (leafTexture.isReady()) onTextureReady();
     // The leaf texture is created per material, so the material owns it.
     // Callers must not force-dispose material textures instead: the shared
     // shadow map and the scene-cached bark texture are bound here too.

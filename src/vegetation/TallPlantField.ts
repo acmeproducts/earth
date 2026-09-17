@@ -162,7 +162,7 @@ export async function createTallPlantField(
   const matrixData = await packInstanceMatrices(matrices, yieldControl);
   return createRegionalVegetationField(
     scene, root, variantBuckets.values(), matrixData,
-    { metersPerUnit, renderMode, yieldControl },
+    { metersPerUnit, renderMode, yieldControl, snowCover: options.snowCover },
     (bucket, suffix) => ({
       rootName: `tallPlantField-${suffix}`,
       impostorName: `plantImpostors-${suffix}`,

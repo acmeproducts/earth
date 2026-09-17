@@ -23,6 +23,7 @@ import { compositeBuildingGeometry } from "./CompositeBuildingGeometry";
 import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
 import { compactMeshBuffers } from "../rendering/CompactMeshBuffers";
+import { appendSnowShell } from "../rendering/SnowShell";
 import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../world/Geo";
 import { clamp01 } from "../core/MathUtils";
 import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
@@ -87,7 +88,9 @@ import {
 } from "./BuildingRendererConstants";
 import {
   BUILDING_MATERIAL_VERTEX_KIND,
+  BUILDING_SNOW_SURFACE_ID,
   createBuildingSolidMaterial,
+  isRoofSurfaceId,
   roofSurfaceFor,
   setBuildingSurface,
   setBuildingSurfaces,
@@ -365,7 +368,9 @@ export class ProceduralBuildingRenderer {
     });
   }
 
-  static merge(meshes: Mesh[], name: string, parent: TransformNode, logTiming = true): Mesh | undefined {
+  static merge(
+    meshes: Mesh[], name: string, parent: TransformNode, logTiming = true, snowCover = 0,
+  ): Mesh | undefined {
     if (meshes.length === 0) return undefined;
     return BuildingTrace.run(`chunk=${parent.name}/${parent.uniqueId} ${name} meshes=${meshes.length}`, (trace) => {
       trace.stage("compact buffers/metadata");
@@ -385,6 +390,7 @@ export class ProceduralBuildingRenderer {
       trace.stage("solid material/activation");
       const material = createBuildingSolidMaterial(
         `${name}Material`, result.getScene(), Number.isFinite(metersPerUnit) ? metersPerUnit : 1,
+        { snow: name !== "buildingInteriors" },
       );
       material.transparencyMode = Material.MATERIAL_OPAQUE;
       result.useVertexColors = true;
@@ -394,6 +400,10 @@ export class ProceduralBuildingRenderer {
       result.parent = parent;
       result.setEnabled(true);
       result.checkCollisions = name === "buildings" || name === "detailedBuildings";
+      if (snowCover > 0 && Number.isFinite(metersPerUnit)) {
+        trace.stage("roof snow slabs");
+        appendBuildingRoofSnow(result, snowCover, metersPerUnit);
+      }
       trace.stage("retain layout captures");
       retainCurrentBuildingLayoutCaptures(buildingIds, result);
       if (Number.isFinite(metersPerUnit)) {
@@ -414,6 +424,24 @@ export class ProceduralBuildingRenderer {
       return result;
     }, logTiming);
   }
+}
+
+/** Settled roof snow at full depth, before the per-vertex lumps. */
+const BUILDING_ROOF_SNOW_METERS = 0.3;
+
+/**
+ * Extrudes every roof surface of a merged tile mesh into a snow slab with
+ * side walls, so eaves and parapets show the layer's thickness. Walls, sills
+ * and rooftop gear keep the thin shader coloration only.
+ */
+function appendBuildingRoofSnow(mesh: Mesh, snowCover: number, metersPerUnit: number): void {
+  const surfaces = mesh.getVerticesData(BUILDING_MATERIAL_VERTEX_KIND);
+  if (!surfaces) return;
+  appendSnowShell(mesh, {
+    thickness: BUILDING_ROOF_SNOW_METERS * (0.4 + 0.6 * snowCover) / metersPerUnit,
+    capFilter: (vertex) => isRoofSurfaceId(Math.round(surfaces[vertex * 2])),
+    surfaceId: BUILDING_SNOW_SURFACE_ID,
+  });
 }
 
 function createCompositeBuilding(

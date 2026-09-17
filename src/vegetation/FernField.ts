@@ -6,6 +6,7 @@ import {
   fernRenderedCaptureSize,
 } from "./FernImpostor";
 import { setVegetationWindShear } from "../procedural/ProceduralCaptureMaterial";
+import { snowCoveredVariant } from "../rendering/Impostor";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import { createSeededRandom } from "../core/Random";
@@ -167,7 +168,7 @@ export async function createFernField(
   // silhouette. Keep one renderer per terrain tile instead of one impostor
   // mesh for every regional bucket touched by the tile.
   if (variant) {
-    const selectedVariant = variant;
+    const selectedVariant = snowCoveredVariant(variant, options.snowCover ?? 0);
     const { root: variantRoot, impostor: fern, model: fernModel } =
       await createVegetationFieldRenderers(scene, {
         rootName: "fernField-renderer",
@@ -175,6 +176,7 @@ export async function createFernField(
         renderHeight,
         loadAssets: () => acquireFernImpostorAssets(scene, selectedVariant),
         createModel: () => createFernModel(scene, renderHeight, selectedVariant.seed),
+        snowCover: selectedVariant.snowCover,
       });
     variantRoot.parent = root;
     configureFernRenderers(fern, fernModel, meshWidth, meshDepth);

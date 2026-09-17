@@ -58,7 +58,7 @@ test("uses the same regional seed for each tree model and impostor", () => {
   assert.match(treeField, /createTreeImpostorPrototype\([\s\S]*?variant/);
   assert.match(
     treeField,
-    /createTreeModels\(scene, treeHeight, species, variant\.seed, variant\.season\)/,
+    /createTreeModels\(scene, treeHeight, species, variant\.seed, variant\.season, variant\.snowCover \?\? 0\)/,
   );
 });
 

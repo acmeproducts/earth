@@ -22,6 +22,7 @@ import {
   ImpostorVariant,
 } from "../rendering/Impostor";
 import type { TreeSeasonAppearance } from "./TreeSeason";
+import { applyVegetationSnowfall } from "../rendering/SnowFall";
 import { bakeTreeExposure } from "./DirectionalExposure";
 import { TreeModelGeometryCache } from "./TreeModelGeometryCache";
 
@@ -39,6 +40,7 @@ function createTreeProvider(species: TreeSpecies) {
   return createImpostorAssetProvider({
     name: `${species}TreeImpostor`,
     directionalExposure: true,
+    snowfall: true,
     queryPrefix: species === "birch" ? "tree-impostor" : `${species}-tree-impostor`,
     createSource: (scene, variant) => {
       const treeVariant = variant as TreeImpostorVariant;
@@ -106,6 +108,7 @@ export async function createTreeModels(
   species: TreeSpecies = "birch",
   seed?: number,
   season?: TreeSeasonAppearance,
+  snowCover = 0,
 ): Promise<Mesh[]> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
@@ -145,6 +148,8 @@ export async function createTreeModels(
     mesh.material = material;
     scaleTreeMesh(mesh, renderScale, renderHeight / 2, renderHeight);
   }
+  // Snow dropped on the crown and branches, sized like the atlas capture.
+  applyVegetationSnowfall(meshes, renderHeight, snowCover);
   // A fading impostor must have a drawable model to replace it.
   await waitForVertexColorTextures(meshes);
   meshes.forEach((mesh) => { mesh.isVisible = true; });
@@ -158,6 +163,7 @@ export async function createTreeLogModel(
   species: TreeSpecies,
   seed?: number,
   season?: TreeSeasonAppearance,
+  snowCover = 0,
 ): Promise<Mesh> {
   await measureFoliageTextures();
   const treeDefinition = TREE_SPECIES[species];
@@ -169,6 +175,7 @@ export async function createTreeLogModel(
   });
   parts.branches.dispose(false, false);
   scaleTreeMesh(parts.log, renderHeight / treeDefinition.sourceHeight, 0, renderHeight);
+  applyVegetationSnowfall([parts.log], renderHeight, snowCover);
   return parts.log;
 }
 

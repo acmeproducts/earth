@@ -13,6 +13,7 @@ import {
 } from "@babylonjs/core";
 import { FpsCounter } from "../diagnostics/FpsCounter";
 import { treeSeasonAt } from "../vegetation/TreeSeason";
+import { applyVegetationSnowfall } from "../rendering/SnowFall";
 import {
   captureImpostorAtlases,
   CubeFace,
@@ -153,6 +154,8 @@ export class TreeImpostorDemo {
       ? treeSeasonAt(seasonDate, 52, species, Number(query.get("maturity") ?? "1"))
       : undefined;
     const source = definition.create(this.scene, { name: "treeCaptureSource", season });
+    // `&snow=0..1` drops snow on the source, as a winter tile would.
+    applyVegetationSnowfall([source.log, source.branches], definition.sourceHeight, Number(query.get("snow") ?? "0"));
     const sourceRoot = new TransformNode("treeCaptureSourceRoot", this.scene);
     source.log.parent = sourceRoot;
     source.branches.parent = sourceRoot;

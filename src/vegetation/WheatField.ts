@@ -47,7 +47,7 @@ export async function createWheatField(scene: Scene, terrain: TerrainData, optio
       [...buckets.values()].flatMap((bucket) => bucket.matrices),
       yieldControl,
     ),
-    { metersPerUnit, renderMode, yieldControl },
+    { metersPerUnit, renderMode, yieldControl, snowCover: options.snowCover },
     (bucket, suffix) => ({
       rootName: `wheatField-${suffix}`,
       impostorName: `wheatImpostors-${suffix}`,

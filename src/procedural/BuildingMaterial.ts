@@ -1,6 +1,7 @@
 import { Color3, Mesh, Scene, StandardMaterial, VertexBuffer } from "@babylonjs/core";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
 import { shareCustomShader } from "../rendering/SharedCustomShader";
+import { SnowCoverPlugin } from "../rendering/SnowCover";
 import type { BuildingClass, BuildingRoofShape } from "../buildings/BuildingPlanner";
 
 // UV2 survives Babylon's Mesh.MergeMeshes path; the building geometry does not
@@ -31,6 +32,14 @@ const SURFACE_IDS: Readonly<Record<BuildingSurface, number>> = {
   "roof-metal": 8,
   "roof-flat": 9,
 };
+
+/** Surface id of snow slabs appended to roofs; not a mapped building surface. */
+export const BUILDING_SNOW_SURFACE_ID = 10;
+
+/** Whether a per-vertex surface id belongs to a roof surface. */
+export function isRoofSurfaceId(id: number): boolean {
+  return id >= SURFACE_IDS["roof-tile"] && id <= SURFACE_IDS["roof-flat"];
+}
 
 const WALL_MATERIALS: Readonly<Record<string, BuildingSurface>> = {
   brick: "brick",
@@ -131,6 +140,7 @@ export function createBuildingSolidMaterial(
   name: string,
   scene: Scene,
   metersPerUnit: number,
+  options: { snow?: boolean } = {},
 ): StandardMaterial {
   const material = new CustomMaterial(name, scene);
   material.diffuseColor = Color3.White();
@@ -196,11 +206,18 @@ export function createBuildingSolidMaterial(
       buildingShade = mix(0.7, 0.98, seam);
     } else if (buildingKind == 8.0) {
       buildingShade = 0.82 + 0.2 * pow(abs(sin(buildingUv.x * 3.14159 / 0.38)), 12.0);
+    } else if (buildingKind == ${BUILDING_SNOW_SURFACE_ID}.0) {
+      // Snow slabs carry their color in the vertices and take no facade pattern.
+      buildingShade = 1.0;
     } else {
       buildingShade = 0.92 + 0.08 * buildingHash(buildingUv * 2.0);
     }
     result *= buildingShade;
   `);
+  // Snow settles on roofs, ledges and sills after the facade pattern is
+  // applied; walls shed it. The depth is set per merged tile mesh. Interior
+  // shells opt out: nothing falls indoors.
+  if (options.snow !== false) new SnowCoverPlugin(material);
   shareCustomShader(material);
   return material;
 }

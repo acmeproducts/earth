@@ -45,3 +45,29 @@ for (const outcome of ["load", "error"]) {
     }
   });
 }
+
+test("an already-ready leaf texture does not wait for its deferred load callback", async () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    let deferredLoad;
+    engine.createTexture = (_url, _noMipmap, _invertY, _scene, _sampling, onLoad) => {
+      const texture = new InternalTexture(engine, InternalTextureSource.Url);
+      texture.isReady = true;
+      deferredLoad = onLoad;
+      return texture;
+    };
+    const mesh = new Mesh("cached tree", scene);
+    mesh.material = createVertexColorCaptureMaterial(scene, "cached tree", true, "cached-leaf.png");
+    let settled = false;
+    void waitForVertexColorTextures([mesh]).then(() => { settled = true; });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    assert.equal(settled, true, "a throttled load notification must not hold up tile construction");
+    assert.equal(mesh.material._floats.leafTextureEnabled, 1);
+    deferredLoad();
+    assert.equal(mesh.material._floats.leafTextureEnabled, 1, "the eventual callback is harmless");
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});

@@ -19,6 +19,7 @@ import {
 } from "./Geo";
 import { acquireBushImpostorAssets, createBushModel } from "../vegetation/BushImpostor";
 import { createVegetationFieldRenderers } from "../vegetation/VegetationFieldRenderers";
+import { snowCoveredVariant } from "../rendering/Impostor";
 import { createVegetationFieldResult } from "../vegetation/VegetationField";
 import type { VegetationFieldResult } from "../vegetation/VegetationField";
 import type { TerrainData } from "../terrain/TerrainData";
@@ -46,6 +47,8 @@ export interface BarrierLayerOptions {
   meshDepth: number;
   metersPerUnit: number;
   startDisabled?: boolean;
+  /** Snow depth in [0, 1] on the tile, baked into hedge models and atlases. */
+  snowCover?: number;
 }
 
 export interface BarrierFeatureLayer {
@@ -192,12 +195,16 @@ async function createBarrierLayer(
     if (hedgeMatrices.length > 0) {
       const hedgeRoot = new TransformNode("hedgerowBushes", scene);
       hedgeRoot.parent = root;
+      // Hedges take the tile's snow like any bush: the variant selects a
+      // snowed atlas and the live model bakes the same depth and shell.
+      const hedgeVariant = snowCoveredVariant({ key: "default" }, options.snowCover ?? 0);
       const renderers = await createVegetationFieldRenderers(scene, {
         rootName: "hedgerowBushRenderers",
         impostorName: "hedgerowBushImpostors",
         renderHeight: 1.6 / options.metersPerUnit,
-        loadAssets: () => acquireBushImpostorAssets(scene, { key: "default" }),
+        loadAssets: () => acquireBushImpostorAssets(scene, hedgeVariant),
         createModel: () => createBushModel(scene, 1.6 / options.metersPerUnit),
+        snowCover: hedgeVariant.snowCover,
       });
       renderers.root.parent = hedgeRoot;
       setVegetationWindShear(

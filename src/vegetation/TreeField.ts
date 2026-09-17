@@ -29,7 +29,7 @@ import {
   TREE_IMPOSTOR_FACES,
   TreeImpostorVariant,
 } from "./TreeImpostor";
-import { ImpostorAssets } from "../rendering/Impostor";
+import { ImpostorAssets, snowCoveredVariant } from "../rendering/Impostor";
 import {
   combineVegetationFieldResults,
   createVegetationFieldResult,
@@ -342,6 +342,7 @@ uniform float distanceFadeFar;
 uniform float groundColorBlend;
 uniform float distanceGroundBlend;
 uniform vec3 distanceGroundColor;
+uniform float snowAmount;
 uniform float impostorAmbientUpward;
 uniform float impostorColorContrast;
 uniform float crownLightStrength;
@@ -393,8 +394,7 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   }
   vec2 lowLocalUV = mix(lowTileInset, vec2(1.0) - lowTileInset, imageUV);
   vec4 lowColor = lowAtlasSample(face, (tile + lowLocalUV) / atlasTileCounts * lowAtlasScale);
-  // The low atlas is color-only. Its coarse coverage is unsuitable for a
-  // stable foliage silhouette, so the original atlas remains the alpha mask.
+  // Use the coarse atlas for color only; its expanded mask loses branch detail.
   lowColor.a = step(0.5, lowColor.a);
 
   vec4 highColor = atlasSample(face, atlasUV);
@@ -405,8 +405,7 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   float lowPresent = step(1.0 / 255.0, lowColor.a);
   vec3 highStraight = mix(lowColor.rgb, highColor.rgb, highPresent);
   vec3 lowStraight = mix(highStraight, lowColor.rgb, lowPresent);
-  // Keep detailed coverage in the ordinary distant tier, then smoothly filter
-  // both coverage and color when the entire impostor is only a few pixels tall.
+  // Preserve the captured branches and gaps instead of filling the canopy.
   float alpha = highColor.a;
   vec3 straightColor = mix(highStraight, lowStraight, lodBlend);
   vec3 ultraStraight = mix(straightColor, ultraColor.rgb, step(1.0 / 255.0, ultraColor.a));
@@ -604,7 +603,7 @@ void main(void) {
   color.a = clamp(softShadowAlpha * 0.9 - 0.02, 0.0, 1.0);
   float alphaChoice = bayer8(gl_FragCoord.xy + vec2(1.0, 2.0));
   #else
-  float alphaChoice = bayer4(gl_FragCoord.xy + vec2(1.0, 2.0));
+  float alphaChoice = mix(bayer4(gl_FragCoord.xy + vec2(1.0, 2.0)), 0.5, lodBlend);
   #endif
   if (color.a <= alphaChoice) discard;
 
@@ -686,7 +685,10 @@ void main(void) {
   float lowLightBlend = 1.0 - smoothstep(0.22, 0.58, sceneBrightness);
   straightColor *= mix(1.0, lowLightAlbedoScale, lowLightBlend);
   float petalMask = smoothstep(0.68, 0.86, min(straightColor.r, min(straightColor.g, straightColor.b)));
-  float instanceColorMask = max(petalMask, instanceColorCoverage);
+  // Baked snow is the brightest thing in a winter atlas; leave it untinted by
+  // the land cover the way the live model does.
+  float snowMask = petalMask * step(0.001, snowAmount);
+  float instanceColorMask = max(petalMask, instanceColorCoverage) * (1.0 - snowMask);
   straightColor = mix(straightColor, straightColor * vInstanceColor, instanceColorMask);
   // The remaining sparse blades converge on the same locally-derived palette
   // as the terrain, making the final coverage loss read as ground texture.
@@ -753,6 +755,7 @@ export async function createTreeField(
     seed = 0x4f534c4f,
     modelVariantSeed = DEFAULT_WORLD_SEED,
     seasonalDate,
+    snowCover = 0,
     spacingMeters = DEFAULT_TREE_SPACING_METERS,
     occupancy = 0.52,
     edgeOccupancy = 0.12,
@@ -936,7 +939,7 @@ export async function createTreeField(
             modelVariantSeed, Math.floor(ground.x), Math.floor(ground.y), 0x46414c4c,
           ) * 3);
           const season = treeSeasonAt(seasonalDate, tileVariantLocation.lat, species, autumnVariant);
-          const variant: TreeImpostorVariant = {
+          const variant: TreeImpostorVariant = snowCoveredVariant({
             ...tileRegion,
             key: `${tileRegion.key}/local/${tileLocalVariant}/season/${season.key}`,
             seed: layerSeed(layerSeed(
@@ -944,7 +947,7 @@ export async function createTreeField(
               `sister-${tileLocalVariant}`,
             ), species),
             season,
-          };
+          }, snowCover);
           const bucketKey = `${species}:${variant.key}`;
           let bucket = variantBuckets.get(bucketKey);
           if (!bucket) {
@@ -1008,9 +1011,12 @@ export async function createTreeField(
       if (prototype.mesh.material instanceof ShaderMaterial) {
         prototype.mesh.material.setFloat("forceLowestLod", forceLowestImpostorLod ? 1 : 0);
       }
+      if (prototype.mesh.material instanceof ShaderMaterial) {
+        prototype.mesh.material.setFloat("snowAmount", variant.snowCover ?? 0);
+      }
       trace.stage(`${species} model geometry + lighting bake`);
       const modelMeshes = includeModels
-        ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season)
+        ? await createTreeModels(scene, treeHeight, species, variant.seed, variant.season, variant.snowCover ?? 0)
         : [];
       // Trees move with the same wind field as their impostors, but at a much
       // smaller amplitude so the canopy breathes without making trunks wobble.
@@ -1018,7 +1024,7 @@ export async function createTreeField(
       modelMeshes.forEach((mesh) => { mesh.parent = prototype.root; });
       trace.stage(`${species} fallen logs`);
       const fallenLogModel = bucket.fallenLogMatrices.length > 0
-        ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season)
+        ? await createTreeLogModel(scene, treeHeight, species, variant.seed, variant.season, variant.snowCover ?? 0)
         : undefined;
       if (fallenLogModel) fallenLogModel.parent = prototype.root;
       const modelMaterials = new Set(
@@ -1336,7 +1342,7 @@ export function createImpostorMaterial(
     { vertexSource: impostorVertexShader, fragmentSource: impostorFragmentShader },
     {
       attributes: ["position", "vegetationColor", "instanceLodBlend"],
-      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "impostorDepthPull", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "impostorAmbientUpward", "impostorColorContrast", "crownLightStrength", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
+      uniforms: ["world", "viewProjection", "cameraPosition", "captureCenterY", "impostorDepthPull", "captureDimensions", "gridDimensions", "atlasTileCounts", "tileInset", "lowTileInset", "impostorLodNear", "impostorLodFar", "forceLowestLod", "cameraOrthographic", "rotationallySymmetric", "rotationalSymmetryOrder", "upperHemisphereOnly", "sunDirection", "sunColor", "skyColor", "groundColor", "lowLightAlbedoScale", "instanceColorCoverage", "fieldFade", "distanceFadeNear", "distanceFadeFar", "groundColorBlend", "distanceGroundBlend", "distanceGroundColor", "snowAmount", "impostorAmbientUpward", "impostorColorContrast", "crownLightStrength", "fogColor", "fogStart", "fogEnd", "vegetationShadowMatrix", "vegetationShadowAtInstanceRoot", "vegetationShadowTexelSize", "vegetationShadowDepthValues", "vegetationShadowEnabled", "vegetationShadowReverseDepth", "vegetationShadowDarkness", "vegetationShadowFloatTexture", ...CLOUD_SHADOW_UNIFORMS, ...WIND_PHASE_UNIFORMS, ...WIND_SHEAR_UNIFORMS],
       samplers: ["atlas0", "atlas1", "atlas2", "atlas3", "atlas4", "lowAtlas0", "lowAtlas1", "lowAtlas2", "lowAtlas3", "lowAtlas4", "vegetationShadowSampler", "cloudShadowAtlas"],
       // Writing depth costs the early depth test, so the dense low vegetation
       // that never needed it compiles without the proxy at all.
@@ -1405,6 +1411,7 @@ export function createImpostorMaterial(
   material.setFloat("groundColorBlend", 0);
   material.setFloat("distanceGroundBlend", 0);
   material.setColor3("distanceGroundColor", Color3.White());
+  material.setFloat("snowAmount", 0);
   material.setFloat("impostorAmbientUpward", 1);
   material.setFloat("impostorColorContrast", 1);
   material.setFloat("crownLightStrength", 1);

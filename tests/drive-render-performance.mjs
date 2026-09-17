@@ -13,6 +13,11 @@ const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
 const pixelTest = process.argv.includes('--pixels');
 const osloWalk = process.argv.includes('--oslo-walk');
+// --snapshot: settle the world, save one screenshot and the browser errors, exit.
+const snapshot = process.argv.includes('--snapshot');
+const sceneDate = process.argv.find(a => a.startsWith('--date='))?.slice(7) ?? '2026-09-05';
+// --fixture=<query>: replaces the default 3x3 tile fixture query for --snapshot (e.g. oslo-walk).
+const snapshotFixture = process.argv.find(a => a.startsWith('--fixture='))?.slice(10);
 console.log('Artifacts:', output);
 if (!reuseBundle) await new Promise((resolve, reject) => {
   const build = spawn(process.execPath, [
@@ -106,7 +111,7 @@ try {
   await send('Runtime.enable');
   await send('Page.enable');
   if (osloWalk) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=2026-09-05&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
+  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
   if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
   if (osloWalk) {
     await runOsloWalk({ evaluate, send, output, errors, browserLog, readTrace: async (stop = true) => {
@@ -138,6 +143,26 @@ try {
       if(i===119)throw new Error('Pixel tests timed out');
       await sleep(500);
     }
+  } else if (snapshot) {
+    for (let i = 0; i < 240; i++) {
+      const state = await evaluate(`({ready:window.performanceReady,error:window.performanceError,step:window.performanceProgress,builds:window.performanceGame?.activeTileBuilds?.size,tiles:window.performanceGame?.tiles?.size})`);
+      if (state.error) throw new Error(state.error);
+      if (i % 15 === 0) console.log('Loading', state);
+      if (state.ready && state.builds === 0 && state.tiles >= 9) break;
+      if (i === 239) throw new Error('World did not settle');
+      await sleep(1000);
+    }
+    await sleep(4000);
+    // --eval=<js>: replaces the default camera placement; `g` is the game.
+    const placeCamera = process.argv.find(a => a.startsWith('--eval='))?.slice(7)
+      ?? 'g.flyCamera.rotation.x=0.08; g.flyCamera.rotation.y=1.2;';
+    const evaluated = await evaluate(`(async () => { const g=window.performanceGame; const evalResult = await (async () => { ${placeCamera} })(); g.updateVegetationLod(true); return evalResult === undefined ? null : JSON.stringify(evalResult).slice(0, 6000); })()`);
+    if (evaluated) console.log('Eval:', evaluated);
+    await sleep(1500);
+    const screenshot = await send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(join(output, 'snapshot.png'), Buffer.from(screenshot.data, 'base64'));
+    console.log('Snapshot saved:', join(output, 'snapshot.png'));
+    console.log('Errors:', JSON.stringify(errors).slice(0, 4000));
   } else {
   for (let i = 0; i < 240; i++) {
     const state = await evaluate(`({ready:window.performanceReady,error:window.performanceError,step:window.performanceProgress,builds:window.performanceGame?.activeTileBuilds?.size,tiles:window.performanceGame?.tiles?.size})`);

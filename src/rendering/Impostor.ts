@@ -16,6 +16,8 @@ import {
 import { documentIsBackgrounded, waitForNextFrame as nextFrame } from "../diagnostics/FrameBudget";
 import { waitForVertexColorTextures } from "../procedural/ProceduralCaptureMaterial";
 import { bakeTreeExposure, packExposureFace } from "../vegetation/DirectionalExposure";
+import { snowCoverForTier, snowCoverTier } from "../vegetation/TreeSeason";
+import { applyVegetationSnowfall } from "./SnowFall";
 import { publishGeneratedAsset } from "../demos/GeneratedAssetPreview";
 
 export interface ImpostorAssets {
@@ -31,6 +33,8 @@ export interface ImpostorAssets {
   rotationalSymmetryOrder: number;
   /** Side-face rows start at a level view instead of including views from below. */
   upperHemisphereOnly: boolean;
+  /** Whether winter snow is dropped on the source; live models must match. */
+  snowfall: boolean;
   gridWidth: number;
   gridHeight: number;
   /** Kept for the square-grid validation tools. */
@@ -109,6 +113,8 @@ export interface ImpostorCaptureOptions {
   rotationalSymmetryOrder?: number;
   /** Captures side faces from level through overhead; top faces retain their full range. */
   upperHemisphereOnly?: boolean;
+  /** Recorded so live models grow the same snow geometry as the captured source. */
+  snowfall?: boolean;
   /** Prioritizes stable gameplay frames over total capture duration. */
   cooperative?: boolean;
   onProgress?: (
@@ -131,6 +137,8 @@ export interface ImpostorVariant {
   key: string;
   /** Seed supplied to the procedural source. Omitted by legacy static captures. */
   seed?: number;
+  /** Snow depth in [0, 1] baked into the source before capture. */
+  snowCover?: number;
 }
 
 export interface ImpostorAssetRequestOptions {
@@ -169,6 +177,8 @@ export interface ImpostorDefinition {
   rotationalSymmetryOrder?: number;
   /** Omits below-object angles from side-face atlas rows. Defaults to false. */
   upperHemisphereOnly?: boolean;
+  /** Drops winter snow on the source before capture; models do the same. */
+  snowfall?: boolean;
   sampling: {
     horizontalSamples: ImpostorParameter;
     verticalSamples: ImpostorParameter;
@@ -200,6 +210,20 @@ interface ImpostorCacheEntry {
 }
 
 const DEFAULT_IMPOSTOR_VARIANT: ImpostorVariant = { key: "default" };
+
+/**
+ * Derives the variant that bakes a tile's snow. Depth is quantized to a few
+ * tiers so neighboring tiles share atlases, and the same tier depth is used
+ * by the live model so both LODs match.
+ */
+export function snowCoveredVariant<T extends ImpostorVariant>(
+  variant: T,
+  snowCover: number,
+): T & { snowCover?: number } {
+  const tier = snowCoverTier(snowCover);
+  if (tier === 0) return variant;
+  return { ...variant, key: `${variant.key}/snow/${tier}`, snowCover: snowCoverForTier(tier) };
+}
 /** Four corner variants, the legacy default, and one recently used neighbor. */
 const MAX_CACHED_IMPOSTOR_VARIANTS = 6;
 const sceneCaptureTails = new WeakMap<Scene, Promise<void>>();
@@ -369,6 +393,9 @@ async function captureDefinition(
     trace.finish();
     throw new Error(`${definition.name} created no source meshes.`);
   }
+  // Drop the variant's snow on the source so the atlas matches the live
+  // model that will replace it up close.
+  if (definition.snowfall) applyVegetationSnowfall(meshes, definition.sourceHeight, variant.snowCover ?? 0);
 
   // A lazily discovered source belongs only to its render target. Keep it out
   // of gameplay frames while textures become ready and between capture views.
@@ -418,6 +445,7 @@ async function captureDefinition(
       rotationallySymmetric: definition.rotationallySymmetric,
       rotationalSymmetryOrder: definition.rotationalSymmetryOrder,
       upperHemisphereOnly: definition.upperHemisphereOnly,
+      snowfall: definition.snowfall ?? false,
       cooperative,
     };
     const assets = await captureImpostorAtlases(scene, captureOptions);
@@ -518,6 +546,7 @@ export async function captureImpostorAtlases(
     rotationallySymmetric = false,
     rotationalSymmetryOrder = 0,
     upperHemisphereOnly = false,
+    snowfall = false,
     cooperative = false,
     onProgress,
   } = options;
@@ -671,6 +700,7 @@ export async function captureImpostorAtlases(
     rotationallySymmetric,
     rotationalSymmetryOrder,
     upperHemisphereOnly,
+    snowfall,
     gridWidth,
     gridHeight,
     resolution: resolutionHeight,

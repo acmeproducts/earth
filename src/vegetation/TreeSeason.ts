@@ -53,13 +53,66 @@ export function hasWinterGroundCover(
   date: Date | undefined,
   latitude: number,
 ): boolean {
-  return Boolean(
-    date
-    && Number.isFinite(date.getTime())
-    && Number.isFinite(latitude)
-    && Math.abs(latitude) >= 23.5
-    && meteorologicalSeason(date.getMonth(), latitude < 0) === "winter",
-  );
+  return snowCoverAt(date, latitude) > 0;
+}
+
+/** Number of baked snow tiers above bare ground shared by impostor atlases. */
+export const SNOW_COVER_TIERS = 3;
+
+/**
+ * Snow depth in [0, 1] for a place and date, where 1 is a deep, settled
+ * cover. Snow only lies during the hemisphere's meteorological winter and
+ * never within the tropics. Within winter it builds from a thin early
+ * dusting to a late-January peak and thins again towards spring; higher
+ * latitudes and elevations hold more of it.
+ */
+export function snowCoverAt(
+  date: Date | undefined,
+  latitude: number,
+  elevationMeters = 0,
+): number {
+  if (!date || !Number.isFinite(date.getTime()) || !Number.isFinite(latitude)) return 0;
+  const absoluteLatitude = Math.abs(latitude);
+  if (absoluteLatitude < 23.5) return 0;
+  const southern = latitude < 0;
+  if (meteorologicalSeason(date.getMonth(), southern) !== "winter") return 0;
+
+  // Fraction of the three-month winter elapsed, counting from the first
+  // winter month of either hemisphere.
+  const winterMonth = ((date.getMonth() - (southern ? 5 : 11)) + 12) % 12;
+  const dayOfMonth = Math.min(date.getDate() - 1, 29) / 30;
+  const progress = (winterMonth + dayOfMonth) / 3;
+  const peak = 0.55;
+  const seasonalDepth = progress < peak
+    ? lerp(0.3, 1, smoothstep(0, peak, progress))
+    : lerp(1, 0.55, smoothstep(peak, 1, progress));
+
+  const latitudeFactor = lerp(0.4, 1, smoothstep(23.5, 60, absoluteLatitude));
+  const elevationBonus = Number.isFinite(elevationMeters)
+    ? Math.min(0.5, Math.max(0, elevationMeters) / 2500)
+    : 0;
+  return Math.min(1, seasonalDepth * latitudeFactor + elevationBonus);
+}
+
+/** Discrete snow level (0 = none) that identifies a baked impostor atlas. */
+export function snowCoverTier(snowCover: number): number {
+  if (!(snowCover > 0)) return 0;
+  return Math.max(1, Math.min(SNOW_COVER_TIERS, Math.round(snowCover * SNOW_COVER_TIERS)));
+}
+
+/** Snow depth a model and its impostor both bake for a tier, so the LODs match. */
+export function snowCoverForTier(tier: number): number {
+  return Math.max(0, Math.min(SNOW_COVER_TIERS, tier)) / SNOW_COVER_TIERS;
+}
+
+/**
+ * Density multiplier for grass, flowers, wheat and ferns under snow. A light
+ * dusting leaves them standing with white tips; the raised deep cover of
+ * midwinter hides them entirely.
+ */
+export function groundCoverUnderSnow(snowCover: number | undefined): number {
+  const cover = snowCover ?? 0;
+  return 1 - smoothstep(0.25, 0.6, cover);
 }
 
 const EVERGREEN_SPECIES = new Set<TreeSpecies>([

@@ -37,6 +37,7 @@ async function place(includeFallenLogs, exclude = () => false) {
     modelVariantSeed: 123, seasonalDate: undefined, tileVariantLocation: {lat: 60},
     treeSeasonAt: () => ({key: "summer"}), tileRegion: {key: "region", seed: 789},
     tileLocalVariant: 1, layerSeed: deriveSeed, variantBuckets: new Map(),
+    snowCover: 0, snowCoveredVariant: (variant) => variant,
     includeFallenLogs, FALLEN_LOG_MINIMUM_INTERIOR_DEPTH: 0.7, FALLEN_LOG_CHANCE: 0.25,
     yieldControl: undefined,
   };

@@ -41,6 +41,7 @@ const ACCENT_PALETTES: ReadonlyArray<readonly [Color3, Color3]> = [
 const bushImpostors = createImpostorAssetProvider({
   name: "bushImpostor",
   queryPrefix: "bush-impostor",
+  snowfall: true,
   createSource: (scene, variant) => createBushSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,

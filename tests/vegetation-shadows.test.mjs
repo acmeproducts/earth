@@ -121,7 +121,7 @@ test("softens dense impostor canopies only while writing shadow depth", () => {
   assert.match(impostors, /float alphaChoice = bayer8\(gl_FragCoord\.xy/);
   assert.match(
     impostors,
-    /#else\s+float alphaChoice = bayer4\(gl_FragCoord\.xy/,
+    /#else\s+float alphaChoice = mix\(bayer4\(gl_FragCoord\.xy[\s\S]*?, 0\.5, lodBlend\)/,
   );
 });
 

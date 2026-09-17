@@ -36,6 +36,7 @@ export function rockyBeachRenderedCaptureSize(renderHeight: number): number {
 const rockyBeachImpostors = createImpostorAssetProvider({
   name: "rockyBeachImpostor",
   queryPrefix: "rocky-beach-impostor",
+  snowfall: true,
   createSource: (scene, variant) => createRockyBeachSource(scene, false, variant.seed),
   sourceHeight: SOURCE_HEIGHT,
   captureDiameter: CAPTURE_DIAMETER,

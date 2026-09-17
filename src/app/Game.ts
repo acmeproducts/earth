@@ -17,6 +17,8 @@ import {
   KeyboardEventTypes,
 } from "@babylonjs/core";
 import type { TerrainData } from "../terrain/TerrainData";
+import { pointInRing } from "../core/PlanarGeometry";
+import type { PlannedBuildingSite } from "../roads/RoadAndBuildingPlanner";
 import { enableTerrainCollisions } from "../terrain/TerrainCollision";
 import { prepareSceneForReveal } from "../rendering/SceneReadiness";
 import { loadAntialiasing, saveAntialiasing } from "../rendering/Antialiasing";
@@ -80,16 +82,18 @@ import { StreetLamps } from "../roads/StreetLamps";
 import { LandCoverClass, WorldCover } from "../world/WorldCover";
 import type { LandCoverSampler } from "../world/WorldCover";
 import { disposeTerrainMesh } from "../terrain/TerrainMaterial";
-import { createTerrainMesh as buildTerrainMesh, setTerrainSnowCovered } from "../terrain/TerrainMesh";
+import { createTerrainMesh as buildTerrainMesh, setTerrainSnowCover, terrainSnowCover } from "../terrain/TerrainMesh";
+import { setHierarchySnowCover } from "../rendering/SnowCover";
 import { TerrainSurface } from "../terrain/TerrainSurface";
 import { configureWindSceneScale, setManualWindSpeed } from "../vegetation/Wind";
 import { SolarLighting } from "../sky/SolarLighting";
-import { hasWinterGroundCover, treeSeasonAt } from "../vegetation/TreeSeason";
+import { groundCoverUnderSnow, snowCoverAt, snowCoverTier, treeSeasonAt } from "../vegetation/TreeSeason";
 import { createCloudLayer } from "../sky/CloudImpostors";
 import type { CloudLayer } from "../sky/CloudImpostors";
 import { FpsCounter } from "../diagnostics/FpsCounter";
 import {
   createFrameBudgetYielder,
+  documentIsBackgrounded,
   FrameBudgetYielder,
   waitForNextFrame,
 } from "../diagnostics/FrameBudget";
@@ -226,6 +230,7 @@ export class Game {
   private frameIntervalEstimateMilliseconds = 1000 / 60;
   private frameCallbackEstimateMilliseconds = 0;
   private lastFrameStartMilliseconds?: number;
+  private terrainStreamingTimer?: ReturnType<typeof setInterval>;
   private readonly streamingYielder = createFrameBudgetYielder(() => this.streamingBudgetMilliseconds);
   private cameraTileKey?: string;
   private readonly gridLevel = WORLD_GRID_LEVEL;
@@ -815,6 +820,7 @@ export class Game {
       metersPerUnit,
       landCover,
       yieldControl,
+      snowExclusion: buildingSnowExclusion(roadAndBuildingPlan.buildingSites),
     });
     if (generation !== this.streamingGeneration) {
       disposeTerrainMesh(terrain);
@@ -980,6 +986,7 @@ export class Game {
       preCarvingElevations: record.preCarvingElevations,
       skyReflection: this.solarLighting?.skyReflectionTexture,
       showRoofs: this.sceneSettings.value.showRoofs,
+      snowCover: this.tileSnowCover(terrainData),
       startDisabled,
       planning: record.roadAndBuildingPlan,
       sharedBuildingElevations: this.buildingElevations.forOwner(
@@ -1021,14 +1028,13 @@ export class Game {
       exclusionMask,
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       seasonalDate: this.vegetationDate,
+      snowCover: this.tileSnowCover(terrainData),
       yieldControl,
       impostorCaptureMode: onProgress ? "fast" as const : "cooperative" as const,
       startDisabled,
     };
-    const winterGroundCover = hasWinterGroundCover(
-      this.vegetationDate,
-      (terrainData.bounds.latNorth + terrainData.bounds.latSouth) / 2,
-    );
+    // Low ground cover disappears under the raised deep snow of midwinter.
+    const snowFreeGroundCover = groundCoverUnderSnow(fieldOptions.snowCover);
     const actorMix = proceduralActorMixAtTile(record.id, this.worldSeed);
 
     const fields: { kind: VegetationFieldKind; label: string; progress: number;
@@ -1056,41 +1062,41 @@ export class Game {
           lakeExclusionMask: record.lakeExclusionMask,
           seed: layerSeed(terrainData.generationSeed, "grass"),
           renderMode: this.vegetationModes.grass,
-          densityScale: () => winterGroundCover ? 0 : actorMix.grass.densityScale,
+          densityScale: () => actorMix.grass.densityScale * snowFreeGroundCover,
         }) },
       { kind: "tallPlantField", label: "Growing wildflowers", progress: 74,
         create: () => createTallPlantField(this.scene, terrainData, {
           ...fieldOptions,
           seed: layerSeed(terrainData.generationSeed, "tallPlants"),
-          densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
+          densityScale: () => actorMix.tallPlants.densityScale * snowFreeGroundCover,
           renderMode: this.vegetationModes.grass,
         }) },
       { kind: "wheatField", label: "Growing wheat", progress: 76,
         create: () => createWheatField(this.scene, terrainData, {
           ...fieldOptions,
           seed: layerSeed(terrainData.generationSeed, "wheat"),
-          densityScale: () => winterGroundCover ? 0 : actorMix.tallPlants.densityScale,
+          densityScale: () => actorMix.tallPlants.densityScale * snowFreeGroundCover,
           renderMode: this.vegetationModes.grass,
         }) },
       { kind: "bushField", label: "Adding bushes", progress: 79,
         create: () => createBushField(this.scene, terrainData, {
           ...fieldOptions,
           seed: layerSeed(terrainData.generationSeed, "bushes"),
-          densityScale: () => winterGroundCover ? 0 : actorMix.bushes.densityScale,
+          densityScale: () => actorMix.bushes.densityScale,
           renderMode: this.vegetationModes.bushes,
         }) },
       { kind: "fernField", label: "Growing undergrowth", progress: 83,
         create: () => createFernField(this.scene, terrainData, {
           ...fieldOptions,
           seed: layerSeed(terrainData.generationSeed, "ferns"),
-          densityScale: () => winterGroundCover ? 0 : actorMix.ferns.densityScale,
+          densityScale: () => actorMix.ferns.densityScale * snowFreeGroundCover,
           renderMode: this.vegetationModes.grass,
         }) },
       { kind: "rockyBeachField", label: "Covering rocky beaches", progress: 85,
         create: () => createRockyBeachField(this.scene, terrainData, {
           ...fieldOptions,
           seed: layerSeed(terrainData.generationSeed, "rockyBeaches"),
-          densityScale: () => winterGroundCover ? 0 : actorMix.rocks.densityScale,
+          densityScale: () => actorMix.rocks.densityScale,
           renderMode: this.vegetationModes.grass,
         }) },
     ];
@@ -1169,6 +1175,7 @@ export class Game {
     const mapRoot = mapFeatures.root;
     this.layerFades.begin(0, 1, (fade) => setMapLayerFade(mapRoot, fade), undefined, true);
     record.mapFeatures = mapFeatures.root;
+    setHierarchySnowCover(mapFeatures.root, this.tileSnowCover(record.terrainData), this.terrainMetersPerUnit ?? 1);
     record.barrierField = plotBoundaryLayer.hedgeField;
     if (record.farBuildings) {
       const farBuildings = record.farBuildings;
@@ -1244,6 +1251,7 @@ export class Game {
       densityScale: () => actorMix.trees.densityScale,
       modelVariantSeed: layerSeed(this.worldSeed, "proceduralModels"),
       seasonalDate: this.vegetationDate,
+      snowCover: this.tileSnowCover(record.terrainData),
       landCover: placementLandCover,
       exclusionMask,
       // Match detailed-tree placement; only the representation changes with range.
@@ -1287,6 +1295,7 @@ export class Game {
         meshDepth: record.meshDepth,
         metersPerUnit,
         showRoofs: this.sceneSettings.value.showRoofs,
+        snowCover: this.tileSnowCover(record.terrainData),
         startDisabled: true,
         planning: record.roadAndBuildingPlan,
       },
@@ -1299,6 +1308,7 @@ export class Game {
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
     record.farBuildings = layer.root;
+    setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), metersPerUnit);
     if (record.detailed) {
       layer.root.setEnabled(false);
     } else {
@@ -1338,6 +1348,7 @@ export class Game {
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
     record.farRoads = layer.root;
+    setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), this.terrainMetersPerUnit ?? 1);
     if (record.detailed) {
       layer.root.setEnabled(false);
     } else {
@@ -1862,27 +1873,36 @@ export class Game {
   private refreshSeasonalScenery(): void {
     const date = this.solarLighting?.currentDate;
     if (!date) return;
-    // All seasonal appearances (including southern seasons and snow) change
-    // on these same quarter boundaries. Time-only edits need no geometry work.
+    // Atlases use snow tiers, but low vegetation density follows the exact
+    // depth. Both must be checked before keeping the generated fields.
     const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").season;
     const nextSeason = treeSeasonAt(date, 45, "oak").season;
     this.vegetationDate = date;
-    if (previousSeason !== nextSeason) {
-      for (const record of this.tiles.values()) {
-        const latitude = (record.terrainData.bounds.latNorth + record.terrainData.bounds.latSouth) / 2;
-        const snowCovered = hasWinterGroundCover(date, latitude);
-        setTerrainSnowCovered(this.scene, record.terrain, snowCovered);
-        record.rockField?.setSnowCovered(snowCovered);
-        if (snowCovered) {
-          // Old summer undergrowth must not obscure the newly visible snow
-          // while replacement tree atlases are being generated.
-          for (const kind of ["grassField", "tallPlantField", "wheatField", "fernField"] as const) {
-            record[kind]?.root.setEnabled(false);
-          }
-        }
+    let rebuildScenery = previousSeason !== nextSeason;
+    const metersPerUnit = this.terrainMetersPerUnit ?? 1;
+    for (const record of this.tiles.values()) {
+      const snowCover = this.tileSnowCover(record.terrainData);
+      const previousSnowCover = terrainSnowCover(record.terrain);
+      if (snowCoverTier(previousSnowCover) !== snowCoverTier(snowCover) ||
+          groundCoverUnderSnow(previousSnowCover) !== groundCoverUnderSnow(snowCover)) {
+        rebuildScenery = true;
       }
-      this.invalidateScenery();
+      setTerrainSnowCover(record.terrain, snowCover);
+      record.rockField?.setSnowCover(snowCover);
+      for (const layer of [record.mapFeatures, record.farBuildings, record.farRoads]) {
+        if (layer) setHierarchySnowCover(layer, snowCover, metersPerUnit);
+      }
     }
+    if (rebuildScenery) this.invalidateScenery();
+  }
+
+  /** Snow depth on a tile from the scenery date, its latitude and mean elevation. */
+  private tileSnowCover(terrain: TerrainData): number {
+    return snowCoverAt(
+      this.vegetationDate,
+      (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
+      meanElevation(terrain),
+    );
   }
 
   private changeClockMode(mode: ClockMode): void {
@@ -2114,10 +2134,10 @@ export class Game {
     this.playerControls?.resetVerticalMotion();
   }
 
-  private updateTerrainStreaming(): void {
+  private updateTerrainStreaming(force = false): void {
     if (this.reloadingLocation) return;
     const now = performance.now();
-    if (now - this.lastTerrainStreamingCheckMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) {
+    if (!force && now - this.lastTerrainStreamingCheckMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) {
       return;
     }
     this.lastTerrainStreamingCheckMilliseconds = now;
@@ -2199,7 +2219,9 @@ export class Game {
       if (this.activeDetailBuilds.size > 0) break;
       if (item.detail ? this.activeTileBuilds.size > 0
         : this.activeTileBuilds.size >= MAX_CONCURRENT_FAR_TILE_BUILDS) break;
-      void this.streamTile(item.id, item.detail, generation).catch((error: unknown) => {
+      void this.streamTile(item.id, item.detail, generation).then(() => {
+        this.continueTerrainStreaming(generation);
+      }).catch((error: unknown) => {
         console.error(`Failed to stream tile ${worldTileKey(item.id)}.`, error);
       });
     }
@@ -2207,7 +2229,27 @@ export class Game {
     this.evictCooledTiles(now, center, detailWindow);
   }
 
+  private continueTerrainStreaming(generation: number): void {
+    if (generation !== this.streamingGeneration || this.terrainStreamingTimer === undefined) return;
+    if (!documentIsBackgrounded() && this.lastFrameStartMilliseconds !== undefined &&
+        performance.now() - this.lastFrameStartMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) return;
+    // Hidden-tab timers may fire only once a minute. A completed build releases
+    // capacity immediately, so drain the queue from that event instead.
+    this.updateTerrainStreaming(true);
+    this.layerFades.update();
+  }
+
   run(): void {
+    // Rendering can stop in an occluded window. Keep filling the current tile
+    // window and settling its transitions even when no render callback arrives.
+    if (this.terrainStreamingTimer === undefined) {
+      this.terrainStreamingTimer = setInterval(() => {
+        if (this.lastFrameStartMilliseconds !== undefined &&
+            performance.now() - this.lastFrameStartMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) return;
+        this.updateTerrainStreaming();
+        this.layerFades.update();
+      }, TERRAIN_STREAMING_CHECK_INTERVAL_MS);
+    }
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
       if (this.lastFrameStartMilliseconds !== undefined) {
@@ -2256,6 +2298,10 @@ export class Game {
   }
 
   dispose(): void {
+    if (this.terrainStreamingTimer !== undefined) {
+      clearInterval(this.terrainStreamingTimer);
+      this.terrainStreamingTimer = undefined;
+    }
     this.streamingGeneration++;
     this.roadPlanningWorker.dispose();
     this.lakeCollectionWorker.dispose();
@@ -2415,18 +2461,42 @@ export class Game {
       landCover?: LandCoverSampler;
       yieldControl?: FrameBudgetYielder;
       trace?: StreamingTrace;
+      snowExclusion?: (x: number, z: number) => boolean;
     },
   ): Promise<Mesh> {
     return buildTerrainMesh(this.scene, name, terrain, {
       ...options,
       worldSeed: this.worldSeed,
-      snowCovered: hasWinterGroundCover(
-        this.vegetationDate,
-        (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
-      ),
+      snowCover: this.tileSnowCover(terrain),
     });
   }
 
+}
+
+/** Ground under a planned building keeps no snow; the raised layer would show through its floors. */
+function buildingSnowExclusion(
+  sites: readonly PlannedBuildingSite[],
+): ((x: number, z: number) => boolean) | undefined {
+  if (sites.length === 0) return undefined;
+  return (x, z) => sites.some((site) => (
+    pointInRing({ x, z }, site.outline) && !site.holes.some((hole) => pointInRing({ x, z }, hole))
+  ));
+}
+
+/** Mean elevation of a tile's raster, sampled coarsely; it only nudges snow depth. */
+function meanElevation(terrain: TerrainData): number {
+  const { elevations } = terrain;
+  if (elevations.length === 0) return 0;
+  const step = Math.max(1, Math.floor(elevations.length / 4096));
+  let sum = 0;
+  let count = 0;
+  for (let index = 0; index < elevations.length; index += step) {
+    const elevation = elevations[index];
+    if (!Number.isFinite(elevation)) continue;
+    sum += elevation;
+    count++;
+  }
+  return count === 0 ? 0 : sum / count;
 }
 
 function queryNumber(

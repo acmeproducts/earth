@@ -23,6 +23,7 @@ import type { LandCoverClass, LandCoverSampler } from "../world/WorldCover";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import type { FrameBudgetYielder } from "../diagnostics/FrameBudget";
 import { attachTerrainReliefNormals } from "./TerrainReliefNormals";
+import { setMeshSnowCover, SNOW_MASK_KIND } from "../rendering/SnowCover";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 
 const GROUND_COVER_BLEND_METERS = 12;
@@ -38,7 +39,10 @@ export interface TerrainMeshOptions {
   landCover?: LandCoverSampler;
   yieldControl?: FrameBudgetYielder;
   trace?: StreamingTrace;
-  snowCovered?: boolean;
+  /** Snow depth in [0, 1] lying on the tile; zero leaves the ground bare. */
+  snowCover?: number;
+  /** Ground that never takes snow, such as the floor area under a building. */
+  snowExclusion?: (x: number, z: number) => boolean;
   /** World-level seed for the ground color bands, not the per-tile seed. */
   worldSeed?: number;
 }
@@ -46,7 +50,8 @@ export interface TerrainMeshOptions {
 interface TerrainMeshMetadata {
   surfaceColors?: Float32Array;
   skirt?: Mesh;
-  snowCovered: boolean;
+  snowCover: number;
+  metersPerUnit: number;
 }
 
 /** Builds the renderable mesh and material for one processed terrain tile. */
@@ -64,7 +69,8 @@ export async function createTerrainMesh(
     landCover,
     yieldControl,
     trace,
-    snowCovered = false,
+    snowCover = 0,
+    snowExclusion,
     worldSeed = DEFAULT_WORLD_SEED,
   } = options;
 
@@ -205,6 +211,16 @@ export async function createTerrainMesh(
   await yieldControl?.();
   trace?.stage("terrain position upload and bounds", "synchronous");
   ground.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+  if (snowExclusion) {
+    // Ground under a building neither whitens nor rises: the raised snow
+    // surface would otherwise show through the floors indoors.
+    trace?.stage("terrain snow mask", "synchronous");
+    const snowMask = new Float32Array(positions.length / 3);
+    for (let vertex = 0; vertex < snowMask.length; vertex++) {
+      snowMask[vertex] = snowExclusion(positions[vertex * 3], positions[vertex * 3 + 2]) ? 0 : 1;
+    }
+    ground.setVerticesData(SNOW_MASK_KIND, snowMask, false, 1);
+  }
   trace?.stage("terrain normal upload frame wait");
   await yieldControl?.();
   trace?.stage("terrain normal upload", "synchronous");
@@ -240,7 +256,8 @@ export async function createTerrainMesh(
   ground.metadata = {
     surfaceColors,
     skirt,
-    snowCovered,
+    snowCover,
+    metersPerUnit,
   } satisfies TerrainMeshMetadata;
   ground.freezeWorldMatrix();
 
@@ -258,12 +275,23 @@ export async function createTerrainMesh(
   return ground;
 }
 
-/** Switches snow on an existing tile without rebuilding or fetching terrain. */
-export function setTerrainSnowCovered(scene: Scene, terrain: Mesh, snowCovered: boolean): void {
+/** Changes the snow depth on an existing tile without rebuilding or fetching terrain. */
+export function setTerrainSnowCover(terrain: Mesh, snowCover: number): void {
   const metadata = terrain.metadata as TerrainMeshMetadata | null;
-  if (!metadata || metadata.snowCovered === snowCovered) return;
-  metadata.snowCovered = snowCovered;
-  applyDefaultTerrainMaterial(scene, terrain);
+  if (!metadata || metadata.snowCover === snowCover) return;
+  metadata.snowCover = snowCover;
+  applyTerrainSnowCover(terrain, metadata);
+}
+
+/** Snow depth currently lying on a terrain tile. */
+export function terrainSnowCover(terrain: Mesh): number {
+  return (terrain.metadata as TerrainMeshMetadata | null)?.snowCover ?? 0;
+}
+
+function applyTerrainSnowCover(terrain: Mesh, metadata: TerrainMeshMetadata): void {
+  const metersPerUnit = metadata.metersPerUnit || 1;
+  setMeshSnowCover(terrain, metadata.snowCover, metersPerUnit);
+  if (metadata.skirt) setMeshSnowCover(metadata.skirt, metadata.snowCover, metersPerUnit);
 }
 
 /** Rebuilds a terrain tile's shared material from its mesh metadata. */
@@ -271,8 +299,7 @@ export function applyDefaultTerrainMaterial(scene: Scene, terrain: Mesh): void {
   disposeTerrainAppearance(terrain);
   const metadata = terrain.metadata as TerrainMeshMetadata | null;
   const colors = metadata?.surfaceColors;
-  const snowCovered = Boolean(metadata?.snowCovered);
-  if (colors && !snowCovered) {
+  if (colors) {
     terrain.setVerticesData(VertexBuffer.ColorKind, colors);
     terrain.useVertexColors = true;
   } else {
@@ -281,14 +308,14 @@ export function applyDefaultTerrainMaterial(scene: Scene, terrain: Mesh): void {
   }
   const material = createTerrainMaterial(scene, {
     usesLandCoverTint: Boolean(colors),
-    snowCovered,
   });
   terrain.material = material;
   const skirt = metadata?.skirt;
   if (skirt) {
     skirt.material = material;
-    skirt.useVertexColors = Boolean(colors) && !snowCovered;
+    skirt.useVertexColors = Boolean(colors);
   }
+  if (metadata) applyTerrainSnowCover(terrain, metadata);
 }
 
 function disposeTerrainAppearance(terrain: Mesh): void {

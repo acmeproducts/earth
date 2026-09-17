@@ -9,6 +9,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { sampleElevation } from "../world/Geo";
+import { SnowCoverPlugin } from "../rendering/SnowCover";
 import type { PlannedStreetLamp } from "./RoadAndBuildingPlanner";
 import type { TerrainData } from "../terrain/TerrainData";
 
@@ -86,6 +87,10 @@ function createLampMeshes(
   const shadeMaterial = new StandardMaterial("streetLampShadeMaterial", scene);
   shadeMaterial.diffuseColor = new Color3(0.045, 0.05, 0.05);
   shadeMaterial.specularColor = new Color3(0.1, 0.11, 0.11);
+  // A cap of snow gathers on the fixture tops in winter.
+  new SnowCoverPlugin(poleMaterial);
+  new SnowCoverPlugin(headMaterial);
+  new SnowCoverPlugin(shadeMaterial);
   pole.material = poleMaterial;
   head.material = headMaterial;
   shade.material = shadeMaterial;
