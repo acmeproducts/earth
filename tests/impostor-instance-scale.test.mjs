@@ -34,7 +34,9 @@ test("the ellipsoid depth proxy converts its local hit back to world depth", () 
 
 test("fog and distance fades still measure world distance", () => {
   assert.match(treeSource, /float fog = smoothstep\(fogStart, fogEnd, length\(vViewDirection\)\);/);
-  assert.match(treeSource, /distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/);
+  const dropoutSource = readFileSync(new URL("../src/vegetation/DistanceDropout.ts", import.meta.url), "utf8");
+  assert.match(dropoutSource, /distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/);
+  assert.match(treeSource, /distanceDropoutScale\(instanceOrigin, cameraPosition, vDistanceFade\)/);
 });
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

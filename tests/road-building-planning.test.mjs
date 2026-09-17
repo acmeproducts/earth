@@ -651,3 +651,21 @@ test("a dirt track keeps a dirt junction where a footpath joins it", () => {
   assert.ok(disc);
   assert.equal(disc.visualStyle, "dirt");
 });
+
+test("far tiles can skip shoulder beds without changing carriageways, sites or plots", () => {
+  const roads = [
+    { id: "east-west", paths: [[{ x: -5, z: 0 }, { x: 5, z: 0 }]], appearance },
+    { id: "north-south", paths: [[{ x: 0, z: -5 }, { x: 0, z: 5 }]], appearance },
+  ];
+  const buildings = [{ id: "house", outline: [
+    { x: 2, z: 2 }, { x: 4, z: 2 }, { x: 4, z: 4 }, { x: 2, z: 4 },
+  ] }];
+  const full = planRoadsAndBuildings(roads, buildings, options);
+  const far = planRoadsAndBuildings(roads, buildings, { ...options, includeShoulders: false });
+  assert.ok(full.shoulders.length > 0);
+  assert.deepEqual(far.shoulders, []);
+  assert.deepEqual(far.roads, full.roads);
+  assert.deepEqual(far.buildingSites, full.buildingSites);
+  assert.deepEqual(far.plots, full.plots);
+  assert.deepEqual(far.plotBoundaries, full.plotBoundaries);
+});

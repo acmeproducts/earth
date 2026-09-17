@@ -46,12 +46,17 @@ export function averagePoint(points: readonly PlanarPoint[]): PlanarPoint {
 }
 
 export function pointBounds(points: readonly PlanarPoint[]): PlanarBounds {
-  return points.reduce((result, point) => ({
-    minX: Math.min(result.minX, point.x),
-    maxX: Math.max(result.maxX, point.x),
-    minZ: Math.min(result.minZ, point.z),
-    maxZ: Math.max(result.maxZ, point.z),
-  }), { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const point of points) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.z < minZ) minZ = point.z;
+    if (point.z > maxZ) maxZ = point.z;
+  }
+  return { minX, maxX, minZ, maxZ };
 }
 
 export function boundsOverlap(a: readonly PlanarPoint[], b: readonly PlanarPoint[]): boolean {
@@ -62,7 +67,15 @@ export function boundsOverlap(a: readonly PlanarPoint[], b: readonly PlanarPoint
 }
 
 export function samePoint(first: PlanarPoint, second: PlanarPoint): boolean {
-  return Math.hypot(first.x - second.x, first.z - second.z) <= 1e-8;
+  const dx = first.x - second.x;
+  const dz = first.z - second.z;
+  return dx * dx + dz * dz <= 1e-16;
+}
+
+/** Axis-aligned bounds overlap with the same tolerance as boundsOverlap. */
+export function boundsIntersect(left: PlanarBounds, right: PlanarBounds): boolean {
+  return left.minX < right.maxX - 1e-9 && left.maxX > right.minX + 1e-9 &&
+    left.minZ < right.maxZ - 1e-9 && left.maxZ > right.minZ + 1e-9;
 }
 
 export function pointInRing(point: PlanarPoint, polygon: readonly PlanarPoint[]): boolean {
@@ -100,12 +113,9 @@ export function deduplicateRing(points: readonly PlanarPoint[]): PlanarPoint[] {
   const result: PlanarPoint[] = [];
   for (const point of points) {
     const previous = result[result.length - 1];
-    if (!previous || Math.hypot(point.x - previous.x, point.z - previous.z) > 1e-8) result.push(point);
+    if (!previous || !samePoint(point, previous)) result.push(point);
   }
-  if (result.length > 1 && Math.hypot(
-    result[0].x - result[result.length - 1].x,
-    result[0].z - result[result.length - 1].z,
-  ) <= 1e-8) result.pop();
+  if (result.length > 1 && samePoint(result[0], result[result.length - 1])) result.pop();
   return result;
 }
 
@@ -166,6 +176,18 @@ export function clipToBounds(
   polygon: readonly PlanarPoint[],
   bounds: PlanarBounds,
 ): PlanarPoint[] {
+  // Most pieces lie fully inside the tile; skip four half-plane passes then.
+  let inside = true;
+  for (const point of polygon) {
+    if (point.x < bounds.minX || point.x > bounds.maxX || point.z < bounds.minZ || point.z > bounds.maxZ) {
+      inside = false;
+      break;
+    }
+  }
+  if (inside) {
+    const deduplicated = deduplicateRing(polygon);
+    return deduplicated.length === polygon.length ? (polygon as PlanarPoint[]) : deduplicated;
+  }
   let result = [...polygon];
   const edges: Array<[PlanarPoint, PlanarPoint]> = [
     [{ x: bounds.minX, z: bounds.minZ }, { x: bounds.maxX, z: bounds.minZ }],

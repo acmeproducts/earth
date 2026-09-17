@@ -415,7 +415,7 @@ export class OpenStreetMap {
   static prepareRoadAndBuildingInputs(
     tiles: readonly MapTile[],
     terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit">,
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth" | "metersPerUnit"> & { includeShoulders?: boolean },
     trace?: StreamingTrace,
   ): RoadPlanningInput {
     trace?.stage("road source projection and clipping", "synchronous");
@@ -444,6 +444,7 @@ export class OpenStreetMap {
     }));
     return { roads, buildings, options: {
       meshWidth: options.meshWidth, meshDepth: options.meshDepth, metersPerUnit: options.metersPerUnit,
+      includeShoulders: options.includeShoulders ?? true,
     } };
   }
 
@@ -489,7 +490,7 @@ export class OpenStreetMap {
   static prepareLakeCollection(
     tiles: readonly MapTile[],
     terrain: TerrainData,
-    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth"> & { clipPadding?: number },
+    options: Pick<MapLayerOptions, "meshWidth" | "meshDepth"> & { clipPadding?: number; withoutObstacles?: boolean },
   ): LakeCollectionInput {
     const candidates: LakeCollectionInput["candidates"][number][] = [];
     const clipPadding = Math.max(0, options.clipPadding ?? 0);
@@ -523,17 +524,18 @@ export class OpenStreetMap {
     const waterBounds = candidates.map(({ water }) => pointBounds(water.outline));
     const metersPerUnit = terrain.groundWidthMeters / options.meshWidth;
     // Most terrain tiles contain no lake. Avoid decoding/projecting obstacles at all for those tiles.
+    const withObstacles = candidates.length > 0 && !options.withoutObstacles;
     return {
       candidates, cellSize, metersPerUnit,
       // The worker subtracts footprints cumulatively, so overlaps and duplicates
       // already count once. Composing entire provider tiles here adds a long
       // main-thread polygon union (and building-use inference) for no benefit.
-      buildings: candidates.length ? tiles.flatMap((tile) => lakeBuildingFootprints(tile)
+      buildings: withObstacles ? tiles.flatMap((tile) => lakeBuildingFootprints(tile)
         .filter((polygon) => sourceOverlapsWater(polygon[0], project, waterBounds))
         .map((polygon) => ({
         outline: polygon[0].map(project), holes: polygon.slice(1).map((hole) => hole.map(project)),
       }))) : [],
-      roads: candidates.length ? tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
+      roads: withObstacles ? tiles.flatMap((tile) => roadSources(tile).flatMap((source) => {
         const appearance = planRoad(source.properties);
         if (!appearance || appearance.structure !== "surface" || appearance.layer !== 0) return [];
         const halfWidth = appearance.widthMeters / (2 * metersPerUnit);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { readFileSync } from "node:fs";
-import { prepareLakeCandidate, collectPreparedLakePolygons } from "../src/water/LakeCollectionTask.ts";
+import { prepareLakeCandidate, collectPreparedLakePolygons, resetLakeVerdictCache } from "../src/water/LakeCollectionTask.ts";
 import { createWaterBuildingOverlapFilter } from "../src/water/WaterBuildingOverlap.ts";
 import { createWaterRoadOverlapFilter } from "../src/water/WaterRoadOverlap.ts";
 import { clipToBounds, pointInRing } from "../src/core/PlanarGeometry.ts";
@@ -15,6 +15,8 @@ const inputFor = (waters, buildings = [], roads = []) => ({
   candidates: waters.map((water) => prepareLakeCandidate(water, bounds)).filter(Boolean),
   buildings, roads, metersPerUnit: 1, cellSize: 2,
 });
+// Verdicts are cached per water source across calls; tests reuse source ids.
+const collect = (input) => { resetLakeVerdictCache(); return collectPreparedLakePolygons(input); };
 
 // Original ordering: build indexes, reject whole provider polygons, then clip.
 function reference(waters, input) {
@@ -41,10 +43,23 @@ test("overlap rejection still uses full provider polygons, including obstacles o
   const water = box(0, 0, 100, 10);
   const input = inputFor([water], [box(20, 0, 30, 10)]);
   assert.equal(input.candidates[0].water, water);
-  assert.deepEqual(collectPreparedLakePolygons(input), []);
+  assert.deepEqual(collect(input), []);
   // Conversely, a small clipped fragment must not inflate the overlap fraction.
   const retained = inputFor([water], [box(0, 0, 5, 10)]);
-  assert.equal(collectPreparedLakePolygons(retained).length, 1);
+  assert.equal(collect(retained).length, 1);
+});
+
+test("verdicts are reused per water source until the cache is reset", () => {
+  const water = box(0, 0, 100, 10);
+  assert.deepEqual(collect(inputFor([water], [box(20, 0, 30, 10)])), []);
+  // Same source id, obstacles now unavailable: the cached rejection still applies
+  // and neither obstacle index is rebuilt.
+  const cached = { candidates: inputFor([water]).candidates, metersPerUnit: 1, cellSize: 2,
+    get buildings() { throw new Error("unnecessary buildings"); },
+    get roads() { throw new Error("unnecessary roads"); } };
+  assert.deepEqual(collectPreparedLakePolygons(cached), []);
+  resetLakeVerdictCache();
+  assert.equal(collectPreparedLakePolygons(inputFor([water])).length, 1);
 });
 
 test("culling preserves original output for holes, duplicates, winding and road structures", () => {
@@ -57,7 +72,7 @@ test("culling preserves original output for holes, duplicates, winding and road 
     const waters = [lake, lake, box(30, 30, 10, 10), box(6, 6, 2, 2, "pond")];
     const input = inputFor(waters, [box(2.5, 2.5, 1, 1)], [{ appearance: { ...appearance, structure },
       paths: [[{ x: -5, z: 7 }, { x: 15, z: 7 }]] }]);
-    assert.deepEqual(collectPreparedLakePolygons(input), reference(waters, input));
+    assert.deepEqual(collect(input), reference(waters, input));
   }
 });
 
@@ -78,7 +93,9 @@ test("lake worker returns the reference geometry through real structured cloning
 
 test("game waits for lake work and cancels it wherever road work is cancelled", () => {
   const source = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
-  assert.match(source, /await Promise\.all\(\[\s*this\.lakeCollectionWorker\.collect/);
+  // One worker pass on the wider context input decides both lake lists.
+  assert.match(source, /lakeSources = await this\.lakeCollectionWorker\.collect\(contextLakeInput/);
+  assert.doesNotMatch(source, /lakeCollectionWorker\.collect\(surfaceLakeInput/);
   assert.match(source, /generation !== this\.streamingGeneration\) return undefined;\s*trace\?\.stage\("lake terrain shaping"\)/);
   assert.equal((source.match(/this\.lakeCollectionWorker\.reset\(\)/g) ?? []).length, 2);
   assert.match(source, /this\.lakeCollectionWorker\.dispose\(\)/);

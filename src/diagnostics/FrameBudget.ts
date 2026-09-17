@@ -111,9 +111,13 @@ export function waitForNextFrame(): Promise<void> {
   });
 }
 
-/** Cooperatively splits CPU-heavy scene construction across animation frames. */
+/**
+ * Cooperatively splits CPU-heavy scene construction across animation frames.
+ * The budget may be a function so callers can spend spare frame time on
+ * streaming while frames are cheap and fall back to a small slice otherwise.
+ */
 export function createFrameBudgetYielder(
-  budgetMilliseconds = DEFAULT_BUDGET_MILLISECONDS,
+  budget: number | (() => number) = DEFAULT_BUDGET_MILLISECONDS,
 ): FrameBudgetYielder {
   let frameStart = performance.now();
 
@@ -122,10 +126,11 @@ export function createFrameBudgetYielder(
     frameStart = performance.now();
   };
   const yieldIfNeeded = async (): Promise<void> => {
-    const budget = documentIsBackgrounded()
+    const budgetMilliseconds = typeof budget === "function" ? budget() : budget;
+    const allowed = documentIsBackgrounded()
       ? Math.max(budgetMilliseconds, BACKGROUND_BUDGET_MILLISECONDS)
       : budgetMilliseconds;
-    if (performance.now() - frameStart < budget) return;
+    if (performance.now() - frameStart < allowed) return;
     await nextFrame();
   };
 

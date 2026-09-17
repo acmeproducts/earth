@@ -20,7 +20,6 @@ import {
 } from "./TerrainStitching";
 import { landCoverSurfaceColor } from "../world/WorldCover";
 import type { LandCoverClass, LandCoverSampler } from "../world/WorldCover";
-import { yieldToNextFrame } from "../diagnostics/FrameBudget";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import type { FrameBudgetYielder } from "../diagnostics/FrameBudget";
 import { attachTerrainReliefNormals } from "./TerrainReliefNormals";
@@ -70,9 +69,10 @@ export async function createTerrainMesh(
   } = options;
 
   // Ground creation allocates and uploads the initial flat vertex buffers.
-  // Give it a fresh post-render slice when this is a streamed tile.
+  // Each step below is well under a millisecond for far tiles, so only budget
+  // exhaustion yields a frame: forced frame waits cost far more than the work.
   trace?.stage("ground creation frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("ground creation and initial buffers", "synchronous");
   const ground = MeshBuilder.CreateGround(
     name,
@@ -196,21 +196,21 @@ export async function createTerrainMesh(
   }
 
   trace?.stage("terrain normals frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("terrain normal computation", "synchronous");
   const normals = new Float32Array(positions.length);
   VertexData.ComputeNormals(positions, indices, normals);
   // Upload positions before normals so Babylon refreshes the formerly flat bounds.
   trace?.stage("terrain position upload frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("terrain position upload and bounds", "synchronous");
   ground.updateVerticesData(VertexBuffer.PositionKind, positions, true);
   trace?.stage("terrain normal upload frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("terrain normal upload", "synchronous");
   ground.updateVerticesData(VertexBuffer.NormalKind, normals);
   trace?.stage("terrain UV upload frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("terrain UV upload", "synchronous");
   ground.updateVerticesData(VertexBuffer.UVKind, uvs);
 
@@ -245,7 +245,7 @@ export async function createTerrainMesh(
   ground.freezeWorldMatrix();
 
   trace?.stage("terrain material frame wait");
-  await yieldToNextFrame(yieldControl);
+  await yieldControl?.();
   trace?.stage("terrain material and textures", "synchronous");
   applyDefaultTerrainMaterial(scene, ground);
   trace?.stage("terrain relief normal attachment", "synchronous");

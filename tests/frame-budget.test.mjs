@@ -127,6 +127,35 @@ test("hidden documents spend a longer slice between yields", async () => {
   }
 });
 
+test("a budget function is consulted at every yield so slices can adapt per frame", async () => {
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  let animationCallback;
+  let animationRequests = 0;
+  globalThis.requestAnimationFrame = (callback) => {
+    animationRequests++;
+    animationCallback = callback;
+    return 1;
+  };
+  const documentStub = stubDocument(false);
+
+  try {
+    let budget = 8;
+    const yielder = createFrameBudgetYielder(() => budget);
+    burnMilliseconds(4);
+    await yielder();
+    assert.equal(animationRequests, 0, "a 4ms slice fits a generous frame");
+
+    budget = 2;
+    const pending = yielder();
+    assert.equal(animationRequests, 1, "the same elapsed slice overruns once the budget shrinks");
+    animationCallback(0);
+    await pending;
+  } finally {
+    documentStub.restore();
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
+});
+
 test("hiding the tab releases work already waiting on an animation frame", async () => {
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   globalThis.requestAnimationFrame = () => 1;

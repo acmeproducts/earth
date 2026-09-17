@@ -48,15 +48,25 @@ test("distant grass fades according to the active full-detail distance", () => {
     impostorSource,
     /distanceGroundColor \* vInstanceColor,[\s\S]*?mix\(groundColorBlend, distanceGroundBlend, 1\.0 - distanceFade\)/,
   );
-  // Far grass fades as plain translucency per instance instead of dissolving
-  // through a screen-space dither, so no fixed dot pattern is left behind.
+  // Far grass thins by shrinking and dropping whole opaque clumps in a stable
+  // per-instance order. Neither translucency nor a screen-space dither is
+  // involved, so nothing behind a clump ever shows through it.
+  const dropoutSource = readFileSync(new URL("../src/vegetation/DistanceDropout.ts", import.meta.url), "utf8");
   assert.match(
-    impostorSource,
-    /vDistanceFade = 1\.0 - smoothstep\(\s*distanceFadeNear,\s*distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/,
+    dropoutSource,
+    /survival = 1\.0 - smoothstep\(\s*distanceFadeNear,\s*distanceFadeFar,\s*length\(cameraPosition - instanceOrigin\)/,
   );
-  assert.match(impostorSource, /gl_FragColor = vec4\([\s\S]*?, distanceFade\);/);
+  assert.match(dropoutSource, /distanceDropoutHash\(instanceOrigin\.xz\)/);
+  assert.match(impostorSource, /distanceDropoutScale\(instanceOrigin, cameraPosition, vDistanceFade\)/);
+  assert.match(impostorSource, /finalWorld\[0\]\.xyz \*= dropoutScale;/);
+  assert.match(impostorSource, /gl_FragColor = vec4\([\s\S]*?, 1\.0\);/);
   assert.doesNotMatch(impostorSource, /bayer8\([\s\S]*?\) >= distanceFade\) discard/);
-  assert.match(fieldSource, /material\.options\.needAlphaBlending = true;[\s\S]*?material\.forceDepthWrite = true;/);
+  assert.doesNotMatch(impostorSource, /\* distanceFade;/);
+  assert.doesNotMatch(fieldSource, /needAlphaBlending = true/);
+  // The live model shares the threshold so both LODs of a clump drop together.
+  assert.match(modelSource, /distanceDropoutScale\(finalWorld\[3\]\.xyz, cameraPosition, dropoutSurvival\)/);
+  assert.match(modelSource, /\.\.\.DISTANCE_DROPOUT_UNIFORMS/);
+  assert.match(fieldSource, /configureVegetationMaterials\(\[grass, grassModel\], \{[\s\S]*?distanceFadeNear: fade\.near/);
   assert.match(modelSource, /distanceGroundColor \* vInstanceColor/);
 });
 

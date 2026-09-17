@@ -43,6 +43,11 @@ function recordStage(entry: StageTiming): void {
   }
   const category = entry.executionThread === "worker" ? `worker.stage.${entry.stage}` : `streaming.stage.${entry.stage}`;
   creationStats.record(`${category}.ms`, entry.durationMilliseconds);
+  if (entry.executionThread === "worker" && entry.label.startsWith("tile=")) accumulateTileStage(entry, "worker");
+  // Tree fields and atlas captures trace themselves; their stages nest inside
+  // the tile's tree stages.
+  else if (entry.executionThread === "main" &&
+    (entry.label.startsWith("trees ") || entry.label.startsWith("impostor "))) accumulateTileStage(entry, "nested");
   if (entry.timingKind === "synchronous" && entry.durationMilliseconds > SLOW_OPERATION_THRESHOLD_MS) {
     if (slowHistory.length < SLOW_HISTORY_SIZE) slowHistory.push(entry);
     else {
@@ -74,6 +79,8 @@ export class StreamingTrace {
   private finished = false;
   private readonly label: string;
   private timingKind: StageTiming["timingKind"];
+  private readonly isTile: boolean;
+  private readonly ownStages: StageTiming[] = [];
 
   constructor(
     label: string,
@@ -83,6 +90,7 @@ export class StreamingTrace {
     this.label = label;
     this.timingKind = timingKind;
     this.stageName = stageName;
+    this.isTile = label.startsWith("tile=");
     active.set(this.id, this);
   }
 
@@ -104,6 +112,7 @@ export class StreamingTrace {
     if (this.finished) return;
     const entry = this.snapshot(now, true);
     recordStage(entry);
+    if (this.isTile) this.ownStages.push(entry);
     this.stageName = name;
     this.stageStarted = now;
     this.timingKind = timingKind;
@@ -114,7 +123,9 @@ export class StreamingTrace {
     this.stage("finished");
     this.finished = true;
     active.delete(this.id);
-    creationStats.record("streaming.finished.ms", performance.now() - this.started);
+    const total = performance.now() - this.started;
+    creationStats.record("streaming.finished.ms", total);
+    if (this.isTile) recordTileTiming(this.label, total, this.ownStages);
   }
 }
 
@@ -125,4 +136,144 @@ export function traceStreamingSynchronous<T>(label: string, operation: () => T, 
   } finally {
     trace.finish();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tile timing log
+//
+// Every tile build (`tile=<key> detail=<bool>` traces) logs one line with its
+// wall-clock total, the main-thread blocking total, and its costliest stages.
+// The same stages accumulate into a session aggregate so the dominant stage
+// across many tiles can be read at a glance. Stage names are bounded; labels
+// containing tile IDs are never used as keys.
+// ---------------------------------------------------------------------------
+
+export const TILE_TIMING_LOG_ENABLED = true;
+const TILE_LOG_TOP_STAGES = 6;
+const TILE_LOG_MINIMUM_STAGE_MS = 1;
+
+type TileStageKind = StageTiming["timingKind"] | "worker" | "nested";
+
+interface TileStageAggregate {
+  stage: string;
+  timingKind: TileStageKind;
+  tiles: number;
+  totalMilliseconds: number;
+  maximumMilliseconds: number;
+}
+
+interface TileTimingTotals {
+  tiles: number;
+  wallClockMilliseconds: number;
+  synchronousMilliseconds: number;
+  maximumWallClockMilliseconds: number;
+  maximumSynchronousMilliseconds: number;
+}
+
+const tileStageAggregates = new Map<string, TileStageAggregate>();
+const tileTotals: Record<"terrain" | "detail", TileTimingTotals> = {
+  terrain: emptyTotals(),
+  detail: emptyTotals(),
+};
+
+function emptyTotals(): TileTimingTotals {
+  return {
+    tiles: 0, wallClockMilliseconds: 0, synchronousMilliseconds: 0,
+    maximumWallClockMilliseconds: 0, maximumSynchronousMilliseconds: 0,
+  };
+}
+
+/** Stage names may carry counts; collapse them so aggregate keys stay bounded. */
+function normalizeStageName(stage: string): string {
+  return stage.replace(/\d+/g, "*");
+}
+
+function accumulateTileStage(entry: StageTiming, timingKind: TileStageKind): void {
+  const key = `${timingKind}:${normalizeStageName(entry.stage)}`;
+  const aggregate = tileStageAggregates.get(key) ?? {
+    stage: normalizeStageName(entry.stage), timingKind,
+    tiles: 0, totalMilliseconds: 0, maximumMilliseconds: 0,
+  };
+  aggregate.tiles++;
+  aggregate.totalMilliseconds += entry.durationMilliseconds;
+  aggregate.maximumMilliseconds = Math.max(aggregate.maximumMilliseconds, entry.durationMilliseconds);
+  tileStageAggregates.set(key, aggregate);
+}
+
+function recordTileTiming(label: string, totalMilliseconds: number, stages: readonly StageTiming[]): void {
+  const kind = label.includes("detail=true") ? "detail" : "terrain";
+  let synchronous = 0;
+  for (const entry of stages) {
+    if (entry.timingKind === "synchronous") synchronous += entry.durationMilliseconds;
+    accumulateTileStage(entry, entry.timingKind);
+  }
+  const totals = tileTotals[kind];
+  totals.tiles++;
+  totals.wallClockMilliseconds += totalMilliseconds;
+  totals.synchronousMilliseconds += synchronous;
+  totals.maximumWallClockMilliseconds = Math.max(totals.maximumWallClockMilliseconds, totalMilliseconds);
+  totals.maximumSynchronousMilliseconds = Math.max(totals.maximumSynchronousMilliseconds, synchronous);
+
+  if (!TILE_TIMING_LOG_ENABLED) return;
+  const top = [...stages]
+    .filter((entry) => entry.durationMilliseconds >= TILE_LOG_MINIMUM_STAGE_MS)
+    .sort((a, b) => b.durationMilliseconds - a.durationMilliseconds)
+    .slice(0, TILE_LOG_TOP_STAGES)
+    .map((entry) =>
+      `${entry.stage} ${entry.durationMilliseconds.toFixed(0)}${entry.timingKind === "synchronous" ? "s" : ""}`)
+    .join(" | ");
+  console.log(
+    `[Tile timing] ${label} total ${totalMilliseconds.toFixed(0)} ms, ` +
+    `blocking ${synchronous.toFixed(0)} ms, ${stages.length} stages | ${top}`,
+  );
+}
+
+/** Aggregated tile stage costs for the session, sorted by total wall-clock time. */
+export function tileTimingSummary() {
+  const stageRows = [...tileStageAggregates.values()]
+    .sort((a, b) => b.totalMilliseconds - a.totalMilliseconds)
+    .map((aggregate) => ({
+      stage: aggregate.stage,
+      kind: aggregate.timingKind === "synchronous" ? "blocking"
+        : aggregate.timingKind === "worker" ? "worker"
+        : aggregate.timingKind === "nested" ? "nested" : "wall-clock",
+      tiles: aggregate.tiles,
+      totalMs: Number(aggregate.totalMilliseconds.toFixed(1)),
+      averageMs: Number((aggregate.totalMilliseconds / aggregate.tiles).toFixed(1)),
+      maxMs: Number(aggregate.maximumMilliseconds.toFixed(1)),
+    }));
+  const totalsRows = (["terrain", "detail"] as const).map((kind) => {
+    const totals = tileTotals[kind];
+    const divisor = Math.max(1, totals.tiles);
+    return {
+      kind,
+      tiles: totals.tiles,
+      averageTotalMs: Number((totals.wallClockMilliseconds / divisor).toFixed(1)),
+      maxTotalMs: Number(totals.maximumWallClockMilliseconds.toFixed(1)),
+      averageBlockingMs: Number((totals.synchronousMilliseconds / divisor).toFixed(1)),
+      maxBlockingMs: Number(totals.maximumSynchronousMilliseconds.toFixed(1)),
+    };
+  });
+  return {
+    note: "Tile stages nest inside 'terrain' and 'detail (...)' parents and the parents' own rows are near zero. Wall-clock rows include network and frame waits; blocking rows are elapsed main-thread time; worker rows run off the main thread and nest inside worker wait stages. Rows must not be summed across kinds.",
+    tiles: totalsRows,
+    stages: stageRows,
+  };
+}
+
+/** Prints the session aggregate as console tables. */
+export function logTileTimingSummary(): void {
+  const summary = tileTimingSummary();
+  const tileCount = summary.tiles.reduce((count, row) => count + row.tiles, 0);
+  console.log(`[Tile timing summary] ${tileCount} tile builds this session`);
+  if (!tileCount) return;
+  console.table(summary.tiles);
+  console.table(summary.stages);
+}
+
+/** Test support. */
+export function resetTileTimingSummary(): void {
+  tileStageAggregates.clear();
+  tileTotals.terrain = emptyTotals();
+  tileTotals.detail = emptyTotals();
 }

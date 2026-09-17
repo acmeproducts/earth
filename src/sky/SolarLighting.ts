@@ -123,9 +123,6 @@ export class SolarLighting {
       !scene.getEngine().isWebGPU,
     );
     this.shadows.useContactHardeningShadow = true;
-    // Far grass fades through alpha blending; without this the generator would
-    // drop every blended caster from the shadow map entirely.
-    this.shadows.transparencyShadow = true;
     this.shadows.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
     this.shadows.contactHardeningLightSizeUVRatio = SHADOW_LIGHT_SIZE_UV_RATIO;
     this.shadows.darkness = SHADOW_DARKNESS;

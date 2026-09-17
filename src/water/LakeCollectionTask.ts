@@ -25,12 +25,32 @@ export function prepareLakeCandidate(water: TerrainLakeSource, bounds: PlanarBou
   return { water, clipped: { sourceId: water.sourceId, outline, holes } };
 }
 
+// The verdict describes the entire provider polygon, so neighbouring tiles and
+// repeated visits reuse it instead of re-triangulating large waters each time.
+// A shared verdict also keeps a lake's surface consistent across tile borders.
+const VERDICT_CACHE_LIMIT = 8192;
+const rejectedBySourceId = new Map<string, boolean>();
+
 export function collectPreparedLakePolygons(input: LakeCollectionInput): TerrainLakeSource[] {
   if (!input.candidates.length) return [];
-  const overlapsBuildings = createWaterBuildingOverlapFilter(input.buildings, input.cellSize, 0.15);
-  const overlapsRoads = createWaterRoadOverlapFilter(input.roads, input.metersPerUnit, input.cellSize);
-  return input.candidates.filter(({ water }) => !overlapsBuildings(water) && !overlapsRoads(water))
-    .map(({ clipped }) => clipped);
+  let overlapsBuildings: ((water: TerrainLakeSource) => boolean) | undefined;
+  let overlapsRoads: ((water: TerrainLakeSource) => boolean) | undefined;
+  return input.candidates.filter(({ water }) => {
+    let rejected = rejectedBySourceId.get(water.sourceId);
+    if (rejected === undefined) {
+      overlapsBuildings ??= createWaterBuildingOverlapFilter(input.buildings, input.cellSize, 0.15);
+      overlapsRoads ??= createWaterRoadOverlapFilter(input.roads, input.metersPerUnit, input.cellSize);
+      rejected = overlapsBuildings(water) || overlapsRoads(water);
+      if (rejectedBySourceId.size >= VERDICT_CACHE_LIMIT) rejectedBySourceId.clear();
+      rejectedBySourceId.set(water.sourceId, rejected);
+    }
+    return !rejected;
+  }).map(({ clipped }) => clipped);
+}
+
+/** Test support: forget cached verdicts. */
+export function resetLakeVerdictCache(): void {
+  rejectedBySourceId.clear();
 }
 
 export function runLakeCollectionTask(input: LakeCollectionInput) {

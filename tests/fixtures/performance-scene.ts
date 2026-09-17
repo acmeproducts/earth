@@ -2,7 +2,7 @@
 import { Game } from '../../src/app/Game';
 import { createRenderingEngine } from '../../src/rendering/Renderer';
 import { EngineInstrumentation, PassPostProcess, ShadowGenerator } from '@babylonjs/core';
-import { streamingDiagnosticsSnapshot } from '../../src/diagnostics/StreamingDiagnostics';
+import { streamingDiagnosticsSnapshot, tileTimingSummary } from '../../src/diagnostics/StreamingDiagnostics';
 
 const probe = window as any;
 void (async () => {
@@ -15,7 +15,7 @@ void (async () => {
     (game as any).worldLocation.requestDestination({ lat: 59.9116, lon: 10.7334 });
   }
   probe.performanceGame = game;
-  probe.performanceTools = { EngineInstrumentation, PassPostProcess, ShadowGenerator, streamingDiagnosticsSnapshot };
+  probe.performanceTools = { EngineInstrumentation, PassPostProcess, ShadowGenerator, streamingDiagnosticsSnapshot, tileTimingSummary };
   await game.initialize((step) => {
     probe.performanceProgress = step;
     if (new URLSearchParams(location.search).has('oslo-walk')) {

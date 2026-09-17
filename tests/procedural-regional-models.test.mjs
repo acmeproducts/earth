@@ -31,7 +31,7 @@ test("regional impostor captures are leased, bounded, and serialized", () => {
 test("cooperative captures yield between GPU views and pixel-processing slices", () => {
   const impostors = source("rendering/Impostor.ts");
   assert.match(impostors, /RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2/);
-  assert.match(impostors, /cooperative && viewsThisFrame >= viewsPerSlice/);
+  assert.match(impostors, /cooperative && viewsThisFrame > 0 &&\s*\(viewsThisFrame >= viewsPerSlice \|\| performance\.now\(\) - sliceStart > frameBudget\)/);
   assert.match(impostors, /await binaryImage/);
   assert.match(impostors, /await dilateTransparentTileEdgeColors/);
   assert.match(impostors, /yieldCaptureWorkIfNeeded/);

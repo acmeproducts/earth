@@ -267,10 +267,22 @@ export class WorldCover {
     return top * (1 - fy) + bottom * fy;
   }
 
+  private lastTileRow = NaN;
+  private lastTileColumn = NaN;
+  private lastTile: Lerc.LercData | undefined;
+
   private classAtPixel(pixelX: number, pixelY: number, fallback: LandCoverClass): LandCoverClass {
     const column = Math.floor(pixelX / WorldCover.TILE_SIZE);
     const row = Math.floor(pixelY / WorldCover.TILE_SIZE);
-    const tile = this.tiles.get(`${row}/${column}`);
+    // Consecutive samples almost always hit the same raster tile.
+    let tile: Lerc.LercData | undefined;
+    if (row === this.lastTileRow && column === this.lastTileColumn) tile = this.lastTile;
+    else {
+      tile = this.tiles.get(`${row}/${column}`);
+      this.lastTileRow = row;
+      this.lastTileColumn = column;
+      this.lastTile = tile;
+    }
     if (!tile) return fallback;
     const x = pixelX - column * WorldCover.TILE_SIZE;
     const y = pixelY - row * WorldCover.TILE_SIZE;

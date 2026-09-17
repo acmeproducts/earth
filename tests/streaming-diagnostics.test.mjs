@@ -144,3 +144,51 @@ test("history is bounded and remains in completion order after wrapping", () => 
   assert.equal(snapshot.stages[0].label, "bounded 5");
   assert.equal(snapshot.stages.at(-1).label, `bounded ${capacity + 4}`);
 });
+
+test("tile traces log a per-tile breakdown and accumulate a session summary", async (t) => {
+  const { logTileTimingSummary, resetTileTimingSummary, tileTimingSummary } =
+    await import("../src/diagnostics/StreamingDiagnostics.ts");
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const logs = [];
+  t.mock.method(console, "log", (...args) => logs.push(args.join(" ")));
+  const tables = [];
+  t.mock.method(console, "table", (rows) => tables.push(rows));
+  resetTileTimingSummary();
+
+  const untracked = new StreamingTrace("buildings somewhere");
+  now += 500;
+  untracked.finish();
+
+  const tile = new StreamingTrace("tile=1/2/3 detail=true");
+  tile.stage("elevation fetch/resample");
+  now += 300;
+  tile.stage("terrain edge stitching", "synchronous");
+  now += 40;
+  tile.stage("grass and initial LOD");
+  now += 0.2;
+  tile.stage("forest mask (12x9 cells)");
+  now += 60;
+  tile.finish();
+
+  const line = logs.find((entry) => entry.startsWith("[Tile timing] tile=1/2/3 detail=true"));
+  assert.ok(line, "one log line per tile build");
+  assert.match(line, /total 400 ms, blocking 40 ms/);
+  assert.match(line, /elevation fetch\/resample 300 \| forest mask \(12x9 cells\) 60 \| terrain edge stitching 40s/);
+  assert.doesNotMatch(line, /grass and initial LOD/, "sub-millisecond stages are omitted from the line");
+
+  const summary = tileTimingSummary();
+  assert.deepEqual(summary.tiles, [
+    { kind: "terrain", tiles: 0, averageTotalMs: 0, maxTotalMs: 0, averageBlockingMs: 0, maxBlockingMs: 0 },
+    { kind: "detail", tiles: 1, averageTotalMs: 400.2, maxTotalMs: 400.2, averageBlockingMs: 40, maxBlockingMs: 40 },
+  ]);
+  assert.deepEqual(summary.stages[0], {
+    stage: "elevation fetch/resample", kind: "wall-clock", tiles: 1, totalMs: 300, averageMs: 300, maxMs: 300,
+  });
+  assert.equal(summary.stages[1].stage, "forest mask (*x* cells)", "counts collapse in aggregate keys");
+  assert.equal(summary.stages[2].kind, "blocking");
+
+  logTileTimingSummary();
+  assert.equal(tables.length, 2);
+  assert.ok(logs.at(-1).startsWith("[Tile timing summary] 1 tile builds"));
+});

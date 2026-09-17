@@ -7,7 +7,7 @@ import {
   Scene,
   SceneInstrumentation,
 } from "@babylonjs/core";
-import { streamingDiagnosticsSnapshot } from "./StreamingDiagnostics";
+import { logTileTimingSummary, streamingDiagnosticsSnapshot, tileTimingSummary } from "./StreamingDiagnostics";
 import { creationStats, SLOW_OPERATION_THRESHOLD_MS } from "./CreationStats";
 
 const UPDATE_INTERVAL_MS = 500;
@@ -236,6 +236,7 @@ export class FpsCounter {
     application: RenderStatsContext = {},
   ): void {
     const report = this.createRenderStatsReport(engine, scene, application);
+    logTileTimingSummary();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `earth-render-stats-${timestamp}.json`;
     const json = JSON.stringify(report, null, 2);
@@ -498,6 +499,7 @@ export class FpsCounter {
       schema: "babylon-earth/render-stats",
       version: REPORT_VERSION,
       streamingDiagnostics: streamingDiagnosticsSnapshot(),
+      tileTiming: tileTimingSummary(),
       slowOperations: creationStats.slowOperationsSnapshot(),
       capturedAt: new Date().toISOString(),
       pageUptimeMilliseconds: performance.now(),

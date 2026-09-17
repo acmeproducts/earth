@@ -69,7 +69,11 @@ test("streaming aggregates across tiles and records completion only once", (t) =
   let now = 0;
   t.mock.method(performance, "now", () => now);
   const messages = [];
-  t.mock.method(console, "log", (...args) => messages.push(args));
+  // Each tile build also logs its own timing line; only the periodic
+  // creation-stats report is counted here.
+  t.mock.method(console, "log", (...args) => {
+    if (!String(args[0]).startsWith("[Tile timing]")) messages.push(args);
+  });
   for (let i = 0; i < 100; i++) {
     const trace = new StreamingTrace(`tile=${i}`);
     trace.stage("terrain");

@@ -1,4 +1,5 @@
 import { creationStats } from "../diagnostics/CreationStats";
+import { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 import {
   Color4,
   Constants,
@@ -50,6 +51,12 @@ export interface ImpostorAssets {
 
 /** Runtime capture work per frame; editor/demo captures retain their faster path. */
 const RUNTIME_CAPTURE_FRAME_BUDGET_MS = 2;
+let cooperativeCaptureBudgetMilliseconds = RUNTIME_CAPTURE_FRAME_BUDGET_MS;
+
+/** Streamed captures share the game's adaptive per-frame streaming slice. */
+export function setCooperativeCaptureBudget(milliseconds: number): void {
+  cooperativeCaptureBudgetMilliseconds = Math.max(RUNTIME_CAPTURE_FRAME_BUDGET_MS, milliseconds);
+}
 const OFFLINE_CAPTURE_FRAME_BUDGET_MS = 12;
 const BACKGROUND_CAPTURE_VIEWS_PER_SLICE = 16;
 
@@ -351,10 +358,17 @@ async function captureDefinition(
   retainAtlasCanvases = true,
 ): Promise<ImpostorAssets> {
   const cooperative = cooperativeOverride ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
+  // Stages nest inside the requesting tile's impostor acquire stage; the
+  // label prefix feeds the per-tile timing aggregate.
+  const trace = new StreamingTrace(`impostor ${definition.name} cooperative=${cooperative}`, "wall-clock", "capture frame wait");
   if (cooperative) await nextFrame();
+  trace.stage("capture source model creation");
   const created = await definition.createSource(scene, variant);
   const meshes = Array.isArray(created) ? created : [created];
-  if (meshes.length === 0) throw new Error(`${definition.name} created no source meshes.`);
+  if (meshes.length === 0) {
+    trace.finish();
+    throw new Error(`${definition.name} created no source meshes.`);
+  }
 
   // A lazily discovered source belongs only to its render target. Keep it out
   // of gameplay frames while textures become ready and between capture views.
@@ -364,9 +378,13 @@ async function captureDefinition(
     // Invisible capture sources are not a reliable part of Babylon's scene
     // readiness checks. Explicitly wait for their optional foliage cutouts so
     // every atlas direction is captured with the same material state.
+    trace.stage("capture source textures");
     await waitForVertexColorTextures(meshes);
+    trace.stage("capture exposure bake");
     if (definition.directionalExposure) await bakeTreeExposure(meshes);
+    trace.stage("capture scene ready (shaders)");
     await scene.whenReadyAsync();
+    trace.stage("capture atlas views and pixels");
     let captureWidth = definition.captureWidth ?? definition.captureDiameter;
     let captureHeight = definition.captureHeight ?? definition.captureDiameter;
     if (definition.boundsPadding !== undefined) {
@@ -405,6 +423,7 @@ async function captureDefinition(
     const assets = await captureImpostorAtlases(scene, captureOptions);
     if (!retainAtlasCanvases) releaseAtlasCanvases(assets);
     if (definition.directionalExposure) {
+      trace.stage("capture exposure atlas");
       try {
         assets.exposureTextures = await captureExposureAtlases(scene, captureOptions);
       } catch (error) {
@@ -412,9 +431,11 @@ async function captureDefinition(
         throw error;
       }
     }
+    trace.stage("capture source disposal");
     creationStats.record("impostor.capturesCompleted");
     return assets;
   } finally {
+    trace.finish();
     const materials = new Set(meshes.map((mesh) => mesh.material).filter((material) => material !== null));
     meshes.forEach((mesh) => mesh.dispose(false, false));
     // Capture sources may use scene-cached procedural textures that remain
@@ -553,7 +574,7 @@ export async function captureImpostorAtlases(
   let sliceStart = performance.now();
   let viewsThisFrame = 0;
   const frameBudget = cooperative
-    ? RUNTIME_CAPTURE_FRAME_BUDGET_MS
+    ? cooperativeCaptureBudgetMilliseconds
     : OFFLINE_CAPTURE_FRAME_BUDGET_MS;
 
   try {
@@ -571,9 +592,12 @@ export async function captureImpostorAtlases(
       for (let y = 0; y < gridHeight; y++) {
         for (let x = 0; x < gridWidth; x++) {
           // A background page paints nothing, so capture views no longer have
-          // to leave room for a gameplay frame between them.
-          const viewsPerSlice = documentIsBackgrounded() ? BACKGROUND_CAPTURE_VIEWS_PER_SLICE : 1;
-          if (cooperative && viewsThisFrame >= viewsPerSlice) {
+          // to leave room for a gameplay frame between them. A visible page
+          // keeps rendering views while the slice budget lasts; one view per
+          // frame made a single atlas take hundreds of frames.
+          const viewsPerSlice = documentIsBackgrounded() ? BACKGROUND_CAPTURE_VIEWS_PER_SLICE : Infinity;
+          if (cooperative && viewsThisFrame > 0 &&
+              (viewsThisFrame >= viewsPerSlice || performance.now() - sliceStart > frameBudget)) {
             await nextFrame();
             sliceStart = performance.now();
             viewsThisFrame = 0;
@@ -1081,7 +1105,7 @@ async function yieldCaptureWorkIfNeeded(
   cooperative: boolean,
   slice: CaptureWorkSlice,
 ): Promise<void> {
-  if (!cooperative || performance.now() - slice.startedAt < RUNTIME_CAPTURE_FRAME_BUDGET_MS) return;
+  if (!cooperative || performance.now() - slice.startedAt < cooperativeCaptureBudgetMilliseconds) return;
   await nextFrame();
   slice.startedAt = performance.now();
 }

@@ -163,22 +163,8 @@ export class TerrainElevationSource {
     const stitchedWidth = tileSize * sourceColumns;
     const stitchedHeight = tileSize * sourceRows;
 
-    // Stitch the tile grid into a single elevation grid.
-    const stitched = new Float32Array(stitchedWidth * stitchedHeight);
-    for (let i = 0; i < rawTiles.length; i++) {
-      const ox = (i % sourceColumns) * tileSize;
-      const oy = Math.floor(i / sourceColumns) * tileSize;
-      for (let row = 0; row < tileSize; row++) {
-        for (let col = 0; col < tileSize; col++) {
-          stitched[(oy + row) * stitchedWidth + (ox + col)] =
-            rawTiles[i].elevations[row * tileSize + col];
-        }
-        await yieldControl?.();
-      }
-    }
-
     // Provider tiles rarely align with our grid when its level is finer than
-    // the source level, so cut the stitched grid down to the requested bounds.
+    // the source level, so cut the provider grid down to the requested bounds.
     // The crop includes both boundary samples. Adjacent application tiles
     // therefore share one complete row or column instead of terminating on
     // opposite sides of a provider pixel interval.
@@ -190,16 +176,24 @@ export class TerrainElevationSource {
       stitchedWidth,
       stitchedHeight,
     );
+    // Copy the crop straight out of the provider tiles: a finer application
+    // grid only needs a small window of the stitched provider area.
     const cropped = new Float32Array(crop.width * crop.height);
     for (let row = 0; row < crop.height; row++) {
-      cropped.set(
-        stitched.subarray(
-          (crop.top + row) * stitchedWidth + crop.left,
-          (crop.top + row) * stitchedWidth + crop.left + crop.width,
-        ),
-        row * crop.width,
-      );
-      await yieldControl?.();
+      const stitchedY = crop.top + row;
+      const tileRow = Math.floor(stitchedY / tileSize);
+      const localY = stitchedY - tileRow * tileSize;
+      let column = 0;
+      while (column < crop.width) {
+        const stitchedX = crop.left + column;
+        const tileColumn = Math.floor(stitchedX / tileSize);
+        const localX = stitchedX - tileColumn * tileSize;
+        const run = Math.min(crop.width - column, tileSize - localX);
+        const source = rawTiles[tileRow * sourceColumns + tileColumn].elevations;
+        cropped.set(source.subarray(localY * tileSize + localX, localY * tileSize + localX + run), row * crop.width + column);
+        column += run;
+      }
+      if ((row & 63) === 63) await yieldControl?.();
     }
 
     // Compute the real-world ground extent of the requested area.

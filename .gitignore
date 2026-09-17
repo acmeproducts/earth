@@ -46,3 +46,7 @@ artifacts/oslo-walk/
 earth-impostor*.png
 impostor-example-*.png
 impostor-validation.png
+
+# Tile timing measurement artifacts and scratch benchmark files
+artifacts/tile-timing/
+.claude-tmp-*

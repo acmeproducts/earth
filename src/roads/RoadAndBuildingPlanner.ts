@@ -4,6 +4,7 @@ import { traceStreamingSynchronous } from "../diagnostics/StreamingDiagnostics";
 import { hashString } from "../core/Random";
 import {
   averagePoint,
+  boundsIntersect,
   boundsOverlap,
   clipHalfPlane,
   clipToBounds,
@@ -130,10 +131,17 @@ export interface RoadAndBuildingPlanningOptions {
   meshWidth: number;
   meshDepth: number;
   metersPerUnit: number;
+  /**
+   * Far tiles render carriageways only, so their plans skip the shoulder bed
+   * partitioning (about half the planner's cost). Defaults to true.
+   */
+  includeShoulders?: boolean;
 }
 
 interface Candidate extends PlannedRoadPolygon {
   priority: number;
+  /** Fragments of one triangulated candidate never overlap each other. */
+  origin?: number;
 }
 
 interface NetworkSegment {
@@ -195,9 +203,12 @@ export function planRoadsAndBuildings(
   const surfaceTriangles = measure("planner road triangulation", () => triangulateCandidates(surfaceCandidates));
   const surfacePartitions = measure("planner road partitioning", () => partitionCandidates(surfaceTriangles, bounds, options));
   const roads = measure("planner road merging", () => mergeCompatiblePolygons(surfacePartitions));
-  const shoulderTriangles = measure("planner shoulder triangulation", () => triangulateCandidates(outerCandidates));
-  const shoulderPartitions = measure("planner shoulder partitioning", () => partitionCandidates(shoulderTriangles, bounds, options));
-  const shoulders = measure("planner shoulder merging", () => mergeCompatiblePolygons(shoulderPartitions));
+  let shoulders: PlannedRoadPolygon[] = [];
+  if (options.includeShoulders !== false) {
+    const shoulderTriangles = measure("planner shoulder triangulation", () => triangulateCandidates(outerCandidates));
+    const shoulderPartitions = measure("planner shoulder partitioning", () => partitionCandidates(shoulderTriangles, bounds, options));
+    shoulders = measure("planner shoulder merging", () => mergeCompatiblePolygons(shoulderPartitions));
+  }
   const buildingSites = measure("planner building clipping", () => buildingInputs.flatMap((building) => {
     const outline = clipToBounds(withoutClosingPoint(building.outline), bounds);
     if (outline.length < 3) return [];
@@ -695,13 +706,14 @@ function insideBounds(point: PlanningPoint, bounds: RoadAndBuildingPlanBounds): 
 }
 
 function triangulateCandidates(candidates: readonly Candidate[]): Candidate[] {
-  return candidates.flatMap((candidate) => {
-    if (candidate.outline.length === 3) return [candidate];
+  return candidates.flatMap((candidate, origin) => {
+    if (candidate.outline.length === 3) return [{ ...candidate, origin }];
     const indices = earcut(candidate.outline.flatMap((point) => [point.x, point.z]));
     const triangles: Candidate[] = [];
     for (let index = 0; index < indices.length; index += 3) {
       triangles.push({
         ...candidate,
+        origin,
         outline: [
           candidate.outline[indices[index]],
           candidate.outline[indices[index + 1]],
@@ -725,18 +737,26 @@ function mergeCompatiblePolygons(roads: readonly PlannedRoadPolygon[]): PlannedR
 
   const result: PlannedRoadPolygon[] = [];
   for (const group of groups.values()) {
-    let merged = true;
-    while (merged) {
-      merged = false;
-      outer: for (let left = 0; left < group.length; left++) {
-        for (let right = left + 1; right < group.length; right++) {
-          const outline = mergeAlongSharedEdge(group[left].outline, group[right].outline);
-          if (!outline) continue;
-          group[left] = { ...group[left], outline };
-          group.splice(right, 1);
-          merged = true;
-          break outer;
+    // Same merge order as a full restart after every merge, without
+    // re-testing pairs whose outlines did not change: only pairs involving
+    // the polygon that just grew can newly share an edge.
+    for (let left = 0; left < group.length; left++) {
+      for (let right = left + 1; right < group.length; right++) {
+        const outline = mergeAlongSharedEdge(group[left].outline, group[right].outline);
+        if (!outline) continue;
+        group[left] = { ...group[left], outline };
+        group.splice(right, 1);
+        let grown = left;
+        for (let earlier = 0; earlier < grown; earlier++) {
+          const merged = mergeAlongSharedEdge(group[earlier].outline, group[grown].outline);
+          if (!merged) continue;
+          group[earlier] = { ...group[earlier], outline: merged };
+          group.splice(grown, 1);
+          grown = earlier;
+          earlier = -1;
         }
+        left = grown;
+        right = left;
       }
     }
     result.push(...group);
@@ -1427,21 +1447,42 @@ function partitionCandidates(
 ): PlannedRoadPolygon[] {
   const accepted: PlannedRoadPolygon[] = [];
   const index = new PlanarCellIndex<PlannedRoadPolygon>(planningCellSize(options));
+  // Bounds and origins of accepted pieces, computed once instead of per comparison.
+  const acceptedBounds = new Map<PlannedRoadPolygon, PlanarBounds>();
+  const acceptedOrigin = new Map<PlannedRoadPolygon, number | undefined>();
   for (const candidate of [...candidates].sort((a, b) => b.priority - a.priority)) {
-    let pieces = [clipToBounds(candidate.outline, bounds)];
-    const overlaps = index.query(pointBounds(candidate.outline), 0, physicalLayerKey(candidate));
+    const { origin, ...road } = candidate;
+    const layerKey = physicalLayerKey(candidate);
+    const candidateBounds = pointBounds(candidate.outline);
+    const clipped = clipToBounds(candidate.outline, bounds);
+    let pieces: Array<{ outline: PlanningPoint[]; bounds: PlanarBounds }> =
+      [{ outline: clipped, bounds: clipped === candidate.outline ? candidateBounds : pointBounds(clipped) }];
+    const overlaps = index.query(candidateBounds, 0, layerKey);
     for (const previous of overlaps) {
-      pieces = pieces.flatMap((piece) => boundsOverlap(piece, previous.outline)
-        && polygonsOverlapArea(piece, previous.outline)
-        ? subtractConvex(piece, previous.outline)
-        : [piece]);
+      // Sibling fragments of the same triangulated candidate are disjoint.
+      if (origin !== undefined && acceptedOrigin.get(previous) === origin) continue;
+      const previousBounds = acceptedBounds.get(previous)!;
+      if (!boundsIntersect(candidateBounds, previousBounds)) continue;
+      let next: typeof pieces | undefined;
+      for (let pieceIndex = 0; pieceIndex < pieces.length; pieceIndex++) {
+        const piece = pieces[pieceIndex];
+        if (boundsIntersect(piece.bounds, previousBounds) && polygonsOverlapArea(piece.outline, previous.outline)) {
+          next ??= pieces.slice(0, pieceIndex);
+          for (const part of subtractConvex(piece.outline, previous.outline)) {
+            next.push({ outline: part, bounds: pointBounds(part) });
+          }
+        } else next?.push(piece);
+      }
+      if (next) pieces = next;
       if (pieces.length === 0) break;
     }
-    for (const outline of pieces) {
+    for (const { outline, bounds: pieceBounds } of pieces) {
       if (polygonArea(outline) <= 1e-10) continue;
-      const road = { ...candidate, outline };
-      accepted.push(road);
-      index.add(road, pointBounds(outline), 0, physicalLayerKey(road));
+      const piece = { ...road, outline };
+      accepted.push(piece);
+      acceptedBounds.set(piece, pieceBounds);
+      acceptedOrigin.set(piece, origin);
+      index.add(piece, pieceBounds, 0, layerKey);
     }
   }
   return accepted;

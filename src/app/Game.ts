@@ -111,6 +111,7 @@ import {
 } from "../world/StreamedTile";
 import type { StreamedTile, VegetationFieldKind } from "../world/StreamedTile";
 import { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
+import { setCooperativeCaptureBudget } from "../rendering/Impostor";
 import { creationStats } from "../diagnostics/CreationStats";
 import {
   VegetationFieldResult,
@@ -174,6 +175,17 @@ const FOG_START_FRACTION = 0.6;
 /** Built tiles cool down for this long after leaving the radius before disposal. */
 const TILE_COOLDOWN_MS = 30_000;
 const DETAIL_COOLDOWN_MS = 10_000;
+// Streamed main-thread work per frame: the default slice when frames are
+// busy, up to a cap that still leaves room for input and compositing.
+const STREAMING_BUDGET_MINIMUM_MS = 2;
+const STREAMING_BUDGET_MAXIMUM_MS = 8;
+const STREAMING_BUDGET_SPARE_SHARE = 0.5;
+// Far tiles spend most of their build waiting on workers, network and frame
+// slices, so a few may overlap. Main-thread slices stay bounded by the shared
+// frame budget, and shared edge, lake and building elevations are claimed
+// synchronously, so overlapping neighbours still agree. Detail builds carry
+// far heavier main-thread work and build alone.
+const MAX_CONCURRENT_FAR_TILE_BUILDS = 2;
 /** One departing row/column may cool down; older off-window tiles are evicted. */
 const RETAINED_TILE_EDGE_SLACK = 2;
 /** Terrain resolution for tiles beyond the detail rings. */
@@ -195,6 +207,7 @@ export class Game {
   private water?: Mesh;
   private readonly tiles = new Map<string, StreamedTile>();
   private readonly activeTileBuilds = new Map<string, number>();
+  private readonly activeDetailBuilds = new Set<string>();
   private readonly terrainEdgeElevations = new OwnedValueCache<string, number>();
   private readonly lakeElevations = new OwnedValueCache<string, number>();
   /** `?lake-debug` logs where rendered ground fails to carry a mapped lake outline. */
@@ -207,7 +220,13 @@ export class Game {
   private readonly buildingPlanningWorker = new BuildingPlanningWorker();
   private readonly buildingCompositionWorker = new BuildingCompositionWorker();
   /** Streaming CPU work yields when it has consumed its frame slice. */
-  private readonly streamingYielder = createFrameBudgetYielder();
+  // Streaming slices grow while frames have spare time and shrink to the
+  // default slice when the render callback itself fills the frame.
+  private streamingBudgetMilliseconds = STREAMING_BUDGET_MINIMUM_MS;
+  private frameIntervalEstimateMilliseconds = 1000 / 60;
+  private frameCallbackEstimateMilliseconds = 0;
+  private lastFrameStartMilliseconds?: number;
+  private readonly streamingYielder = createFrameBudgetYielder(() => this.streamingBudgetMilliseconds);
   private cameraTileKey?: string;
   private readonly gridLevel = WORLD_GRID_LEVEL;
   private readonly worldSeed: number;
@@ -461,53 +480,16 @@ export class Game {
       (step, progress) => onProgress?.(step, 10 + progress * 0.25),
       () => this.placeCameraAtLocation(target),
     );
-    await this.prepareSpawnWindow(target, generation, onProgress);
+    // Only the centre tile gates the spawn. The surrounding detail window
+    // streams in behind the player once the render loop runs, ordered by
+    // distance, instead of holding the loading screen for every tile.
+    await reportInitializationProgress(onProgress, "Spawn tile ready", 96);
     this.layerFades.finish();
     this.worldLocation.update(target);
     this.sceneControls?.setLocation(target);
     if (this.terrainCoordinateFrame && this.terrainMetersPerUnit) {
       this.playerPresence.setWorldFrame(this.terrainCoordinateFrame, this.terrainMetersPerUnit);
     }
-  }
-
-  /** Generate every tile in the configured full-detail inner window. */
-  private async prepareSpawnWindow(
-    target: WorldLocation,
-    generation: number,
-    onProgress?: InitializationProgress,
-  ): Promise<void> {
-    const center = worldTileAtLocation(target.lat, target.lon, this.gridLevel);
-    const scale = 2 ** center.level;
-    const detailWindow = worldTileWindowOffsetsAtLocation(
-      target.lat, target.lon, this.sceneSettings.value.detailTilesAcross, center.level,
-    );
-    const work: Array<{ id: WorldTileId; distanceSquared: number }> = [];
-    for (let dy = detailWindow.minimumY; dy <= detailWindow.maximumY; dy++) {
-      const y = center.y + dy;
-      if (y < 0 || y >= scale) continue;
-      for (let dx = detailWindow.minimumX; dx <= detailWindow.maximumX; dx++) {
-        work.push({
-          id: { level: center.level, x: ((center.x + dx) % scale + scale) % scale, y },
-          distanceSquared: dx * dx + dy * dy,
-        });
-      }
-    }
-    work.sort((a, b) => a.distanceSquared - b.distanceSquared);
-    for (const [index, item] of work.entries()) {
-      await reportInitializationProgress(
-        onProgress, `Generating full-detail tiles (${index}/${work.length})`,
-        35 + 61 * index / work.length,
-      );
-      await this.streamTile(item.id, true, generation);
-      const record = this.tiles.get(worldTileKey(item.id));
-      if (generation !== this.streamingGeneration || !record?.detailed) {
-        throw new Error(`Spawn tile ${worldTileKey(item.id)} did not finish generating.`);
-      }
-      this.layerFades.finish();
-    }
-    await reportInitializationProgress(
-      onProgress, `Full-detail tiles ready (${work.length}/${work.length})`, 96,
-    );
   }
 
   /** Drops movement carried over from the outgoing world's local frame. */
@@ -527,6 +509,7 @@ export class Game {
     const key = worldTileKey(id);
     if (this.activeTileBuilds.has(key)) return;
     this.activeTileBuilds.set(key, generation);
+    if (wantDetail) this.activeDetailBuilds.add(key);
     const trace = new StreamingTrace(`tile=${key} detail=${wantDetail}`);
     try {
       let record = this.tiles.get(key);
@@ -573,7 +556,10 @@ export class Game {
       }
     } finally {
       trace.finish();
-      if (this.activeTileBuilds.get(key) === generation) this.activeTileBuilds.delete(key);
+      if (this.activeTileBuilds.get(key) === generation) {
+        this.activeTileBuilds.delete(key);
+        this.activeDetailBuilds.delete(key);
+      }
     }
   }
 
@@ -698,10 +684,12 @@ export class Game {
     const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
     if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("lake surface source preparation", "synchronous");
+    // The overlap verdict is decided once per water polygon from the wider
+    // context input below; the surface input only supplies tile-clipped rings.
     const surfaceLakeInput = OpenStreetMap.prepareLakeCollection(
       lakeTiles,
       terrainData,
-      { meshWidth, meshDepth },
+      { meshWidth, meshDepth, withoutObstacles: true },
     );
     trace?.stage("lake context source preparation", "synchronous");
     const contextLakeInput = OpenStreetMap.prepareLakeCollection(
@@ -717,10 +705,14 @@ export class Game {
     let surfaceLakeSources: TerrainLakeSource[];
     let lakeSources: TerrainLakeSource[];
     try {
-      [surfaceLakeSources, lakeSources] = await Promise.all([
-        this.lakeCollectionWorker.collect(surfaceLakeInput, `tile=${key} lake surface`),
-        this.lakeCollectionWorker.collect(contextLakeInput, `tile=${key} lake context`),
-      ]);
+      // Context tiles and clip bounds cover every surface candidate, and the
+      // overlap fraction describes the whole provider polygon, so one worker
+      // pass decides both lists.
+      lakeSources = await this.lakeCollectionWorker.collect(contextLakeInput, `tile=${key} lake context`);
+      const accepted = new Set(lakeSources.map((lake) => lake.sourceId));
+      surfaceLakeSources = surfaceLakeInput.candidates
+        .filter((candidate) => accepted.has(candidate.water.sourceId))
+        .map((candidate) => candidate.clipped);
     } catch (error) {
       if (generation !== this.streamingGeneration) return undefined;
       throw error;
@@ -768,7 +760,9 @@ export class Game {
     const planningInput = OpenStreetMap.prepareRoadAndBuildingInputs(
       lakeTiles,
       terrainData,
-      { meshWidth, meshDepth, metersPerUnit },
+      // Far tiles only render carriageways and building stand-ins; promotion
+      // to native terrain plans again with shoulders.
+      { meshWidth, meshDepth, metersPerUnit, includeShoulders: native },
       trace,
     );
     trace?.stage("road and building worker wait");
@@ -1780,6 +1774,16 @@ export class Game {
     });
   }
 
+  /** Streamed work may use about half of the frame time the callback leaves unused. */
+  private updateStreamingBudget(callbackMilliseconds: number): void {
+    this.frameCallbackEstimateMilliseconds +=
+      (callbackMilliseconds - this.frameCallbackEstimateMilliseconds) * 0.1;
+    const spare = this.frameIntervalEstimateMilliseconds - callbackMilliseconds;
+    this.streamingBudgetMilliseconds = Math.min(STREAMING_BUDGET_MAXIMUM_MS,
+      Math.max(STREAMING_BUDGET_MINIMUM_MS, spare * STREAMING_BUDGET_SPARE_SHARE));
+    setCooperativeCaptureBudget(this.streamingBudgetMilliseconds);
+  }
+
   private setVegetationMode(category: VegetationCategory, mode: VegetationRenderMode): void {
     // Rendering every procedural clump as geometry is prohibitively costly;
     // Auto still provides real models in the immediate foreground.
@@ -2191,8 +2195,10 @@ export class Game {
     work.sort((a, b) => Number(b.demotion) - Number(a.demotion) ||
       a.distanceSquared - b.distanceSquared);
     for (const item of work) {
-      // Keep the main-thread workload predictable: one tile builds at a time.
-      if (this.activeTileBuilds.size > 0) break;
+      // Detail builds run alone; far builds overlap up to a small limit.
+      if (this.activeDetailBuilds.size > 0) break;
+      if (item.detail ? this.activeTileBuilds.size > 0
+        : this.activeTileBuilds.size >= MAX_CONCURRENT_FAR_TILE_BUILDS) break;
       void this.streamTile(item.id, item.detail, generation).catch((error: unknown) => {
         console.error(`Failed to stream tile ${worldTileKey(item.id)}.`, error);
       });
@@ -2204,6 +2210,11 @@ export class Game {
   run(): void {
     this.engine.runRenderLoop(() => {
       const gameStart = performance.now();
+      if (this.lastFrameStartMilliseconds !== undefined) {
+        const interval = Math.min(gameStart - this.lastFrameStartMilliseconds, 1000 / 30);
+        this.frameIntervalEstimateMilliseconds += (interval - this.frameIntervalEstimateMilliseconds) * 0.1;
+      }
+      this.lastFrameStartMilliseconds = gameStart;
       this.playerControls?.updateMovement();
       this.refreshSeasonalScenery();
       this.updateTerrainStreaming();
@@ -2223,6 +2234,7 @@ export class Game {
       this.playerControls?.constrainToLoadedTile();
       this.publishLocalPlayerPose();
       const renderEnd = performance.now();
+      this.updateStreamingBudget(renderEnd - gameStart);
       let detailTiles = 0;
       for (const tile of this.tiles.values()) {
         if (tile.detailed) detailTiles++;

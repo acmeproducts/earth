@@ -32,6 +32,7 @@ import {
   WIND_PHASE_UNIFORMS,
   WIND_SHEAR_UNIFORMS,
 } from "../vegetation/Wind";
+import { DISTANCE_DROPOUT_UNIFORMS, distanceDropoutVertexDeclaration } from "../vegetation/DistanceDropout";
 
 const BARK_TEXTURE_SIZE = 512;
 
@@ -395,8 +396,10 @@ export function createVertexColorCaptureMaterial(
         attribute float instanceLodBlend;
         #endif
         uniform mat4 viewProjection;
+        uniform vec3 cameraPosition;
         uniform float modelHeight;
         uniform float modelBaseY;
+        ${distanceDropoutVertexDeclaration}
         #ifdef TREE_EXPOSURE
         attribute vec4 sunExposureLow;
         attribute vec4 sunExposureHigh;
@@ -419,6 +422,18 @@ export function createVertexColorCaptureMaterial(
         varying float vInstanceLodBlend;
         void main(void) {
           #include<instancesVertex>
+          // Low ground cover thins with distance in step with its impostor:
+          // the same per-instance threshold shrinks and drops both LODs of a
+          // clump together, so the cross-fade never dithers against a clump
+          // that has already gone from the other layer.
+          float dropoutSurvival;
+          float dropoutScale = max(
+            distanceDropoutScale(finalWorld[3].xyz, cameraPosition, dropoutSurvival),
+            0.001
+          );
+          finalWorld[0].xyz *= dropoutScale;
+          finalWorld[1].xyz *= dropoutScale;
+          finalWorld[2].xyz *= dropoutScale;
           mat3 rotation = mat3(
             normalize(finalWorld[0].xyz),
             normalize(finalWorld[1].xyz),
@@ -636,6 +651,8 @@ export function createVertexColorCaptureMaterial(
       uniforms: [
         "world",
         "viewProjection",
+        "cameraPosition",
+        ...DISTANCE_DROPOUT_UNIFORMS,
         "sunDirection",
         "sunColor",
         "skyColor",
@@ -700,6 +717,9 @@ export function createVertexColorCaptureMaterial(
   // Species opt into wind explicitly; trees remain still.
   setWindShear(material, 0);
   material.setFloat("fieldFade", 1);
+  // Out of range by default: only low ground cover opts into distance thinning.
+  material.setFloat("distanceFadeNear", 1e6);
+  material.setFloat("distanceFadeFar", 1e6 + 1);
   material.setFloat("groundColorBlend", 0);
   material.setColor3("distanceGroundColor", Color3.White());
   let resolveTextureReadiness: (() => void) | undefined;

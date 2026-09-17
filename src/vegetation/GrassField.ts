@@ -3,7 +3,6 @@ import {
   Matrix,
   Quaternion,
   Scene,
-  Constants,
   ShaderMaterial,
   TransformNode,
   Vector3,
@@ -94,7 +93,7 @@ export function setGrassFieldDetailDistance(
   detailTilesAcross: number,
 ): void {
   const fade = grassDistanceFadeRange(tileWidth, detailTilesAcross);
-  for (const mesh of field.impostorMeshes) {
+  for (const mesh of [...field.impostorMeshes, ...field.modelMeshes]) {
     if (!(mesh.material instanceof ShaderMaterial)) continue;
     mesh.material.setFloat("distanceFadeNear", fade.near);
     mesh.material.setFloat("distanceFadeFar", fade.far);
@@ -261,30 +260,32 @@ function configureGrassRenderers(
   grassHeight: number,
 ): void {
   const distanceGroundColor = Color3.FromArray(GRASSLAND_REFERENCE_COLOR);
+  const fade = grassDistanceFadeRange(
+    Math.min(meshWidth, meshDepth),
+    DEFAULT_DETAIL_TILES_ACROSS,
+  );
   configureVegetationMaterials([grass, grassModel], {
     floats: {
       instanceColorCoverage: 1,
       groundColorBlend: GRASS_GROUND_COLOR_BLEND,
       vegetationShadowAtInstanceRoot: 1,
       vegetationShadowDarkness: GRASS_SHADOW_DARKNESS,
+      // Both LODs thin out over the same range so a clump's model and impostor
+      // shrink and drop together (see DistanceDropout).
+      distanceFadeNear: fade.near,
+      distanceFadeFar: fade.far,
     },
     colors: { distanceGroundColor },
   });
-  const fade = grassDistanceFadeRange(
-    Math.min(meshWidth, meshDepth),
-    DEFAULT_DETAIL_TILES_ACROSS,
-  );
   configureVegetationMaterials([grass], {
     floats: {
       impostorDepthPull: grassImpostorDepthPull(grassHeight),
       impostorLodNear: 40,
       impostorLodFar: 80,
-      distanceFadeNear: fade.near,
-      distanceFadeFar: fade.far,
-      // The far band now fades through alpha rather than a dither, so the
-      // clumps must keep their colour. Pulling them toward the flat reference
-      // green here removed the atlas' blade shadowing and lit up the whole
-      // transition as a bright band between the near grass and the bare ground.
+      // Surviving clumps stay opaque and full colour right up to the edge.
+      // Pulling them toward the flat reference green removed the atlas' blade
+      // shadowing and lit up the whole transition as a bright band between the
+      // near grass and the bare ground.
       distanceGroundBlend: GRASS_GROUND_COLOR_BLEND,
       impostorAmbientUpward: GRASS_AMBIENT_UPWARD,
       // A grass clump is three times wider than it is tall, so the impostor's
@@ -295,21 +296,6 @@ function configureGrassRenderers(
     },
   });
   setVegetationWindShear([grass, grassModel], windShearFraction("grass"));
-  enableSubtleDistanceFade(grass);
-}
-
-/**
- * Lets the far grass fade out as plain translucency instead of a screen-door
- * dither. Depth still writes so the clumps keep occluding the terrain behind
- * them; the only cost is that overlapping faded clumps are drawn in instance
- * order, which is imperceptible on a low carpet seen from a distance.
- */
-function enableSubtleDistanceFade(grass: import("@babylonjs/core").Mesh): void {
-  const material = grass.material;
-  if (!(material instanceof ShaderMaterial)) return;
-  material.options.needAlphaBlending = true;
-  material.forceDepthWrite = true;
-  material.alphaMode = Constants.ALPHA_COMBINE;
 }
 
 /**
