@@ -21,6 +21,8 @@ import { pointInRing } from "../core/PlanarGeometry";
 import type { PlannedBuildingSite } from "../roads/RoadAndBuildingPlanner";
 import { enableTerrainCollisions } from "../terrain/TerrainCollision";
 import { prepareSceneForReveal } from "../rendering/SceneReadiness";
+import { registerStaticMeshCandidates } from "../rendering/StaticMeshCandidates";
+import { StaticMeshBatches } from "../rendering/StaticMeshBatches";
 import { loadAntialiasing, saveAntialiasing } from "../rendering/Antialiasing";
 import type { AntialiasingMode } from "../rendering/Antialiasing";
 import { TerrainElevationSource } from "../terrain/TerrainElevationSource";
@@ -208,6 +210,7 @@ export class Game {
   private canvas: HTMLCanvasElement;
   private engine: AbstractEngine;
   private scene: Scene;
+  private readonly staticBatches: StaticMeshBatches;
   private water?: Mesh;
   private readonly tiles = new Map<string, StreamedTile>();
   private readonly activeTileBuilds = new Map<string, number>();
@@ -284,6 +287,7 @@ export class Game {
     // Reverse depth can be isolated explicitly once the base renderer is sound.
     this.engine.useReverseDepthBuffer = !this.engine.isWebGPU || forceReverseDepth;
     this.scene = new Scene(this.engine);
+    this.staticBatches = new StaticMeshBatches(this.scene);
     monitorRenderHealth(this.scene);
     this.antialiasingMode = loadAntialiasing(query);
     if (this.antialiasingMode === "taa" && !this.engine.getCaps().texelFetch) {
@@ -510,6 +514,7 @@ export class Game {
     generation: number,
     onProgress?: InitializationProgress,
     onTerrainReady?: () => void,
+    terrainOnly = false,
   ): Promise<void> {
     const key = worldTileKey(id);
     if (this.activeTileBuilds.has(key)) return;
@@ -549,7 +554,7 @@ export class Game {
             await this.activateTileVegetation(record, generation);
           }
         }
-      } else if (!wantDetail) {
+      } else if (!wantDetail && !terrainOnly) {
         // Runs for undetailed tiles, and for detailed tiles the scheduler
         // queued ahead of a demotion (the stand-ins commit hidden there).
         trace.stage("far trees (including exclusion mask)");
@@ -582,6 +587,8 @@ export class Game {
     const previous = this.tiles.get(key);
     const area = worldTileArea(id, this.worldSeed);
     const yieldControl = onProgress ? undefined : this.streamingYielder;
+    // Map data does not depend on elevation; overlap its download with the DEM.
+    const mapTiles = previous?.mapTiles ?? this.requestMapTiles(area.bounds);
     trace?.stage("elevation fetch/resample");
     const sourceTerrain = await TerrainElevationSource.fetchWorldArea(area, yieldControl);
     if (generation !== this.streamingGeneration) return undefined;
@@ -596,13 +603,19 @@ export class Game {
         ? terrainData.width - 1
         : Math.min(FAR_TILE_SUBDIVISIONS, terrainData.width - 1),
     );
-    await reportInitializationProgress(onProgress, "Loading land cover", 24);
-    trace?.stage("land cover fetch");
-    const landCover = previous?.landCover ??
-      await WorldCover.fetchForTerrain(terrainData).catch((error: unknown) => {
+    const lakeContextTiles = previous?.lakeContextTiles ?? this.requestMapTiles(expandTerrainBounds(
+      terrainData,
+      LAKE_TERRAIN_CONTEXT_METERS,
+    ));
+    const landCoverRequest = previous?.landCover
+      ? Promise.resolve(previous.landCover)
+      : WorldCover.fetchForTerrain(terrainData).catch((error: unknown) => {
         console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
         return undefined;
       });
+    await reportInitializationProgress(onProgress, "Loading land cover", 24);
+    trace?.stage("land cover fetch");
+    const landCover = await landCoverRequest;
     if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("procedural relief");
     await applyTerrainDetail(
@@ -679,13 +692,6 @@ export class Game {
     });
 
     trace?.stage("map and lake context fetch");
-    let mapTiles = previous?.mapTiles;
-    mapTiles ??= this.requestMapTiles(terrainData.bounds);
-    let lakeContextTiles = previous?.lakeContextTiles;
-    lakeContextTiles ??= this.requestMapTiles(expandTerrainBounds(
-      terrainData,
-      LAKE_TERRAIN_CONTEXT_METERS,
-    ));
     const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
     if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("lake surface source preparation", "synchronous");
@@ -911,6 +917,13 @@ export class Game {
     };
     retainSharedElevations = true;
     this.tiles.set(key, record);
+    if (!native) registerStaticMeshCandidates(this.scene, [terrain, ...terrain.getChildMeshes(), ...lakeSurfaces.meshes]);
+    if (!native) {
+      const region = `${Math.floor(id.x / 4)}/${Math.floor(id.y / 4)}`;
+      this.staticBatches.add(terrain, region, metersPerUnit);
+      const skirt = terrain.metadata?.skirt;
+      if (skirt instanceof Mesh) this.staticBatches.add(skirt, region, metersPerUnit);
+    }
     if (previous) disposeStreamedTile(previous);
     this.playerControls?.ensureAboveGround();
     return record;
@@ -1269,6 +1282,7 @@ export class Game {
     // the tiles behind the camera from the draw list.
     for (const mesh of treeField.meshes) mesh.alwaysSelectAsActiveMesh = false;
     setTransformNodeOffset(treeField.root, record.offsetX, record.offsetZ);
+    registerStaticMeshCandidates(this.scene, treeField.meshes);
     record.farTreeField = treeField;
     if (record.detailed) {
       // Pre-built for an upcoming demotion: stays hidden until the tile's full
@@ -1308,6 +1322,7 @@ export class Game {
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
     record.farBuildings = layer.root;
+    registerStaticMeshCandidates(this.scene, layer.root.getChildMeshes());
     setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), metersPerUnit);
     if (record.detailed) {
       layer.root.setEnabled(false);
@@ -1348,7 +1363,12 @@ export class Game {
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
     record.farRoads = layer.root;
+    registerStaticMeshCandidates(this.scene, layer.root.getChildMeshes());
     setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), this.terrainMetersPerUnit ?? 1);
+    for (const mesh of layer.root.getChildMeshes()) {
+      if (mesh instanceof Mesh) this.staticBatches.add(mesh,
+        `${Math.floor(record.id.x / 4)}/${Math.floor(record.id.y / 4)}`, metersPerUnit);
+    }
     if (record.detailed) {
       layer.root.setEnabled(false);
     } else {
@@ -1873,6 +1893,11 @@ export class Game {
   private refreshSeasonalScenery(): void {
     const date = this.solarLighting?.currentDate;
     if (!date) return;
+    // Season and snow depth depend on the calendar day, not the frame or time
+    // of day. Newly streamed layers receive the current snow depth at creation.
+    const previousDate = this.vegetationDate;
+    if (previousDate && previousDate.getFullYear() === date.getFullYear() &&
+        previousDate.getMonth() === date.getMonth() && previousDate.getDate() === date.getDate()) return;
     // Atlases use snow tiers, but low vegetation density follows the exact
     // depth. Both must be checked before keeping the generated fields.
     const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").season;
@@ -1893,6 +1918,7 @@ export class Game {
         if (layer) setHierarchySnowCover(layer, snowCover, metersPerUnit);
       }
     }
+    this.staticBatches?.update();
     if (rebuildScenery) this.invalidateScenery();
   }
 
@@ -2173,6 +2199,7 @@ export class Game {
       id: WorldTileId;
       detail: boolean;
       demotion: boolean;
+      terrainOnly: boolean;
       distanceSquared: number;
     }> = [];
     for (let dy = -this.terrainTileRadius; dy <= this.terrainTileRadius; dy++) {
@@ -2206,6 +2233,7 @@ export class Game {
           (!record.detailed || wantsDemotion);
         if (needsTerrain || needsDetail || needsFarLayers) {
           work.push({ id, detail: wantDetail, demotion: wantsDemotion,
+            terrainOnly: !wantDetail && needsTerrain && !wantsDemotion,
             distanceSquared: dx * dx + dy * dy });
         }
       }
@@ -2213,13 +2241,17 @@ export class Game {
     // Release expired detail before allocating another tile's full models.
     // Distance-only ordering starves demotions while the camera keeps moving.
     work.sort((a, b) => Number(b.demotion) - Number(a.demotion) ||
+      Number(b.detail) - Number(a.detail) ||
+      Number(b.terrainOnly) - Number(a.terrainOnly) ||
       a.distanceSquared - b.distanceSquared);
     for (const item of work) {
       // Detail builds run alone; far builds overlap up to a small limit.
       if (this.activeDetailBuilds.size > 0) break;
       if (item.detail ? this.activeTileBuilds.size > 0
         : this.activeTileBuilds.size >= MAX_CONCURRENT_FAR_TILE_BUILDS) break;
-      void this.streamTile(item.id, item.detail, generation).then(() => {
+      // Release the build slot once ground and water are visible. Far scenery
+      // gets a separate turn after the missing terrain has filled the horizon.
+      void this.streamTile(item.id, item.detail, generation, undefined, undefined, item.terrainOnly).then(() => {
         this.continueTerrainStreaming(generation);
       }).catch((error: unknown) => {
         console.error(`Failed to stream tile ${worldTileKey(item.id)}.`, error);
@@ -2232,11 +2264,17 @@ export class Game {
   private continueTerrainStreaming(generation: number): void {
     if (generation !== this.streamingGeneration || this.terrainStreamingTimer === undefined) return;
     if (!documentIsBackgrounded() && this.lastFrameStartMilliseconds !== undefined &&
-        performance.now() - this.lastFrameStartMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) return;
+        performance.now() - this.lastFrameStartMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) {
+      // Refill on the next render tick instead of leaving a completed slot
+      // idle until the periodic camera-window check. Never recurse into builds.
+      this.lastTerrainStreamingCheckMilliseconds = Number.NEGATIVE_INFINITY;
+      return;
+    }
     // Hidden-tab timers may fire only once a minute. A completed build releases
     // capacity immediately, so drain the queue from that event instead.
     this.updateTerrainStreaming(true);
     this.layerFades.update();
+    this.staticBatches?.update();
   }
 
   run(): void {
@@ -2248,6 +2286,7 @@ export class Game {
             performance.now() - this.lastFrameStartMilliseconds < TERRAIN_STREAMING_CHECK_INTERVAL_MS) return;
         this.updateTerrainStreaming();
         this.layerFades.update();
+        this.staticBatches?.update();
       }, TERRAIN_STREAMING_CHECK_INTERVAL_MS);
     }
     this.engine.runRenderLoop(() => {
@@ -2260,7 +2299,9 @@ export class Game {
       this.playerControls?.updateMovement();
       this.refreshSeasonalScenery();
       this.updateTerrainStreaming();
+      const fading = this.layerFades.size > 0;
       this.layerFades.update();
+      this.staticBatches.update(fading);
       if (this.flyCamera) {
         this.cloudLayer?.update(this.flyCamera.globalPosition);
       }
@@ -2310,6 +2351,7 @@ export class Game {
     window.removeEventListener("pagehide", this.handlePageHide);
     this.playerControls?.dispose();
     this.playerPresence.dispose();
+    this.staticBatches?.dispose();
     this.fpsCounter.dispose();
     this.sceneControls?.dispose();
     this.cloudLayer?.dispose();

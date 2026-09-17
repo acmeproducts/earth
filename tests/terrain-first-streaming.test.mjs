@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import ts from "typescript";
+
+const source = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
+const parsed = ts.createSourceFile("Game.ts", source, ts.ScriptTarget.Latest, true);
+function subject(methodNames, globals) {
+  const methods = parsed.statements.find(ts.isClassDeclaration).members
+    .filter(member => methodNames.includes(member.name?.getText(parsed)));
+  const { outputText } = ts.transpileModule(`class Subject { ${methods.map(method => method.getText(parsed)).join("\n")} }`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  });
+  const Subject = new Function(...Object.keys(globals), outputText + "; return Subject;")(...Object.values(globals));
+  return new Subject();
+}
+const key = id => `${id.x}/${id.y}`;
+
+test("foreground completions refill on the next frame without a recursive build", () => {
+  const game = subject(["continueTerrainStreaming"], {
+    performance: { now: () => 1000 }, TERRAIN_STREAMING_CHECK_INTERVAL_MS: 250,
+    documentIsBackgrounded: () => false,
+  });
+  Object.assign(game, { streamingGeneration: 1, terrainStreamingTimer: 1,
+    lastFrameStartMilliseconds: 999, lastTerrainStreamingCheckMilliseconds: 999,
+    updateTerrainStreaming() { throw new Error("Must yield to rendering first"); } });
+  game.continueTerrainStreaming(0);
+  assert.equal(game.lastTerrainStreamingCheckMilliseconds, 999, "ignore a cancelled build");
+  game.continueTerrainStreaming(1);
+  assert.equal(game.lastTerrainStreamingCheckMilliseconds, -Infinity);
+});
+
+test("terrain pass releases its slot before scenery, and the next pass finishes scenery", async () => {
+  const game = subject(["streamTile"], {
+    worldTileKey: key,
+    StreamingTrace: class { stage() {} finish() {} },
+  });
+  Object.assign(game, { activeTileBuilds: new Map(), activeDetailBuilds: new Set(),
+    tiles: new Map(), streamingGeneration: 1, sceneryRevision: 0 });
+  const calls = [];
+  game.buildTileTerrain = async id => {
+    calls.push("terrain");
+    const record = { sceneryRevision: 0, nativeTerrain: false };
+    game.tiles.set(key(id), record);
+    return record;
+  };
+  for (const [method, field] of [["buildFarTrees", "farTreeField"],
+    ["buildFarBuildings", "farBuildings"], ["buildFarRoads", "farRoads"]]) {
+    game[method] = async record => { calls.push(field); record[field] = {}; };
+  }
+  const id = { x: 10, y: 10 };
+  await game.streamTile(id, false, 1, undefined, undefined, true);
+  assert.deepEqual(calls, ["terrain"]);
+  assert.equal(game.activeTileBuilds.size, 0);
+  await game.streamTile(id, false, 1);
+  assert.deepEqual(calls, ["terrain", "farTreeField", "farBuildings", "farRoads"]);
+  assert.equal(game.activeTileBuilds.size, 0);
+});
+
+test("scheduler fills missing terrain before far scenery and still prioritizes nearby detail", async () => {
+  const game = subject(["updateTerrainStreaming"], {
+    performance: { now: () => 20000 }, TERRAIN_STREAMING_CHECK_INTERVAL_MS: 250,
+    DETAIL_COOLDOWN_MS: 10000, MAX_CONCURRENT_FAR_TILE_BUILDS: 2,
+    sceneToLonLat: () => ({ lat: 0, lon: 0 }),
+    worldTileAtLocation: () => ({ x: 10, y: 10, level: 5 }), worldTileKey: key,
+    worldTileWindowOffsetsAtLocation: () => ({ minimumX: 0, maximumX: 0, minimumY: 0, maximumY: 0 }),
+  });
+  const complete = () => ({ nativeTerrain: false, detailed: false, sceneryRevision: 0,
+    farTreeField: {}, farBuildings: {}, farRoads: {} });
+  Object.assign(game, { terrainCoordinateFrame: {}, flyCamera: { position: { x: 0, z: 0 } },
+    worldLocation: { update() {} }, cameraTileKey: "10/10", water: {}, streamingGeneration: 1,
+    sceneSettings: { value: { detailTilesAcross: 1 } }, terrainTileRadius: 1,
+    activeTileBuilds: new Map(), activeDetailBuilds: new Set(), tiles: new Map(), sceneryRevision: 0,
+    evictCooledTiles() {}, continueTerrainStreaming() {} });
+  for (let x = 9; x <= 11; x++) for (let y = 9; y <= 11; y++) game.tiles.set(`${x}/${y}`, complete());
+  Object.assign(game.tiles.get("10/10"), { nativeTerrain: true, detailed: true });
+  game.tiles.get("9/10").farTreeField = undefined;
+  game.tiles.delete("11/11");
+  const calls = [];
+  game.streamTile = (id, detail, generation, progress, ready, terrainOnly) => {
+    calls.push({ key: key(id), detail, terrainOnly });
+    game.activeTileBuilds.set(key(id), generation);
+    if (detail) game.activeDetailBuilds.add(key(id));
+    return Promise.resolve();
+  };
+  game.updateTerrainStreaming(true);
+  assert.deepEqual(calls, [
+    { key: "11/11", detail: false, terrainOnly: true },
+    { key: "9/10", detail: false, terrainOnly: false },
+  ]);
+  calls.length = 0;
+  game.activeTileBuilds.clear();
+  game.tiles.get("10/10").detailed = false;
+  game.updateTerrainStreaming(true);
+  assert.deepEqual(calls, [{ key: "10/10", detail: true, terrainOnly: false }]);
+  await Promise.resolve();
+});

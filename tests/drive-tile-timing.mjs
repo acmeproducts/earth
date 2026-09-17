@@ -18,6 +18,7 @@ const label = argument('label', 'run');
 const reuseBundle = argument('bundle');
 const hops = Number(argument('hops', 3));
 const settleSeconds = Number(argument('settle', 20));
+const terrainSize = Number(argument('terrain-size', 33));
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-tile-timing-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -115,7 +116,7 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
-  const url = `http://127.0.0.1:${server.address().port}/?oslo-walk&seed=1161908820&clock=manual&date=2026-09-05&time=14&wind-speed=0`;
+  const url = `http://127.0.0.1:${server.address().port}/?oslo-walk&seed=1161908820&clock=manual&date=2026-09-05&time=14&wind-speed=0&terrain-size=${terrainSize}`;
   const navigation = await send('Page.navigate', { url });
   if (navigation.errorText) throw new Error(navigation.errorText);
   const startedAt = Date.now();
@@ -141,15 +142,24 @@ try {
 
   const tileCount = async () =>
     evaluate('window.performanceTools.tileTimingSummary().tiles.reduce((n, r) => n + r.tiles, 0)');
+  const coverage = [];
   const settle = async (phase) => {
     let last = -1;
     let stableFor = 0;
     for (let elapsed = 0; elapsed < 300 && stableFor < settleSeconds; elapsed += 5) {
       await sleep(5000);
       const count = await tileCount();
+      const state = await evaluate(`(() => {
+        const game = window.performanceGame;
+        const tiles = [...game.tiles.values()];
+        return { terrain: tiles.length, target: (2 * game.terrainTileRadius + 1) ** 2,
+          scenery: tiles.filter(t => t.detailed || (t.farTreeField && t.farBuildings && t.farRoads)).length,
+          active: game.activeTileBuilds.size };
+      })()`);
+      coverage.push({ phase, elapsedSeconds: elapsed + 5, ...state });
       stableFor = count === last ? stableFor + 5 : 0;
       last = count;
-      console.log(`${phase} ${elapsed + 5}s: ${count} tile builds`);
+      console.log(`${phase} ${elapsed + 5}s: ${count} tile builds, coverage ${JSON.stringify(state)}`);
     }
   };
   await settle('fill');
@@ -184,7 +194,7 @@ try {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const file = join(directory, `${label}-${stamp}.json`);
   writeFileSync(file, JSON.stringify({
-    label, url, bundle: output, initializationSeconds, summary, recentStages, tileLines, errors, gpu, frames,
+    label, url, bundle: output, initializationSeconds, coverage, summary, recentStages, tileLines, errors, gpu, frames,
   }, null, 2));
   console.log('\nTile totals:');
   console.table(summary.tiles);

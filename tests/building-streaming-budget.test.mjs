@@ -19,6 +19,10 @@ const hook = registerHooks({
       format: "module", shortCircuit: true,
       source: stripTypeScriptTypes(readFileSync(new URL(url), "utf8"), { mode: "transform" }),
     };
+    // Node 23's synchronous hooks need explicit source for Yarn's archived CJS.
+    if (context.format === "commonjs" || url.endsWith(".cjs.js") || url.endsWith(".cjs")) return {
+      format: "commonjs", shortCircuit: true, source: readFileSync(new URL(url), "utf8"),
+    };
     return nextLoad(url, context);
   },
 });
@@ -31,6 +35,38 @@ const { planRoad } = await import("../src/roads/RoadPlanner.ts");
 const { TerrainSurface } = await import("../src/terrain/TerrainSurface.ts");
 const { BuildingTrace } = await import("../src/buildings/BuildingDiagnostics.ts");
 const { runBuildingComposition } = await import("../src/buildings/BuildingCompositionTask.ts");
+
+test("road tiles share scene-owned materials and keep neighbors alive on disposal", async () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const terrain = { width: 2, height: 2, elevations: new Float32Array(4),
+      bounds: { lonWest: 0, lonEast: 1, latSouth: 0, latNorth: 1 }, groundWidthMeters: 100 };
+    const options = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
+    const planning = planRoadsAndBuildings([{ id: 'road',
+      paths: [[{ x: -40, z: 0 }, { x: 40, z: 0 }]], appearance: planRoad({ class: 'minor' }),
+    }], [], options);
+    const first = await OpenStreetMap.createRoadLayer(scene, [], terrain, { ...options, planning });
+    const second = await OpenStreetMap.createRoadLayer(scene, [], terrain, { ...options, planning });
+    assert.ok(first.meshes.length > 0);
+    const material = first.meshes[0].material;
+    const texture = material.diffuseTexture;
+    assert.equal(second.meshes[0].material, material);
+    assert.ok(material.pluginManager.getPlugin('SnowCover'));
+    OpenStreetMap.disposeLayer(first.root);
+    assert.equal(second.meshes[0].material, material);
+    assert.ok(scene.materials.includes(material));
+    assert.ok(scene.textures.includes(texture));
+    const third = await OpenStreetMap.createRoadLayer(scene, [], terrain, { ...options, planning });
+    assert.equal(third.meshes[0].material, material);
+    OpenStreetMap.disposeLayer(second.root);
+    OpenStreetMap.disposeLayer(third.root);
+    assert.ok(scene.materials.includes(material), 'the scene retains reusable materials between tile visits');
+    scene.dispose();
+    assert.equal(scene.materials.length, 0);
+    assert.equal(scene.textures.length, 0);
+  } finally { scene.dispose(); engine.dispose(); }
+});
 
 test("planned roads and shoulders yield without changing geometry or exposing partial batches", async () => {
   const engine = new NullEngine();

@@ -8,11 +8,13 @@ import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runOsloWalk } from './oslo-walk.mjs';
+import { runVistaPerformance } from './vista-performance.mjs';
 
 const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
 const pixelTest = process.argv.includes('--pixels');
 const osloWalk = process.argv.includes('--oslo-walk');
+const vista = process.argv.includes('--vista');
 // --snapshot: settle the world, save one screenshot and the browser errors, exit.
 const snapshot = process.argv.includes('--snapshot');
 const sceneDate = process.argv.find(a => a.startsWith('--date='))?.slice(7) ?? '2026-09-05';
@@ -110,10 +112,12 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
-  if (osloWalk) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
+  if (osloWalk || vista) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk || vista ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
   if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
-  if (osloWalk) {
+  if (vista) {
+    await runVistaPerformance({ evaluate, send, output, errors });
+  } else if (osloWalk) {
     await runOsloWalk({ evaluate, send, output, errors, browserLog, readTrace: async (stop = true) => {
       if (stop) await send('Tracing.end');
       const deadline = Date.now() + 60000;

@@ -699,6 +699,10 @@ export class OpenStreetMap {
   /** Disposes a streamed layer without taking down its scene-owned sky map. */
   static disposeLayer(root: TransformNode): void {
     for (const mesh of root.getChildMeshes(false)) {
+      if (mesh.material && sharedRoadMaterials.has(mesh.material)) {
+        mesh.material = null;
+        continue;
+      }
       // Hedge renderers own their materials and atlas leases. Dispose their
       // meshes without textures before recursive map cleanup can destroy the
       // shadow/cloud maps and atlases still used by other vegetation fields.
@@ -1741,7 +1745,17 @@ function mergeWaterways(
   result.parent = parent;
   return result;
 }
+const roadMaterials = new WeakMap<Scene, Map<RoadMaterialStyle, StandardMaterial>>();
+const sharedRoadMaterials = new WeakSet<Material>();
+
 function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMaterialStyle): StandardMaterial {
+  let materials = roadMaterials.get(scene);
+  if (!materials) {
+    materials = new Map();
+    roadMaterials.set(scene, materials);
+  }
+  const cached = materials.get(visualStyle);
+  if (cached) return cached;
   const material = visualStyle === "dirt"
     ? createDirtRoadMaterial(scene, `${name}Material`)
     : new StandardMaterial(`${name}Material`, scene);
@@ -1780,6 +1794,9 @@ function createRoadMaterial(scene: Scene, name: string, visualStyle: RoadMateria
     relief.level = visualStyle === "dirt" ? 0.12 : 0.24;
     material.bumpTexture = relief;
   }
+  materials.set(visualStyle, material);
+  sharedRoadMaterials.add(material);
+  material.onDisposeObservable.addOnce(() => materials.delete(visualStyle));
   return material;
 }
 

@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "test:oslo-walk": "node tests/drive-render-performance.mjs --oslo-walk",
+    "test:vista": "node tests/drive-render-performance.mjs --vista",
     "dev": "webpack serve --mode development",
     "game:dev": "yarn node --experimental-sqlite server/local-game-server.mjs",
     "build": "webpack --mode production",

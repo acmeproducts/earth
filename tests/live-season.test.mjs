@@ -77,6 +77,16 @@ for (const reverse of [false, true]) {
   });
 }
 
+test("unchanged calendar days do not resample terrain or revisit scenery", () => {
+  const subject = new SeasonSubject();
+  subject.vegetationDate = new Date(2026, 11, 1, 1);
+  subject.solarLighting = { currentDate: new Date(2026, 11, 1, 23) };
+  subject.tiles = new Map([["tile", { terrainData: {} }]]);
+  subject.tileSnowCover = () => { throw new Error("Unchanged date sampled terrain"); };
+  subject.invalidateScenery = () => { throw new Error("Unchanged date rebuilt scenery"); };
+  subject.refreshSeasonalScenery();
+});
+
 test("live seasons change ground snow depth in place without swapping materials or colors", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

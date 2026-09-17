@@ -17,7 +17,7 @@ test("streamed tiles own one provider-backed data bundle", () => {
   assert.match(streamedTile, /mapTiles\?: Promise<MapTile\[\]>/);
   assert.match(game, /const preCarvingElevations = terrainData\.elevations\.slice\(\)/);
   assert.match(game, /record\.mapTiles \?\?= this\.requestMapTiles\(record\.terrainData\.bounds\)/);
-  assert.match(game, /mapTiles \?\?= this\.requestMapTiles\(terrainData\.bounds\)/);
+  assert.match(game, /const mapTiles = previous\?\.mapTiles \?\? this\.requestMapTiles\(area\.bounds\)/);
   assert.equal((game.match(/TerrainElevationSource\.fetchWorldArea\(/g) ?? []).length, 1);
   assert.equal((game.match(/OpenStreetMap\.fetch\(/g) ?? []).length, 1);
   assert.match(worldCover, /private static decoderReady\?: Promise<void>/);

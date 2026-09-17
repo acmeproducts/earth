@@ -49,4 +49,5 @@ impostor-validation.png
 
 # Tile timing measurement artifacts and scratch benchmark files
 artifacts/tile-timing/
+artifacts/vista-performance/
 .claude-tmp-*
