@@ -26,6 +26,41 @@ const hook = registerHooks({
 const { OpenStreetMap } = await import("../src/world/OpenStreetMap.ts");
 hook.deregister();
 
+test('planned and distant road crossings both stay above the river surface', async () => {
+  const { TerrainSurface } = await import('../src/terrain/TerrainSurface.ts');
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const feature = (properties, coordinates) => ({ id: 1, properties,
+    toGeoJSON: () => ({ geometry: { type: 'LineString', coordinates } }) });
+  const tile = { x: 0, y: 0, zoom: 14, data: { layers: {
+    waterway: { length: 1, feature: () => feature({ class: 'river' }, [[0.5, 0], [0.5, 1]]) },
+    transportation: { length: 1, feature: () => feature({ class: 'secondary' }, [[0, 0.5], [1, 0.5]]) },
+  } } };
+  const terrain = { bounds: { lonWest: 0, lonEast: 1, latSouth: 0, latNorth: 1 },
+    width: 9, height: 9, elevations: new Float32Array(81).fill(10),
+    minElevation: 10, maxElevation: 10, groundWidthMeters: 40, groundHeightMeters: 40 };
+  const options = { meshWidth: 40, meshDepth: 40, metersPerUnit: 1,
+    terrainSurface: new TerrainSurface(terrain.elevations, 8, 40, 40) };
+  options.planning = OpenStreetMap.planRoadsAndBuildings([tile], terrain, options);
+  try {
+    const detailed = await OpenStreetMap.createLayer(scene, [tile], terrain, options);
+    const distant = await OpenStreetMap.createRoadLayer(scene, [tile], terrain, options);
+    const river = detailed.meshes.find(mesh => mesh.name === 'waterways').getVerticesData('position');
+    const waterHeight = river[1];
+    for (const [layer, name] of [[detailed, 'markedRoads'], [distant, 'farMarkedRoads']]) {
+      const positions = layer.meshes.find(mesh => mesh.name === name).getVerticesData('position');
+      let crossingVertices = 0;
+      for (let i = 0; i < positions.length; i += 3) {
+        if (Math.abs(positions[i]) >= 6) continue;
+        crossingVertices++;
+        assert.ok(positions[i + 1] > waterHeight + 0.11, `${name} must clear water`);
+      }
+      assert.ok(crossingVertices > 0);
+      OpenStreetMap.disposeLayer(layer.root);
+    }
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test("streamed rivers retain their shared material, smooth normals and moving current", async () => {
   const { TerrainSurface } = await import('../src/terrain/TerrainSurface.ts');
   const engine = new NullEngine();

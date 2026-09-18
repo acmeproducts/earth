@@ -29,7 +29,6 @@ import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import { setMeshSnowCover, SnowCoverPlugin } from "../rendering/SnowCover";
-import { simulateSnowfall } from "../rendering/SnowFall";
 
 export interface RockFieldResult {
   root: TransformNode;
@@ -253,16 +252,8 @@ export async function createRockField(
       const matrices = buckets[variant * 2 + mossIndex];
       if (matrices.length === 0) continue;
       const rock = createRockMesh(scene, variant, mossIndex === 1);
-      const snowCover = options.snowCover ?? 0;
-      if (snowCover > 0) {
-        // The stone is unit-radius and scaled per instance, so the blanket
-        // scales with each rock: a knee-high boulder carries a hand-deep crown.
-        simulateSnowfall(rock, {
-          cellSize: 0.28,
-          depth: 0.18 * (0.4 + 0.6 * snowCover),
-          amount: snowCover,
-        });
-      }
+      // Ground accumulation buries small stones; exposed boulders receive
+      // shader snow without a permanent, instance-scaled cap.
       rock.parent = root;
       rock.material = material ??= createRockMaterial(scene);
       rock.isPickable = false;
@@ -428,7 +419,7 @@ function addRock(
 
 function createRockMaterial(scene: Scene): StandardMaterial {
   const material = new StandardMaterial("rockMaterial", scene);
-  new SnowCoverPlugin(material);
+  new SnowCoverPlugin(material, { smoothSurface: true });
   material.diffuseColor = Color3.White();
   material.ambientColor = new Color3(0.16, 0.17, 0.14);
   material.specularColor = new Color3(0.055, 0.06, 0.05);

@@ -87,6 +87,7 @@ import type { TerrainLakeSource } from "../terrain/TerrainLakePolygons";
 import { collectPreparedLakePolygons, prepareLakeCandidate, type LakeCollectionInput } from "../water/LakeCollectionTask";
 import { isSurfaceWaterFeature } from "../water/WaterFeatureVisibility";
 import { riverChannelDepth, riverFlowSign, riverSurfaceFrame, riverSurfaceLevels } from "../water/RiverSurface";
+import { raiseRoadsAboveRivers } from "../roads/RiverRoadCrossings";
 
 export interface MapTile {
   x: number;
@@ -347,6 +348,12 @@ export class OpenStreetMap {
       }
 
       trace.stage("final building/road/water merges (inclusive)");
+      const riverGeometry = waterways.map(mesh => ({
+        positions: mesh.getVerticesData(VertexBuffer.PositionKind), indices: mesh.getIndices(),
+      }));
+      await raiseRoadsAboveRivers(
+        Object.values(roadMeshes).flat(), riverGeometry, options.metersPerUnit, yieldControl,
+      );
       const meshes = [
         ...buildings.meshes,
         mergeRoads(roadShoulders.paved, "pavedRoadShoulders", "pavedShoulder", root),
@@ -587,6 +594,14 @@ export class OpenStreetMap {
       }
       await yieldControl?.();
     }
+    const riverGeometry: VertexData[] = [];
+    for (const tile of tiles) forEachFeature(tile, "waterway", feature => {
+      if (!isSurfaceWaterFeature(feature.properties)) return;
+      const width = waterwayWidthMeters(feature.properties.class);
+      if (width === undefined) return;
+      for (const line of lines(feature, tile)) riverGeometry.push(...waterwayGeometry(line, terrain, options, width));
+    });
+    await raiseRoadsAboveRivers(Object.values(roadMeshes).flat(), riverGeometry, options.metersPerUnit, yieldControl);
     const meshes = [
       mergeRoads(roadMeshes.marked, "farMarkedRoads", "marked", root),
       mergeRoads(roadMeshes.paved, "farPavedRoads", "paved", root),
@@ -1524,6 +1539,17 @@ function createWaterway(
   options: MapLayerOptions,
   widthMeters: number,
 ): Mesh[] {
+  return waterwayGeometry(coordinates, terrain, options, widthMeters).map(data => {
+    const mesh = new Mesh("waterway", scene);
+    data.applyToMesh(mesh, false);
+    mesh.isPickable = false;
+    return stageMapMesh(mesh);
+  });
+}
+
+function waterwayGeometry(
+  coordinates: LonLat[], terrain: TerrainData, options: MapLayerOptions, widthMeters: number,
+): VertexData[] {
   const points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth)
   );
@@ -1532,8 +1558,7 @@ function createWaterway(
     options.meshWidth / Math.max(1, terrain.width - 1),
     options.meshDepth / Math.max(1, terrain.height - 1),
   ) / 2;
-  return paths.flatMap((path) => createWaterwayMeshes(
-    scene,
+  return paths.flatMap((path) => createWaterwayVertexData(
     resamplePath(path, sampleSpacing),
     terrain,
     options,
@@ -1541,13 +1566,12 @@ function createWaterway(
   ));
 }
 
-function createWaterwayMeshes(
-  scene: Scene,
+function createWaterwayVertexData(
   points: Array<{ x: number; z: number }>,
   terrain: TerrainData,
   options: MapLayerOptions,
   halfWidth: number,
-): Mesh[] {
+): VertexData[] {
   if (points.length < 2) return [];
   const left: Array<{ x: number; z: number }> = [];
   const right: Array<{ x: number; z: number }> = [];
@@ -1610,10 +1634,7 @@ function createWaterwayMeshes(
   vertexData.normals = normals;
   vertexData.uvs = uvs;
   vertexData.tangents = tangents;
-  const mesh = new Mesh("waterway", scene);
-  vertexData.applyToMesh(mesh, false);
-  mesh.isPickable = false;
-  return [stageMapMesh(mesh)];
+  return [vertexData];
 }
 
 function waterwayWidthMeters(value: unknown): number | undefined {

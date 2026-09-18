@@ -36,7 +36,7 @@ float snowDrift(vec2 worldMeters) {
 // Settled depth on level ground in metres: the broad banks only, so coarse
 // far tessellations and fine near ones lift the same surface.
 float snowDepthMeters(vec2 worldMeters, float amount) {
-  return amount * 0.35 * (0.55 + 0.9 * snowNoise2(worldMeters / 7.0));
+  return amount * (0.35 + 0.85 * amount) * (0.55 + 0.9 * snowNoise2(worldMeters / 7.0));
 }
 // Fraction of a surface hidden under snow. Steep faces shed it, drifts pile
 // it, and a thin cover leaves the low spots bare.
@@ -90,6 +90,8 @@ export interface SnowCoverPluginOptions {
    * standing on the ground keep their place and sink into the raised snow.
    */
   displace?: boolean;
+  /** Hide stone bump detail beneath settled snow. */
+  smoothSurface?: boolean;
 }
 
 interface SnowDefines extends MaterialDefines {
@@ -105,12 +107,14 @@ interface SnowDefines extends MaterialDefines {
  */
 export class SnowCoverPlugin extends MaterialPluginBase {
   private readonly displace: boolean;
+  private readonly smoothSurface: boolean;
 
   constructor(material: Material, options: SnowCoverPluginOptions = {}) {
     super(material, "SnowCover", 190, {
       SNOW_COVER: true, SNOW_DISPLACE: Boolean(options.displace), SNOW_MASK: false,
     });
     this.displace = Boolean(options.displace);
+    this.smoothSurface = Boolean(options.smoothSurface);
     // hardBindForSubMesh is only dispatched to plugins registered for extra events.
     this.registerForExtraEvents = true;
     this._enable(true);
@@ -208,7 +212,18 @@ float snowCoverValue = 0.0;
 if (snowCoverParams.x > 0.0) {
   float snowDriftValue = vSnowDrift;
   float snowShore = smoothstep(snowCoverParams.z, snowCoverParams.z + 0.6 / snowCoverParams.y, vPositionW.y);
-  snowCoverValue = snowCoverage(normalW.y, snowDriftValue, snowCoverParams.x) * snowShore * vSnowMask;
+  vec3 snowNormal = normalW;
+  ${this.smoothSurface ? `
+  #ifdef NORMAL
+  snowNormal = normalize(vNormalW);
+  #ifdef TWOSIDEDLIGHTING
+  snowNormal = gl_FrontFacing ? snowNormal : -snowNormal;
+  #endif
+  #endif
+  ` : ""}
+  snowCoverValue = snowCoverage(snowNormal.y, snowDriftValue, snowCoverParams.x) * snowShore * vSnowMask;
+  // Settled snow hides the underlying material's bump and detail normals.
+  normalW = normalize(mix(normalW, snowNormal, snowCoverValue));
   baseColor.rgb = mix(baseColor.rgb, snowAlbedo(snowDriftValue), snowCoverValue);
   diffuseColor = mix(diffuseColor, vec3(1.0), snowCoverValue);
 }

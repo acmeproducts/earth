@@ -28,6 +28,9 @@ void (async () => {
     terrain.elevations[row * 65 + col] = 15 - row / 64 * 10 + Math.sin(col / 8) * 0.3;
   }
   const tile = { x: 0, y: 0, zoom: 14, data: { layers: {
+    transportation: { length: 1, feature: () => ({ id: 2, properties: { class: 'secondary', surface: 'asphalt' },
+      toGeoJSON: () => ({ geometry: { type: 'LineString', coordinates: [[0.1, 0.5], [0.9, 0.5]] } }),
+    }) },
     waterway: { length: 1, feature: () => ({ id: 1, properties: { class: 'river' },
       toGeoJSON: () => ({ geometry: { type: 'LineString', coordinates:
         [[0.5, 1], [0.48, 0.8], [0.4, 0.65], [0.45, 0.5], [0.6, 0.35], [0.63, 0.2], [0.55, 0]] } }),
@@ -46,7 +49,8 @@ void (async () => {
   soil.diffuseColor = new Color3(0.24, 0.32, 0.19);
   soil.specularColor = Color3.Black();
   ground.material = soil;
-  const renderOptions = { ...options, terrainSurface: TerrainSurface.fromGroundMesh(ground, 100, 100) };
+  const renderOptions = { ...options, terrainSurface: TerrainSurface.fromGroundMesh(ground, 100, 100),
+    planning: OpenStreetMap.planRoadsAndBuildings([tile], terrain, options) };
   const first = await OpenStreetMap.createLayer(scene, [tile], terrain, renderOptions);
   const second = await OpenStreetMap.createLayer(scene, [tile], terrain, renderOptions);
   OpenStreetMap.disposeLayer(first.root);

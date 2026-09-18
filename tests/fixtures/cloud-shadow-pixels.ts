@@ -85,7 +85,7 @@ void (async () => {
   await checkUniforms('shadow-resumed',[255,51,153,255]);
   mesh.setEnabled(false);
   const lighting = { copyLightingTo(snapshot: SolarLightingSnapshot) {
-    snapshot.sunDirection.set(0, 1, 0);
+    snapshot.sunDirection.set(0.7, 0.55, 0.4).normalize();
     snapshot.sunColor.set(1, 1, 1);
     snapshot.skyColor.set(0.8, 0.85, 1);
     snapshot.groundColor.set(0.3, 0.3, 0.3);

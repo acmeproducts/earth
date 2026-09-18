@@ -38,6 +38,7 @@ export function createCloudLayer(scene: Scene, lighting: SolarLighting, options:
       varying vec3 cloudWorldPosition;
       uniform vec3 cameraPosition;
       uniform vec3 cloudColor;
+      uniform vec3 sunDirection;
       uniform vec3 fogColor;
       uniform float metersPerUnit;
       ${cloudCoverageShader}
@@ -46,13 +47,21 @@ export function createCloudLayer(scene: Scene, lighting: SolarLighting, options:
         float fade = 1.0 - smoothstep(18000.0, 26000.0, distanceMeters);
         fade *= smoothstep(50.0, 400.0, abs(cameraPosition.y - cloudField.z) * metersPerUnit);
         float coverage = cloudCoverage(cloudWorldPosition.xz);
-        vec3 color = cloudColor * mix(1.0, 0.83, coverage);
+        vec2 patternUV = cloudWorldPosition.xz * cloudField.x + cloudOffset;
+        float broadDensity = texture2D(cloudPattern, patternUV).g;
+        float threshold = mix(0.82, 0.24, cloudField.y);
+        float thickness = smoothstep(threshold, threshold + 0.32, broadDensity);
+        // Broad light absorption gives soft depth without a hard, embossed surface.
+        vec2 lightOffset = sunDirection.xz * (600.0 * cloudField.x / metersPerUnit);
+        float sunwardDensity = texture2D(cloudPattern, patternUV + lightOffset).g;
+        float softShadow = smoothstep(0.0, 0.2, sunwardDensity - broadDensity);
+        vec3 color = cloudColor * (mix(1.0, 0.83, thickness) - softShadow * 0.08 * cloudField.w);
         color = mix(color, fogColor, smoothstep(10000.0, 26000.0, distanceMeters));
         gl_FragColor = vec4(color, coverage * fade * 0.94);
       }`,
   }, {
     attributes: ["position"],
-    uniforms: ["world", "viewProjection", "cameraPosition", "cloudColor", "fogColor", "metersPerUnit", "cloudField", "cloudOffset"],
+    uniforms: ["world", "viewProjection", "cameraPosition", "cloudColor", "sunDirection", "fogColor", "metersPerUnit", "cloudField", "cloudOffset"],
     samplers: ["cloudPattern"], needAlphaBlending: true,
   });
   material.backFaceCulling = false;
@@ -71,6 +80,7 @@ export function createCloudLayer(scene: Scene, lighting: SolarLighting, options:
     effect.setVector2("cloudOffset", field.offset);
     effect.setVector3("cameraPosition", scene.activeCamera.globalPosition);
     effect.setColor3("cloudColor", color);
+    effect.setVector3("sunDirection", snapshot.sunDirection);
     effect.setColor3("fogColor", scene.fogColor);
     effect.setFloat("metersPerUnit", metersPerUnit);
   });

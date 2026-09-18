@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const output = mkdtempSync(join(tmpdir(), 'earth-rock-'));
+const snow = process.argv.includes('--snow');
 const port = 9351;
 let chrome, socket;
 try {
@@ -83,7 +84,7 @@ try {
     const anchor = window.__rockBest.rounded ?? window.__rockBest.angular;
     if (!anchor) return 'no anchor rock';
     const Vector3 = scene.activeCamera.position.constructor;
-    const bare = scene.meshes.filter(m => /^rock-\\d+-bare$/.test(m.name) && m.thinInstanceCount > 0)
+    const bare = scene.meshes.filter(m => /^rock-\\d+-(bare|mossy)$/.test(m.name) && m.thinInstanceCount > 0)
       .sort((a, b) => a.name.localeCompare(b.name));
     const radius = anchor.radius;
     const spacing = radius * 2.6;
@@ -100,6 +101,12 @@ try {
       const copy = new (mesh.constructor)(mesh.name + '-showcase', scene);
       mesh.geometry.applyToMesh(copy);
       copy.material = mesh.material;
+      if (${snow}) {
+        const req = window.__rockRequire;
+        const snowModule = Object.keys(req.m).find(key => key.endsWith('/src/rendering/SnowCover.ts'));
+        if (!snowModule) throw new Error('SnowCover module not found');
+        req(snowModule).setMeshSnowCover(copy, 1, 1);
+      }
       copy.useVertexColors = true;
       copy.receiveShadows = true;
       copy.layerMask = SHOWCASE_LAYER;
