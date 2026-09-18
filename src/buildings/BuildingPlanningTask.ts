@@ -1,6 +1,6 @@
-import { pointOnSegment2D } from "../core/PolygonGeometry";
+import { pointOnSegment2D, polygonArea } from "../core/PolygonGeometry";
 import { planBuildingLayout, type BuildingLayout } from "./BuildingLayoutPlanner";
-import { maximumMinimumRoomAreaForApartment, planApartmentLayout, type ApartmentLayout } from "./ApartmentLayoutPlanner";
+import { MINIMUM_ROOM_AREA_SQUARE_METERS, planApartmentLayout, type ApartmentLayout } from "./ApartmentLayoutPlanner";
 import type { BuildingPlan } from "./BuildingPlanner";
 import type { Opening2D, Point2D } from "./FloorPlan";
 import { planningFrameForPolygon } from "../core/PlanningFrame.mjs";
@@ -87,11 +87,12 @@ function apartmentRoomAreaTarget(
   apartmentIndex: number,
   apartmentPolygon: BuildingLayout["rooms"][number]["polygon"],
 ): number {
-  // Keep the 12-60 square meter variation deterministic: room proportions change by
-  // building and apartment, but a rebuild never produces a different layout.
+  // Aim for four usable rooms before increasing their size. Keep variation
+  // deterministic so rebuilding an apartment preserves its layout.
   const variation = unitFromSeed(buildingSeed ^ (apartmentIndex * 0x1f123bb5) ^ 0x3c6ef372);
-  const maximum = maximumMinimumRoomAreaForApartment(apartmentPolygon);
-  return 12 + variation * (maximum - 12);
+  const minimum = MINIMUM_ROOM_AREA_SQUARE_METERS;
+  const maximum = Math.max(minimum, Math.min(14, polygonArea(apartmentPolygon.outer) / 4));
+  return minimum + variation * (maximum - minimum);
 }
 
 export function openingTouchesBoundary(opening: Opening2D, polygon: readonly Point2D[]): boolean {

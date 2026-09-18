@@ -1,6 +1,7 @@
 import type { VectorTile } from "@mapbox/vector-tile";
 import {
   LandCoverClass,
+  landCoverSurfaceColor,
   type LandCoverSampler,
 } from "./WorldCover";
 import { worldTileAtLocation } from "./WorldGrid";
@@ -44,6 +45,14 @@ class OpenStreetMapLandCover implements LandCoverSampler {
       if (contains(region, longitude, latitude)) cover = region.cover;
     }
     return cover;
+  }
+
+  sampleSurfaceColor(longitude: number, latitude: number): readonly [number, number, number] {
+    const cover = this.sample(longitude, latitude);
+    if (cover === this.fallback.sample(longitude, latitude)) {
+      return this.fallback.sampleSurfaceColor?.(longitude, latitude) ?? landCoverSurfaceColor(cover);
+    }
+    return landCoverSurfaceColor(cover);
   }
 }
 
@@ -129,7 +138,9 @@ export function landCoverClassForFeature(
       return LandCoverClass.Cropland;
     }
     if (["bog", "marsh", "swamp", "wetland"].includes(detail)) return LandCoverClass.Wetland;
-    if (["bare_rock", "beach", "dune", "rock", "sand", "scree", "shingle"].includes(detail)) {
+    if (detail === "dune") return LandCoverClass.Dune;
+    if (["beach", "sand"].includes(detail)) return LandCoverClass.Sand;
+    if (["bare_rock", "rock", "scree", "shingle"].includes(detail)) {
       return LandCoverClass.Bare;
     }
     if (["glacier", "ice"].includes(detail)) return LandCoverClass.SnowAndIce;

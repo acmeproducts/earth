@@ -172,7 +172,9 @@ test("complex gates preserve courtyard and tower voids, then open atomically and
       advanceInteriorFrame(scene);
       assert.equal(exterior.metadata.loadingInteriorCount,1);
       assert.ok(scene.meshes.filter((m) => m.metadata?.buildingInteriorGate).every((m) => m.isEnabled()));
-      drainInteriorBuilds(scene);
+      // The mocked clock permits one work step per frame; denser apartments
+      // need more simulated frames to furnish the complete complex.
+      drainInteriorBuilds(scene, undefined, 40000);
       assert.equal(exterior.metadata.loadedInteriorCount,1);
       assert.equal(exterior.metadata.interiorsLoaded,true);
       assert.ok(scene.meshes.filter((m) => m.metadata?.buildingInteriorGate).every((m) => !m.isEnabled()));

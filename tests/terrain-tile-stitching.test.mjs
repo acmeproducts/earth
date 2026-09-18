@@ -193,7 +193,7 @@ test("overlap strips stay beneath sloping terrain, including diagonal corners", 
         positions, uvs, subdivisions, -1, undefined, 0.5, 0.02, normals,
       );
       for (let segment = 0; segment < subdivisions * 4; segment++) {
-        for (const offset of [2, 3, 4, 5]) {
+        for (const offset of [0, 1, 2, 3, 4, 5]) {
           const vertex = (segment * 8 + offset) * 3;
           const [x, y, z] = skirt.positions.slice(vertex, vertex + 3);
           assert.ok(y <= heightAt(x, z) - 0.019,

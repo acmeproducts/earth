@@ -23,7 +23,7 @@ registerHooks({
   },
 });
 
-const { applyTerrainDetail, upsampleTerrain, TERRAIN_RELIEF_BANDS } =
+const { applyTerrainDetail, upsampleTerrain, TERRAIN_RELIEF_BANDS, duneReliefAt } =
   await import("../src/terrain/TerrainDetail.ts");
 const { LandCoverClass } = await import("../src/world/WorldCover.ts");
 const { worldTileBounds } = await import("../src/world/WorldGrid.ts");
@@ -84,6 +84,46 @@ function rootMeanSquare(values) {
 }
 
 const uniformCover = (landCover) => ({ sample: () => landCover });
+
+test("dune crests vary across successive nominal wavelengths", () => {
+  let squaredDifference = 0;
+  for (let i = 0; i < 100; i++) {
+    const x = 150000 + i * 3, y = 3400000 + i * 5;
+    const shift = duneReliefAt(x + 72 * 0.84, y + 72 * 0.54, 1) - duneReliefAt(x, y, 1);
+    squaredDifference += shift * shift;
+  }
+  assert.ok(Math.sqrt(squaredDifference / 100) > 0.5,
+    'successive dunes must not reproduce the same translated profile');
+});
+
+test("mapped dunes have walkable relief, sand coverage, and repeatable heights", async () => {
+  const dunes = terrain(TILE, 128, () => 100);
+  const repeat = terrain(TILE, 128, () => 100);
+  const rock = terrain(TILE, 128, () => 100);
+  const duneOptions = { landCover: uniformCover(LandCoverClass.Dune) };
+  await displacement(dunes, duneOptions);
+  await displacement(repeat, duneOptions);
+  await displacement(rock, { landCover: uniformCover(LandCoverClass.Bare) });
+  assert.deepEqual(dunes.elevations, repeat.elevations);
+  assert.ok(dunes.maxElevation - dunes.minElevation > 6);
+  assert.ok(dunes.sandCoverage.every(value => value === 1));
+  assert.ok(rock.sandCoverage.every(value => value === 0));
+  assert.deepEqual(dunes.elevations, dunes.reliefReferenceElevations);
+});
+
+test("sand relief joins neighboring tiles and leaves the waterline untouched", async () => {
+  const west = terrain(TILE, 64, () => 100);
+  const east = terrain({ ...TILE, x: TILE.x + 1 }, 64, () => 100);
+  const options = { landCover: uniformCover(LandCoverClass.Sand) };
+  await displacement(west, options);
+  await displacement(east, options);
+  for (let row = 0; row < west.height; row++) {
+    assert.ok(Math.abs(west.elevations[row * west.width + west.width - 1] -
+      east.elevations[row * east.width]) < 1e-5);
+  }
+  const shore = await displacement(terrain(TILE, 32, () => 0.2), options);
+  assert.ok(shore.every(value => value === 0));
+});
 
 test("upsampling doubles the intervals and keeps the rendered surface", () => {
   const source = terrain(TILE, 4, (x, y) => 100 + x * 0.1 + y * 0.05);

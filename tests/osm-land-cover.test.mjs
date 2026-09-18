@@ -19,7 +19,7 @@ const hook = registerHooks({
     return nextLoad(url, context);
   },
 });
-const { createOpenStreetMapLandCover } = await import("../src/world/OpenStreetMapLandCover.ts");
+const { createOpenStreetMapLandCover, landCoverClassForFeature } = await import("../src/world/OpenStreetMapLandCover.ts");
 hook.deregister();
 
 test("reuses decoded provider polygons while retaining independent fallbacks", async () => {
@@ -53,7 +53,9 @@ test("maps OSM natural cover to WorldCover-compatible classes", () => {
   assert.match(landCover, /\["forest", "wood"\][\s\S]*?LandCoverClass\.TreeCover/);
   assert.match(landCover, /\["heath", "scrub", "shrubbery"\][\s\S]*?LandCoverClass\.Shrubland/);
   assert.match(landCover, /\["bog", "marsh", "swamp", "wetland"\][\s\S]*?LandCoverClass\.Wetland/);
-  assert.match(landCover, /"sand"[\s\S]*?LandCoverClass\.Bare/);
+  assert.equal(landCoverClassForFeature("landcover", {class: "sand"}), 61);
+  assert.equal(landCoverClassForFeature("landcover", {class: "sand", subclass: "dune"}), 62);
+  assert.equal(landCoverClassForFeature("landcover", {class: "rock"}), 60);
 });
 
 test("maps OSM land use that materially changes vegetation placement", () => {

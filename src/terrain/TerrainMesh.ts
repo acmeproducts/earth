@@ -19,7 +19,7 @@ import {
   createTerrainSkirtGeometry,
   stitchTerrainMeshEdges,
 } from "./TerrainStitching";
-import { landCoverSurfaceColor } from "../world/WorldCover";
+import { createTerrainSurfaceColors } from "./TerrainSurfaceColors";
 import type { LandCoverClass, LandCoverSampler } from "../world/WorldCover";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import type { FrameBudgetYielder } from "../diagnostics/FrameBudget";
@@ -27,10 +27,9 @@ import { attachTerrainReliefNormals } from "./TerrainReliefNormals";
 import { setMeshSnowCover, SNOW_MASK_KIND } from "../rendering/SnowCover";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 
-const GROUND_COVER_BLEND_METERS = 12;
 const FAR_TILE_SUBDIVISIONS = 32;
 const TERRAIN_SKIRT_OVERLAP_METERS = 0.5;
-const TERRAIN_SKIRT_SURFACE_DROP_METERS = 0.02;
+const TERRAIN_SKIRT_SURFACE_DROP_METERS = 0.1;
 
 export interface TerrainMeshOptions {
   meshWidth: number;
@@ -102,6 +101,10 @@ export async function createTerrainMesh(
   const coverClasses = landCover
     ? new Uint8Array(positions.length / 3)
     : undefined;
+  trace?.stage("terrain surface color field");
+  const sampleSurfaceColor = landCover
+    ? await createTerrainSurfaceColors(terrain, landCover, yieldControl)
+    : undefined;
 
   trace?.stage("terrain vertex elevation and land cover sampling");
   for (let row = 0; row < verticesPerRow; row++) {
@@ -133,8 +136,7 @@ export async function createTerrainMesh(
           meshDepth,
         );
         const coverClass = landCover.sample(lon, lat);
-        const color = landCover.sampleSurfaceColor?.(lon, lat) ??
-          landCoverSurfaceColor(coverClass);
+        const color = sampleSurfaceColor!(u, v);
         const colorIndex = vertexIndex * 4;
         surfaceColors[colorIndex] = color[0];
         surfaceColors[colorIndex + 1] = color[1];
@@ -157,13 +159,6 @@ export async function createTerrainMesh(
     const metersPerVertex = Math.min(
       terrain.groundWidthMeters / subdivisions,
       terrain.groundHeightMeters / subdivisions,
-    );
-    trace?.stage("terrain vertex color smoothing");
-    await smoothVertexColors(
-      surfaceColors,
-      verticesPerRow,
-      Math.max(1, Math.round(GROUND_COVER_BLEND_METERS / metersPerVertex)),
-      yieldControl,
     );
     trace?.stage("terrain ground color variation");
     await applyGroundVariation(surfaceColors, coverClasses, positions, terrain, {
@@ -255,7 +250,7 @@ export async function createTerrainMesh(
   trace?.stage("terrain material and textures", "synchronous");
   applyDefaultTerrainMaterial(scene, ground);
   trace?.stage("terrain relief normal attachment", "synchronous");
-  attachTerrainReliefNormals(ground, terrain, meshWidth, meshDepth);
+  attachTerrainReliefNormals(ground, terrain, meshWidth, meshDepth, metersPerUnit);
   if (terrain.shoreDistanceMeters) {
     trace?.stage("terrain shoreline attachment");
     await attachShoreline(ground, positions, indices, metersPerUnit, yieldControl);
@@ -347,36 +342,5 @@ async function applyGroundVariation(
     colors[target + 1] = green;
     colors[target + 2] = blue;
     if ((index & 511) === 511) await yieldControl?.();
-  }
-}
-
-async function smoothVertexColors(
-  colors: Float32Array,
-  rowSize: number,
-  radius: number,
-  yieldControl?: () => Promise<void>,
-): Promise<void> {
-  const horizontal = new Float32Array(colors.length);
-  for (const vertical of [false, true]) {
-    const source = vertical ? horizontal : colors;
-    const destination = vertical ? colors : horizontal;
-    for (let row = 0; row < rowSize; row++) {
-      for (let column = 0; column < rowSize; column++) {
-        const target = (row * rowSize + column) * 4;
-        const coordinate = vertical ? row : column;
-        const start = Math.max(0, coordinate - radius);
-        const end = Math.min(rowSize - 1, coordinate + radius);
-        for (let channel = 0; channel < 3; channel++) {
-          let sum = 0;
-          for (let sample = start; sample <= end; sample++) {
-            const index = vertical ? sample * rowSize + column : row * rowSize + sample;
-            sum += source[index * 4 + channel];
-          }
-          destination[target + channel] = sum / (end - start + 1);
-        }
-        destination[target + 3] = 1;
-      }
-      await yieldControl?.();
-    }
   }
 }

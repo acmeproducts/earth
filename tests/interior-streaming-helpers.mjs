@@ -12,10 +12,10 @@ export function advanceInteriorFrame(scene) {
 }
 
 export function drainInteriorBuilds(scene, done = () =>
-  scene.meshes.every((mesh) => !mesh.metadata?.loadingInteriorCount)) {
-  for (let frame = 0; frame < 20000; frame++) {
+  scene.meshes.every((mesh) => !mesh.metadata?.loadingInteriorCount), maxFrames = 20000) {
+  for (let frame = 0; frame < maxFrames; frame++) {
     advanceInteriorFrame(scene);
     if (done()) return frame + 1;
   }
-  assert.fail("Interior build did not finish in 20000 simulated frames");
+  assert.fail(`Interior build did not finish in ${maxFrames} simulated frames`);
 }

@@ -193,7 +193,9 @@ export class SolarLighting {
           varying vec3 direction;
           uniform vec3 horizonColor;
           void main(void) {
-            float alpha = 1.0 - smoothstep(0.0, 0.22, abs(normalize(direction).y));
+            // Below the horizon, match fully fogged terrain instead of revealing
+            // the lower sky dome along the streaming boundary.
+            float alpha = 1.0 - smoothstep(0.0, 0.22, normalize(direction).y);
             gl_FragColor = vec4(horizonColor, alpha);
           }
         `,

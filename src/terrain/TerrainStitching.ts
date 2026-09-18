@@ -197,8 +197,10 @@ export function createTerrainSkirtGeometry(
     const endOffset = outerOffset((segment + 1) % boundary.length);
     const startHeight = outerHeight(start, startOffset);
     const endHeight = outerHeight(end, endOffset);
-    copyVertex(start, vertex);
-    copyVertex(end, vertex + 1);
+    // Inset the entire cap: a coincident inner edge can still z-fight even
+    // when the outer edge is safely beneath the neighboring terrain.
+    copyVertex(start, vertex, surfacePositions[start * 3 + 1] - surfaceDrop);
+    copyVertex(end, vertex + 1, surfacePositions[end * 3 + 1] - surfaceDrop);
     copyVertex(start, vertex + 2, startHeight);
     copyVertex(end, vertex + 3, endHeight);
     copyVertex(start, vertex + 4, startHeight);

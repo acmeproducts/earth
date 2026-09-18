@@ -6,6 +6,8 @@ export interface TerrainData {
   elevations: Float32Array;
   /** Relief omitted from geometry but retained for terrain normal mapping. */
   shadingRelief?: Float32Array;
+  /** Blended mapped sand coverage for surface ripple shading. */
+  sandCoverage?: Float32Array;
   /** Geometry heights before roads, lakes and pads reshape the surface. */
   reliefReferenceElevations?: Float32Array;
   minElevation: number;

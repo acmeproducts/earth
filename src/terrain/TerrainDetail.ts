@@ -83,6 +83,8 @@ const RELIEF_STRENGTH: Readonly<Record<number, number>> = {
   [LandCoverClass.MossAndLichen]: 0.9,
   [LandCoverClass.TreeCover]: 1,
   [LandCoverClass.Bare]: 1.25,
+  [LandCoverClass.Sand]: 0.25,
+  [LandCoverClass.Dune]: 0.15,
 };
 
 export interface TerrainDetailOptions {
@@ -160,6 +162,11 @@ export async function applyTerrainDetail(
   const fields = reliefFields(options.worldSeed ?? DEFAULT_WORLD_SEED);
   const steepness = await steepnessField(terrain, yieldControl);
   const strength = await reliefStrengthField(terrain, options.landCover, yieldControl);
+  const sand = await reliefStrengthField(terrain, options.landCover, yieldControl, {
+    [LandCoverClass.Sand]: 0.55,
+    [LandCoverClass.Dune]: 1,
+  }, 0);
+  terrain.sandCoverage = sand;
 
   for (let row = 0; row < height; row++) {
     for (let column = 0; column < width; column++) {
@@ -175,8 +182,13 @@ export async function applyTerrainDetail(
       const ground = groundMetersAt(longitude, latitude);
       elevations[index] = elevation +
         receptivity * reliefAt(fields, ground.x, ground.y, steepness[index], weights);
+      elevations[index] += sand[index] * smoothstep(0.5, 6, elevation - SEA_LEVEL_METERS) *
+        duneReliefAt(ground.x, ground.y, options.meshVertexSpacingMeters);
       shadingRelief[index] = receptivity *
         reliefAt(fields, ground.x, ground.y, steepness[index], shadingWeights);
+      shadingRelief[index] += sand[index] * smoothstep(0.5, 6, elevation - SEA_LEVEL_METERS) *
+        (duneReliefAt(ground.x, ground.y, rasterSpacing) -
+          duneReliefAt(ground.x, ground.y, options.meshVertexSpacingMeters));
     }
     await yieldControl?.();
   }
@@ -189,6 +201,24 @@ export async function applyTerrainDetail(
     terrain.minElevation = Math.min(terrain.minElevation, elevation);
     terrain.maxElevation = Math.max(terrain.maxElevation, elevation);
   }
+}
+
+/** Asymmetric windward slopes and short slip faces, continuous across tile edges. */
+const duneNoise = new SimplexNoise2D(layerSeed(DEFAULT_WORLD_SEED, "sandDunes"));
+
+export function duneReliefAt(x: number, y: number, spacing: number): number {
+  const across = x * 0.84 + y * 0.54;
+  const along = -x * 0.54 + y * 0.84;
+  const warp = 35 * duneNoise.sample(across / 190, along / 130) +
+    9 * duneNoise.sample(across / 67 + 17, along / 95);
+  const phase = (across + warp) / 72;
+  const cycle = phase - Math.floor(phase);
+  const crest = 0.74 + 0.06 * duneNoise.sample(across / 240, along / 180);
+  const ramp = cycle < crest ? cycle / crest : (1 - cycle) / (1 - crest);
+  const profile = ramp * ramp * (3 - 2 * ramp);
+  const amplitude = 7 + 2 * duneNoise.sample(across / 160 + 51, along / 220);
+  return (profile - 0.5) * amplitude * resolvableBandWeight(72, spacing) +
+    duneNoise.sample(across / 95, along / 110) * 0.9 * resolvableBandWeight(119, spacing);
 }
 
 interface ReliefFields {
@@ -292,9 +322,11 @@ async function reliefStrengthField(
   terrain: TerrainData,
   landCover: LandCoverSampler | undefined,
   yieldControl?: () => Promise<void>,
+  strengths: Readonly<Record<number, number>> = RELIEF_STRENGTH,
+  fallback = 1,
 ): Promise<Float32Array> {
   const { width, height } = terrain;
-  if (!landCover) return new Float32Array(width * height).fill(1);
+  if (!landCover) return new Float32Array(width * height).fill(fallback);
 
   const haloX = Math.max(1, Math.round(
     STRENGTH_BLEND_METERS / (terrain.groundWidthMeters / (width - 1)),
@@ -309,7 +341,7 @@ async function reliefStrengthField(
     for (let column = 0; column < paddedWidth; column++) {
       const { longitude, latitude } = rasterLocation(terrain, column - haloX, row - haloY);
       padded[row * paddedWidth + column] =
-        RELIEF_STRENGTH[landCover.sample(longitude, latitude)] ?? 1;
+        strengths[landCover.sample(longitude, latitude)] ?? fallback;
     }
     await yieldControl?.();
   }

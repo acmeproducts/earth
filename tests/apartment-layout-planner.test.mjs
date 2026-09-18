@@ -6,10 +6,40 @@ import {
   assignApartmentRoomTypes,
   planApartmentLayout,
 } from "../src/buildings/ApartmentLayoutPlanner.ts";
+import { runBuildingPlanning } from "../src/buildings/BuildingPlanningTask.ts";
 
 const apartment = {
   outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
 };
+
+test("a bedroom takes priority over the only eligible toilet room", () => {
+  const layout = planApartmentLayout({
+    apartmentPolygon: { outer: [{ x: 0, y: 0 }, { x: 8, y: 0 }, { x: 8, y: 3 }, { x: 0, y: 3 }] },
+    openings: [{ id: "entrance", type: "door", start: { x: 1, y: 0 }, end: { x: 2, y: 0 } }],
+  });
+  assert.equal(layout.rooms.length, 2);
+  assert.equal(layout.rooms.filter((room) => room.type === "bedroom").length, 1);
+  assert.equal(layout.rooms.filter((room) => room.type === "toilet").length, 0);
+  assert.equal(layout.rooms.filter((room) => room.type === "kitchen").length, 1);
+  const bedroom = layout.rooms.find((room) => room.type === "bedroom");
+  assert.ok(!segmentOnPolygon(layout.openings[0], bedroom.polygon.outer));
+});
+
+test("automatic targets leave space for four functions in a compact apartment", () => {
+  const polygon = { outer: [{ x: 0, y: 0 }, { x: 7, y: 0 }, { x: 7, y: 6 }, { x: 0, y: 6 }] };
+  for (let seed = 0; seed < 20; seed++) {
+    const input = { kind: "apartments", seed, use: "residential", facadeOpenings: [],
+      building: { boundary: polygon, rooms: [{ id: "apartment-1", type: "apartment", polygon }] } };
+    const result = runBuildingPlanning(input);
+    assert.equal(result.failure, undefined);
+    assert.equal(result.apartments.length, 1);
+    assert.deepEqual(result, runBuildingPlanning(input));
+    const rooms = result.apartments[0].rooms;
+    assert.deepEqual(rooms.map((room) => room.type).sort(), ["bedroom", "kitchen", "living-room", "toilet"]);
+    assert.ok(rooms.every((room) => polygonArea(room.polygon.outer) >= 10 - 1e-7));
+    assert.ok(rooms.every((room) => minimumBoundsDimension(room.polygon.outer) >= 2.8 - 1e-7));
+  }
+});
 
 test("recursively creates equal orthogonal rooms down to the minimum area", () => {
   const layout = planApartmentLayout({ apartmentPolygon: apartment });
@@ -49,8 +79,8 @@ test("leaves an indivisible area as one room", () => {
   });
   assert.equal(layout.rooms.length, 1);
   assert.equal(polygonArea(layout.rooms[0].polygon.outer), 15);
-  assert.equal(layout.rooms[0].type, "living-room");
-  assert.equal(layout.rooms[0].label, "Living room");
+  assert.equal(layout.rooms[0].type, "bedroom");
+  assert.equal(layout.rooms[0].label, "Bedroom");
 });
 
 test("assigns a small room to the toilet and the largest remaining room to the kitchen", () => {
@@ -61,7 +91,7 @@ test("assigns a small room to the toilet and the largest remaining room to the k
   assert.equal(layout.rooms.length, 4);
   assert.equal(layout.rooms.filter((room) => room.type === "toilet").length, 1);
   assert.equal(layout.rooms.filter((room) => room.type === "kitchen").length, 1);
-  assert.ok(layout.rooms.find((room) => room.type === "toilet" && polygonArea(room.polygon.outer) < 25));
+  assert.ok(layout.rooms.find((room) => room.type === "toilet" && polygonArea(room.polygon.outer) <= 25 + 1e-7));
   assert.equal(layout.rooms.filter((room) => room.type === "bedroom").length, 1);
   assert.equal(layout.rooms.filter((room) => room.type === "living-room").length, 1);
   assert.ok(layout.rooms.every((room) => room.type !== "room"));
@@ -145,14 +175,14 @@ test("supports different room-size limits for different apartments", () => {
 test("rejects unreasonable per-apartment room-size limits", () => {
   assert.throws(() => planApartmentLayout({
     apartmentPolygon: apartment,
-    minimumRoomAreaSquareMeters: 10,
-  }), /between 12 and 50/);
+    minimumRoomAreaSquareMeters: 9,
+  }), /between 10 and 50/);
 });
 
 test("rejects apartments smaller than the minimum room area", () => {
   assert.throws(() => planApartmentLayout({
     apartmentPolygon: { outer: [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }] },
-  }), /at least 12 square meters/);
+  }), /at least 10 square meters/);
 });
 
 test("subdivides concave apartments without extending beyond their outline", () => {

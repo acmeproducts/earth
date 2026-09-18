@@ -21,12 +21,14 @@ import {
   createPlacementGrid,
   jitteredPlacementRow,
   packInstanceMatrices,
+  sampleTerrainNormal,
   type VegetationPlacementOptions,
 } from "./VegetationPlacement";
 import { LandCoverClass } from "../world/WorldCover";
 import type { LandCoverSampler } from "../world/WorldCover";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import { habitatField } from "./HabitatNoise";
+import { smoothstep } from "../core/MathUtils";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import { setMeshSnowCover, SnowCoverPlugin } from "../rendering/SnowCover";
 
@@ -70,19 +72,11 @@ const SHORE_FORMATION_CHANCE = 0.55;
  * as clear.
  */
 const HABITAT: HabitatFieldSpec = {
-  patchMeters: 150,
-  abundanceMeters: 2000,
-  barrenShare: 0.34,
-  richestCoverage: 0.95,
+  patchMeters: 250,
+  abundanceMeters: 2800,
+  barrenShare: 0.45,
+  richestCoverage: 0.8,
 };
-
-/** Ground that is stony by nature thins out but never clears completely. */
-const STONY_COVERS: ReadonlySet<LandCoverClass> = new Set([
-  LandCoverClass.Bare,
-  LandCoverClass.MossAndLichen,
-  LandCoverClass.SnowAndIce,
-]);
-const STONY_FLOOR = 0.4;
 const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
   [1, 0],
@@ -221,24 +215,19 @@ export async function createRockField(
         }
 
         const stand = habitat.sample(lon, lat);
-        const field = STONY_COVERS.has(cover)
-          ? STONY_FLOOR + stand * (1 - STONY_FLOOR)
-          : stand;
-        if (field <= 0) continue;
+        if (stand <= 0) continue;
+        const normal = sampleTerrainNormal(terrain, x, z, meshWidth, meshDepth, metersPerUnit);
+        // Deposits favor slopes, but loose stones do not perch on cliff faces.
+        const slopeWeight = (0.3 + smoothstep(0.02, 0.22, 1 - normal.y)) *
+          smoothstep(0.4, 0.7, normal.y);
 
         const occupancy = Math.min(
           1,
-          (INLAND_OCCUPANCY[cover] ?? 0) * field * 1.8 *
+          (INLAND_OCCUPANCY[cover] ?? 0) * stand * slopeWeight * 0.55 *
             Math.max(0, densityScale?.(x, z) ?? 1),
         );
-        if (random() > occupancy) continue;
-
-        // Mostly hand-sized stones, with a long tail into isolated boulders and
-        // the rare car-sized block.
-        const radiusMeters = random() < BOULDER_CHANCE
-          ? 2.2 + Math.pow(random(), 1.6) * 2.8
-          : 0.22 + Math.pow(random(), 2.1) * 1.65;
-        addRock(placement, x, z, radiusMeters);
+        if (random() >= occupancy) continue;
+        addInlandFormation(placement, normal, x, z, habitat, densityScale);
       }
       await yieldControl?.();
     }
@@ -289,6 +278,41 @@ export async function createRockField(
       for (const mesh of meshes) mesh.visibility = visibility;
     },
   };
+}
+
+/** A larger embedded stone with smaller fragments spreading downhill. */
+function addInlandFormation(
+  context: RockPlacementContext,
+  normal: Vector3,
+  anchorX: number,
+  anchorZ: number,
+  habitat: ReturnType<typeof habitatField>,
+  densityScale: VegetationPlacementOptions["densityScale"],
+): void {
+  const { random, metersPerUnit, terrain, meshWidth, meshDepth, landCover } = context;
+  const radiusMeters = random() < BOULDER_CHANCE
+    ? 2.2 + Math.pow(random(), 1.6) * 2.8
+    : 0.45 + Math.pow(random(), 1.8) * 1.4;
+  if (!addRock(context, anchorX, anchorZ, radiusMeters)) return;
+
+  const angle = Math.hypot(normal.x, normal.z) > 0.05
+    ? Math.atan2(normal.z, normal.x)
+    : random() * Math.PI * 2;
+  const downhillX = Math.cos(angle);
+  const downhillZ = Math.sin(angle);
+  const reach = radiusMeters * 2 + 2 + random() * 4;
+  const count = 3 + Math.floor(random() * 5);
+  for (let index = 0; index < count; index++) {
+    const along = (random() - 0.2) * reach;
+    const across = (random() - 0.5) * reach * 0.7;
+    const x = anchorX + (downhillX * along - downhillZ * across) / metersPerUnit;
+    const z = anchorZ + (downhillZ * along + downhillX * across) / metersPerUnit;
+    const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+    if (habitat.sample(lon, lat) <= 0 || (densityScale?.(x, z) ?? 1) <= 0) continue;
+    if ((INLAND_OCCUPANCY[landCover.sample(lon, lat)] ?? 0) <= 0) continue;
+    const fragmentRadius = 0.12 + Math.pow(random(), 1.8) * Math.min(0.8, radiusMeters * 0.6);
+    addRock(context, x, z, fragmentRadius);
+  }
 }
 
 /** Estimates the local shoreline tangent from nearby land-cover samples. */

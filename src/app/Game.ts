@@ -622,6 +622,10 @@ export class Game {
     trace?.stage("land cover fetch");
     const landCover = await landCoverRequest;
     if (generation !== this.streamingGeneration) return undefined;
+    trace?.stage("map and lake context fetch");
+    const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
+    if (generation !== this.streamingGeneration) return undefined;
+    const surfaceLandCover = OpenStreetMap.createLandCoverSampler(contextTiles, landCover);
     trace?.stage("procedural relief");
     await applyTerrainDetail(
       terrainData,
@@ -630,7 +634,7 @@ export class Game {
           terrainData.groundWidthMeters,
           terrainData.groundHeightMeters,
         ) / subdivisions,
-        landCover,
+        landCover: surfaceLandCover,
         worldSeed: this.worldSeed,
       },
       yieldControl,
@@ -696,9 +700,6 @@ export class Game {
       meshDepth,
     });
 
-    trace?.stage("map and lake context fetch");
-    const [lakeTiles, contextTiles] = await Promise.all([mapTiles, lakeContextTiles]);
-    if (generation !== this.streamingGeneration) return undefined;
     trace?.stage("lake surface source preparation", "synchronous");
     // The overlap verdict is decided once per water polygon from the wider
     // context input below; the surface input only supplies tile-clipped rings.
@@ -835,7 +836,7 @@ export class Game {
       meshDepth,
       subdivisions,
       metersPerUnit,
-      landCover,
+      landCover: surfaceLandCover,
       yieldControl,
       snowExclusion: buildingSnowExclusion(roadAndBuildingPlan.buildingSites),
     });

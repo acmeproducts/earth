@@ -14,10 +14,10 @@ import {
   type CartesianAxis,
 } from "../core/PolygonGeometry";
 
-export const MINIMUM_ROOM_AREA_SQUARE_METERS = 12;
+export const MINIMUM_ROOM_AREA_SQUARE_METERS = 10;
 /** Keep generated rooms wide enough to furnish and move through comfortably. */
 export const MINIMUM_ROOM_CLEAR_WIDTH_METERS = 2.8;
-const MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 12;
+const MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 10;
 // Keep the upper bound high enough for large, open-plan apartments. Since
 // subdivision stops once a piece would fall below twice this target, this
 // also raises the largest room size the planner can intentionally retain.
@@ -97,10 +97,9 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
 /**
  * Assigns the first useful room functions in a finished apartment.
  *
- * The assignment is deliberately deterministic: when several rooms qualify
- * for the toilet, the smallest one wins, and the largest remaining room gets
- * the kitchen. Remaining rooms become bedrooms, with a separate living room
- * when at least two rooms remain.
+ * Reserve a bedroom first, preferring a private room away from the entrance.
+ * Then assign a toilet, kitchen, and living room, in that order. Additional
+ * rooms become bedrooms. Area and position make the assignment deterministic.
  *
  * A toilet is always a dead end. Rooms that hold an entrance door, or whose
  * removal would cut the apartment in two, never become the toilet, so no
@@ -112,8 +111,8 @@ export function assignApartmentRoomTypes(
 ): void {
   if (rooms.length === 0) return;
   if (rooms.length === 1) {
-    rooms[0].type = "living-room";
-    rooms[0].label = "Living room";
+    rooms[0].type = "bedroom";
+    rooms[0].label = "Bedroom";
     return;
   }
 
@@ -134,31 +133,41 @@ export function assignApartmentRoomTypes(
     return Math.abs(difference) > 1e-7 ? difference : comparePosition(first, second);
   };
   const adjacency = roomAdjacency(rooms);
+  const privacyRank = (room: LayoutRoom<ApartmentRoomType>): number =>
+    (roomHasDoor(room, openings) ? 2 : 0) +
+    (isPassThroughRoom(rooms.indexOf(room), adjacency) ? 1 : 0);
+  const bedroom = [...rooms].sort((first, second) =>
+    privacyRank(first) - privacyRank(second) || compareArea(second, first))[0];
+  const sharedRooms = rooms.filter((room) => room !== bedroom);
+  const sharedAdjacency = roomAdjacency(sharedRooms);
   const smallRoom = rooms
-    .filter((room, index) => area(room) <= SMALL_ROOM_AREA_SQUARE_METERS + 1e-7 &&
+    .filter((room, index) => room !== bedroom && area(room) <= SMALL_ROOM_AREA_SQUARE_METERS + 1e-7 &&
       !roomHasDoor(room, openings) &&
       !isPassThroughRoom(index, adjacency))
-    .sort(compareArea)[0];
+    .sort((first, second) =>
+      Number(isPassThroughRoom(sharedRooms.indexOf(first), sharedAdjacency)) -
+      Number(isPassThroughRoom(sharedRooms.indexOf(second), sharedAdjacency)) || compareArea(first, second))[0];
   if (smallRoom) {
     smallRoom.type = "toilet";
     smallRoom.label = "Toilet";
   }
 
   const kitchen = rooms
-    .filter((room) => room !== smallRoom)
+    .filter((room) => room !== bedroom && room !== smallRoom)
     .sort((first, second) => compareArea(second, first))[0];
   if (kitchen) {
     kitchen.type = "kitchen";
     kitchen.label = "Kitchen";
   }
 
-  const remaining = rooms.filter((room) => room !== smallRoom && room !== kitchen)
+  const remaining = rooms.filter((room) => room !== bedroom && room !== smallRoom && room !== kitchen)
     .sort((first, second) => compareArea(second, first));
-  if (remaining.length > 1) {
+  if (remaining.length > 0) {
     const livingRoom = remaining.shift()!;
     livingRoom.type = "living-room";
     livingRoom.label = "Living room";
   }
+  remaining.push(bedroom);
   remaining.sort(comparePosition).forEach((room, index) => {
     room.type = "bedroom";
     room.label = remaining.length === 1 ? "Bedroom" : `Bedroom ${index + 1}`;
@@ -225,11 +234,12 @@ function internalRoomDoors(
   const doors: Opening2D[] = [];
   while (connected.size < rooms.length) {
     let best: { from: number; to: number; segment: readonly [Point2D, Point2D]; length: number } | undefined;
-    // Toilets are only used as a source when nothing else can reach a room,
-    // so connectivity still wins over the dead-end rule in degenerate plans.
-    for (const allowToilets of [false, true]) {
+    // Prefer shared circulation, then bedrooms. Toilets are only a last-resort
+    // source so connectivity still wins in degenerate plans.
+    for (const privacyLimit of [0, 1, 2]) {
       for (const from of connected) {
-        if (!allowToilets && isToilet(from)) continue;
+        const privacy = isToilet(from) ? 2 : rooms[from].type === "bedroom" ? 1 : 0;
+        if (privacy > privacyLimit) continue;
         for (let to = 0; to < rooms.length; to++) {
           if (connected.has(to)) continue;
           const segment = sharedSegment(

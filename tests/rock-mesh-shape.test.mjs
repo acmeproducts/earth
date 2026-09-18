@@ -25,10 +25,13 @@ registerHooks({
 });
 
 const { NullEngine, Scene, VertexBuffer } = await import("@babylonjs/core");
-const { createRockMesh } = await import("../src/vegetation/RockField.ts");
+const { createRockMesh, createRockField } = await import("../src/vegetation/RockField.ts");
+const { habitatField } = await import("../src/vegetation/HabitatNoise.ts");
+const { sceneToLonLat } = await import("../src/world/Geo.ts");
 
 const engine = new NullEngine();
 const scene = new Scene(engine);
+engine.getCaps().instancedArrays = true;
 
 /** Per-face geometric normal and the shading normals it was given. */
 function analyse(mesh) {
@@ -88,4 +91,60 @@ test("blocky stones mix hard fracture facets with a smoothed body", () => {
       `variant ${variant}: only ${stats.smoothShare.toFixed(2)} of shading normals are smoothed`,
     );
   }
+});
+
+async function placedRocks({ cover = 60, slope = 0, densityScale, exclusionMask } = {}) {
+  const span = 2400;
+  const terrain = {
+    width: 2, height: 2,
+    elevations: new Float32Array([2000 - slope * span / 2, 2000 + slope * span / 2,
+      2000 - slope * span / 2, 2000 + slope * span / 2]),
+    bounds: { lonWest: 8.5, lonEast: 8.532, latSouth: 47.3, latNorth: 47.322 },
+  };
+  const field = await createRockField(scene, terrain, {
+    meshWidth: span, meshDepth: span, metersPerUnit: 1,
+    seed: 123, modelVariantSeed: 456, landCover: { sample: () => cover },
+    densityScale, exclusionMask,
+  });
+  const points = field.meshes.flatMap(mesh => mesh.thinInstanceGetWorldMatrices().map(matrix => ({
+    x: matrix.m[12], z: matrix.m[14], radius: Math.hypot(...matrix.m.slice(0, 3)),
+  })));
+  field.root.dispose(false, true);
+  return { points, terrain, span };
+}
+
+test("inland deposits leave habitat gaps empty even on stony covers", async () => {
+  const habitat = habitatField("rocks", 456, {
+    patchMeters: 250, abundanceMeters: 2800, barrenShare: 0.45, richestCoverage: 0.8,
+  });
+  for (const cover of [60, 70, 100]) {
+    const { points, terrain, span } = await placedRocks({ cover });
+    assert.ok(points.length > 20, `cover ${cover} must still have deposits`);
+    for (const point of points) {
+      const { lon, lat } = sceneToLonLat(point.x, point.z, terrain.bounds, span, span);
+      assert.ok(habitat.sample(lon, lat) > 0, `cover ${cover} filled an empty habitat`);
+    }
+    const occupied = new Set(points.map(p => `${Math.floor((p.x + span / 2) / 100)},${Math.floor((p.z + span / 2) / 100)}`));
+    assert.ok(occupied.size < 24 * 24 * 0.4, "most 100m blocks should be clear");
+  }
+});
+
+test("deposits are repeatable, locally grouped, and favor slopes", async () => {
+  const flat = (await placedRocks()).points;
+  const sloped = (await placedRocks({ slope: 0.65 })).points;
+  assert.deepEqual((await placedRocks()).points, flat);
+  assert.ok(sloped.length > flat.length * 1.5, `${sloped.length} slope vs ${flat.length} flat`);
+  const grouped = flat.filter((p, i) => flat.some((q, j) => i !== j && Math.hypot(p.x - q.x, p.z - q.z) < 10));
+  assert.ok(grouped.length > flat.length * 0.9, "stones should have nearby companions");
+});
+
+test("formation fragments respect exclusions, density masks, and sand cover", async () => {
+  assert.equal((await placedRocks({ densityScale: () => 0 })).points.length, 0);
+  assert.equal((await placedRocks({ cover: 61 })).points.length, 0);
+  const { points } = await placedRocks({
+    densityScale: (x) => x < 0 ? 0 : 1,
+    exclusionMask: { intersects: (x, z, radius) => z - radius < 0 },
+  });
+  assert.ok(points.length > 0);
+  assert.ok(points.every(p => p.x >= 0 && p.z >= 0));
 });

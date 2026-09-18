@@ -48,7 +48,7 @@ test("furniture follows rotated and translated rooms", () => {
 });
 
 test("generated apartment bedrooms fit beds with internal doors present", () => {
-  for (const [width, height] of [[10, 10], [20, 5], [14, 9]]) {
+  for (const [width, height] of [[5, 3], [8, 3], [7, 6], [10, 10], [20, 5], [14, 9]]) {
     const source = planApartmentLayout({
       apartmentPolygon: { outer: [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }] },
       openings: [{ id: "entrance", type: "door", start: { x: 1, y: 0 }, end: { x: 2, y: 0 } }],

@@ -55,8 +55,8 @@ test("keeps the general grassland rock scatter sparse", () => {
   assert.match(source, /\[LandCoverClass\.Grassland\]: 0\.015/);
   assert.match(source, /const habitat = habitatField\("rocks", modelVariantSeed, HABITAT\)/);
   assert.match(source, /const stand = habitat\.sample\(lon, lat\)/);
-  assert.match(source, /const STONY_FLOOR = 0\.4/);
-  assert.match(source, /if \(field <= 0\) continue/);
+  assert.doesNotMatch(source, /STONY_FLOOR/);
+  assert.match(source, /if \(stand <= 0\) continue/);
 });
 
 test("rocks retain burial and upward-facing moss decisions", () => {

@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NullEngine, Scene, Mesh } from '@babylonjs/core';
-import { terrainReliefNormalPixels, attachTerrainReliefNormals } from '../src/terrain/TerrainReliefNormals.ts';
+import { NullEngine, Scene, Mesh, StandardMaterial } from '@babylonjs/core';
+import { terrainReliefNormalPixels, attachTerrainReliefNormals, TerrainReliefNormalsPlugin } from '../src/terrain/TerrainReliefNormals.ts';
 
 const raster = (fn) => ({ width: 5, height: 5, groundWidthMeters: 4, groundHeightMeters: 4,
   elevations: Float32Array.from({length: 25}, (_, i) => fn(i % 5, Math.floor(i / 5))) });
+
+test('road grading and building pads preserve the surrounding sand material', () => {
+  const data = raster(() => 100);
+  data.sandCoverage = new Float32Array(25).fill(1);
+  data.reliefReferenceElevations = data.elevations.slice();
+  assert.equal(terrainReliefNormalPixels(data)[3], 255);
+  // Road channel, raised foundation, and their graded shoulders.
+  data.elevations.set([99, 99.75, 100, 100.25, 102]);
+  const pixels = terrainReliefNormalPixels(data);
+  for (let i = 0; i < 25; i++) assert.equal(pixels[i * 4 + 3], 255);
+  data.sandCoverage[0] = 0.2;
+  assert.equal(terrainReliefNormalPixels(data)[3], 102, 'retain blended land-cover boundaries');
+  delete data.sandCoverage;
+  assert.equal(terrainReliefNormalPixels(data)[3], 0);
+});
 
 test('normal map preserves physical slope and north/south orientation', () => {
   const pixels = terrainReliefNormalPixels(raster((x, y) => 100 + x * 0.3 + y * 0.4));
@@ -33,6 +48,24 @@ test('normal maps belong to tiles and are released independently', () => {
   assert.equal(scene.textures.length, 1);
   second.dispose();
   assert.equal(scene.textures.length, 0);
+  scene.dispose(); engine.dispose();
+});
+
+test('skirts share parent sand shading and the common scene scale without another texture', () => {
+  const engine = new NullEngine(), scene = new Scene(engine);
+  const ground = new Mesh('ground', scene), skirt = new Mesh('skirt', scene);
+  skirt.parent = ground;
+  attachTerrainReliefNormals(ground, raster(() => 100), 4, 4, 7);
+  const plugin = new TerrainReliefNormalsPlugin(new StandardMaterial('test', scene));
+  const defines = {};
+  plugin.prepareDefines(defines, scene, skirt);
+  assert.equal(defines.TERRAIN_RELIEF_NORMALS, true);
+  const uniforms = {};
+  plugin.hardBindForSubMesh({ updateFloat4() {}, setTexture(name, value) { uniforms[name] = value; },
+    updateFloat(name, value) { uniforms[name] = value; } }, scene, engine, {getMesh: () => skirt});
+  assert.equal(uniforms.terrainSandScale, 7);
+  assert.equal(uniforms.terrainReliefNormals, scene.textures[0]);
+  assert.equal(scene.textures.length, 1);
   scene.dispose(); engine.dispose();
 });
 
