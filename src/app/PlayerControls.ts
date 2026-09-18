@@ -17,6 +17,7 @@ import {
 import { moveWalkerWithCollisions } from "./WalkerCollision";
 import type { WalkerBody } from "../vegetation/TreeTrunkCollision";
 import type { PlayerPose } from "../integration/GameProtocol";
+import { findInteraction } from "./InteractionSystem";
 
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
@@ -60,6 +61,7 @@ export class PlayerControls {
   private walkerJumpRequested = false;
   private pointerLockWasActive = false;
   private flySpeedOutput: HTMLOutputElement;
+  private readonly interactionPrompt: HTMLOutputElement;
   private currentMovementMode: MovementMode = "fly";
   private lastLoadedX?: number;
   private lastLoadedZ?: number;
@@ -76,6 +78,10 @@ export class PlayerControls {
     this.flySpeedOutput.id = "flySpeed";
     document.body.appendChild(this.flySpeedOutput);
     this.updateFlySpeedOutput();
+    this.interactionPrompt = document.createElement("output");
+    this.interactionPrompt.id = "interactionPrompt";
+    this.interactionPrompt.hidden = true;
+    document.body.appendChild(this.interactionPrompt);
 
     canvas.addEventListener("wheel", this.handleFlySpeedWheel, { passive: false });
     canvas.addEventListener("click", this.handleCanvasClick);
@@ -93,6 +99,9 @@ export class PlayerControls {
   updateMovement(): void {
     this.constrainToLoadedTile();
     this.updateWalker();
+    const interaction = this.getInteraction();
+    this.interactionPrompt.hidden = !interaction;
+    this.interactionPrompt.value = interaction ? `F  ${interaction.label}` : "";
   }
 
   /** Keeps camera input from carrying the player across an unloaded tile. */
@@ -116,6 +125,7 @@ export class PlayerControls {
     const { camera, canvas } = this.options;
     this.heldMovementKeys.clear();
     document.body.classList.toggle("gameplay-input", !isOpen);
+    this.interactionPrompt.hidden = true;
     if (isOpen) {
       camera.detachControl();
       if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -176,6 +186,7 @@ export class PlayerControls {
     document.body.classList.remove("gameplay-input");
     if (document.pointerLockElement === canvas) document.exitPointerLock();
     this.flySpeedOutput.remove();
+    this.interactionPrompt.remove();
   }
 
   private readonly handleCanvasClick = (): void => {
@@ -224,6 +235,10 @@ export class PlayerControls {
     if (this.options.isMenuOpen()) return;
     const key = kbInfo.event.key.toLowerCase();
     if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
+      if (kbInfo.event.code === "KeyF" && !kbInfo.event.shiftKey && !kbInfo.event.ctrlKey &&
+          !kbInfo.event.altKey && !kbInfo.event.metaKey && !(kbInfo.event as KeyboardEvent).repeat) {
+        this.getInteraction()?.activate();
+      }
       if (["w", "a", "s", "d"].includes(key)) this.heldMovementKeys.add(key);
       if (key === "g" && !(kbInfo.event as KeyboardEvent).repeat) this.toggleMovementMode();
       if (this.currentMovementMode === "walk" && kbInfo.event.code === "Space"
@@ -248,6 +263,13 @@ export class PlayerControls {
     } catch {
       // Browsers reject pointer lock without a current user activation.
     }
+  }
+
+  private getInteraction() {
+    const { camera, scene, canvas } = this.options;
+    const scale = this.options.getMetersPerUnit();
+    if (!scale || this.options.isMenuOpen() || document.pointerLockElement !== canvas) return undefined;
+    return findInteraction(scene, camera.getForwardRay(3 / scale));
   }
 
   private updateFlySpeedOutput(): void {

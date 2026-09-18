@@ -40,8 +40,8 @@ function setup(parts, scale = 1) {
 }
 function hits(meshes, origin, direction, length) {
   return meshes.map((mesh) => {
-    mesh.computeWorldMatrix(true);
-    return mesh.intersects(new Ray(origin,direction,length));
+    const inverse = mesh.computeWorldMatrix(true).clone().invert();
+    return mesh.intersects(Ray.Transform(new Ray(origin,direction,length), inverse));
   }).filter((hit) => hit.hit);
 }
 

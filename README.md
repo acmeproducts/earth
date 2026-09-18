@@ -334,7 +334,7 @@ animation frames (or long tasks as a fallback), the hottest attributed script,
 and a render breakdown for active-mesh evaluation, render targets, draw
 submission, GPU frame time, and shader compilation. It also shows streaming
 counts, heap use where supported, draw calls, active meshes, and render scale.
-Press `F` to toggle the expanded counter at runtime.
+Press `Shift+F` to toggle the expanded counter at runtime.
 
 Press `R` to download a timestamped JSON render report and mirror it to the
 browser console. Reports retain the latest 300 frame samples with percentile
@@ -398,7 +398,8 @@ earth/
 - `Space`: Jump in walker mode
 - `Mouse wheel`: Change fly speed
 - `V`: Cycle vegetation rendering modes
-- `F`: Toggle expanded performance diagnostics
+- `F`: Open or close the door you are looking at within 3 meters
+- `Shift+F`: Toggle expanded performance diagnostics
 - `R`: Download a render report
 
 Walker mode uses a 1.8 m player height, terrain collision, and gravity.

@@ -48,6 +48,7 @@ import { buildingWindowStyle, type BuildingWindowStyle } from "../buildings/Buil
 import { buildingProfile } from "../buildings/BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
 import { createRooftopEquipment } from "./RooftopEquipment";
+import { createBuildingDoor } from "./BuildingDoor";
 import type { TerrainData } from "../terrain/TerrainData";
 import { buildingGroundElevation } from "../terrain/BuildingGroundElevation";
 import type {
@@ -745,6 +746,10 @@ function* buildInteriorChunks(
       yield next.done ? "geometry complete" : next.value;
       for (const mesh of parts) {
         mesh.parent = root;
+        if (mesh.metadata?.buildingDoor) {
+          yield "door geometry";
+          continue;
+        }
         if (!mesh.isVerticesDataPresent(BUILDING_MATERIAL_VERTEX_KIND)) setBuildingSurface(mesh, "plaster");
         compactMeshBuffers(mesh);
         mesh.metadata = { metersPerUnit: options.metersPerUnit };
@@ -829,6 +834,7 @@ function* createFloorContents(
   entranceOpenings: Opening2D[], facadeOpenings: Opening2D[],
   interiorUse: NonNullable<BuildingPlan["interiorUse"]>, holes: ScenePoint[][] = [],
 ): Generator<string, void, void> {
+  const doorOpenings = [...(floor === 0 ? entranceOpenings : [])];
   if (plannedInterior) {
     const wallColor = mixColor(appearance.wall, new Color3(0.82, 0.79, 0.72), 0.18);
     // One ground-floor suite serves as reception; upper floors retain their rooms.
@@ -846,6 +852,11 @@ function* createFloorContents(
         rooms: [{ id: "reception", type: "room", polygon: apartment.boundary }],
         openings: apartment.openings?.filter((opening) => openingTouchesBoundary(opening, apartment.boundary.outer)),
       } : apartment) };
+    for (const layout of [floorInterior.building, ...floorInterior.apartments]) {
+      doorOpenings.push(...(layout.openings ?? []).filter((opening) =>
+        !openingTouchesBoundary(opening, plannedInterior.building.boundary.outer) &&
+        !(plannedInterior.building.boundary.holes ?? []).some((ring) => openingTouchesBoundary(opening, ring))));
+    }
     const furniture: FurniturePlacement[] = [];
     for (let index = 0; index < floorInterior.apartments.length; index++) {
       const apartment = floorInterior.apartments[index];
@@ -878,6 +889,21 @@ function* createFloorContents(
     yield* createFurnitureParts(parts, scene, furniture,
       floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
       options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
+  }
+  const seenDoors = new Set<string>();
+  for (const opening of doorOpenings) {
+    if (opening.type !== "door" || opening.fullHeight) continue;
+    const key = canonicalSegmentKey(opening.start, opening.end);
+    if (seenDoors.has(key)) continue;
+    seenDoors.add(key);
+    const exterior = entranceOpenings.some((entrance) => canonicalSegmentKey(entrance.start, entrance.end) === key);
+    const height = exterior
+      ? Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28) - BUILDING_FLOOR_THICKNESS_METERS
+      : Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - BUILDING_FLOOR_THICKNESS_METERS - 0.12);
+    if (height < 0.4) continue;
+    parts.push(createBuildingDoor(scene, opening, floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
+      height, options.metersPerUnit));
+    yield "doors";
   }
 }
 

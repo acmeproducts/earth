@@ -1757,7 +1757,7 @@ export class Game {
             ? "impostors"
             : "auto";
         this.setAllVegetationModes(nextMode);
-      } else if (kbInfo.event.key === "f" || kbInfo.event.key === "F") {
+      } else if (kbInfo.event.shiftKey && (kbInfo.event.key === "f" || kbInfo.event.key === "F")) {
         this.fpsCounter.toggleExpanded();
       } else if (kbInfo.event.key === "r" || kbInfo.event.key === "R") {
         this.fpsCounter.dumpRenderStats(this.engine, this.scene, this.getRenderStatsContext());
