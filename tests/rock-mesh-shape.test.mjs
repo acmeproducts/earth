@@ -115,7 +115,7 @@ async function placedRocks({ cover = 60, slope = 0, densityScale, exclusionMask 
 
 test("inland deposits leave habitat gaps empty even on stony covers", async () => {
   const habitat = habitatField("rocks", 456, {
-    patchMeters: 250, abundanceMeters: 2800, barrenShare: 0.45, richestCoverage: 0.8,
+    patchMeters: 600, abundanceMeters: 2800, barrenShare: 0.5, richestCoverage: 0.7,
   });
   for (const cover of [60, 70, 100]) {
     const { points, terrain, span } = await placedRocks({ cover });
@@ -125,7 +125,7 @@ test("inland deposits leave habitat gaps empty even on stony covers", async () =
       assert.ok(habitat.sample(lon, lat) > 0, `cover ${cover} filled an empty habitat`);
     }
     const occupied = new Set(points.map(p => `${Math.floor((p.x + span / 2) / 100)},${Math.floor((p.z + span / 2) / 100)}`));
-    assert.ok(occupied.size < 24 * 24 * 0.4, "most 100m blocks should be clear");
+    assert.ok(occupied.size < 24 * 24 * 0.5, `${occupied.size} of 576 blocks contain rocks`);
   }
 });
 

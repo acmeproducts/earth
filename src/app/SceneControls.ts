@@ -44,6 +44,7 @@ export class SceneControls {
   private readonly placeGoButton: HTMLButtonElement;
   private readonly latitudeInput: HTMLInputElement;
   private readonly longitudeInput: HTMLInputElement;
+  private readonly googleMapsLink: HTMLAnchorElement;
   private readonly locationStatus: HTMLOutputElement;
   private readonly goButton: HTMLButtonElement;
   private readonly randomLocationButton: HTMLButtonElement;
@@ -245,6 +246,15 @@ export class SceneControls {
     this.goButton.textContent = "Go";
     locationForm.appendChild(this.goButton);
 
+    this.googleMapsLink = document.createElement("a");
+    this.googleMapsLink.className = "google-maps-link";
+    this.googleMapsLink.textContent = "Open in Google Maps";
+    this.googleMapsLink.target = "_blank";
+    this.googleMapsLink.rel = "noopener noreferrer";
+    locationForm.appendChild(this.googleMapsLink);
+    this.latitudeInput.addEventListener("input", () => this.updateGoogleMapsLink());
+    this.longitudeInput.addEventListener("input", () => this.updateGoogleMapsLink());
+
     this.locationStatus = document.createElement("output");
     this.locationStatus.className = "coordinate-status";
     this.locationStatus.setAttribute("aria-live", "polite");
@@ -301,7 +311,22 @@ export class SceneControls {
   setLocation(location: WorldLocation): void {
     this.latitudeInput.value = formatCoordinate(location.lat);
     this.longitudeInput.value = formatCoordinate(location.lon);
+    this.updateGoogleMapsLink();
     this.locationStatus.value = "";
+  }
+
+  private updateGoogleMapsLink(): void {
+    const lat = this.latitudeInput.valueAsNumber;
+    const lon = this.longitudeInput.valueAsNumber;
+    const valid = Number.isFinite(lat) && Number.isFinite(lon)
+      && Math.abs(lat) <= WEB_MERCATOR_MAX_LATITUDE && Math.abs(lon) <= 180;
+    if (valid) {
+      this.googleMapsLink.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lon}`)}`;
+      this.googleMapsLink.removeAttribute("aria-disabled");
+    } else {
+      this.googleMapsLink.removeAttribute("href");
+      this.googleMapsLink.setAttribute("aria-disabled", "true");
+    }
   }
 
   setMenuOpen(isOpen: boolean): void {
@@ -369,8 +394,7 @@ export class SceneControls {
         return;
       }
       const location = { lat: result.lat, lon: result.lon };
-      this.latitudeInput.value = formatCoordinate(location.lat);
-      this.longitudeInput.value = formatCoordinate(location.lon);
+      this.setLocation(location);
       this.locationStatus.value = `Loading ${result.displayName}...`;
       await onLocationChange(location);
       this.setLocation(location);

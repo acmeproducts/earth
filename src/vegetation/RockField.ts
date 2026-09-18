@@ -72,10 +72,10 @@ const SHORE_FORMATION_CHANCE = 0.55;
  * as clear.
  */
 const HABITAT: HabitatFieldSpec = {
-  patchMeters: 250,
+  patchMeters: 600,
   abundanceMeters: 2800,
-  barrenShare: 0.45,
-  richestCoverage: 0.8,
+  barrenShare: 0.5,
+  richestCoverage: 0.7,
 };
 const SHORE_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
