@@ -125,7 +125,9 @@ export async function createGrassField(
   });
   const maximumHalfWidth = grassRenderedCaptureSize(grassHeight) * 0.72;
 
-  if (landCover) {
+  // Snow whitens the ground before the shared low-plant density reaches zero.
+  // Keep summer-green grass out of snowy tiles, including light winter cover.
+  if (landCover && (options.snowCover ?? 0) <= 0) {
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
         // Let neighbouring clumps overlap irregularly. Their generous width

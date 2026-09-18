@@ -9,7 +9,7 @@ import {
   SSRRenderingPipeline,
   TAARenderingPipeline,
   FxaaPostProcess,
-  PassPostProcess,
+  PostProcess,
   UniversalCamera,
   Vector3,
   Color4,
@@ -24,6 +24,7 @@ import { prepareSceneForReveal } from "../rendering/SceneReadiness";
 import { registerStaticMeshCandidates } from "../rendering/StaticMeshCandidates";
 import { StaticMeshBatches } from "../rendering/StaticMeshBatches";
 import { loadAntialiasing, saveAntialiasing } from "../rendering/Antialiasing";
+import { createToneMappingPass } from "../rendering/ToneMapping";
 import type { AntialiasingMode } from "../rendering/Antialiasing";
 import { TerrainElevationSource } from "../terrain/TerrainElevationSource";
 import { applyTerrainDetail, upsampleTerrain } from "../terrain/TerrainDetail";
@@ -259,7 +260,8 @@ export class Game {
   private screenSpaceReflections?: SSRRenderingPipeline;
   private antialiasingMode: AntialiasingMode;
   private temporalAA?: TAARenderingPipeline;
-  private antialiasingPass?: FxaaPostProcess | PassPostProcess;
+  private antialiasingPass?: FxaaPostProcess;
+  private toneMappingPass?: PostProcess;
   private flyCamera?: UniversalCamera;
   private playerControls?: PlayerControls;
   private terrainCoordinateFrame?: SceneGeographicFrame;
@@ -1482,10 +1484,13 @@ export class Game {
     this.temporalAA = undefined;
     this.antialiasingPass?.dispose(camera);
     this.antialiasingPass = undefined;
+    this.toneMappingPass?.dispose(camera);
+    this.toneMappingPass = createToneMappingPass(camera);
     camera.getProjectionMatrix(true);
 
     const samples = this.antialiasingMode === "msaa" ? 4 : 1;
     if (this.screenSpaceReflections) this.screenSpaceReflections.samples = samples;
+    else this.toneMappingPass.samples = samples;
     if (this.antialiasingMode === "taa") {
       const taa = new TAARenderingPipeline("temporalAA", this.scene, [camera]);
       taa.samples = 8;
@@ -1495,10 +1500,6 @@ export class Game {
       this.temporalAA = taa;
     } else if (this.antialiasingMode === "fxaa") {
       this.antialiasingPass = new FxaaPostProcess("FXAA", 1, camera);
-    } else if (this.antialiasingMode === "msaa" && !this.screenSpaceReflections) {
-      // Keep MSAA available with reflections disabled, without recreating the engine.
-      this.antialiasingPass = new PassPostProcess("MSAA", 1, camera);
-      this.antialiasingPass.samples = 4;
     }
   }
 
