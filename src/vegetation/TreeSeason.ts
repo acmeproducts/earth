@@ -2,6 +2,7 @@ import { sampleValueNoise3D } from "../core/ValueNoise";
 import type { TreeSpecies } from "../procedural/ProceduralTree";
 import { lerp, smoothstep } from "../core/MathUtils";
 import { cellRandom, unitFromSeed } from "../core/Random";
+import { treeDistributionAt } from "./TreeDistribution";
 
 export type TreeSeason = "spring" | "summer" | "autumn" | "winter";
 
@@ -53,8 +54,10 @@ function autumnMatureColor(species: TreeSpecies): readonly [number, number, numb
 export function hasWinterGroundCover(
   date: Date | undefined,
   latitude: number,
+  elevationMeters = 0,
+  longitude?: number,
 ): boolean {
-  return snowCoverAt(date, latitude) > 0;
+  return snowCoverAt(date, latitude, elevationMeters, longitude) > 0;
 }
 
 /** Number of baked snow tiers above bare ground shared by impostor atlases. */
@@ -65,18 +68,31 @@ export const SNOW_COVER_TIERS = 3;
  * cover. Snow only lies during the hemisphere's meteorological winter and
  * never within the tropics. Within winter it builds from a thin early
  * dusting to a late-January peak and thins again towards spring; higher
- * latitudes and elevations hold more of it.
+ * latitudes and elevations hold more of it. A coarse biome-based snow line
+ * keeps mild lowlands bare; this is seasonal scenery, not observed weather.
  */
 export function snowCoverAt(
   date: Date | undefined,
   latitude: number,
   elevationMeters = 0,
+  longitude?: number,
 ): number {
   if (!date || !Number.isFinite(date.getTime()) || !Number.isFinite(latitude)) return 0;
   const absoluteLatitude = Math.abs(latitude);
   if (absoluteLatitude < 23.5) return 0;
   const southern = latitude < 0;
   if (meteorologicalSeason(date.getMonth(), southern) !== "winter") return 0;
+
+  const elevation = Number.isFinite(elevationMeters) ? Math.max(0, elevationMeters) : 0;
+  let snowLine = lerp(1400, -600, smoothstep(23.5, 60, absoluteLatitude));
+  if (longitude !== undefined && Number.isFinite(longitude) && Math.abs(longitude) <= 180 && absoluteLatitude <= 90) {
+    const mildInfluence = treeDistributionAt(longitude, latitude).biomes.reduce(
+      (sum, { biome, ratio }) => sum + (biome === "mediterranean" || biome === "desert" ? ratio : 0), 0,
+    );
+    snowLine = lerp(snowLine, Math.max(snowLine, 1800), mildInfluence);
+  }
+  const snowSuitability = smoothstep(snowLine, snowLine + 600, elevation);
+  if (snowSuitability === 0) return 0;
 
   // Fraction of the three-month winter elapsed, counting from the first
   // winter month of either hemisphere.
@@ -89,10 +105,8 @@ export function snowCoverAt(
     : lerp(1, 0.55, smoothstep(peak, 1, progress));
 
   const latitudeFactor = lerp(0.4, 1, smoothstep(23.5, 60, absoluteLatitude));
-  const elevationBonus = Number.isFinite(elevationMeters)
-    ? Math.min(0.5, Math.max(0, elevationMeters) / 2500)
-    : 0;
-  return Math.min(1, seasonalDepth * latitudeFactor + elevationBonus);
+  const elevationBonus = Math.min(0.5, elevation / 2500);
+  return snowSuitability * Math.min(1, seasonalDepth * latitudeFactor + elevationBonus);
 }
 
 /** Discrete snow level (0 = none) that identifies a baked impostor atlas. */

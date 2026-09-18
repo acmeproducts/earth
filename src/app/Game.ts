@@ -144,6 +144,8 @@ import {
   worldTileArea,
   worldTileAtLocation,
   worldTileBounds,
+  worldTileCoordinatesAtLocation,
+  worldTileIntersectsCircle,
   worldTileKey,
   worldTileWindowOffsetsAtLocation,
 } from "../world/WorldGrid";
@@ -1697,6 +1699,7 @@ export class Game {
     now: number,
     center: WorldTileId,
     detailWindow: WorldTileWindowOffsets,
+    neededTiles: ReadonlySet<string>,
   ): void {
     const scale = 2 ** center.level;
     let detailChanged = false;
@@ -1706,12 +1709,10 @@ export class Game {
       const dx = rawDx > scale / 2
         ? rawDx - scale
         : rawDx < -scale / 2 ? rawDx + scale : rawDx;
-      const dy = Math.abs(record.id.y - center.y);
-      const ring = Math.max(Math.abs(dx), dy);
       const wantDetail = dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
         record.id.y - center.y >= detailWindow.minimumY &&
         record.id.y - center.y <= detailWindow.maximumY;
-      if (ring > this.terrainTileRadius &&
+      if (!neededTiles.has(record.key) &&
           now - record.lastNeededMilliseconds > TILE_COOLDOWN_MS) {
         this.tiles.delete(record.key);
         detailChanged = detailChanged || record.detailed;
@@ -1726,19 +1727,12 @@ export class Game {
       }
     }
     const tilesAcross = this.terrainTileRadius * 2 + 1;
-    const maximumRetainedTiles = tilesAcross * tilesAcross +
+    const maximumRetainedTiles = neededTiles.size +
       RETAINED_TILE_EDGE_SLACK * tilesAcross;
     if (this.tiles.size > maximumRetainedTiles) {
       const stale = [...this.tiles.values()]
         .filter((record) => !this.activeTileBuilds.has(record.key))
-        .filter((record) => {
-          const rawDx = record.id.x - center.x;
-          const dx = rawDx > scale / 2
-            ? rawDx - scale
-            : rawDx < -scale / 2 ? rawDx + scale : rawDx;
-          return Math.max(Math.abs(dx), Math.abs(record.id.y - center.y)) >
-            this.terrainTileRadius;
-        })
+        .filter((record) => !neededTiles.has(record.key))
         .sort((left, right) => left.lastNeededMilliseconds - right.lastNeededMilliseconds);
       while (this.tiles.size > maximumRetainedTiles && stale.length > 0) {
         const record = stale.shift()!;
@@ -1888,12 +1882,13 @@ export class Game {
     if (rebuildScenery) this.invalidateScenery();
   }
 
-  /** Snow depth on a tile from the scenery date, its latitude and mean elevation. */
+  /** Snow depth on a tile from the scenery date, location and mean elevation. */
   private tileSnowCover(terrain: TerrainData): number {
     return snowCoverAt(
       this.vegetationDate,
       (terrain.bounds.latNorth + terrain.bounds.latSouth) / 2,
       meanElevation(terrain),
+      (terrain.bounds.lonWest + terrain.bounds.lonEast) / 2,
     );
   }
 
@@ -2155,6 +2150,12 @@ export class Game {
 
     const scale = 2 ** center.level;
     const generation = this.streamingGeneration;
+    const coordinates = worldTileCoordinatesAtLocation(lat, lon, center.level);
+    const fractionX = coordinates.x - center.x;
+    const fractionY = coordinates.y - center.y;
+    const neededTiles = new Set<string>();
+    const radius = this.terrainTileRadius + 0.5;
+    const extent = Math.ceil(radius);
     const detailWindow = worldTileWindowOffsetsAtLocation(
       lat,
       lon,
@@ -2168,18 +2169,20 @@ export class Game {
       terrainOnly: boolean;
       distanceSquared: number;
     }> = [];
-    for (let dy = -this.terrainTileRadius; dy <= this.terrainTileRadius; dy++) {
+    for (let dy = -extent; dy <= extent; dy++) {
       const y = center.y + dy;
       if (y < 0 || y >= scale) continue;
-      for (let dx = -this.terrainTileRadius; dx <= this.terrainTileRadius; dx++) {
+      for (let dx = -extent; dx <= extent; dx++) {
+        const wantDetail = dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
+          dy >= detailWindow.minimumY && dy <= detailWindow.maximumY;
+        if (!wantDetail && !worldTileIntersectsCircle(dx, dy, fractionX, fractionY, radius)) continue;
         const id: WorldTileId = {
           level: center.level,
           x: ((center.x + dx) % scale + scale) % scale,
           y,
         };
         const key = worldTileKey(id);
-        const wantDetail = dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
-          dy >= detailWindow.minimumY && dy <= detailWindow.maximumY;
+        neededTiles.add(key);
         const record = this.tiles.get(key);
         if (record) {
           record.lastNeededMilliseconds = now;
@@ -2224,7 +2227,7 @@ export class Game {
       });
     }
 
-    this.evictCooledTiles(now, center, detailWindow);
+    this.evictCooledTiles(now, center, detailWindow, neededTiles);
   }
 
   private continueTerrainStreaming(generation: number): void {

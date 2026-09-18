@@ -47,6 +47,19 @@ export interface WorldTileCoordinates {
   y: number;
 }
 
+/** Includes boundary tiles so a circular streaming horizon has no missing ground. */
+export function worldTileIntersectsCircle(
+  dx: number,
+  dy: number,
+  fractionX: number,
+  fractionY: number,
+  radius: number,
+): boolean {
+  const nearestX = Math.max(dx - fractionX, 0, fractionX - dx - 1);
+  const nearestY = Math.max(dy - fractionY, 0, fractionY - dy - 1);
+  return nearestX * nearestX + nearestY * nearestY < radius * radius;
+}
+
 /** Projects a location into continuous application-tile coordinates. */
 export function worldTileCoordinatesAtLocation(
   latitude: number,

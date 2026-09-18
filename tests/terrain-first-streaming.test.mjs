@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
+import { worldTileIntersectsCircle } from "../src/world/WorldGrid.ts";
 
 const source = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
 const parsed = ts.createSourceFile("Game.ts", source, ts.ScriptTarget.Latest, true);
@@ -15,6 +16,25 @@ function subject(methodNames, globals) {
   return new Subject();
 }
 const key = id => `${id.x}/${id.y}`;
+
+test("eviction releases square corners outside the circular footprint after cooldown", () => {
+  const disposed = [];
+  const game = subject(["evictCooledTiles"], {
+    TILE_COOLDOWN_MS: 30000, DETAIL_COOLDOWN_MS: 10000, RETAINED_TILE_EDGE_SLACK: 2,
+    disposeStreamedTile: record => disposed.push(record.key),
+  });
+  const record = (x, y, lastNeededMilliseconds) => ({
+    id: { x, y, level: 7 }, key: `${x}/${y}`, lastNeededMilliseconds, detailed: false,
+  });
+  const records = [record(66, 66, 0), record(66, 50, 0), record(65, 66, 35000)];
+  Object.assign(game, { tiles: new Map(records.map(item => [item.key, item])),
+    activeTileBuilds: new Map(), terrainTileRadius: 16 });
+  game.evictCooledTiles(40000, { x: 50, y: 50, level: 7 },
+    { minimumX: 0, maximumX: 0, minimumY: 0, maximumY: 0 }, new Set(["66/50"]));
+  assert.deepEqual(disposed, ["66/66"]);
+  assert.ok(game.tiles.has("66/50"), "keep needed edge tiles");
+  assert.ok(game.tiles.has("65/66"), "respect cooldown for recently needed tiles");
+});
 
 test("foreground completions refill on the next frame without a recursive build", () => {
   const game = subject(["continueTerrainStreaming"], {
@@ -63,6 +83,8 @@ test("scheduler fills missing terrain before far scenery and still prioritizes n
     DETAIL_COOLDOWN_MS: 10000, MAX_CONCURRENT_FAR_TILE_BUILDS: 2,
     sceneToLonLat: () => ({ lat: 0, lon: 0 }),
     worldTileAtLocation: () => ({ x: 10, y: 10, level: 5 }), worldTileKey: key,
+    worldTileCoordinatesAtLocation: () => ({ x: 10.5, y: 10.5 }),
+    worldTileIntersectsCircle,
     worldTileWindowOffsetsAtLocation: () => ({ minimumX: 0, maximumX: 0, minimumY: 0, maximumY: 0 }),
   });
   const complete = () => ({ nativeTerrain: false, detailed: false, sceneryRevision: 0,

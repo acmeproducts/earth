@@ -49,13 +49,13 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
   {
     key: "terrainTilesAcross",
     label: "Far terrain",
-    ariaLabel: "Far terrain size in tiles",
+    ariaLabel: "Far terrain diameter in tiles",
     queryParameter: "terrain-size",
     minimum: 3,
     maximum: 49,
     step: 2,
     defaultValue: 33,
-    format: formatTileArea,
+    format: (value) => `${value} tiles across`,
   },
   {
     key: "cloudDensity",

@@ -84,6 +84,7 @@ test("completed tiles refill the real scheduler without a second timer tick", as
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   });
   const key = id => `${id.x}/${id.y}`;
+  const { worldTileIntersectsCircle } = await import("../src/world/WorldGrid.ts");
   const bindings = {
     performance: { now: () => 1000 },
     documentIsBackgrounded: () => true,
@@ -92,6 +93,8 @@ test("completed tiles refill the real scheduler without a second timer tick", as
     MAX_CONCURRENT_FAR_TILE_BUILDS: 2,
     sceneToLonLat: () => ({ lon: 0, lat: 0 }),
     worldTileAtLocation: () => ({ level: 3, x: 4, y: 4 }),
+    worldTileCoordinatesAtLocation: () => ({ x: 4.5, y: 4.5 }),
+    worldTileIntersectsCircle,
     worldTileKey: key,
     worldTileWindowOffsetsAtLocation: () => ({ minimumX: -1, maximumX: 1, minimumY: -1, maximumY: 1 }),
   };

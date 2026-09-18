@@ -11,8 +11,33 @@ const {
   worldTileBounds,
   worldTileCoordinatesAtLocation,
   worldTileSeed,
+  worldTileIntersectsCircle,
   worldTileWindowOffsetsAtLocation,
 } = await import("../src/world/WorldGrid.ts");
+
+test("circular streaming trims square corners but includes intersecting edge tiles", () => {
+  let count = 0;
+  for (let dy = -17; dy <= 17; dy++) {
+    for (let dx = -17; dx <= 17; dx++) {
+      if (worldTileIntersectsCircle(dx, dy, 0.5, 0.5, 16.5)) count++;
+    }
+  }
+  assert.ok(count < 33 * 33 * 0.85);
+  assert.equal(worldTileIntersectsCircle(16, 16, 0.5, 0.5, 16.5), false);
+  assert.equal(worldTileIntersectsCircle(16, 0, 0.5, 0.5, 16.5), true);
+  assert.equal(worldTileIntersectsCircle(17, 0, 0.9, 0.5, 16.5), true);
+  assert.equal(worldTileIntersectsCircle(-17, 0, 0.1, 0.5, 16.5), true);
+});
+
+test("circular streaming covers every point inside the horizon as the player moves", () => {
+  for (const fraction of [0.01, 0.25, 0.5, 0.99]) {
+    for (let angle = 0; angle < Math.PI * 2; angle += 0.02) {
+      const dx = Math.floor(fraction + Math.cos(angle) * 16.49);
+      const dy = Math.floor(1 - fraction + Math.sin(angle) * 16.49);
+      assert.ok(worldTileIntersectsCircle(dx, dy, fraction, 1 - fraction, 16.5));
+    }
+  }
+});
 test("maps a location into the fixed application-owned grid", () => {
   const latitude = 59.8888085995981;
   const longitude = 10.593090176648504;
