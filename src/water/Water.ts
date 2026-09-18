@@ -24,6 +24,11 @@ export type { WaterSurfaceKind } from './WaterProfile';
 const waterMaterials = new WeakMap<Scene, Map<string, PBRMaterial | StandardMaterial>>();
 const waterMaterialUsers = new WeakMap<Material, number>();
 
+/** Streamed map cleanup must release water through its mesh-owned reference. */
+export function isSharedWaterMaterial(material: Material): boolean {
+  return waterMaterialUsers.has(material);
+}
+
 const WAVE_NORMAL_MAP_URL = 'https://assets.babylonjs.com/textures/waterbump.png';
 /** Ground distance spanned by one repeat of the broad swell normal map. */
 const SWELL_TILE_METERS = 48;
@@ -262,12 +267,14 @@ export function disposeWaterPlane(waterMesh: Mesh): void {
  */
 export function prepareWaterSurfaceMesh(mesh: Mesh): void {
   const vertexCount = mesh.getTotalVertices();
-  const tangents = new Float32Array(vertexCount * 4);
-  for (let vertex = 0; vertex < vertexCount; vertex++) {
-    tangents[vertex * 4] = 1; // +X, matching the ground's U direction.
-    tangents[vertex * 4 + 3] = 1; // Handedness of the derived bitangent.
+  if (!mesh.isVerticesDataPresent(VertexBuffer.TangentKind)) {
+    const tangents = new Float32Array(vertexCount * 4);
+    for (let vertex = 0; vertex < vertexCount; vertex++) {
+      tangents[vertex * 4] = 1; // +X, matching the ground's U direction.
+      tangents[vertex * 4 + 3] = 1; // Handedness of the derived bitangent.
+    }
+    mesh.setVerticesData(VertexBuffer.TangentKind, tangents);
   }
-  mesh.setVerticesData(VertexBuffer.TangentKind, tangents);
   // x = terrain height relative to water in metres, y = crest-enabled region.
   // Broad ocean and lake polygons use the common heave, without shore crests.
   const shore = new Float32Array(vertexCount * 2);
@@ -381,6 +388,15 @@ function animateWaves(
     swell.vOffset = 0.417 + driftY * swellRepeatsPerSecond * exposure;
     chop.uOffset = 0.631 - driftY * chopRepeatsPerSecond * exposure * 0.55;
     chop.vOffset = 0.289 + driftX * chopRepeatsPerSecond * exposure;
+    if (kind === 'river') {
+      // River UVs run across the channel (U) and downstream (V), in metres.
+      // A current continues in calm weather and follows bends in the ribbon.
+      const distance = waterFrame(scene).seconds * (profile.currentMetersPerSecond ?? 0);
+      swell.uOffset = 0.173;
+      swell.vOffset = 0.417 - distance / SWELL_TILE_METERS;
+      chop.uOffset = 0.631;
+      chop.vOffset = 0.289 - distance * CHOP_TILE_RATIO / SWELL_TILE_METERS;
+    }
     // Wind makes the surface more broken without changing the authored look
     // at calm conditions. Lakes respond less dramatically than open sea.
     const roughnessWind = Math.min(MAX_WAVE_ROUGHNESS_WIND, wind.strength);

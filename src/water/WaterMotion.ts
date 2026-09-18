@@ -71,7 +71,9 @@ export class WaterMotionPlugin extends MaterialPluginBase {
           `${output}vWaterWave = ${vec(4)}(${shore}.x, waterLift, waterCrest, ${shore}.y * waterFade);`,
           // Texture coordinates are physical metres and identical on ocean,
           // shore and lake meshes, regardless of their dimensions or offsets.
-          `#ifdef UV1\nuvUpdated = ${vec(2)}(waterP.x, -waterP.y);\n#endif`,
+          this.profile?.currentMetersPerSecond === undefined
+            ? `#ifdef UV1\nuvUpdated = ${vec(2)}(waterP.x, -waterP.y);\n#endif`
+            : '',
         ].join('\n'),
       };
     }

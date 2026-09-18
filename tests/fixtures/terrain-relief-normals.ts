@@ -1,7 +1,7 @@
 import { Engine, Scene, UniversalCamera, Vector3, MeshBuilder, DirectionalLight, Color3, VertexBuffer } from '@babylonjs/core';
 import { createTerrainMaterial } from '../../src/terrain/TerrainMaterial';
 import { attachTerrainReliefNormals } from '../../src/terrain/TerrainReliefNormals';
-import { createCloudShadowProjector } from '../../src/sky/CloudShadows';
+import { createCloudField } from '../../src/sky/CloudField';
 import type { TerrainData } from '../../src/terrain/TerrainData';
 
 const probe = window as any;
@@ -14,7 +14,7 @@ void (async () => {
   const sun = new DirectionalLight('sun', new Vector3(0.7, -1, 0.2), scene);
   sun.intensity = 1;
   // Exercise composition with the cloud CustomMaterial as used by the app.
-  createCloudShadowProjector(scene, 1);
+  createCloudField(scene, 1, 42);
   const material = createTerrainMaterial(scene);
   material.diffuseColor = Color3.White();
   material.specularColor = Color3.Black();

@@ -2688,7 +2688,24 @@ function createRooftopVolume(
     return [[[start.x + x, start.z + z], [end.x + x, end.z + z],
       [end.x - x, end.z - z], [start.x - x, start.z - z]]];
   });
-  const roof = polygonClipping.union(footprint, ...walls);
+  let roof: polygonClipping.MultiPolygon;
+  try {
+    roof = polygonClipping.union(footprint, ...walls);
+  } catch {
+    // Nearly coincident wall intersections can prevent the clipping sweep from
+    // closing a ring. Retry on a micrometer grid, independent of scene scale.
+    const grid = 1e-6 / options.metersPerUnit;
+    const snap = (polygon: polygonClipping.Polygon): polygonClipping.Polygon =>
+      polygon.map((ring) => ring.map(([x, z]) =>
+        [Math.round(x / grid) * grid, Math.round(z / grid) * grid]));
+    try {
+      roof = polygonClipping.union(snap(footprint), ...walls.map(snap));
+    } catch {
+      // Losing the wall overhang is preferable to losing the entire tile.
+      // Keep the ring closed for the cap conversion and retain stair cutouts.
+      roof = [[[...footprint[0], footprint[0][0]]]];
+    }
+  }
   const cutouts = openings.map((ring): polygonClipping.Polygon => [ring.map((p) => [p.x, p.z])]);
   const caps = (cutouts.length ? polygonClipping.difference(roof, ...cutouts) : roof).map((polygon) => {
     const rings = polygon.map((ring) => ring.slice(0, -1).map(([x, z]) => ({ x, z })));

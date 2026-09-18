@@ -96,7 +96,6 @@ test("completed tiles refill the real scheduler without a second timer tick", as
     worldTileCoordinatesAtLocation: () => ({ x: 4.5, y: 4.5 }),
     worldTileIntersectsCircle,
     worldTileKey: key,
-    worldTileWindowOffsetsAtLocation: () => ({ minimumX: -1, maximumX: 1, minimumY: -1, maximumY: 1 }),
   };
   const Subject = new Function(...Object.keys(bindings), outputText + "; return Subject;")(...Object.values(bindings));
   const subject = new Subject();

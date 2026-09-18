@@ -660,7 +660,7 @@ export function createVertexColorCaptureMaterial(
         ...WIND_PHASE_UNIFORMS,
         ...WIND_SHEAR_UNIFORMS,
       ],
-      samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler", "cloudShadowAtlas"],
+      samplers: ["leafTexture", "barkTexture", "vegetationShadowSampler", "cloudPattern"],
       needAlphaBlending: false,
     },
   );

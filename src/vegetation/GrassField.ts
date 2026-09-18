@@ -3,7 +3,6 @@ import {
   Matrix,
   Quaternion,
   Scene,
-  ShaderMaterial,
   Vector3,
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation, type HorizontalExclusionMask } from "../world/Geo";
@@ -30,6 +29,7 @@ import {
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
+import { vegetationDistanceFadeRange as grassDistanceFadeRange } from "./DistanceDropout";
 
 /** Keeps the broad grass patch above small terrain interpolation differences. */
 const GRASS_GROUND_OFFSET_METERS = 0.07;
@@ -42,9 +42,6 @@ const GRASS_SURFACE_CLEARANCE_METERS = 1.2;
 /** How strongly each clump adopts the hue and brightness of its local ground. */
 const GRASS_GROUND_COLOR_INFLUENCE = 1;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
-/** Keeps the established 3 x 3 fade just inside its former two-tile reach. */
-const GRASS_FADE_EDGE_INSET_TILE_WIDTHS = 0.05;
-const GRASS_FADE_TRANSITION_TILE_WIDTHS = 1.1;
 const DEFAULT_DETAIL_TILES_ACROSS = 3;
 const GRASS_GROUND_COLOR_BLEND = 0.42;
 /** Average upward response of the crossed grass cards in the live model. */
@@ -59,42 +56,8 @@ const GRASS_WIDTH_SCALE_MINIMUM = 1.1;
 const GRASS_WIDTH_SCALE_SPAN = 0.42;
 
 interface GrassFieldOptions extends VegetationPlacementOptions {
-  /** Lake outlines use the full clump footprint, independently of road clearance. */
+  /** Lake outlines and river channels exclude the full grass clump footprint. */
   lakeExclusionMask?: HorizontalExclusionMask;
-}
-
-export interface GrassDistanceFadeRange {
-  near: number;
-  far: number;
-}
-/** Resolves the radial grass dissolve from the active full-detail tile count. */
-export function grassDistanceFadeRange(
-  tileWidth: number,
-  detailTilesAcross: number,
-): GrassDistanceFadeRange {
-  const width = Math.max(0, tileWidth);
-  const size = Math.max(1, Math.round(detailTilesAcross));
-  const far = width * (
-    (size + 1) / 2 - GRASS_FADE_EDGE_INSET_TILE_WIDTHS
-  );
-  return {
-    near: Math.max(0, far - width * GRASS_FADE_TRANSITION_TILE_WIDTHS),
-    far,
-  };
-}
-
-/** Updates an existing field without rebuilding its grass instances. */
-export function setGrassFieldDetailDistance(
-  field: VegetationFieldResult,
-  tileWidth: number,
-  detailTilesAcross: number,
-): void {
-  const fade = grassDistanceFadeRange(tileWidth, detailTilesAcross);
-  for (const mesh of [...field.impostorMeshes, ...field.modelMeshes]) {
-    if (!(mesh.material instanceof ShaderMaterial)) continue;
-    mesh.material.setFloat("distanceFadeNear", fade.near);
-    mesh.material.setFloat("distanceFadeFar", fade.far);
-  }
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {

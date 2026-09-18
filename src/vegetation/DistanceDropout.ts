@@ -10,6 +10,15 @@ export const DISTANCE_DROPOUT_UNIFORMS: readonly string[] = [
   "distanceFadeFar",
 ];
 
+/** Keep cover dense until the outer fifth of the circular detail radius. */
+export function vegetationDistanceFadeRange(tileWidth: number, detailTilesAcross: number): {
+  near: number;
+  far: number;
+} {
+  const far = Math.max(0, tileWidth) * Math.max(1, Math.round(detailTilesAcross)) / 2;
+  return { near: far * 0.8, far };
+}
+
 /** Fraction of the survival range a clump spends shrinking before it drops. */
 const DISTANCE_DROPOUT_SHRINK_FRACTION = 0.15;
 

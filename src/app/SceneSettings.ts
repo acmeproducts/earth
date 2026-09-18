@@ -38,13 +38,13 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
   {
     key: "detailTilesAcross",
     label: "Full detail",
-    ariaLabel: "Fully detailed terrain size in tiles",
+    ariaLabel: "Fully detailed terrain diameter in tiles",
     queryParameter: "detail-size",
     minimum: 1,
-    maximum: 9,
+    maximum: 15,
     step: 1,
     defaultValue: 2,
-    format: formatTileArea,
+    format: (value) => `${value} tiles across`,
   },
   {
     key: "terrainTilesAcross",
@@ -52,8 +52,8 @@ export const SCENE_SETTING_DEFINITIONS: readonly SceneSettingDefinition[] = [
     ariaLabel: "Far terrain diameter in tiles",
     queryParameter: "terrain-size",
     minimum: 3,
-    maximum: 49,
-    step: 2,
+    maximum: 70,
+    step: 1,
     defaultValue: 33,
     format: (value) => `${value} tiles across`,
   },
@@ -220,6 +220,3 @@ function normalizeValue(value: number, definition: SceneSettingDefinition): numb
   return Number(clamped.toFixed(10));
 }
 
-function formatTileArea(tilesAcross: number): string {
-  return `${tilesAcross} x ${tilesAcross}`;
-}

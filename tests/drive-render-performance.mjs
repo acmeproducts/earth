@@ -160,6 +160,10 @@ try {
       if(state.done) {
         console.log('Pixel equivalence:',JSON.stringify(state.results));
         writeFileSync(join(output,'pixels.json'),JSON.stringify(state.results,null,2));
+        const screenshots = await evaluate('window.pixelScreenshots ?? {}');
+        for (const [name, data] of Object.entries(screenshots)) {
+          writeFileSync(join(output,`${name}.png`),Buffer.from(data,'base64'));
+        }
         if(errors.length)throw new Error('Browser errors during pixel tests');
         break;
       }

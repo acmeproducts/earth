@@ -204,17 +204,16 @@ test("cloud footprints shadow both vegetation models and impostors", () => {
     models,
     /lighting \*= mix\(1\.0, vegetationCloudShadowVisibility\(\), lightingEnabled\)/,
   );
-  assert.match(cloudReceivers, /uniform sampler2D cloudShadowAtlas/);
+  assert.match(cloudReceivers, /cloudCoverageShader/);
   assert.match(
     cloudReceivers,
-    /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?#else[\s\S]*?uniform sampler2D cloudShadowAtlas/,
+    /#if SM_DIRECTIONINLIGHTDATA == 1[\s\S]*?#else[\s\S]*?\$\{shadowSampling\}/,
   );
-  assert.match(cloudReceivers, /CLOUD_SHADOW_DARKNESS = 0\.22/);
   assert.match(
     cloudReceivers,
-    /coverage \* cloudShadowLighting\.x \* \$\{CLOUD_SHADOW_DARKNESS\}/,
+    /cloudCoverage\(cloudXZ\) \* cloudField\.w \* 0\.22/,
   );
-  assert.match(cloudReceivers, /material\.setTexture\("cloudShadowAtlas", texture\)/);
+  assert.match(cloudReceivers, /effect\.setTexture\("cloudPattern", field\?\.texture/);
 });
 
 test("unpacks Babylon's unsigned-byte fallback before comparing grass shadows", () => {

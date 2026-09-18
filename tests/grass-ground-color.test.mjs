@@ -41,8 +41,7 @@ test("distant grass fades according to the active full-detail distance", () => {
   assert.match(fieldSource, /distanceFadeNear/);
   assert.match(fieldSource, /distanceFadeFar/);
   assert.match(fieldSource, /grassDistanceFadeRange\(/);
-  assert.match(fieldSource, /\(size \+ 1\) \/ 2 - GRASS_FADE_EDGE_INSET_TILE_WIDTHS/);
-  assert.match(fieldSource, /far - width \* GRASS_FADE_TRANSITION_TILE_WIDTHS/);
+  assert.match(fieldSource, /vegetationDistanceFadeRange as grassDistanceFadeRange/);
   assert.match(fieldSource, /distanceGroundColor/);
   assert.match(
     impostorSource,
@@ -74,15 +73,15 @@ test("loaded and newly committed grass fields use the current detail setting", (
   const game = readFileSync(new URL("../src/app/Game.ts", import.meta.url), "utf8");
   assert.match(
     game,
-    /kind === "grassField"[\s\S]*?setGrassFieldDetailDistance\([\s\S]*?detailTilesAcross/,
+    /kind === "grassField" \|\| kind === "bushField" \|\| kind === "tallPlantField"[\s\S]*?setVegetationFieldDetailDistance\([\s\S]*?detailTilesAcross/,
   );
   assert.match(
     game,
-    /if \(detailSizeChanged\) this\.updateGrassDetailDistance\(\)/,
+    /if \(detailSizeChanged\) this\.updateVegetationDetailDistance\(\)/,
   );
   assert.match(
     game,
-    /updateGrassDetailDistance\(\)[\s\S]*?record\.grassField[\s\S]*?setGrassFieldDetailDistance/,
+    /updateVegetationDetailDistance\(\)[\s\S]*?record\.grassField, record\.bushField, record\.tallPlantField[\s\S]*?setVegetationFieldDetailDistance/,
   );
 });
 

@@ -13,6 +13,8 @@ export interface WaterProfile {
   troughMeters: number;
   crestMeters: number;
   foamStrength: number;
+  /** River current along the mesh's downstream texture axis, independent of wind. */
+  currentMetersPerSecond?: number;
 }
 
 /** Sea and lake are parameter sets for exactly the same material and motion. */
@@ -33,10 +35,11 @@ export const WATER_PROFILES: Readonly<Record<WaterSurfaceKind, WaterProfile>> = 
   // small uniform lift would periodically pass through road crossings and banks.
   // Moving normal maps still provide visible current without moving the mesh.
   river: {
-    color: [0.045, 0.22, 0.25], glossiness: 0.8,
+    color: [0.045, 0.22, 0.25], glossiness: 0.72,
     swellNormal: 0.48, chopNormal: 0.3, exposure: 0.38,
     periodSeconds: 5.4, heaveMeters: 0.002, troughMeters: 0.001,
     crestMeters: 0, foamStrength: 0,
+    currentMetersPerSecond: 1.2,
   },
 };
 

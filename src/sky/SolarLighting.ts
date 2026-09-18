@@ -154,6 +154,8 @@ export class SolarLighting {
     this.skyMesh.infiniteDistance = true;
     this.skyMaterial = new SkyMaterial("skyMaterial", scene);
     this.skyMaterial.backFaceCulling = false;
+    // The dome is a background, not an occluder for world-space clouds.
+    this.skyMaterial.disableDepthWrite = true;
     this.skyMaterial.useSunPosition = true;
     this.skyMaterial.turbidity = 5;
     this.skyMaterial.rayleigh = 2.2;

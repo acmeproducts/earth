@@ -3,14 +3,15 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { Mesh, MultiMaterial, NullEngine, PBRMaterial, RawTexture, Scene, ShaderMaterial, StandardMaterial, TransformNode } from "@babylonjs/core";
+import { isSharedWaterMaterial } from '../src/water/Water.ts';
 
 // Exercise the actual cleanup method without loading the browser-only map
 // generation dependency graph (including enums unsupported by strip-only Node).
 const source = readFileSync(new URL("../src/world/OpenStreetMap.ts", import.meta.url), "utf8");
 const method = source.slice(source.indexOf("  static disposeLayer("), source.indexOf("  private static async fetchTile("));
-const OpenStreetMap = new Function("ShaderMaterial", "MultiMaterial", "PBRMaterial", "StandardMaterial",
+const OpenStreetMap = new Function("ShaderMaterial", "MultiMaterial", "PBRMaterial", "StandardMaterial", "isSharedWaterMaterial", "sharedRoadMaterials",
   `${stripTypeScriptTypes(`class MapCleanup { ${method} }`)}; return MapCleanup;`,
-)(ShaderMaterial, MultiMaterial, PBRMaterial, StandardMaterial);
+)(ShaderMaterial, MultiMaterial, PBRMaterial, StandardMaterial, isSharedWaterMaterial, new WeakSet());
 
 test("disposing a map layer preserves textures used by vegetation in other tiles", () => {
   const engine = new NullEngine();

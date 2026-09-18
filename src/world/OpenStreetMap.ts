@@ -57,6 +57,8 @@ import {
 import { ProceduralBuildingRenderer } from "../procedural/ProceduralBuildingRenderer";
 import {
   createWaterSurfaceMaterial,
+  bindWaterMaterial,
+  isSharedWaterMaterial,
   prepareWaterSurfaceMesh,
 } from "../water/Water";
 import {
@@ -77,13 +79,14 @@ import { conformTerrainToPlannedFeatures } from "../terrain/PlannedFeatureTerrai
 import type { RoadPlanningInput } from "../roads/RoadPlanningTask";
 import type { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 import { clipToBounds, signedArea, pointBounds, type PlanarBounds, type PlanarPoint } from "../core/PlanarGeometry";
-import { conformDecalPolygon, conformDecalPolygonAsync } from "../terrain/TerrainSurface";
+import { conformDecalPolygonAsync } from "../terrain/TerrainSurface";
 import type { TerrainSurface } from "../terrain/TerrainSurface";
 import { createOpenStreetMapLandCover } from "./OpenStreetMapLandCover";
 import type { LandCoverSampler } from "./WorldCover";
 import type { TerrainLakeSource } from "../terrain/TerrainLakePolygons";
 import { collectPreparedLakePolygons, prepareLakeCandidate, type LakeCollectionInput } from "../water/LakeCollectionTask";
 import { isSurfaceWaterFeature } from "../water/WaterFeatureVisibility";
+import { riverChannelDepth, riverFlowSign, riverSurfaceFrame, riverSurfaceLevels } from "../water/RiverSurface";
 
 export interface MapTile {
   x: number;
@@ -185,6 +188,31 @@ export interface RoadFeatureLayer {
 }
 
 export class OpenStreetMap {
+  static collectWaterwaySegments(
+    tiles: MapTile[],
+    terrain: TerrainData,
+    options: { meshWidth: number; meshDepth: number; metersPerUnit: number },
+  ): import('./Geo').HorizontalSegment[] {
+    const segments: import('./Geo').HorizontalSegment[] = [];
+    for (const tile of tiles) {
+      forEachFeature(tile, "waterway", (feature) => {
+        if (!isSurfaceWaterFeature(feature.properties)) return;
+        const widthMeters = waterwayWidthMeters(feature.properties.class);
+        if (widthMeters === undefined) return;
+        for (const line of lines(feature, tile)) {
+          const points = line.map(([lon, lat]) => lonLatToScene(
+            lon, lat, terrain.bounds, options.meshWidth, options.meshDepth,
+          ));
+          for (let index = 1; index < points.length; index++) {
+            segments.push({ start: points[index - 1], end: points[index],
+              halfWidth: widthMeters / options.metersPerUnit / 2 });
+          }
+        }
+      });
+    }
+    return segments;
+  }
+
   private static readonly ZOOM = 14;
   private static readonly TILE_URL = "https://tiles.openfreemap.org/planet/latest";
   private static readonly cache = new ResourceCache<{ data: VectorTile | undefined; bytes: number }>(
@@ -648,6 +676,10 @@ export class OpenStreetMap {
   /** Disposes a streamed layer without taking down its scene-owned sky map. */
   static disposeLayer(root: TransformNode): void {
     for (const mesh of root.getChildMeshes(false)) {
+      if (mesh.material && isSharedWaterMaterial(mesh.material)) {
+        mesh.dispose(false, false);
+        continue;
+      }
       if (mesh.material && sharedRoadMaterials.has(mesh.material)) {
         mesh.material = null;
         continue;
@@ -1528,6 +1560,8 @@ function createWaterwayMeshes(
   const positions: number[] = [];
   const indices: number[] = [];
   const uvs: number[] = [];
+  const normals: number[] = [];
+  const tangents: number[] = [];
   const clearance = WATERWAY_SURFACE_CLEARANCE_METERS / options.metersPerUnit;
   const groundHeight = (point: { x: number; z: number }) => sampleElevation(
     terrain,
@@ -1536,43 +1570,46 @@ function createWaterwayMeshes(
     options.meshWidth,
     options.meshDepth,
   ) / options.metersPerUnit;
-  for (let index = 0; index < points.length - 1; index++) {
-    let outline = [left[index], left[index + 1], right[index + 1], right[index]];
-    if (signedArea(outline) < 0) outline = [...outline].reverse();
-    // A bilinear height sample is not the surface that Babylon actually draws.
-    // Split every strip segment along the ground triangles and copy their exact
-    // planes, just as planned road decals do, so neither bank can sink through.
-    const rings = conformDecalPolygon(
-      outline,
-      groundHeight,
-      clearance,
-      options.terrainSurface,
-      true,
-    );
-    for (const ring of rings) {
-      const vertexOffset = positions.length / 3;
-      for (const point of ring) {
-        positions.push(point.x, point.y, point.z);
-        uvs.push(point.x * options.metersPerUnit, point.z * options.metersPerUnit);
-      }
-      const localIndices = earcut(ring.flatMap((point) => [point.x, point.z]));
-      for (let triangle = 0; triangle < localIndices.length; triangle += 3) {
-        indices.push(
-          vertexOffset + localIndices[triangle],
-          vertexOffset + localIndices[triangle + 1],
-          vertexOffset + localIndices[triangle + 2],
-        );
-      }
+  const flowSign = riverFlowSign(points, groundHeight);
+  const waterDepth = riverChannelDepth(halfWidth * options.metersPerUnit) * 0.6 / options.metersPerUnit;
+  const levels = riverSurfaceLevels(points, groundHeight, Math.max(halfWidth * 2, 6 / options.metersPerUnit));
+  let distanceMeters = 0;
+  for (let index = 0; index < points.length; index++) {
+    const previous = Math.max(0, index - 1);
+    const next = Math.min(points.length - 1, index + 1);
+    const dx = points[next].x - points[previous].x;
+    const dz = points[next].z - points[previous].z;
+    const span = Math.hypot(dx, dz) || 1;
+    const slope = (levels[next] - levels[previous]) / span;
+    const magnitude = Math.hypot(slope, 1);
+    const normal = { x: -dx / span * slope / magnitude, y: 1 / magnitude,
+      z: -dz / span * slope / magnitude };
+    const segment = Math.min(index, points.length - 2);
+    for (const point of [left[index], right[index]]) {
+      // A cross-section has one water level; the terrain intersects it as a bank.
+      positions.push(point.x, levels[index] + waterDepth + clearance, point.z);
+      normals.push(normal.x, normal.y, normal.z);
+      const frame = riverSurfaceFrame(point, left[segment], right[segment],
+        left[segment + 1], right[segment + 1], 0, 1,
+        halfWidth * 2 * options.metersPerUnit, normal, flowSign);
+      uvs.push(frame.u, distanceMeters * flowSign);
+      tangents.push(...frame.tangent);
+    }
+    if (index < points.length - 1) {
+      const outline = [left[index], left[index + 1], right[index + 1], right[index]];
+      const corners = [index * 2, index * 2 + 2, index * 2 + 3, index * 2 + 1];
+      for (const corner of earcut(outline.flatMap(point => [point.x, point.z]))) indices.push(corners[corner]);
+      distanceMeters += Math.hypot(points[index + 1].x - points[index].x,
+        points[index + 1].z - points[index].z) * options.metersPerUnit;
     }
   }
   if (positions.length === 0) return [];
-  const normals: number[] = [];
-  VertexData.ComputeNormals(positions, indices, normals);
   const vertexData = new VertexData();
   vertexData.positions = positions;
   vertexData.indices = indices;
   vertexData.normals = normals;
   vertexData.uvs = uvs;
+  vertexData.tangents = tangents;
   const mesh = new Mesh("waterway", scene);
   vertexData.applyToMesh(mesh, false);
   mesh.isPickable = false;
@@ -1665,7 +1702,7 @@ function mergeWaterways(
   const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
   if (!result) return undefined;
   result.name = "waterways";
-  result.material = createWaterSurfaceMaterial(result.getScene(), {
+  const material = createWaterSurfaceMaterial(result.getScene(), {
     name: "waterwayMaterial",
     width: options.meshWidth,
     height: options.meshDepth,
@@ -1674,6 +1711,7 @@ function mergeWaterways(
     kind: "river",
   });
   prepareWaterSurfaceMesh(result);
+  bindWaterMaterial(result, material, options.metersPerUnit, 'river');
   result.isPickable = false;
   result.parent = parent;
   return result;

@@ -29,6 +29,7 @@ import type { AntialiasingMode } from "../rendering/Antialiasing";
 import { TerrainElevationSource } from "../terrain/TerrainElevationSource";
 import { applyTerrainDetail, upsampleTerrain } from "../terrain/TerrainDetail";
 import { stitchTerrainEdges } from "../terrain/TerrainStitching";
+import { carveTerrainWaterways } from "../terrain/TerrainWaterways";
 import { createWaterPlane, disposeWaterPlane } from "../water/Water";
 import {
   createTerrainLakeLayer,
@@ -47,7 +48,8 @@ import {
   type TreeTrunk,
   type WalkerBody,
 } from "../vegetation/TreeTrunkCollision";
-import { createGrassField, setGrassFieldDetailDistance } from "../vegetation/GrassField";
+import { createGrassField } from "../vegetation/GrassField";
+import { setVegetationFieldDetailDistance } from "../vegetation/VegetationMaterial";
 import { createBushField } from "../vegetation/BushField";
 import { createSaplingField } from "../vegetation/SaplingField";
 import { createFernField } from "../vegetation/FernField";
@@ -65,6 +67,7 @@ import type { WorldLocation, WorldLocationStore } from "../world/Locations";
 import {
   combineHorizontalExclusionMasks,
   PolygonExclusionMask,
+  SegmentExclusionMask,
   geographicFrameOffset,
   lonLatToScene,
   sampleElevation,
@@ -91,8 +94,8 @@ import { TerrainSurface } from "../terrain/TerrainSurface";
 import { configureWindSceneScale, setManualWindSpeed } from "../vegetation/Wind";
 import { SolarLighting } from "../sky/SolarLighting";
 import { groundCoverUnderSnow, snowCoverAt, snowCoverTier, treeSeasonAt } from "../vegetation/TreeSeason";
-import { createCloudLayer } from "../sky/CloudImpostors";
-import type { CloudLayer } from "../sky/CloudImpostors";
+import { createCloudLayer } from "../sky/Clouds";
+import type { CloudLayer } from "../sky/Clouds";
 import { FpsCounter } from "../diagnostics/FpsCounter";
 import {
   createFrameBudgetYielder,
@@ -147,9 +150,7 @@ import {
   worldTileCoordinatesAtLocation,
   worldTileIntersectsCircle,
   worldTileKey,
-  worldTileWindowOffsetsAtLocation,
 } from "../world/WorldGrid";
-import type { WorldTileWindowOffsets } from "../world/WorldGrid";
 import type { WorldTileId } from "../world/WorldGrid";
 import { PlayerPresence } from "../integration/PlayerPresence";
 import type {
@@ -753,6 +754,12 @@ export class Game {
       yieldControl,
       trace,
     );
+    trace?.stage("river terrain shaping");
+    const waterwaySegments = OpenStreetMap.collectWaterwaySegments(contextTiles, terrainData, {
+      meshWidth, meshDepth, metersPerUnit,
+    });
+    await carveTerrainWaterways(terrainData, waterwaySegments,
+      { meshWidth, meshDepth, metersPerUnit }, yieldControl);
     trace?.stage("lake support diagnostics", "synchronous");
     if (generation !== this.streamingGeneration) return undefined;
     const lakeSupportOptions = { meshWidth, meshDepth, metersPerUnit };
@@ -901,10 +908,10 @@ export class Game {
       offsetZ: offset.z,
       nativeTerrain: native,
       lakeSurfaces,
-      lakeExclusionMask: new PolygonExclusionMask(
+      lakeExclusionMask: combineHorizontalExclusionMasks([new PolygonExclusionMask(
         lakePolygons.map(polygon => ({ outer: polygon.outline, holes: polygon.holes })),
         Math.max(0.25, 20 / metersPerUnit),
-      ),
+      ), new SegmentExclusionMask(waterwaySegments, Math.max(0.25, 20 / metersPerUnit))]),
       farTreeField: carriedFarTreeField,
       farBuildings: carriedFarBuildings,
       farRoads: carriedFarRoads,
@@ -1385,8 +1392,8 @@ export class Game {
       return false;
     }
     setTransformNodeOffset(field.root, record.offsetX, record.offsetZ);
-    if (kind === "grassField") {
-      setGrassFieldDetailDistance(
+    if (kind === "grassField" || kind === "bushField" || kind === "tallPlantField") {
+      setVegetationFieldDetailDistance(
         field,
         Math.min(record.meshWidth, record.meshDepth),
         this.sceneSettings.value.detailTilesAcross,
@@ -1697,21 +1704,13 @@ export class Game {
   /** Disposes tiles that stayed outside the streamed radius past their cooldown. */
   private evictCooledTiles(
     now: number,
-    center: WorldTileId,
-    detailWindow: WorldTileWindowOffsets,
+    detailTiles: ReadonlySet<string>,
     neededTiles: ReadonlySet<string>,
   ): void {
-    const scale = 2 ** center.level;
     let detailChanged = false;
     for (const record of [...this.tiles.values()]) {
       if (this.activeTileBuilds.has(record.key)) continue;
-      const rawDx = record.id.x - center.x;
-      const dx = rawDx > scale / 2
-        ? rawDx - scale
-        : rawDx < -scale / 2 ? rawDx + scale : rawDx;
-      const wantDetail = dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
-        record.id.y - center.y >= detailWindow.minimumY &&
-        record.id.y - center.y <= detailWindow.maximumY;
+      const wantDetail = detailTiles.has(record.key);
       if (!neededTiles.has(record.key) &&
           now - record.lastNeededMilliseconds > TILE_COOLDOWN_MS) {
         this.tiles.delete(record.key);
@@ -1825,7 +1824,7 @@ export class Game {
       }
     }
     if (detailSizeChanged || terrainSizeChanged) this.requestStreamingUpdate();
-    if (detailSizeChanged) this.updateGrassDetailDistance();
+    if (detailSizeChanged) this.updateVegetationDetailDistance();
     if (modelRangeChanged) {
       for (const record of this.tiles.values()) record.lodResolved = false;
       this.updateVegetationLod();
@@ -1909,15 +1908,17 @@ export class Game {
     this.updateTerrainStreaming();
   }
 
-  private updateGrassDetailDistance(): void {
+  private updateVegetationDetailDistance(): void {
     const detailTilesAcross = this.sceneSettings.value.detailTilesAcross;
     for (const record of this.tiles.values()) {
-      if (!record.grassField) continue;
-      setGrassFieldDetailDistance(
-        record.grassField,
-        Math.min(record.meshWidth, record.meshDepth),
-        detailTilesAcross,
-      );
+      for (const field of [record.grassField, record.bushField, record.tallPlantField]) {
+        if (!field) continue;
+        setVegetationFieldDetailDistance(
+          field,
+          Math.min(record.meshWidth, record.meshDepth),
+          detailTilesAcross,
+        );
+      }
     }
   }
 
@@ -2156,12 +2157,8 @@ export class Game {
     const neededTiles = new Set<string>();
     const radius = this.terrainTileRadius + 0.5;
     const extent = Math.ceil(radius);
-    const detailWindow = worldTileWindowOffsetsAtLocation(
-      lat,
-      lon,
-      this.sceneSettings.value.detailTilesAcross,
-      center.level,
-    );
+    const detailRadius = this.sceneSettings.value.detailTilesAcross / 2;
+    const detailTiles = new Set<string>();
     const work: Array<{
       id: WorldTileId;
       detail: boolean;
@@ -2173,8 +2170,7 @@ export class Game {
       const y = center.y + dy;
       if (y < 0 || y >= scale) continue;
       for (let dx = -extent; dx <= extent; dx++) {
-        const wantDetail = dx >= detailWindow.minimumX && dx <= detailWindow.maximumX &&
-          dy >= detailWindow.minimumY && dy <= detailWindow.maximumY;
+        const wantDetail = worldTileIntersectsCircle(dx, dy, fractionX, fractionY, detailRadius);
         if (!wantDetail && !worldTileIntersectsCircle(dx, dy, fractionX, fractionY, radius)) continue;
         const id: WorldTileId = {
           level: center.level,
@@ -2183,6 +2179,7 @@ export class Game {
         };
         const key = worldTileKey(id);
         neededTiles.add(key);
+        if (wantDetail) detailTiles.add(key);
         const record = this.tiles.get(key);
         if (record) {
           record.lastNeededMilliseconds = now;
@@ -2227,7 +2224,7 @@ export class Game {
       });
     }
 
-    this.evictCooledTiles(now, center, detailWindow, neededTiles);
+    this.evictCooledTiles(now, detailTiles, neededTiles);
   }
 
   private continueTerrainStreaming(generation: number): void {

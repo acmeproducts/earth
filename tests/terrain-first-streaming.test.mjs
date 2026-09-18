@@ -17,6 +17,42 @@ function subject(methodNames, globals) {
 }
 const key = id => `${id.x}/${id.y}`;
 
+test("full detail follows a moving circle and demotes excluded corners after cooldown", () => {
+  let fractionX = 0.5;
+  const demoted = [];
+  const game = subject(["updateTerrainStreaming", "evictCooledTiles"], {
+    performance: { now: () => 40000 }, TERRAIN_STREAMING_CHECK_INTERVAL_MS: 250,
+    TILE_COOLDOWN_MS: 30000, DETAIL_COOLDOWN_MS: 10000, RETAINED_TILE_EDGE_SLACK: 2,
+    MAX_CONCURRENT_FAR_TILE_BUILDS: 2,
+    sceneToLonLat: () => ({ lat: 0, lon: 0 }),
+    worldTileAtLocation: () => ({ x: 10, y: 10, level: 5 }), worldTileKey: key,
+    worldTileCoordinatesAtLocation: () => ({ x: 10 + fractionX, y: 10.5 }),
+    worldTileIntersectsCircle,
+  });
+  Object.assign(game, { terrainCoordinateFrame: {}, flyCamera: { position: { x: 0, z: 0 } },
+    worldLocation: { update() {} }, cameraTileKey: "10/10", water: {}, streamingGeneration: 1,
+    sceneSettings: { value: { detailTilesAcross: 9 } }, terrainTileRadius: 6,
+    activeTileBuilds: new Map(), activeDetailBuilds: new Set(["busy"]),
+    tiles: new Map(), sceneryRevision: 0, refreshShadowCasters() {},
+    demoteTileDetail(record) { demoted.push(record.key); record.detailed = false; },
+  });
+  for (const [x, y, lastNeeded] of [[14, 14, 0], [14, 10, 0], [15, 10, 0], [6, 6, 35000]]) {
+    game.tiles.set(`${x}/${y}`, { key: `${x}/${y}`, id: { x, y, level: 5 },
+      detailed: true, nativeTerrain: true, sceneryRevision: 0,
+      detailLastNeededMilliseconds: lastNeeded, lastNeededMilliseconds: 0,
+      farTreeField: {}, farBuildings: {}, farRoads: {} });
+  }
+  game.updateTerrainStreaming(true);
+  assert.deepEqual(demoted, ["14/14", "15/10"]);
+  assert.equal(game.tiles.get("14/10").detailLastNeededMilliseconds, 40000);
+  assert.equal(game.tiles.get("6/6").detailed, true, "detail cooldown prevents immediate demotion");
+  fractionX = 0.9;
+  game.updateTerrainStreaming(true);
+  assert.equal(game.tiles.get("15/10").detailLastNeededMilliseconds, 40000,
+    "moving within a tile brings the next edge tile into the detail circle");
+  assert.equal(game.tiles.get("14/14").detailLastNeededMilliseconds, 0);
+});
+
 test("eviction releases square corners outside the circular footprint after cooldown", () => {
   const disposed = [];
   const game = subject(["evictCooledTiles"], {
@@ -29,8 +65,7 @@ test("eviction releases square corners outside the circular footprint after cool
   const records = [record(66, 66, 0), record(66, 50, 0), record(65, 66, 35000)];
   Object.assign(game, { tiles: new Map(records.map(item => [item.key, item])),
     activeTileBuilds: new Map(), terrainTileRadius: 16 });
-  game.evictCooledTiles(40000, { x: 50, y: 50, level: 7 },
-    { minimumX: 0, maximumX: 0, minimumY: 0, maximumY: 0 }, new Set(["66/50"]));
+  game.evictCooledTiles(40000, new Set(), new Set(["66/50"]));
   assert.deepEqual(disposed, ["66/66"]);
   assert.ok(game.tiles.has("66/50"), "keep needed edge tiles");
   assert.ok(game.tiles.has("65/66"), "respect cooldown for recently needed tiles");
@@ -85,7 +120,6 @@ test("scheduler fills missing terrain before far scenery and still prioritizes n
     worldTileAtLocation: () => ({ x: 10, y: 10, level: 5 }), worldTileKey: key,
     worldTileCoordinatesAtLocation: () => ({ x: 10.5, y: 10.5 }),
     worldTileIntersectsCircle,
-    worldTileWindowOffsetsAtLocation: () => ({ minimumX: 0, maximumX: 0, minimumY: 0, maximumY: 0 }),
   });
   const complete = () => ({ nativeTerrain: false, detailed: false, sceneryRevision: 0,
     farTreeField: {}, farBuildings: {}, farRoads: {} });
