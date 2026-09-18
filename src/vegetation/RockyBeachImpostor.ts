@@ -1,10 +1,9 @@
+import { createPlantMesh } from "./PlantGeometry";
 import {
   Mesh,
   MeshBuilder,
   Scene,
-  ShaderMaterial,
   VertexBuffer,
-  VertexData,
 } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
@@ -12,7 +11,7 @@ import {
   type ImpostorAssetLease,
   type ImpostorVariant,
 } from "../rendering/Impostor";
-import { createVertexColorCaptureMaterial } from "../procedural/ProceduralCaptureMaterial";
+import { createVertexColorCaptureMaterial, scaleVertexColorModel } from "../procedural/ProceduralCaptureMaterial";
 import { createSeededRandom } from "../core/Random";
 
 const SOURCE_HEIGHT = 0.62;
@@ -139,17 +138,7 @@ function createRockyBeachSource(
     for (const index of baseIndices) indices.push(vertexOffset + index);
   }
 
-  const normals = new Float32Array(positions.length);
-  VertexData.ComputeNormals(positions, indices, normals);
-  const data = new VertexData();
-  data.positions = positions;
-  data.indices = indices;
-  data.normals = normals;
-  data.colors = colors;
-  const rocks = new Mesh("rockyBeachImpostorProceduralSource", scene);
-  data.applyToMesh(rocks);
-  rocks.isPickable = false;
-  rocks.useVertexColors = true;
+  const rocks = createPlantMesh(scene, "rockyBeachImpostorProceduralSource", positions, indices, colors);
   const material = createVertexColorCaptureMaterial(
     scene,
     "rockyBeachImpostorSourceMaterial",
@@ -164,18 +153,6 @@ function createRockyBeachSource(
 export function createRockyBeachModel(scene: Scene, renderHeight: number, seed?: number): Mesh {
   const rocks = createRockyBeachSource(scene, true, seed);
   rocks.name = "rockyBeachModels";
-  const positions = rocks.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error("Rocky beach model has no position data.");
-  const scale = renderHeight / SOURCE_HEIGHT;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  rocks.setVerticesData(VertexBuffer.PositionKind, positions);
-  rocks.refreshBoundingInfo({ updatePositionsArray: false });
-  if (rocks.material instanceof ShaderMaterial) {
-    rocks.material.setFloat("modelHeight", renderHeight);
-  }
+  scaleVertexColorModel(rocks, renderHeight, SOURCE_HEIGHT);
   return rocks;
 }

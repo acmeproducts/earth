@@ -1,3 +1,4 @@
+import { downloadJson } from "../core/Download";
 import {
   AbstractEngine,
   Engine,
@@ -239,16 +240,7 @@ export class FpsCounter {
     logTileTimingSummary();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `earth-render-stats-${timestamp}.json`;
-    const json = JSON.stringify(report, null, 2);
-    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
-    const download = document.createElement("a");
-    download.href = url;
-    download.download = filename;
-    download.hidden = true;
-    document.body.appendChild(download);
-    download.click();
-    download.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    downloadJson(filename, report);
     console.info(`[Render stats] Downloaded ${filename}`, report);
   }
 

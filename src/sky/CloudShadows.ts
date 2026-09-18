@@ -75,29 +75,7 @@ uniform vec2 cloudShadowMetadata1;
 uniform vec2 cloudShadowMetadata2;
 uniform vec2 cloudShadowMetadata3;
 
-float sampleVegetationCloudShadow(vec4 placement, vec2 metadata) {
-  if (min(placement.z, placement.w) < 0.000001) return 0.0;
-  vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
-  vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
-  float placementEnabled = step(0.000001, min(placement.z, placement.w));
-  localUV.x = mix(localUV.x, 1.0 - localUV.x, metadata.y);
-  localUV = clamp(localUV, vec2(0.0), vec2(1.0));
-  float variant = floor(metadata.x + 0.5);
-  vec2 cell = vec2(
-    mod(variant, ${CLOUD_ATLAS_COLUMNS}.0),
-    floor(variant / ${CLOUD_ATLAS_COLUMNS}.0)
-  );
-  vec2 atlasPixel = cell * cloudShadowAtlasTileStride
-    + vec2(${CLOUD_TEXTURE_GUTTER}.0)
-    + localUV * vec2(${CLOUD_SHADOW_TEXTURE_SIZE - 1}.0)
-    + vec2(0.5);
-  float density = texture2D(
-    cloudShadowAtlas,
-    atlasPixel / cloudShadowAtlasDimensions
-  ).r;
-  float edgeFade = smoothstep(0.0, 0.04, min(edgeDistance.x, edgeDistance.y));
-  return smoothstep(0.025, 0.72, density) * edgeFade * placementEnabled;
-}
+${cloudShadowSamplingShader("sampleVegetationCloudShadow")}
 
 float vegetationCloudShadowVisibility(void) {
   // Uniform branch: disabled clouds and night have exactly zero contribution.
@@ -186,29 +164,7 @@ export function createCloudShadowTerrainMaterial(
   material.Fragment_Definitions(`
     varying vec2 vCloudShadowWorldXZ;
 
-    float sampleProjectedCloudShadow(vec4 placement, vec2 metadata) {
-      if (min(placement.z, placement.w) < 0.000001) return 0.0;
-      vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
-      vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
-      float placementEnabled = step(0.000001, min(placement.z, placement.w));
-      localUV.x = mix(localUV.x, 1.0 - localUV.x, metadata.y);
-      localUV = clamp(localUV, vec2(0.0), vec2(1.0));
-      float variant = floor(metadata.x + 0.5);
-      vec2 cell = vec2(
-        mod(variant, ${CLOUD_ATLAS_COLUMNS}.0),
-        floor(variant / ${CLOUD_ATLAS_COLUMNS}.0)
-      );
-      vec2 atlasPixel = cell * cloudShadowAtlasTileStride
-        + vec2(${CLOUD_TEXTURE_GUTTER}.0)
-        + localUV * vec2(${CLOUD_SHADOW_TEXTURE_SIZE - 1}.0)
-        + vec2(0.5);
-      float density = texture2D(
-        cloudShadowAtlas,
-        atlasPixel / cloudShadowAtlasDimensions
-      ).r;
-      float edgeFade = smoothstep(0.0, 0.04, min(edgeDistance.x, edgeDistance.y));
-      return smoothstep(0.025, 0.72, density) * edgeFade * placementEnabled;
-    }
+    ${cloudShadowSamplingShader("sampleProjectedCloudShadow")}
   `);
   material.Fragment_Before_Fog(`
     if (cloudShadowLighting.x != 0.0) {
@@ -428,4 +384,30 @@ function createShadowAtlas(scene: Scene): {
     dimensions: new Vector2(atlas.width, atlas.height),
     tileStride: new Vector2(atlas.tileStrideX, atlas.tileStrideY),
   };
+}
+
+function cloudShadowSamplingShader(name: string): string {
+  return `float ${name}(vec4 placement, vec2 metadata) {
+  if (min(placement.z, placement.w) < 0.000001) return 0.0;
+  vec2 localUV = (vCloudShadowWorldXZ - placement.xy) * placement.zw + vec2(0.5);
+  vec2 edgeDistance = min(localUV, vec2(1.0) - localUV);
+  float placementEnabled = step(0.000001, min(placement.z, placement.w));
+  localUV.x = mix(localUV.x, 1.0 - localUV.x, metadata.y);
+  localUV = clamp(localUV, vec2(0.0), vec2(1.0));
+  float variant = floor(metadata.x + 0.5);
+  vec2 cell = vec2(
+    mod(variant, ${CLOUD_ATLAS_COLUMNS}.0),
+    floor(variant / ${CLOUD_ATLAS_COLUMNS}.0)
+  );
+  vec2 atlasPixel = cell * cloudShadowAtlasTileStride
+    + vec2(${CLOUD_TEXTURE_GUTTER}.0)
+    + localUV * vec2(${CLOUD_SHADOW_TEXTURE_SIZE - 1}.0)
+    + vec2(0.5);
+  float density = texture2D(
+    cloudShadowAtlas,
+    atlasPixel / cloudShadowAtlasDimensions
+  ).r;
+  float edgeFade = smoothstep(0.0, 0.04, min(edgeDistance.x, edgeDistance.y));
+  return smoothstep(0.025, 0.72, density) * edgeFade * placementEnabled;
+}`;
 }

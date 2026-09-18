@@ -4,7 +4,11 @@ import { decomposeToConvexPolygons, isConvexPolygon } from "../core/PolygonDecom
 import polygonClipping from "polygon-clipping";
 import {
   clipPolygonAtAxis,
-  cutSegment,
+  longestSharedSegment,
+  splitAtCoordinate,
+  splitConvexPolygonEqual,
+  validatedPlanningPolygon,
+  type PolygonSplit,
   overlappingSegment,
   polygonArea,
   polygonBounds,
@@ -14,12 +18,6 @@ import {
   type CartesianAxis,
 } from "../core/PolygonGeometry";
 
-interface PolygonSplit {
-  first: Point2D[];
-  second: Point2D[];
-  wall: readonly [Point2D, Point2D];
-  coordinate: number;
-}
 interface Interval {
   minimum: number;
   maximum: number;
@@ -260,22 +258,7 @@ function concaveBuildingPlan(
     polygon: { outer: hallwayOuter },
     label: "Hallway",
   });
-  if (entrance) {
-    addClippedRoom(
-      rooms,
-      "entrance-lobby",
-      "hallway",
-      boundary.outer,
-      orientedRect(
-        horizontal,
-        entrance.minimum,
-        entrance.side === "lower" ? shortMin : hallwayMax,
-        entrance.maximum,
-        entrance.side === "lower" ? hallwayMin : shortMax,
-      ),
-      "Entrance lobby",
-    );
-  }
+  addEntranceLobby(rooms, boundary.outer, entrance, horizontal, shortMin, shortMax, hallwayMin, hallwayMax);
   addClippedRoom(
     rooms,
     "stairs-1",
@@ -443,22 +426,7 @@ function apartmentBuildingPlan(
 
   addClippedRoom(rooms, "hallway-1", "hallway", boundary.outer,
     orientedRect(horizontal, longMin, hallwayMin, longMax, hallwayMax), "Hallway");
-  if (entrance) {
-    addClippedRoom(
-      rooms,
-      "entrance-lobby",
-      "hallway",
-      boundary.outer,
-      orientedRect(
-        horizontal,
-        entrance.minimum,
-        entrance.side === "lower" ? shortMin : hallwayMax,
-        entrance.maximum,
-        entrance.side === "lower" ? hallwayMin : shortMax,
-      ),
-      "Entrance lobby",
-    );
-  }
+  addEntranceLobby(rooms, boundary.outer, entrance, horizontal, shortMin, shortMax, hallwayMin, hallwayMax);
   addClippedRoom(rooms, "stairs-1", "stairs", boundary.outer,
     orientedRect(
       horizontal,
@@ -825,30 +793,6 @@ function createSharedSegmentLookup(): typeof longestSharedSegment {
   };
 }
 
-function longestSharedSegment(
-  first: readonly Point2D[],
-  second: readonly Point2D[],
-): readonly [Point2D, Point2D] | undefined {
-  let longest: readonly [Point2D, Point2D] | undefined;
-  let longestLength = 0;
-  for (let firstIndex = 0; firstIndex < first.length; firstIndex++) {
-    const a = first[firstIndex];
-    const b = first[(firstIndex + 1) % first.length];
-    for (let secondIndex = 0; secondIndex < second.length; secondIndex++) {
-      const c = second[secondIndex];
-      const d = second[(secondIndex + 1) % second.length];
-      const shared = overlappingSegment(a, b, c, d);
-      if (!shared) continue;
-      const length = Math.hypot(shared[1].x - shared[0].x, shared[1].y - shared[0].y);
-      if (length > longestLength) {
-        longest = shared;
-        longestLength = length;
-      }
-    }
-  }
-  return longest;
-}
-
 function openingTouchesPolygon(opening: Opening2D, polygon: readonly Point2D[]): boolean {
   return polygon.some((start, index) =>
     !!overlappingSegment(start, polygon[(index + 1) % polygon.length], opening.start, opening.end));
@@ -902,42 +846,33 @@ function validatedOpenings(openings: readonly Opening2D[] | undefined): readonly
 }
 
 function validatedConvexPolygon(polygon: Polygon2D, subject: string): Polygon2D {
-  const outer = [...polygon.outer];
-  if (outer.length > 1 && samePoint(outer[0], outer[outer.length - 1])) outer.pop();
-  if (outer.length < 3 || !outer.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))) {
-    throw new Error(`A ${subject} polygon needs at least three finite points.`);
-  }
-  if (polygon.holes?.length) throw new Error("Building planning does not support polygon holes yet.");
-  if (polygonArea(outer) < 0.01) throw new Error("Building polygon area is too small.");
-  return { outer };
+  return validatedPlanningPolygon(polygon, subject, "Building");
 }
 
-function splitConvexPolygonEqual(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-): PolygonSplit | undefined {
-  const bounds = polygonBounds(points);
-  let low = axis === "x" ? bounds.minX : bounds.minY;
-  let high = axis === "x" ? bounds.maxX : bounds.maxY;
-  const targetArea = polygonArea(points) / 2;
-  for (let iteration = 0; iteration < 48; iteration++) {
-    const middle = (low + high) / 2;
-    if (polygonArea(clipPolygonAtAxis(points, axis, middle, true)) < targetArea) low = middle;
-    else high = middle;
+function addEntranceLobby(
+  rooms: LayoutRoom<BuildingRoomType>[],
+  outer: readonly Point2D[],
+  entrance: BuildingEntrance | undefined,
+  horizontal: boolean,
+  shortMin: number,
+  shortMax: number,
+  hallwayMin: number,
+  hallwayMax: number,
+): void {
+  if (entrance) {
+    addClippedRoom(
+      rooms,
+      "entrance-lobby",
+      "hallway",
+      outer,
+      orientedRect(
+        horizontal,
+        entrance.minimum,
+        entrance.side === "lower" ? shortMin : hallwayMax,
+        entrance.maximum,
+        entrance.side === "lower" ? hallwayMin : shortMax,
+      ),
+      "Entrance lobby",
+    );
   }
-  const coordinate = (low + high) / 2;
-  return splitAtCoordinate(points, axis, coordinate);
-}
-
-function splitAtCoordinate(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-): PolygonSplit | undefined {
-  const first = clipPolygonAtAxis(points, axis, coordinate, true);
-  const second = clipPolygonAtAxis(points, axis, coordinate, false);
-  const wall = cutSegment(points, axis, coordinate);
-  return first.length >= 3 && second.length >= 3 && wall
-    ? { first, second, wall, coordinate }
-    : undefined;
 }

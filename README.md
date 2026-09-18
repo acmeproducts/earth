@@ -90,6 +90,23 @@ yarn build
 
 The output will be in the `dist/` directory.
 
+### Duplicate Code Check
+
+With Python 3.12 and Node.js installed, run `corepack yarn check:duplication`.
+This downloads the same `duplicateCodeChecker3.py` used by CI and checks `src`,
+excluding test/spec files. Set `PYTHON` if your Python executable has another name.
+Open `duplication_report.html` for the matches; the report and comparison files
+are ignored by Git. An optional numeric argument overrides the initial severity
+ceiling, for example `corepack yarn check:duplication 0`.
+
+The initial ceiling is 7,452 (39 normalized matches), reduced from 13,120 (69)
+by sharing geometry, exclusion masks, shaders, atlas processing, and export helpers.
+The checker also matches short, structurally similar code with different behavior.
+CI compares pull requests against the latest successful push baseline on their
+target branch and fails if severity increases. Before that baseline exists,
+the initial ceiling applies. Pushes to `main`/`master` publish baseline artifacts;
+every run publishes its HTML report.
+
 ### Tree Impostor Experiment
 
 Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.

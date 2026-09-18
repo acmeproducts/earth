@@ -397,3 +397,50 @@ export function isTerrainFootprintAbove(
     sampleElevation(terrain, x + offsetX, z + offsetZ, meshWidth, meshDepth) > minimumElevation
   );
 }
+
+export interface HorizontalSegment {
+  start: { x: number; z: number };
+  end: { x: number; z: number };
+  halfWidth: number;
+}
+
+export class SegmentExclusionMask implements HorizontalExclusionMask {
+  private readonly cells = new Map<string, HorizontalSegment[]>();
+  private readonly cellSize: number;
+
+  constructor(segments: readonly HorizontalSegment[], cellSize: number) {
+    this.cellSize = cellSize;
+    for (const segment of segments) {
+      const minimumX = Math.floor((Math.min(segment.start.x, segment.end.x) - segment.halfWidth) / cellSize);
+      const maximumX = Math.floor((Math.max(segment.start.x, segment.end.x) + segment.halfWidth) / cellSize);
+      const minimumZ = Math.floor((Math.min(segment.start.z, segment.end.z) - segment.halfWidth) / cellSize);
+      const maximumZ = Math.floor((Math.max(segment.start.z, segment.end.z) + segment.halfWidth) / cellSize);
+      for (let z = minimumZ; z <= maximumZ; z++) {
+        for (let x = minimumX; x <= maximumX; x++) {
+          const key = `${x},${z}`;
+          const cell = this.cells.get(key);
+          if (cell) cell.push(segment);
+          else this.cells.set(key, [segment]);
+        }
+      }
+    }
+  }
+
+  intersects(x: number, z: number, radius: number): boolean {
+    const minimumX = Math.floor((x - radius) / this.cellSize);
+    const maximumX = Math.floor((x + radius) / this.cellSize);
+    const minimumZ = Math.floor((z - radius) / this.cellSize);
+    const maximumZ = Math.floor((z + radius) / this.cellSize);
+    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
+      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
+        for (const segment of this.cells.get(`${cellX},${cellZ}`) ?? []) {
+          const clearance = radius + segment.halfWidth;
+          if (pointSegmentDistanceSquared(x, z, segment.start, segment.end) <= clearance * clearance) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+}

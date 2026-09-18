@@ -1,3 +1,4 @@
+import { bayer4Shader, atlasSamplerShader } from "../rendering/ImpostorShaderParts";
 import {
   Camera,
   Color3,
@@ -357,21 +358,9 @@ uniform sampler2D exposureLowAtlas;
 uniform sampler2D exposureHighAtlas;
 #endif
 
-vec4 atlasSample(float face, vec2 uv) {
-  if (face < 0.5) return texture2D(atlas0, uv);
-  if (face < 1.5) return texture2D(atlas1, uv);
-  if (face < 2.5) return texture2D(atlas2, uv);
-  if (face < 3.5) return texture2D(atlas3, uv);
-  return texture2D(atlas4, uv);
-}
+${atlasSamplerShader("atlasSample", "atlas")}
 
-vec4 lowAtlasSample(float face, vec2 uv) {
-  if (face < 0.5) return texture2D(lowAtlas0, uv);
-  if (face < 1.5) return texture2D(lowAtlas1, uv);
-  if (face < 2.5) return texture2D(lowAtlas2, uv);
-  if (face < 3.5) return texture2D(lowAtlas3, uv);
-  return texture2D(lowAtlas4, uv);
-}
+${atlasSamplerShader("lowAtlasSample", "lowAtlas")}
 
 vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   vec2 localUV = mix(tileInset, vec2(1.0) - tileInset, imageUV);
@@ -412,14 +401,7 @@ vec4 frame(float face, vec2 tile, vec2 imageUV, float lodBlend) {
   return vec4(mix(straightColor, ultraStraight, ultraBlend), mix(alpha, ultraColor.a, ultraBlend));
 }
 
-float bayer4(vec2 pixel) {
-  vec2 p = mod(floor(pixel), 4.0);
-  vec2 low = mod(p, 2.0);
-  vec2 high = floor(p * 0.5);
-  float lowValue = 2.0 * low.x + low.y * (3.0 - 4.0 * low.x);
-  float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
-  return (4.0 * lowValue + highValue) / 16.0;
-}
+${bayer4Shader}
 
 // Alpha selection uses a finer ordered mask than the compact 4 by 4 used for
 // LOD swaps, keeping coverage steps stable in screen space with fewer repeats.

@@ -1,4 +1,5 @@
-import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
+import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
+import { Color3, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
   createImpostorAssetProvider,
@@ -87,12 +88,7 @@ function createWheatSource(scene: Scene, liveLighting = false, seed = 0x57484541
     }
   }
 
-  const normals = new Float32Array(positions.length);
-  VertexData.ComputeNormals(positions, indices, normals);
-  const data = new VertexData();
-  data.positions = positions; data.indices = indices; data.normals = normals; data.colors = colors;
-  const wheat = new Mesh("wheatImpostorProceduralSource", scene);
-  data.applyToMesh(wheat); wheat.isPickable = false; wheat.useVertexColors = true;
+  const wheat = createPlantMesh(scene, "wheatImpostorProceduralSource", positions, indices, colors);
   wheat.material = createVertexColorCaptureMaterial(scene, "wheatImpostorSourceMaterial", liveLighting);
   return wheat;
 
@@ -128,10 +124,7 @@ function createWheatSource(scene: Scene, liveLighting = false, seed = 0x57484541
       push(center.subtract(facing.scale(halfWidth)), color);
       push(center.add(facing.scale(halfWidth)), color);
     }
-    for (let segment = 0; segment < segments; segment++) {
-      const left = start + segment * 2;
-      indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-    }
+    appendBladeIndices(indices, start, segments);
   }
   function addKernel(center: Vector3, side: Vector3, color: Color3): void {
     const axis = Vector3.Up();

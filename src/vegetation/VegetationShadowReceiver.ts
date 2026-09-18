@@ -1,12 +1,11 @@
+import { fallbackWhiteTexture as fallbackShadowTexture } from "../rendering/FallbackTexture";
 import {
   DirectionalLight,
   Engine,
-  RawTexture,
   RenderTargetTexture,
   Scene,
   ShaderMaterial,
   ShadowGenerator,
-  Texture,
   Vector2,
 } from "@babylonjs/core";
 import type { Matrix, Observer } from "@babylonjs/core";
@@ -19,30 +18,13 @@ export const VEGETATION_SHADOW_RECEIVER_BIAS = 0.00015;
  * buildings and vegetation sit in shadows of the same depth.
  */
 export const SHADOW_DARKNESS = 0.3;
-const fallbackShadowTextures = new WeakMap<Scene, RawTexture>();
+
 interface VegetationShadowReceiverState {
   materials: Set<ShaderMaterial>;
   update: (materials?: Iterable<ShaderMaterial>) => void;
   observer: Observer<Scene>;
 }
 const receiverStates = new WeakMap<Scene, VegetationShadowReceiverState>();
-
-function fallbackShadowTexture(scene: Scene): RawTexture {
-  const cached = fallbackShadowTextures.get(scene);
-  if (cached) return cached;
-  const texture = RawTexture.CreateRGBATexture(
-    new Uint8Array([255, 255, 255, 255]),
-    1,
-    1,
-    scene,
-    false,
-    false,
-    Texture.NEAREST_SAMPLINGMODE,
-  );
-  texture.name = "fallbackVegetationShadowTexture";
-  fallbackShadowTextures.set(scene, texture);
-  return texture;
-}
 
 export const vegetationShadowVertexDeclaration = `
 uniform mat4 vegetationShadowMatrix;

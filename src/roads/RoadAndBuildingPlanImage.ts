@@ -1,3 +1,4 @@
+import { number, escapeXml, positiveDimension, diagonalGradient } from "../core/Svg";
 import { polygonArea } from "../core/PlanarGeometry";
 import type {
   PlannedRoadPolygon,
@@ -73,7 +74,7 @@ export function renderRoadAndBuildingPlanSvg(
     { x: plan.bounds.maxX, z: plan.bounds.maxZ },
     { x: plan.bounds.minX, z: plan.bounds.maxZ },
   ], [], project);
-  const defs = `<defs><linearGradient id="building-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde7c2"/><stop offset="1" stop-color="#d6a85f"/></linearGradient><pattern id="dirt-fill" width="9" height="9" patternUnits="userSpaceOnUse"><rect width="9" height="9" fill="#9b7048"/><circle cx="2" cy="3" r="0.45" fill="#7c5738"/><circle cx="7" cy="7" r="0.35" fill="#bc9164"/></pattern><pattern id="unpaved-fill" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#b99a6b"/><circle cx="2" cy="3" r="0.7" fill="#806342"/><circle cx="7" cy="6" r="0.55" fill="#d8c29e"/></pattern><pattern id="ford-fill" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#6094ad"/><path d="M -2 3 Q 1 1 4 3 T 10 3 T 16 3" fill="none" stroke="#b9dcea" stroke-width="1"/></pattern></defs>`;
+  const defs = `<defs>${diagonalGradient("building-fill", "#fde7c2", "#d6a85f")}<pattern id="dirt-fill" width="9" height="9" patternUnits="userSpaceOnUse"><rect width="9" height="9" fill="#9b7048"/><circle cx="2" cy="3" r="0.45" fill="#7c5738"/><circle cx="7" cy="7" r="0.35" fill="#bc9164"/></pattern><pattern id="unpaved-fill" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#b99a6b"/><circle cx="2" cy="3" r="0.7" fill="#806342"/><circle cx="7" cy="6" r="0.55" fill="#d8c29e"/></pattern><pattern id="ford-fill" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#6094ad"/><path d="M -2 3 Q 1 1 4 3 T 10 3 T 16 3" fill="none" stroke="#b9dcea" stroke-width="1"/></pattern></defs>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Road and building plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#edf1e8")}"/>${title}<path d="${extent}" fill="none" stroke="#94a3b8" stroke-width="1" vector-effect="non-scaling-stroke"/>${plots}${shoulders}${roads}${centerlines}${buildings}${plotBoundaries}${lamps}${labels}</svg>`;
 }
@@ -177,24 +178,6 @@ function validateBounds(bounds: RoadAndBuildingPlanBounds): void {
   }
 }
 
-function positiveDimension(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
 function finite(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? value : fallback;
-}
-
-function number(value: number): string {
-  return String(Math.round(value * 100) / 100);
-}
-
-function escapeXml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&apos;",
-  })[character] ?? character);
 }

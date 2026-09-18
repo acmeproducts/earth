@@ -1,3 +1,5 @@
+import { fallbackWhiteTexture } from "../rendering/FallbackTexture";
+import { bayer4Shader } from "../rendering/ImpostorShaderParts";
 import { directionalExposureDeclaration, registerExposureCutout } from "../vegetation/DirectionalExposure";
 import {
   Color3,
@@ -5,7 +7,6 @@ import {
   DynamicTexture,
   HemisphericLight,
   Mesh,
-  RawTexture,
   Scene,
   ShadowDepthWrapper,
   ShaderMaterial,
@@ -52,24 +53,6 @@ export type TreeBarkStyle =
 
 const barkTextures = new WeakMap<Scene, Map<TreeBarkStyle, DynamicTexture>>();
 const textureReadiness = new WeakMap<ShaderMaterial, Promise<void>>();
-const fallbackWhiteTextures = new WeakMap<Scene, RawTexture>();
-
-function fallbackWhiteTexture(scene: Scene): RawTexture {
-  const cached = fallbackWhiteTextures.get(scene);
-  if (cached) return cached;
-  const texture = RawTexture.CreateRGBATexture(
-    new Uint8Array([255, 255, 255, 255]),
-    1,
-    1,
-    scene,
-    false,
-    false,
-    Texture.NEAREST_SAMPLINGMODE,
-  );
-  texture.name = "fallbackWhiteTexture";
-  fallbackWhiteTextures.set(scene, texture);
-  return texture;
-}
 
 const BARK_SEEDS: Record<TreeBarkStyle, number> = {
   acacia: 0x41434143,
@@ -509,14 +492,7 @@ export function createVertexColorCaptureMaterial(
         ${directionalExposureDeclaration}
         ${vegetationShadowFragmentDeclaration}
         ${cloudShadowFragmentDeclaration}
-        float bayer4(vec2 pixel) {
-          vec2 p = mod(floor(pixel), 4.0);
-          vec2 low = mod(p, 2.0);
-          vec2 high = floor(p * 0.5);
-          float lowValue = 2.0 * low.x + low.y * (3.0 - 4.0 * low.x);
-          float highValue = 2.0 * high.x + high.y * (3.0 - 4.0 * high.x);
-          return (4.0 * lowValue + highValue) / 16.0;
-        }
+        ${bayer4Shader}
         float rockHash(vec3 point) {
           return fract(sin(dot(point, vec3(127.1, 311.7, 74.7))) * 43758.5453);
         }

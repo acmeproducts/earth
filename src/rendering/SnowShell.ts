@@ -1,3 +1,4 @@
+import { spatialHash3 as hash3 } from "../core/Random";
 import { Mesh, VertexBuffer } from "@babylonjs/core";
 
 /**
@@ -17,11 +18,6 @@ export interface SnowShellOptions {
 /** Faces at least this upward-facing collect snow; steeper ones shed it. */
 const CAP_UP_THRESHOLD = 0.45;
 const SNOW_RGB = [0.9, 0.94, 0.98] as const;
-
-function hash3(x: number, y: number, z: number): number {
-  const value = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
-  return value - Math.floor(value);
-}
 
 /** Appends the slabs in place. Returns how many faces grew one. */
 export function appendSnowShell(mesh: Mesh, options: SnowShellOptions): number {

@@ -1,4 +1,5 @@
-import { Color3, Mesh, Scene, Vector3, VertexData } from "@babylonjs/core";
+import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
+import { Color3, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import {
   createImpostorAssetProvider,
   IMPOSTOR_CUBE_FACES,
@@ -185,17 +186,7 @@ function createPlantSource(
     }
   }
 
-  const normals = new Float32Array(positions.length);
-  VertexData.ComputeNormals(positions, indices, normals);
-  const data = new VertexData();
-  data.positions = positions;
-  data.indices = indices;
-  data.normals = normals;
-  data.colors = colors;
-  const plants = new Mesh("plantImpostorProceduralSource", scene);
-  data.applyToMesh(plants);
-  plants.isPickable = false;
-  plants.useVertexColors = true;
+  const plants = createPlantMesh(scene, "plantImpostorProceduralSource", positions, indices, colors);
   plants.material = createVertexColorCaptureMaterial(
     scene,
     "plantImpostorSourceMaterial",
@@ -262,10 +253,7 @@ function createPlantSource(
       pushVertex(center.subtract(offset), color, brightness * 0.92);
       pushVertex(center.add(offset), color, brightness * 1.04);
     }
-    for (let segment = 0; segment < segments; segment++) {
-      const left = vertexStart + segment * 2;
-      indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-    }
+    appendBladeIndices(indices, vertexStart, segments);
   }
 
   function addBlossom(

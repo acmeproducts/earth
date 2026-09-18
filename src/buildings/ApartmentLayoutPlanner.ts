@@ -2,23 +2,18 @@ import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type 
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame, type PlanningFrame2D } from "../core/PlanningFrame.mjs";
 import { decomposeToConvexPolygons, mergeConvexNeighbours } from "../core/PolygonDecomposition.mjs";
 import {
-  clipPolygonAtAxis,
-  cutSegment,
+  longestSharedSegment as sharedSegment,
+  splitAtCoordinate,
+  splitConvexPolygonEqual,
+  validatedPlanningPolygon,
+  type PolygonSplit,
   overlappingSegment,
   polygonArea,
   polygonBounds,
   polygonMinimumMeanWidth,
-  samePoint,
   type CartesianAxis,
 } from "../core/PolygonGeometry";
 
-interface PolygonSplit {
-  first: Point2D[];
-  second: Point2D[];
-  wall: readonly [Point2D, Point2D];
-  axis: CartesianAxis;
-  coordinate: number;
-}
 export const MINIMUM_ROOM_AREA_SQUARE_METERS = 12;
 /** Keep generated rooms wide enough to furnish and move through comfortably. */
 export const MINIMUM_ROOM_CLEAR_WIDTH_METERS = 2.8;
@@ -256,30 +251,6 @@ function internalRoomDoors(
   return doors;
 }
 
-function sharedSegment(
-  first: readonly Point2D[],
-  second: readonly Point2D[],
-): readonly [Point2D, Point2D] | undefined {
-  let longest: readonly [Point2D, Point2D] | undefined;
-  let longestLength = 0;
-  for (let firstIndex = 0; firstIndex < first.length; firstIndex++) {
-    const a = first[firstIndex];
-    const b = first[(firstIndex + 1) % first.length];
-    for (let secondIndex = 0; secondIndex < second.length; secondIndex++) {
-      const c = second[secondIndex];
-      const d = second[(secondIndex + 1) % second.length];
-      const candidate = overlappingSegment(a, b, c, d);
-      if (!candidate) continue;
-      const length = Math.hypot(candidate[1].x - candidate[0].x, candidate[1].y - candidate[0].y);
-      if (length > longestLength) {
-        longest = candidate;
-        longestLength = length;
-      }
-    }
-  }
-  return longest;
-}
-
 function subdivideRooms(
   polygon: readonly Point2D[],
   openings: readonly Opening2D[],
@@ -403,41 +374,6 @@ function aspectRatio(points: readonly Point2D[]): number {
   return Math.max(width / height, height / width);
 }
 
-function splitAtCoordinate(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-  coordinate: number,
-): PolygonSplit | undefined {
-  const first = clipPolygonAtAxis(points, axis, coordinate, true);
-  const second = clipPolygonAtAxis(points, axis, coordinate, false);
-  const wall = cutSegment(points, axis, coordinate);
-  if (first.length < 3 || second.length < 3 || !wall) return undefined;
-  return { first, second, wall, axis, coordinate };
-}
-
-function splitConvexPolygonEqual(
-  points: readonly Point2D[],
-  axis: CartesianAxis,
-): PolygonSplit | undefined {
-  const bounds = polygonBounds(points);
-  let low = axis === "x" ? bounds.minX : bounds.minY;
-  let high = axis === "x" ? bounds.maxX : bounds.maxY;
-  const targetArea = polygonArea(points) / 2;
-  for (let iteration = 0; iteration < 48; iteration++) {
-    const middle = (low + high) / 2;
-    if (polygonArea(clipPolygonAtAxis(points, axis, middle, true)) < targetArea) low = middle;
-    else high = middle;
-  }
-  return splitAtCoordinate(points, axis, (low + high) / 2);
-}
-
 function validatedConvexPolygon(polygon: Polygon2D, subject: string): Polygon2D {
-  const outer = [...polygon.outer];
-  if (outer.length > 1 && samePoint(outer[0], outer[outer.length - 1])) outer.pop();
-  if (outer.length < 3 || !outer.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))) {
-    throw new Error(`A ${subject} polygon needs at least three finite points.`);
-  }
-  if (polygon.holes?.length) throw new Error("Apartment planning does not support polygon holes yet.");
-  if (polygonArea(outer) < 0.01) throw new Error("Apartment polygon area is too small.");
-  return { outer };
+  return validatedPlanningPolygon(polygon, subject, "Apartment");
 }

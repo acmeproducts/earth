@@ -1,8 +1,8 @@
+import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
 import {
   Color3,
   Mesh,
   Scene,
-  VertexData,
 } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
@@ -136,25 +136,11 @@ function createGrassSource(scene: Scene, liveLighting = false, seed = 0x47524153
         colors.push(red, green, blue, 1, red, green, blue, 1);
       }
 
-      for (let segment = 0; segment < segments; segment++) {
-        const left = vertexStart + segment * 2;
-        indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-      }
+      appendBladeIndices(indices, vertexStart, segments);
     }
   }
 
-  const normals = new Float32Array(positions.length);
-  VertexData.ComputeNormals(positions, indices, normals);
-  const data = new VertexData();
-  data.positions = positions;
-  data.indices = indices;
-  data.normals = normals;
-  data.colors = colors;
-
-  const grass = new Mesh("grassImpostorProceduralSource", scene);
-  data.applyToMesh(grass);
-  grass.isPickable = false;
-  grass.useVertexColors = true;
+  const grass = createPlantMesh(scene, "grassImpostorProceduralSource", positions, indices, colors);
 
   const material = createVertexColorCaptureMaterial(
     scene,

@@ -908,12 +908,14 @@ async function dilateTransparentTileEdgeColors(
 
           let nearest = -1;
           let nearestDistanceSquared = Number.POSITIVE_INFINITY;
-          for (let offsetY = -radius; offsetY <= radius; offsetY++) {
-            const sampleY = localY + offsetY;
-            if (sampleY < 0 || sampleY >= tileHeight) continue;
-            for (let offsetX = -radius; offsetX <= radius; offsetX++) {
-              const sampleX = localX + offsetX;
-              if (sampleX < 0 || sampleX >= tileWidth) continue;
+          const minY = Math.max(0, localY - radius);
+          const maxY = Math.min(tileHeight - 1, localY + radius);
+          const minX = Math.max(0, localX - radius);
+          const maxX = Math.min(tileWidth - 1, localX + radius);
+          for (let sampleY = minY; sampleY <= maxY; sampleY++) {
+            const offsetY = sampleY - localY;
+            for (let sampleX = minX; sampleX <= maxX; sampleX++) {
+              const offsetX = sampleX - localX;
               const distanceSquared = offsetX * offsetX + offsetY * offsetY;
               if (distanceSquared > radius * radius || distanceSquared >= nearestDistanceSquared) {
                 continue;
@@ -1057,44 +1059,9 @@ async function dilateTransparentTileColors(
   tileHeight: number,
   cooperative: boolean,
 ): Promise<void> {
-  const source = new Uint8ClampedArray(image.data);
-  const slice = captureWorkSlice();
-  for (let tileY = 0; tileY < gridHeight; tileY++) {
-    for (let tileX = 0; tileX < gridWidth; tileX++) {
-      const startX = tileX * tileWidth;
-      const startY = tileY * tileHeight;
-      for (let localY = 0; localY < tileHeight; localY++) {
-        for (let localX = 0; localX < tileWidth; localX++) {
-          const x = startX + localX;
-          const y = startY + localY;
-          const destination = (y * image.width + x) * 4;
-          if (source[destination + 3] !== 0) continue;
-
-          let nearest = -1;
-          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
-          for (let sampleY = 0; sampleY < tileHeight; sampleY++) {
-            for (let sampleX = 0; sampleX < tileWidth; sampleX++) {
-              const sample = ((startY + sampleY) * image.width + startX + sampleX) * 4;
-              if (source[sample + 3] === 0) continue;
-              const dx = sampleX - localX;
-              const dy = sampleY - localY;
-              const distanceSquared = dx * dx + dy * dy;
-              if (distanceSquared < nearestDistanceSquared) {
-                nearest = sample;
-                nearestDistanceSquared = distanceSquared;
-              }
-            }
-          }
-          if (nearest >= 0) {
-            image.data[destination] = source[nearest];
-            image.data[destination + 1] = source[nearest + 1];
-            image.data[destination + 2] = source[nearest + 2];
-          }
-        }
-        await yieldCaptureWorkIfNeeded(cooperative, slice);
-      }
-    }
-  }
+  await dilateTransparentTileEdgeColors(
+    image, gridWidth, gridHeight, tileWidth, tileHeight, Infinity, cooperative,
+  );
 }
 
 async function binaryImage(

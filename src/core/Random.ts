@@ -80,3 +80,8 @@ export function hashString(value: string): number {
   }
   return hash | 0;
 }
+
+export function spatialHash3(a: number, b: number, c: number): number {
+  const value = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
+  return value - Math.floor(value);
+}

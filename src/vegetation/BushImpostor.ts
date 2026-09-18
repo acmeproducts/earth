@@ -1,7 +1,8 @@
-import { Color3, Mesh, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
+import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
+import { Color3, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import {
   createVertexColorCaptureMaterial,
-  setVertexColorModelHeight,
+  scaleVertexColorModel,
 } from "../procedural/ProceduralCaptureMaterial";
 import {
   createImpostorAssetProvider,
@@ -251,24 +252,12 @@ function createBushSource(scene: Scene, liveLighting = false, seed = 0x42555348)
   for (const value of woodPositions) positions.push(value);
   for (const value of woodIndices) indices.push(value + foliageVertices);
   for (const value of woodColors) colors.push(value);
-  const data = new VertexData();
-  const normals = new Float32Array(positions.length);
-  VertexData.ComputeNormals(positions, indices, normals);
-  data.positions = positions;
-  data.indices = indices;
-  data.normals = normals;
-  data.colors = colors;
   // UV.x = 2 marks bark for solid-surface lighting and opaque occlusion.
   const uvs = new Float32Array(positions.length / 3 * 2);
   for (let vertex = foliageVertices; vertex < positions.length / 3; vertex++) {
     uvs[vertex * 2] = 2;
   }
-  data.uvs = uvs;
-
-  const bush = new Mesh("bushImpostorProceduralSource", scene);
-  data.applyToMesh(bush);
-  bush.isPickable = false;
-  bush.useVertexColors = true;
+  const bush = createPlantMesh(scene, "bushImpostorProceduralSource", positions, indices, colors, uvs);
   bush.material = createVertexColorCaptureMaterial(
     scene,
     "bushImpostorSourceMaterial",
@@ -305,18 +294,7 @@ export async function createBushModel(scene: Scene, renderHeight: number, seed?:
   material.options.attributes.push("sunExposureLow", "sunExposureHigh");
   bush.material = material;
   bush.name = "bushModels";
-  const positions = bush.getVerticesData(VertexBuffer.PositionKind);
-  if (!positions) throw new Error("Bush model has no position data.");
-
-  const scale = renderHeight / SOURCE_HEIGHT;
-  for (let index = 0; index < positions.length; index += 3) {
-    positions[index] *= scale;
-    positions[index + 1] = positions[index + 1] * scale + renderHeight / 2;
-    positions[index + 2] *= scale;
-  }
-  bush.setVerticesData(VertexBuffer.PositionKind, positions);
-  bush.refreshBoundingInfo({ updatePositionsArray: false });
-  setVertexColorModelHeight(bush, renderHeight);
+  scaleVertexColorModel(bush, renderHeight, SOURCE_HEIGHT);
   return bush;
 }
 
@@ -398,10 +376,7 @@ function addLeaf(
     colors.push(red, green, blue, 1, red, green, blue, 1);
   }
 
-  for (let segment = 0; segment < segments; segment++) {
-    const left = vertexStart + segment * 2;
-    indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
-  }
+  appendBladeIndices(indices, vertexStart, segments);
 }
 
 /** Adds one small berry or floret as crossed quads, matching the leaf budget. */

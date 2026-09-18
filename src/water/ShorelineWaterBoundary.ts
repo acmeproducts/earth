@@ -1,4 +1,4 @@
-import earcut from 'earcut';
+import { triangulate } from "../core/PolygonTriangulation";
 import { cross, PlanarCellIndex, pointBounds, signedArea, type PlanarPoint } from '../core/PlanarGeometry';
 import type { ShorelineGeometry } from './ShorelineGeometry';
 
@@ -9,19 +9,10 @@ export interface WaterBoundary {
 
 /** Clip wave geometry to mapped water, carrying the sampled bed depth through every cut. */
 export function clipShorelineToWater(geometry: ShorelineGeometry, boundary: WaterBoundary): ShorelineGeometry {
-  const points = [...boundary.outline];
-  const holes: number[] = [];
-  for (const ring of boundary.holes) {
-    if (ring.length < 3) continue;
-    holes.push(points.length);
-    points.push(...ring);
-  }
-  const indices = earcut(points.flatMap(p => [p.x, p.z]), holes);
-  const bounds = pointBounds(points);
+  const bounds = pointBounds(boundary.outline);
   const index = new PlanarCellIndex<PlanarPoint[]>(Math.max(1e-6,
     Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 8));
-  for (let i = 0; i < indices.length; i += 3) {
-    const triangle = indices.slice(i, i + 3).map(i => points[i]);
+  for (const triangle of triangulate(boundary)) {
     if (signedArea(triangle) < 0) triangle.reverse();
     index.add(triangle, pointBounds(triangle));
   }

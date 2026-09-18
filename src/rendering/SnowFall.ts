@@ -1,3 +1,4 @@
+import { spatialHash3 as hash } from "../core/Random";
 import { Mesh, VertexBuffer } from "@babylonjs/core";
 
 /**
@@ -77,11 +78,6 @@ interface Deposit {
 
 const SNOW_RGB = [0.9, 0.94, 0.98] as const;
 const MAX_CELLS_PER_AXIS = 96;
-
-function hash(a: number, b: number, c: number): number {
-  const value = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
-  return value - Math.floor(value);
-}
 
 /** Drops snow on a mesh and appends the resulting blanket geometry in place. */
 export function simulateSnowfall(mesh: Mesh, options: SnowfallOptions): SnowfallResult {

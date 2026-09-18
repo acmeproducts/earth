@@ -1,3 +1,4 @@
+import { downloadJson } from "../core/Download";
 import type { ApartmentLayout } from "./ApartmentLayoutPlanner";
 import type { BuildingLayout, BuildingPlannerInput } from "./BuildingLayoutPlanner";
 import type { BuildingPlan } from "./BuildingPlanner";
@@ -91,17 +92,7 @@ export function downloadEncounteredBuildingLayouts(): void {
   };
   const timestamp = report.capturedAt.replace(/[:.]/g, "-");
   const filename = `earth-building-layouts-${timestamp}.json`;
-  const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {
-    type: "application/json",
-  }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.hidden = true;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  downloadJson(filename, report);
   console.info(`[Building layout debug] Downloaded ${currentCaptures.length} buildings to ${filename}.`);
 }
 

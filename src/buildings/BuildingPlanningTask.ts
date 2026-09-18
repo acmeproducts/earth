@@ -1,3 +1,4 @@
+import { pointOnSegment2D } from "../core/PolygonGeometry";
 import { planBuildingLayout, type BuildingLayout } from "./BuildingLayoutPlanner";
 import { maximumMinimumRoomAreaForApartment, planApartmentLayout, type ApartmentLayout } from "./ApartmentLayoutPlanner";
 import type { BuildingPlan } from "./BuildingPlanner";
@@ -103,15 +104,6 @@ export function openingTouchesBoundary(opening: Opening2D, polygon: readonly Poi
   );
 }
 
-function pointOnSegment2D(point: Point2D, start: Point2D, end: Point2D): boolean {
-  const cross = (end.x - start.x) * (point.y - start.y) -
-    (end.y - start.y) * (point.x - start.x);
-  if (Math.abs(cross) > 1e-5) return false;
-  return point.x >= Math.min(start.x, end.x) - 1e-5 &&
-    point.x <= Math.max(start.x, end.x) + 1e-5 &&
-    point.y >= Math.min(start.y, end.y) - 1e-5 &&
-    point.y <= Math.max(start.y, end.y) + 1e-5;
-}
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

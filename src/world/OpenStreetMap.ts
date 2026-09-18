@@ -37,7 +37,8 @@ import {
   type HorizontalExclusionMask,
   lonLatToScene,
   PolygonExclusionMask,
-  pointSegmentDistanceSquared,
+  SegmentExclusionMask as RoadExclusionMask,
+  type HorizontalSegment as RoadSegment,
   resamplePath,
   sampleElevation,
   SEA_LEVEL_METERS,
@@ -146,55 +147,6 @@ interface MapLayerOptions {
   sharedBuildingElevations?: SharedValueMap<string, number>;
   /** The rendered ground, so terrain-conforming decals cannot sink into it. */
   terrainSurface?: TerrainSurface;
-}
-
-interface RoadSegment {
-  start: { x: number; z: number };
-  end: { x: number; z: number };
-  halfWidth: number;
-}
-
-class RoadExclusionMask implements HorizontalExclusionMask {
-  private readonly cells = new Map<string, RoadSegment[]>();
-  private readonly cellSize: number;
-
-  constructor(segments: RoadSegment[], cellSize: number) {
-    this.cellSize = cellSize;
-    for (const segment of segments) {
-      const minimumX = Math.floor((Math.min(segment.start.x, segment.end.x) - segment.halfWidth) / cellSize);
-      const maximumX = Math.floor((Math.max(segment.start.x, segment.end.x) + segment.halfWidth) / cellSize);
-      const minimumZ = Math.floor((Math.min(segment.start.z, segment.end.z) - segment.halfWidth) / cellSize);
-      const maximumZ = Math.floor((Math.max(segment.start.z, segment.end.z) + segment.halfWidth) / cellSize);
-      for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-        for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-          const key = `${cellX},${cellZ}`;
-          const cell = this.cells.get(key);
-          if (cell) cell.push(segment);
-          else this.cells.set(key, [segment]);
-        }
-      }
-    }
-  }
-
-  intersects(x: number, z: number, radius: number): boolean {
-    const minimumX = Math.floor((x - radius) / this.cellSize);
-    const maximumX = Math.floor((x + radius) / this.cellSize);
-    const minimumZ = Math.floor((z - radius) / this.cellSize);
-    const maximumZ = Math.floor((z + radius) / this.cellSize);
-    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-        const segments = this.cells.get(`${cellX},${cellZ}`);
-        if (!segments) continue;
-        for (const segment of segments) {
-          const clearance = segment.halfWidth + radius;
-          if (pointSegmentDistanceSquared(x, z, segment.start, segment.end) <= clearance * clearance) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
 }
 
 export interface MapFeatureLayer {

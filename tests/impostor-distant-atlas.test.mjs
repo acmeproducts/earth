@@ -13,6 +13,30 @@ function loadFunction(name, dependencies) {
   return new Function(...Object.keys(dependencies), `${outputText}; return ${name};`)(...Object.values(dependencies));
 }
 
+test("transparent atlas colors respect the radius, preserve alpha, and never cross tile boundaries", async () => {
+  const dilate = loadFunction("dilateTransparentTileEdgeColors", {
+    captureWorkSlice: () => ({}),
+    yieldCaptureWorkIfNeeded: async () => {},
+  });
+  for (const [radius, expected] of [
+    [0, [80, 0, 0, 0, 0, 20]],
+    [1, [80, 80, 0, 0, 20, 20]],
+    [Infinity, [80, 80, 80, 20, 20, 20]],
+  ]) {
+    const image = { width: 6, height: 1, data: new Uint8ClampedArray([
+      80, 30, 10, 128, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 20, 60, 90, 255,
+    ]) };
+    await dilate(image, 2, 1, 3, 1, radius, true);
+    assert.deepEqual(Array.from(image.data).filter((_, i) => i % 4 === 0), expected);
+    assert.deepEqual(Array.from(image.data).filter((_, i) => i % 4 === 3), [128, 0, 0, 0, 0, 255]);
+    if (radius === Infinity) {
+      assert.deepEqual(Array.from(image.data.slice(8, 12)), [80, 30, 10, 0]);
+      assert.deepEqual(Array.from(image.data.slice(12, 16)), [20, 60, 90, 0]);
+    }
+  }
+});
+
 test("extreme-distance downsampling keeps fractional coverage and isolates each frame", async () => {
   const pixels = { width: 4, height: 1, data: new Uint8ClampedArray([
     20, 100, 40, 16, 30, 110, 50, 128, 40, 120, 60, 0, 50, 130, 70, 255,

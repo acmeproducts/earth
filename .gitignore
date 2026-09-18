@@ -51,3 +51,10 @@ impostor-validation.png
 artifacts/tile-timing/
 artifacts/vista-performance/
 .claude-tmp-*
+
+# Duplicate code checker reports and downloaded comparison baselines
+duplicated_segments.json
+duplication_severity.txt
+duplication_report.html
+previous_segments.json
+previous_severity.txt

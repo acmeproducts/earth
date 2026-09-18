@@ -1,3 +1,5 @@
+import { atlasSamplerShader } from "../rendering/ImpostorShaderParts";
+import { vertexShader as demoVertexShader } from "./ImpostorPreviewShaders";
 import {
   AbstractEngine,
   Color4,
@@ -413,22 +415,6 @@ export class TreeImpostorValidation {
   }
 }
 
-const demoVertexShader = `
-precision highp float;
-attribute vec3 position;
-attribute vec2 uv;
-uniform mat4 viewProjection;
-uniform vec3 center;
-uniform vec3 billboardRight;
-uniform vec3 billboardUp;
-uniform float diameter;
-varying vec2 vUV;
-void main(void) {
-  vec3 worldPosition = center + (billboardRight * position.x + billboardUp * position.y) * diameter;
-  gl_Position = viewProjection * vec4(worldPosition, 1.0);
-  vUV = vec2(uv.x, 1.0 - uv.y);
-}`;
-
 const demoFragmentShader = `
 #define DISABLE_UNIFORMITY_ANALYSIS
 precision highp float;
@@ -443,13 +429,7 @@ uniform float gridSize;
 uniform vec2 atlasTileCounts;
 uniform float faceIndex;
 uniform float tileInset;
-vec4 atlasSample(vec2 uv) {
-  if (faceIndex < 0.5) return texture2D(atlas0, uv);
-  if (faceIndex < 1.5) return texture2D(atlas1, uv);
-  if (faceIndex < 2.5) return texture2D(atlas2, uv);
-  if (faceIndex < 3.5) return texture2D(atlas3, uv);
-  return texture2D(atlas4, uv);
-}
+${atlasSamplerShader("atlasSample", "atlas", "faceIndex")}
 vec4 frame(vec2 tile) {
   vec2 localUV = mix(vec2(tileInset), vec2(1.0 - tileInset), vUV);
   return atlasSample((tile + localUV) / atlasTileCounts);

@@ -4,6 +4,7 @@
   "description": "Babylon.js project with TypeScript and Webpack",
   "main": "src/index.ts",
   "scripts": {
+    "check:duplication": "node scripts/check-duplication.mjs",
     "test:oslo-walk": "node tests/drive-render-performance.mjs --oslo-walk",
     "test:vista": "node tests/drive-render-performance.mjs --vista",
     "dev": "webpack serve --mode development",

@@ -1,3 +1,4 @@
+import { number, escapeXml, positiveDimension, diagonalGradient } from "../core/Svg";
 /** Cartesian coordinates in planner units (normally meters). */
 export interface Point2D {
   x: number;
@@ -139,7 +140,7 @@ export function renderFloorPlanSvg(
   const title = options.title
     ? `<text x="${number(width / 2)}" y="18" text-anchor="middle" fill="#111827" font-family="sans-serif" font-size="16" font-weight="600">${escapeXml(options.title)}</text>`
     : "";
-  const defs = `<defs><linearGradient id="apartment-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#edf8ed"/><stop offset="1" stop-color="#b9ddc1"/></linearGradient><linearGradient id="room-fill-0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7f2ff"/><stop offset="1" stop-color="#d8c6ed"/></linearGradient><linearGradient id="room-fill-1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#eff7ff"/><stop offset="1" stop-color="#c5dcef"/></linearGradient><linearGradient id="room-fill-2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff7ee"/><stop offset="1" stop-color="#f1d1ac"/></linearGradient><linearGradient id="room-fill-3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f1fbf7"/><stop offset="1" stop-color="#c4e2d2"/></linearGradient><linearGradient id="hallway-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff5e9"/><stop offset="1" stop-color="#f2c999"/></linearGradient><linearGradient id="stairs-fill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#edf8ff"/><stop offset="1" stop-color="#b9d9ed"/></linearGradient></defs>`;
+  const defs = `<defs>${diagonalGradient("apartment-fill", "#edf8ed", "#b9ddc1")}${diagonalGradient("room-fill-0", "#f7f2ff", "#d8c6ed")}${diagonalGradient("room-fill-1", "#eff7ff", "#c5dcef")}${diagonalGradient("room-fill-2", "#fff7ee", "#f1d1ac")}${diagonalGradient("room-fill-3", "#f1fbf7", "#c4e2d2")}${diagonalGradient("hallway-fill", "#fff5e9", "#f2c999")}${diagonalGradient("stairs-fill", "#edf8ff", "#b9d9ed")}</defs>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(options.title ?? "Floor plan")}">${defs}<rect width="100%" height="100%" fill="${escapeXml(options.background ?? "#f8fafc")}"/>${title}${rooms}<path d="${outline}" fill="none" stroke="#172033" stroke-width="1.6" vector-effect="non-scaling-stroke" fill-rule="evenodd"/>${openings}</svg>`;
 }
 
@@ -191,24 +192,6 @@ interface Bounds {
   maxY: number;
 }
 
-function positiveDimension(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
 function titleCase(value: string): string {
   return value.replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function number(value: number): string {
-  return String(Math.round(value * 100) / 100);
-}
-
-function escapeXml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&apos;",
-  })[character] ?? character);
 }
