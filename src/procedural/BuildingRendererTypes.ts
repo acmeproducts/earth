@@ -5,6 +5,7 @@ import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
 import type { Opening2D, Point2D } from "../buildings/FloorPlan";
 import type { BuildingSurface } from "./BuildingMaterial";
 import type { SharedValueMap } from "../core/OwnedValueCache";
+import type { RoofAccess } from "./RooftopEquipment";
 
 export interface BuildingRenderOptions {
   meshWidth: number;
@@ -60,6 +61,7 @@ export interface DetailedBuildingParts {
   windowStyleId: string;
   windowRegion: string;
   plannedInterior: boolean;
+  roofAccess?: RoofAccess;
 }
 
 export interface PlannedInterior {

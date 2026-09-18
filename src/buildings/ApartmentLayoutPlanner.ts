@@ -23,7 +23,7 @@ const MINIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 12;
 // also raises the largest room size the planner can intentionally retain.
 const MAXIMUM_ALLOWED_ROOM_AREA_SQUARE_METERS = 60;
 
-export type ApartmentRoomType = "room" | "living-room" | "toilet" | "kitchen";
+export type ApartmentRoomType = "room" | "living-room" | "bedroom" | "toilet" | "kitchen";
 
 /** Rooms up to this area are suitable candidates for the first bathroom. */
 export const SMALL_ROOM_AREA_SQUARE_METERS = 25;
@@ -99,7 +99,8 @@ function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): Apartmen
  *
  * The assignment is deliberately deterministic: when several rooms qualify
  * for the toilet, the smallest one wins, and the largest remaining room gets
- * the kitchen.
+ * the kitchen. Remaining rooms become bedrooms, with a separate living room
+ * when at least two rooms remain.
  *
  * A toilet is always a dead end. Rooms that hold an entrance door, or whose
  * removal would cut the apartment in two, never become the toilet, so no
@@ -150,6 +151,18 @@ export function assignApartmentRoomTypes(
     kitchen.type = "kitchen";
     kitchen.label = "Kitchen";
   }
+
+  const remaining = rooms.filter((room) => room !== smallRoom && room !== kitchen)
+    .sort((first, second) => compareArea(second, first));
+  if (remaining.length > 1) {
+    const livingRoom = remaining.shift()!;
+    livingRoom.type = "living-room";
+    livingRoom.label = "Living room";
+  }
+  remaining.sort(comparePosition).forEach((room, index) => {
+    room.type = "bedroom";
+    room.label = remaining.length === 1 ? "Bedroom" : `Bedroom ${index + 1}`;
+  });
 }
 
 function polygonCenter(points: readonly Point2D[]): Point2D {

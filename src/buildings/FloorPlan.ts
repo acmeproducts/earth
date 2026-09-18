@@ -84,6 +84,7 @@ const DEFAULT_STYLES: Readonly<Record<string, RoomRenderStyle>> = {
   apartment: { fill: "url(#apartment-fill)", text: "#183b2e" },
   room: { fill: "url(#room-fill)", text: "#39245d" },
   "living-room": { fill: "url(#room-fill-0)", text: "#39245d" },
+  bedroom: { fill: "#dcebdc", text: "#244a32" },
   toilet: { fill: "url(#room-fill-1)", text: "#17436b" },
   kitchen: { fill: "url(#room-fill-2)", text: "#7c4318" },
   hallway: { fill: "url(#hallway-fill)", text: "#6c3615" },

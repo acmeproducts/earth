@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NullEngine, Scene, VertexBuffer, Mesh } from "@babylonjs/core";
 import { planInteriorFurniture, createInteriorFurniture } from "../src/procedural/InteriorFurniture.ts";
+import { planApartmentLayout } from "../src/buildings/ApartmentLayoutPlanner.ts";
 
 function layout(type, transform = (p) => p) {
   const polygon = { outer: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 5 }, { x: 0, y: 5 }].map(transform) };
@@ -16,6 +17,7 @@ test("assigned rooms receive their fixtures and shared artwork", () => {
     ["toilet", ["toilet", "sink", "painting"]],
     ["kitchen", ["stove", "sink", "counter", "fridge", "painting"]],
     ["living-room", ["dining", "sofa", "bookcase", "painting"]],
+    ["bedroom", ["bed", "bookcase", "painting"]],
     ["room", ["dining", "sofa"]],
   ]) {
     const source = layout(type);
@@ -43,6 +45,24 @@ test("furniture follows rotated and translated rooms", () => {
     const expected = transform(prop.center);
     assert.ok(Math.hypot(expected.x - rotated[i].center.x, expected.y - rotated[i].center.y) < 1e-7);
   });
+});
+
+test("generated apartment bedrooms fit beds with internal doors present", () => {
+  for (const [width, height] of [[10, 10], [20, 5], [14, 9]]) {
+    const source = planApartmentLayout({
+      apartmentPolygon: { outer: [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }] },
+      openings: [{ id: "entrance", type: "door", start: { x: 1, y: 0 }, end: { x: 2, y: 0 } }],
+    });
+    const bedrooms = source.rooms.filter((room) => room.type === "bedroom");
+    assert.ok(bedrooms.length > 0);
+    for (const seed of [0, 42, 123]) {
+      const props = planInteriorFurniture(source, seed);
+      for (const bedroom of bedrooms) {
+        assert.ok(props.some((prop) => prop.roomId === bedroom.id && prop.kind === "bed"), JSON.stringify({ width, height, seed, bedroom, openings: source.openings }));
+        assert.ok(!props.some((prop) => prop.roomId === bedroom.id && ["sofa", "dining"].includes(prop.kind)));
+      }
+    }
+  }
 });
 
 test("unfurnishable rooms skip props instead of spilling through walls", () => {
@@ -132,7 +152,7 @@ test("furniture mesh scales with terrain, stays below ceiling, and survives merg
   const engine = new NullEngine();
   const scene = new Scene(engine);
   try {
-    const props = ["toilet", "kitchen", "living-room"].flatMap((type) => planInteriorFurniture(layout(type)));
+    const props = ["toilet", "kitchen", "living-room", "bedroom"].flatMap((type) => planInteriorFurniture(layout(type)));
     const mesh = createInteriorFurniture(scene, props, 12, 2, 2.5, 42);
     assert.ok(mesh && !mesh.isEnabled());
     const positions = mesh.getVerticesData(VertexBuffer.PositionKind);

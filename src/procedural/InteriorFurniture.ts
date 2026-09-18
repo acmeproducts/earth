@@ -66,13 +66,15 @@ export function planInteriorFurniture(layout: ApartmentLayout, seed = 0, use: Fu
     const kinds: FurnitureKind[] = room.type === "toilet" && (use === "residential" || use === "hotel") ? ["toilet", "sink", "painting"]
       : useFurniture[use] ?? (room.type === "toilet" ? ["toilet", "sink", "painting"]
       : room.type === "kitchen" ? ["stove", "sink", "counter", "fridge", "dining", "painting"]
+      : room.type === "bedroom" ? ["bed", "bookcase", "painting"]
       : ["dining", "sofa", "bookcase", "painting"]);
     const classroomEdge = ring.reduce((best, p, i) => {
       const next = ring[(i + 1) % ring.length], a = ring[best], b = ring[(best + 1) % ring.length];
       return Math.hypot(next.x - p.x, next.y - p.y) > Math.hypot(b.x - a.x, b.y - a.y) ? i : best;
     }, 0);
     for (const kind of kinds) {
-      const [width, depth] = sizes[kind];
+      const [width, depth] = kind === "bed" && room.type === "bedroom" && use === "residential"
+        ? [1.7, 2.3] : sizes[kind];
       const candidates: FurniturePlacement[] = [];
       for (let i = 0; i < ring.length; i++) {
         if ((kind === "student-desk" || kind === "whiteboard") && i !== classroomEdge) continue;
@@ -175,9 +177,11 @@ export function createInteriorFurniture(scene: Scene, placements: readonly Furni
         box(0, 0.62, 0.32, 1.58, 0.06, 1.35, blue);
         box(0, 0.67, -0.99, 1.65, 1, 0.12, wood);
         for (const x of [-0.4, 0.4]) box(x, 0.65, -0.65, 0.62, 0.13, 0.38, white);
-        box(1.02, 0.29, -0.7, 0.4, 0.58, 0.42, wood);
-        box(1.02, 0.75, -0.7, 0.05, 0.32, 0.05, metal);
-        box(1.02, 0.9, -0.7, 0.27, 0.22, 0.27, white);
+        if (item.width >= 2.5) {
+          box(1.02, 0.29, -0.7, 0.4, 0.58, 0.42, wood);
+          box(1.02, 0.75, -0.7, 0.05, 0.32, 0.05, metal);
+          box(1.02, 0.9, -0.7, 0.27, 0.22, 0.27, white);
+        }
         break;
       case "reception":
         box(0, 0.5, 0.29, 2.1, 1, 0.64, wood);

@@ -19,7 +19,7 @@ const { planBuilding } = await import("../src/buildings/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
   "../src/procedural/ProceduralBuildingRenderer.ts"
 );
-const { BUILDING_MATERIAL_VERTEX_KIND } = await import(
+const { BUILDING_MATERIAL_VERTEX_KIND, isRoofSurfaceId } = await import(
   "../src/procedural/BuildingMaterial.ts"
 );
 
@@ -44,6 +44,43 @@ const options = { meshWidth: 100, meshDepth: 100, metersPerUnit: 1 };
 function plan(id, properties = {}) {
   return planBuilding({ id: `building/14/${id}/0`, polygon: footprint, properties });
 }
+
+test("flat roof caps reach the outside faces of the facade walls", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    for (const scale of [1, 10]) {
+      const mesh = ProceduralBuildingRenderer.createDetailed(scene,
+        plan(123, { render_height: 12, roof_shape: "flat" }), terrain,
+        { meshWidth: 100 / scale, meshDepth: 100 / scale, metersPerUnit: scale });
+      mesh.setEnabled(true);
+      mesh.computeWorldMatrix(true);
+      const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+      const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+      const surfaces = mesh.getVerticesData(BUILDING_MATERIAL_VERTEX_KIND);
+      let roofSideVertices = 0;
+      for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+        if (!isRoofSurfaceId(Math.round(surfaces[vertex * 2])) ||
+            Math.abs(normals[vertex * 3 + 1]) > 0.01) continue;
+        roofSideVertices++;
+        const elevation = (positions[vertex * 3 + 1] + mesh.position.y) * scale;
+        assert.ok(elevation >= 22 - 1e-5, "roof sides must not overlap the facade below the wall top");
+      }
+      assert.ok(roofSideVertices > 0);
+      for (const [x, z] of [[-15.1, 0], [15.1, 0], [0, -8.1], [0, 8.1]]) {
+        const hit = scene.pickWithRay(new Ray(new Vector3(x / scale, 22.5 / scale, z / scale),
+          Vector3.Down(), 0.5 / scale), (child) => child === mesh);
+        assert.equal(hit?.hit, true, "roof covers the outer wall thickness");
+        assert.ok(hit.pickedPoint.y * scale > 22.09, "ray reaches the cap above the wall");
+      }
+      assert.equal(mesh.getChildMeshes().filter((child) => child.metadata?.buildingDoor).length, 1);
+      mesh.dispose(false, true);
+    }
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
 
 test("repeated building disposal releases unused surface materials", () => {
   const engine = new NullEngine();

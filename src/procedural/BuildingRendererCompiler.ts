@@ -26,7 +26,7 @@ import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import { enqueueInteriorBuild, INTERIOR_MERGE_VERTEX_BUDGET } from "./InteriorStreaming";
 import { compactMeshBuffers } from "../rendering/CompactMeshBuffers";
 import { appendSnowShell } from "../rendering/SnowShell";
-import { lonLatToScene, sampleElevation, SEA_LEVEL_METERS } from "../world/Geo";
+import { lonLatToScene, sceneToLonLat, sampleElevation, SEA_LEVEL_METERS } from "../world/Geo";
 import { clamp01 } from "../core/MathUtils";
 import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
 import { unitFromSeed } from "../core/Random";
@@ -47,7 +47,7 @@ import {
 import { buildingWindowStyle, type BuildingWindowStyle } from "../buildings/BuildingWindowStyle";
 import { buildingProfile } from "../buildings/BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
-import { createRooftopEquipment } from "./RooftopEquipment";
+import { createRooftopEquipment, planRoofAccess, type RoofAccess } from "./RooftopEquipment";
 import { createBuildingDoor } from "./BuildingDoor";
 import type { TerrainData } from "../terrain/TerrainData";
 import { buildingGroundElevation } from "../terrain/BuildingGroundElevation";
@@ -140,6 +140,15 @@ function compileBuildingSynchronously(
   }
 }
 
+function mergeWithDoors(meshes: Mesh[], disposeSource: boolean): Mesh | null {
+  const doors = meshes.flatMap((mesh) => mesh.getChildMeshes(true))
+    .filter((child) => child.metadata?.buildingDoor);
+  for (const door of doors) door.setParent(null);
+  const merged = Mesh.MergeMeshes(meshes, disposeSource, true);
+  for (const door of doors) door.setParent(merged ?? meshes[0]);
+  return merged;
+}
+
 function* mergeDetailedParts(parts: Mesh[], disposeMaterials = false): BuildingCompileSteps<Mesh> {
   const chunks: Mesh[] = [];
   // Babylon merge/disposal cost grows with the number of source meshes.
@@ -147,13 +156,13 @@ function* mergeDetailedParts(parts: Mesh[], disposeMaterials = false): BuildingC
     yield "compact/merge geometry batch";
     const batch = parts.slice(start, start + 64);
     batch.forEach(compactMeshBuffers);
-    const merged = Mesh.MergeMeshes(batch, false, true);
+    const merged = mergeWithDoors(batch, false);
     if (!merged) throw new Error("Building geometry merge failed");
     chunks.push(stageBuildingMesh(merged));
     for (const mesh of batch) mesh.dispose(false, disposeMaterials);
   }
   yield "final building geometry merge";
-  const merged = chunks.length === 1 ? chunks[0] : Mesh.MergeMeshes(chunks, true, true);
+  const merged = chunks.length === 1 ? chunks[0] : mergeWithDoors(chunks, true);
   if (!merged) throw new Error("Building geometry merge failed");
   return stageBuildingMesh(merged);
 }
@@ -234,6 +243,9 @@ export class ProceduralBuildingRenderer {
         appearance,
         "exterior",
         sharedFacadeEdges,
+        false,
+        options.showRoofs !== false && roofHeightMeters === 0
+          ? wallTopElevation + flatRoofThickness(areaSquareMeters) : undefined,
       );
       trace.stage("roof geometry/equipment");
       const parts = detailed.parts;
@@ -276,11 +288,12 @@ export class ProceduralBuildingRenderer {
           areaSquareMeters,
           options,
           appearance,
+          detailed.roofAccess ? [stairOpening(detailed.roofAccess.stair, options)] : [],
         );
         if (rooftop) parts.push(rooftop);
         const equipment = createRooftopEquipment(scene, plan, prepared.outline, [],
-          wallTopElevation + flatRoofThickness(areaSquareMeters) / 2,
-          options.metersPerUnit, appearance.wall);
+          wallTopElevation + flatRoofThickness(areaSquareMeters),
+          options.metersPerUnit, appearance.wall, detailed.roofAccess?.placement);
         if (equipment) parts.push(stageBuildingMesh(equipment));
       }
 
@@ -302,6 +315,7 @@ export class ProceduralBuildingRenderer {
         plannedInterior: detailed.plannedInterior,
         interiorFloorCount: detailed.floorCount,
         stairFlightCount: detailed.stairFlightCount,
+        roofAccess: detailed.roofAccess,
         entranceEdgeIndex: detailed.entranceEdgeIndex,
         stairEdgeIndex: detailed.stairEdgeIndex,
         stairEdgeIndices: detailed.stairEdgeIndices,
@@ -380,7 +394,7 @@ export class ProceduralBuildingRenderer {
         .map((mesh) => mesh.metadata?.pendingInterior as PendingBuildingInterior | undefined)
         .filter((pending): pending is PendingBuildingInterior => pending !== undefined);
       trace.stage("merge/upload/dispose");
-      const result = meshes.length === 1 ? meshes[0] : Mesh.MergeMeshes(meshes, true, true);
+      const result = meshes.length === 1 ? meshes[0] : mergeWithDoors(meshes, true);
       if (!result) return undefined;
       trace.stage("solid material/activation");
       const material = createBuildingSolidMaterial(
@@ -487,6 +501,7 @@ type InteriorSection = {
   openings: Opening2D[];
   facadeOpenings: Opening2D[];
   interior?: PlannedInterior;
+  roofAccess?: RoofAccess;
 };
 
 function sectionRings(section: Pick<InteriorSection, "outline" | "holes">): LonLat[][] {
@@ -562,11 +577,31 @@ function* createComplexEnterableBuilding(
   }
   yield "complex stair connections";
   yield* connectInteriorSections(sections, plan, options);
+  const roofAccesses = new Map<BuildingPolygon, RoofAccess>();
+  if (options.showRoofs !== false && !plan.heightBands?.length) {
+    for (const band of bands) for (const roof of band.roofs) {
+      const polygon = projectPolygon(roof);
+      for (const section of sections) {
+        if (Math.abs(section.top - prepared.baseElevation - band.heightMeters) > 1e-6 || !section.incoming.length) continue;
+        const candidates = [...section.incoming, ...findStairLayouts(section.outline, options,
+          { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 24, plan.detailSeed, section.holes)];
+        const access = candidates.filter((stair) => section.incoming.includes(stair) ||
+          section.incoming.every((incoming) => !stairLayoutsOverlap(stair, incoming, options)))
+          .map((stair) => planRoofAccess(stair, polygon.outline, polygon.holes, options.metersPerUnit))
+          .find((candidate) => candidate !== undefined);
+        if (!access) continue;
+        section.roofAccess = access;
+        roofAccesses.set(roof, access);
+        break;
+      }
+    }
+  }
   const interiorUse = resolvedInteriorUse(plan);
   for (const section of sections) {
     if (profile.interiorLayout !== "rooms") continue;
     const attempt = yield* createPlannedInterior(section.outline, section.openings, options, section.holes,
-      [...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options)));
+      [...section.incoming, ...section.outgoing, ...(section.roofAccess ? [section.roofAccess.stair] : [])]
+        .map((stair) => stairClearance(stair, options)));
     section.interior = attempt.interior;
     if (section.interior) {
       const apartments = yield* planInteriorApartments(section.interior.building, section.facadeOpenings,
@@ -585,7 +620,16 @@ function* createComplexEnterableBuilding(
   // Keep the exact exposed horizontal faces of the distant shell; its solid walls
   // must not survive behind the new doors and windows.
   yield "complex roof cap geometry";
-  const caps = compositeBuildingGeometry(bands, project,
+  const roofBands = bands.map((band) => ({ ...band, roofs: band.roofs.map((roof) => {
+    const access = roofAccesses.get(roof);
+    if (!access) return roof;
+    const opening = stairOpening(access.stair, options).map((point): LonLat => {
+      const geo = sceneToLonLat(point.x, point.z, terrain.bounds, options.meshWidth, options.meshDepth);
+      return [geo.lon, geo.lat];
+    });
+    return { ...roof, holes: [...roof.holes, opening] };
+  }) }));
+  const caps = compositeBuildingGeometry(roofBands, project,
     (height) => (prepared.baseElevation + height) / options.metersPerUnit,
     options.showRoofs !== false, false);
   const capMesh = stageBuildingMesh(new Mesh("complexBuildingCaps", scene));
@@ -601,7 +645,7 @@ function* createComplexEnterableBuilding(
     yield "complex rooftop equipment";
     const polygon = projectPolygon(roof);
     const equipment = createRooftopEquipment(scene, plan, polygon.outline, polygon.holes,
-      prepared.baseElevation + band.heightMeters, options.metersPerUnit, appearance.wall);
+      prepared.baseElevation + band.heightMeters, options.metersPerUnit, appearance.wall, roofAccesses.get(roof)?.placement);
     if (equipment) parts.push(stageBuildingMesh(equipment));
   }
   const mesh = yield* mergeDetailedParts(parts);
@@ -618,6 +662,7 @@ function* createComplexEnterableBuilding(
     complexFootprint: true,
     heightBandCount: plan.heightBands?.length,
     courtyardCount: prepared.holes.length,
+    roofAccesses: [...roofAccesses.values()],
     windowCount,
     interiorFloorCount: new Set(sections.map((section) => section.bottom)).size,
     stairFlightCount: sections.reduce((sum, section) => sum + section.outgoing.length, 0),
@@ -691,10 +736,16 @@ function* createComplexInteriorParts(
       createStairFlight(parts, scene, stair, section.bottom, section.top - section.bottom, options, floorColor);
       yield "complex stair flights";
     }
+    if (section.roofAccess) {
+      createStairFlight(parts, scene, section.roofAccess.stair, section.bottom,
+        section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
+      yield "complex roof stair flight";
+    }
     yield* createFloorContents(parts, scene, plan, section.outline, section.bottom, options, appearance,
       elevations.indexOf(section.bottom), elevations.length, section.top - section.bottom,
       section.interior, section.openings, section.facadeOpenings, resolvedInteriorUse(plan),
-      [...section.holes, ...[...section.incoming, ...section.outgoing].map((stair) => stairClearance(stair, options))]);
+      [...section.holes, ...[...section.incoming, ...section.outgoing,
+        ...(section.roofAccess ? [section.roofAccess.stair] : [])].map((stair) => stairClearance(stair, options))]);
   }
 }
 
@@ -786,6 +837,7 @@ function* createInteriorParts(
   floorCount: number, storyHeight: number, stairs: StairLayout[],
   plannedInterior: PlannedInterior | undefined, entranceOpenings: Opening2D[],
   facadeOpenings: Opening2D[], interiorUse: NonNullable<BuildingPlan["interiorUse"]>,
+  roofAccess?: RoofAccess, roofElevation?: number,
 ): Generator<string, void, void> {
   const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
   for (let floor = 0; floor < floorCount; floor++) {
@@ -819,10 +871,17 @@ function* createInteriorParts(
     }
   }
 
+  if (roofAccess && roofElevation !== undefined) {
+    const floorElevation = baseElevation + (floorCount - 1) * storyHeight;
+    createStairFlight(parts, scene, roofAccess.stair, floorElevation,
+      roofElevation - floorElevation - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
+    yield "roof stair flight";
+  }
+
   for (let floor = 0; floor < floorCount; floor++) {
     yield* createFloorContents(parts, scene, plan, outline, baseElevation + floor * storyHeight,
       options, appearance, floor, floorCount, storyHeight, plannedInterior, entranceOpenings,
-      facadeOpenings, interiorUse, [stairs[floor - 1], stairs[floor]]
+      facadeOpenings, interiorUse, [stairs[floor - 1], stairs[floor], floor === floorCount - 1 ? roofAccess?.stair : undefined]
         .filter((stair): stair is StairLayout => stair !== undefined).map((stair) => stairClearance(stair, options)));
   }
 }
@@ -934,6 +993,7 @@ function* createEnterableBuilding(
   part: "exterior" | "interior",
   blockedFacadeEdges: ReadonlySet<number> = new Set(),
   shellOnly = false,
+  roofElevation?: number,
 ): BuildingCompileSteps<DetailedBuildingParts> {
   return yield* BuildingTrace.runSteps(`building=${plan.id} ${part} planning/parts`, function* (trace): BuildingCompileSteps<DetailedBuildingParts> {
     trace.stage("profile/entrance");
@@ -1038,6 +1098,20 @@ function* createEnterableBuilding(
         ? plannedStairs
         : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
       : [];
+    let roofAccess: RoofAccess | undefined;
+    if (roofElevation !== undefined && stairs.length) {
+      const incoming = stairs[stairs.length - 1];
+      roofAccess = planRoofAccess(incoming, outline, [], options.metersPerUnit);
+      if (!roofAccess) {
+        const candidates = plannedInterior ? stairLayoutCandidatesFromPlan(plannedInterior.building, options)
+          : findStairLayouts(outline, options, entranceClearance, 24, plan.detailSeed);
+        for (const stair of candidates) {
+          if (stairLayoutsOverlap(stair, incoming, options)) continue;
+          roofAccess = planRoofAccess(stair, outline, [], options.metersPerUnit);
+          if (roofAccess) break;
+        }
+      }
+    }
     const parts: Mesh[] = [];
     const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
     let windowCount = 0;
@@ -1153,11 +1227,13 @@ function* createEnterableBuilding(
       interiorParts: (interiorParts: Mesh[]) => createInteriorParts(
         interiorParts, scene, plan, outline, baseElevation, options, appearance,
         floorCount, storyHeight, stairs, plannedInterior, entranceOpenings, facadeOpenings, interiorUse,
+        roofAccess, roofElevation,
       ),
       parts,
       windowCount,
       floorCount,
       stairFlightCount: stairs.length,
+      roofAccess,
       entranceEdgeIndex: entranceEdge,
       stairEdgeIndex: stairs[0]?.edgeIndex,
       stairEdgeIndices: stairs.map((stair) => stair.edgeIndex),
@@ -2595,19 +2671,35 @@ function createRooftopVolume(
   areaSquareMeters: number,
   options: BuildingRenderOptions,
   appearance: BuildingAppearance,
+  openings: ScenePoint[][] = [],
 ): Mesh | undefined {
   // Complex footprints cannot use the pitched triangulation. Always provide
   // a footprint-matching cap so a building never renders open to the sky.
   const thicknessMeters = flatRoofThickness(areaSquareMeters);
-  const rooftop = createBuildingPrism(
-    scene,
-    outline,
-    roofElevation + thicknessMeters / 2,
-    roofElevation - thicknessMeters / 2,
-    options,
-  );
-  setSolidVertexColor(rooftop, appearance.roof, appearance.roofSurface);
-  return rooftop;
+  const halfWall = BUILDING_WALL_THICKNESS_METERS / (2 * options.metersPerUnit);
+  // Facade boxes straddle the footprint edges. Include their outer halves in
+  // the cap, using the same square ends at convex and concave wall junctions.
+  const footprint: polygonClipping.Polygon = [outline.map((p) => [p.x, p.z])];
+  const walls: polygonClipping.Polygon[] = outline.map((start, index) => {
+    const end = outline[(index + 1) % outline.length];
+    const length = pointDistance(start, end) || 1;
+    const x = (end.z - start.z) / length * halfWall;
+    const z = -(end.x - start.x) / length * halfWall;
+    return [[[start.x + x, start.z + z], [end.x + x, end.z + z],
+      [end.x - x, end.z - z], [start.x - x, start.z - z]]];
+  });
+  const roof = polygonClipping.union(footprint, ...walls);
+  const cutouts = openings.map((ring): polygonClipping.Polygon => [ring.map((p) => [p.x, p.z])]);
+  const caps = (cutouts.length ? polygonClipping.difference(roof, ...cutouts) : roof).map((polygon) => {
+    const rings = polygon.map((ring) => ring.slice(0, -1).map(([x, z]) => ({ x, z })));
+    // Sit on the walls: a centered slab shares its side planes with the
+    // expanded facade below, causing z-fighting around the roof edge.
+    const cap = createBuildingPrism(scene, rings[0], roofElevation + thicknessMeters,
+      roofElevation, options, rings.slice(1));
+    setSolidVertexColor(cap, appearance.roof, appearance.roofSurface);
+    return cap;
+  });
+  return caps.length === 1 ? caps[0] : Mesh.MergeMeshes(caps, true, true) ?? undefined;
 }
 
 function flatRoofThickness(areaSquareMeters: number): number {

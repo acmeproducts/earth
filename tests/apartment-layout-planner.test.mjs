@@ -62,7 +62,9 @@ test("assigns a small room to the toilet and the largest remaining room to the k
   assert.equal(layout.rooms.filter((room) => room.type === "toilet").length, 1);
   assert.equal(layout.rooms.filter((room) => room.type === "kitchen").length, 1);
   assert.ok(layout.rooms.find((room) => room.type === "toilet" && polygonArea(room.polygon.outer) < 25));
-  assert.ok(layout.rooms.some((room) => room.type === "room"));
+  assert.equal(layout.rooms.filter((room) => room.type === "bedroom").length, 1);
+  assert.equal(layout.rooms.filter((room) => room.type === "living-room").length, 1);
+  assert.ok(layout.rooms.every((room) => room.type !== "room"));
 });
 
 test("does not designate a toilet when every multi-room room is at least 25 square meters", () => {
@@ -73,6 +75,7 @@ test("does not designate a toilet when every multi-room room is at least 25 squa
   assert.ok(layout.rooms.length > 1);
   assert.equal(layout.rooms.filter((room) => room.type === "toilet").length, 0);
   assert.equal(layout.rooms.filter((room) => room.type === "kitchen").length, 1);
+  assert.equal(layout.rooms.filter((room) => room.type === "bedroom").length, 1);
 });
 
 test("splits long apartments along their longest axis", () => {

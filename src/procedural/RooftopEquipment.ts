@@ -3,6 +3,10 @@ import type { BuildingPlan } from "../buildings/BuildingPlanner";
 import { distanceToRing, pointBounds, pointInRing, signedArea, type PlanarPoint } from "../core/PlanarGeometry";
 import { createSeededRandom } from "../core/Random";
 import { setBuildingSurface, type BuildingSurface } from "./BuildingMaterial";
+import { createBuildingDoor } from "./BuildingDoor";
+import type { StairLayout } from "./BuildingRendererTypes";
+import { BUILDING_STAIR_LANDING_METERS } from "./BuildingRendererConstants";
+import polygonClipping from "polygon-clipping";
 
 export interface RooftopPlacement extends PlanarPoint {
   kind: "access" | "ac" | "vent";
@@ -12,16 +16,45 @@ export interface RooftopPlacement extends PlanarPoint {
   angle: number;
 }
 
+export interface RoofAccess {
+  stair: StairLayout;
+  placement: RooftopPlacement;
+}
+
+export function planRoofAccess(
+  stair: StairLayout, outline: readonly PlanarPoint[], holes: readonly PlanarPoint[][], metersPerUnit: number,
+): RoofAccess | undefined {
+  const depth = stair.runMeters + BUILDING_STAIR_LANDING_METERS + 0.3;
+  const along = depth / 2 - 0.3;
+  const placement: RooftopPlacement = {
+    kind: "access", x: stair.start.x * metersPerUnit + stair.direction.x * along,
+    z: stair.start.z * metersPerUnit + stair.direction.z * along,
+    width: stair.widthMeters + 0.52, depth, height: 2.5,
+    angle: Math.atan2(-stair.direction.x, -stair.direction.z),
+  };
+  // Include space outside the door as well as the enclosure and its roof lip.
+  const clearance: polygonClipping.Ring = [
+    [-placement.width / 2 - 0.1, -depth / 2 - 1], [placement.width / 2 + 0.1, -depth / 2 - 1],
+    [placement.width / 2 + 0.1, depth / 2 + 0.1], [-placement.width / 2 - 0.1, depth / 2 + 0.1],
+  ].map(([x, z]) => [
+    (placement.x + x * Math.cos(placement.angle) + z * Math.sin(placement.angle)) / metersPerUnit,
+    (placement.z - x * Math.sin(placement.angle) + z * Math.cos(placement.angle)) / metersPerUnit,
+  ]);
+  const footprint = [outline, ...holes].map((ring) => ring.map((p): [number, number] => [p.x, p.z]));
+  return polygonClipping.difference([clearance], footprint).length ? undefined : { stair, placement };
+}
+
 /** All dimensions and coordinates are in meters, independent of tile scale. */
 export function planRooftopEquipment(
   plan: BuildingPlan,
   outline: readonly PlanarPoint[],
   holes: readonly PlanarPoint[][] = [],
+  access?: RooftopPlacement,
 ): RooftopPlacement[] {
   const area = Math.abs(signedArea(outline)) - holes.reduce((sum, hole) => sum + Math.abs(signedArea(hole)), 0);
   const floors = Math.min(plan.levels ?? Infinity, (plan.heightMeters - plan.minimumHeightMeters) / 3.1);
   const random = createSeededRandom(plan.detailSeed ^ 0x5e47ac19);
-  if (area < 28 || plan.heightMeters < 2.8 || random() > Math.min(1, 0.25 + floors * 0.18)) return [];
+  if (area < 28 || plan.heightMeters < 2.8 || random() > Math.min(1, 0.25 + floors * 0.18)) return access ? [access] : [];
   const bounds = pointBounds(outline);
   let edge = 0;
   for (let i = 1; i < outline.length; i++) {
@@ -34,12 +67,12 @@ export function planRooftopEquipment(
   const next = outline[(edge + 1) % outline.length];
   const angle = -Math.atan2(next.z - outline[edge].z, next.x - outline[edge].x);
   const count = Math.min(10, Math.max(1, Math.floor(area / 160) + Math.floor(floors / 3)));
-  const placements: RooftopPlacement[] = [];
+  const placements: RooftopPlacement[] = access ? [access] : [];
   for (let index = 0; index < count; index++) {
-    const kind = index === 0 && floors >= 3 ? "access" : index % 3 === 2 ? "vent" : "ac";
-    const width = kind === "access" ? 2.6 : kind === "ac" ? 1.4 + random() * 1.2 : 0.7;
-    const depth = kind === "access" ? 3.4 : kind === "ac" ? 1 + random() * 0.5 : 0.7;
-    const height = kind === "access" ? 2.5 : kind === "ac" ? 0.85 + random() * 0.5 : 1.2;
+    const kind = index % 3 === 2 ? "vent" : "ac";
+    const width = kind === "ac" ? 1.4 + random() * 1.2 : 0.7;
+    const depth = kind === "ac" ? 1 + random() * 0.5 : 0.7;
+    const height = kind === "ac" ? 0.85 + random() * 0.5 : 1.2;
     // A circumscribed disk covers every corner, cap and fitting. This also
     // rejects placements spanning concave notches or small courtyard holes.
     const radius = Math.hypot(width, depth) / 2 + 0.3;
@@ -67,10 +100,12 @@ export function createRooftopEquipment(
   roofElevation: number,
   metersPerUnit: number,
   wallColor: Color3,
+  access?: RooftopPlacement,
 ): Mesh | undefined {
   const toMeters = (point: PlanarPoint): PlanarPoint => ({ x: point.x * metersPerUnit, z: point.z * metersPerUnit });
-  const placements = planRooftopEquipment(plan, outline.map(toMeters), holes.map((hole) => hole.map(toMeters)));
+  const placements = planRooftopEquipment(plan, outline.map(toMeters), holes.map((hole) => hole.map(toMeters)), access);
   const parts: Mesh[] = [];
+  const doors: Mesh[] = [];
   const metal = new Color3(0.57, 0.61, 0.61);
   const dark = new Color3(0.14, 0.17, 0.18);
   for (const item of placements) {
@@ -92,14 +127,33 @@ export function createRooftopEquipment(
         width: width / metersPerUnit, height: height / metersPerUnit, depth: depth / metersPerUnit,
       }, scene), x, y, z, color, surface);
     };
-    box(item.width, 0.16, item.depth, 0.08, dark);
-    box(item.width, item.height, item.depth, 0.16 + item.height / 2,
-      item.kind === "access" ? wallColor : metal, 0, 0, item.kind === "access" ? "concrete" : "metal");
+    if (item.kind !== "access") box(item.width, 0.16, item.depth, 0.08, dark);
     if (item.kind === "access") {
-      box(item.width + 0.2, 0.14, item.depth + 0.2, item.height + 0.23, metal);
-      box(0.9, 2.05, 0.035, 1.185, dark, 0, -item.depth / 2 - 0.02);
-      box(0.06, 0.16, 0.06, 1.2, metal, 0.3, -item.depth / 2 - 0.05);
-    } else if (item.kind === "ac") {
+      const thickness = 0.16;
+      const doorWidth = 0.9, doorHeight = 2.05;
+      const sideWidth = (item.width - doorWidth) / 2;
+      for (const side of [-1, 1]) {
+        box(thickness, item.height, item.depth, item.height / 2,
+          wallColor, side * (item.width - thickness) / 2, 0, "concrete");
+        box(sideWidth, item.height, thickness, item.height / 2,
+          wallColor, side * (doorWidth + sideWidth) / 2, -(item.depth - thickness) / 2, "concrete");
+      }
+      box(item.width, item.height, thickness, item.height / 2,
+        wallColor, 0, (item.depth - thickness) / 2, "concrete");
+      box(doorWidth, item.height - doorHeight, thickness, (item.height + doorHeight) / 2,
+        wallColor, 0, -(item.depth - thickness) / 2, "concrete");
+      box(item.width + 0.2, 0.14, item.depth + 0.2, item.height + 0.07, metal);
+      const endpoint = (x: number) => ({
+        x: item.x + x * Math.cos(item.angle) - (item.depth - thickness) / 2 * Math.sin(item.angle),
+        y: item.z - x * Math.sin(item.angle) - (item.depth - thickness) / 2 * Math.cos(item.angle),
+      });
+      doors.push(createBuildingDoor(scene, {
+        id: `${plan.id}:roof-access`, type: "door", start: endpoint(-doorWidth / 2), end: endpoint(doorWidth / 2),
+      }, roofElevation, doorHeight, metersPerUnit));
+    } else {
+      box(item.width, item.height, item.depth, 0.16 + item.height / 2, metal);
+    }
+    if (item.kind === "ac") {
       const fans = item.width > 1.9 ? 2 : 1;
       for (let fan = 0; fan < fans; fan++) {
         finish(MeshBuilder.CreateCylinder("rooftopFan", {
@@ -109,12 +163,15 @@ export function createRooftopEquipment(
       for (let grille = 0; grille < 4; grille++) {
         box(item.width * 0.82, 0.045, 0.035, 0.35 + grille * 0.14, dark, 0, -item.depth / 2 - 0.02);
       }
-    } else {
-      box(item.width + 0.25, 0.16, item.depth + 0.25, item.height + 0.3, dark);
+    } else if (item.kind === "vent") {
+      box(item.width + 0.25, 0.16, item.depth + 0.25, item.height + 0.24, dark);
     }
   }
   if (!parts.length) return undefined;
   const mesh = Mesh.MergeMeshes(parts, true, true) ?? undefined;
-  if (mesh) mesh.setEnabled(false);
+  if (mesh) {
+    for (const door of doors) door.setParent(mesh);
+    mesh.setEnabled(false);
+  }
   return mesh;
 }
