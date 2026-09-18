@@ -1,4 +1,4 @@
-import { Color3, Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Matrix, Scene, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "../world/Geo";
 import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
@@ -8,7 +8,6 @@ import {
   plantRenderedCaptureSize,
 } from "./PlantImpostor";
 import { setVegetationWindShear } from "../procedural/ProceduralCaptureMaterial";
-import { createSeededRandom } from "../core/Random";
 import type { TerrainData } from "../terrain/TerrainData";
 import {
 } from "./VegetationField";
@@ -18,16 +17,14 @@ import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
   addProceduralVariantPlacement,
-  createPlacementGrid,
+  createFieldPlacement,
   packInstanceMatrices,
 } from "./VegetationPlacement";
 import type {
-  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
 import { windShearFraction } from "./Wind";
 import { LandCoverClass } from "../world/WorldCover";
-import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 
 type TallPlantFieldOptions = VegetationPlacementOptions;
 
@@ -73,24 +70,13 @@ export async function createTallPlantField(
   options: TallPlantFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
-    meshWidth,
-    meshDepth,
-    metersPerUnit,
-    seed = 0x54414c4c,
-    modelVariantSeed = DEFAULT_WORLD_SEED,
-    spacingMeters = COLONY_SPACING_METERS,
-    waterLineMeters = 0,
-    landCover,
-    exclusionMask,
-    densityScale,
-    renderMode = "auto",
-    yieldControl,
-    startDisabled = false,
-  } = options;
-  const renderHeight = TALL_PLANT_HEIGHT_METERS / metersPerUnit;
-  const root = new TransformNode("tallPlantField", scene);
-  if (startDisabled) root.setEnabled(false);
-  const random = createSeededRandom(seed);
+    meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
+    landCover, exclusionMask, densityScale, renderMode, yieldControl,
+    root, random, columns, rows, cellWidth, cellDepth, matrices,
+    renderHeight, variantBuckets,
+  } = createFieldPlacement(scene, "tallPlantField", options, {
+    seed: 0x54414c4c, spacingMeters: COLONY_SPACING_METERS, heightMeters: TALL_PLANT_HEIGHT_METERS,
+  });
   const habitat = habitatField("tallPlants", modelVariantSeed, HABITAT);
   // Choose once at the tile centre. Sampling the variant for every plant made
   // transition tiles build several complete impostor atlases at spawn time.
@@ -101,15 +87,7 @@ export async function createTallPlantField(
     meshWidth,
     meshDepth,
   );
-  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
-    meshWidth,
-    meshDepth,
-    spacingMeters,
-    metersPerUnit,
-  );
   const maximumHalfWidth = plantRenderedCaptureSize(renderHeight) * 0.58;
-  const matrices: Matrix[] = [];
-  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
   let colonyVariantOffset = 0;
 
   if (landCover) {

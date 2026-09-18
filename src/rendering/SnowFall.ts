@@ -1,3 +1,4 @@
+import { appendMeshBuffers } from "./CompactMeshBuffers";
 import { spatialHash3 as hash } from "../core/Random";
 import { Mesh, VertexBuffer } from "@babylonjs/core";
 
@@ -333,17 +334,7 @@ export function simulateSnowfall(mesh: Mesh, options: SnowfallOptions): Snowfall
     }
   }
 
-  for (const entry of kinds) {
-    const merged = new Float32Array(entry.data.length + entry.extra.length);
-    merged.set(entry.data);
-    merged.set(entry.extra, entry.data.length);
-    mesh.setVerticesData(entry.kind, merged, false, entry.size);
-  }
-  const mergedIndices = new Uint32Array(indices.length + newIndices.length);
-  mergedIndices.set(indices);
-  mergedIndices.set(newIndices, indices.length);
-  mesh.setIndices(mergedIndices, vertexCount);
-  mesh.refreshBoundingInfo();
+  appendMeshBuffers(mesh, kinds, indices, newIndices, vertexCount);
   return { mounds: deposits.length, missed };
 }
 

@@ -5,6 +5,12 @@ const fallbackWhiteTextures = new WeakMap<Scene, RawTexture>();
 export function fallbackWhiteTexture(scene: Scene): RawTexture {
   const cached = fallbackWhiteTextures.get(scene);
   if (cached) return cached;
+  const texture = createWhiteTexture(scene, "fallbackWhiteTexture");
+  fallbackWhiteTextures.set(scene, texture);
+  return texture;
+}
+
+export function createWhiteTexture(scene: Scene, name: string): RawTexture {
   const texture = RawTexture.CreateRGBATexture(
     new Uint8Array([255, 255, 255, 255]),
     1,
@@ -14,7 +20,6 @@ export function fallbackWhiteTexture(scene: Scene): RawTexture {
     false,
     Texture.NEAREST_SAMPLINGMODE,
   );
-  texture.name = "fallbackWhiteTexture";
-  fallbackWhiteTextures.set(scene, texture);
+  texture.name = name;
   return texture;
 }

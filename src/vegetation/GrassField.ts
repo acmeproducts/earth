@@ -4,7 +4,6 @@ import {
   Quaternion,
   Scene,
   ShaderMaterial,
-  TransformNode,
   Vector3,
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation, type HorizontalExclusionMask } from "../world/Geo";
@@ -23,13 +22,11 @@ import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import { LandCoverClass, landCoverSurfaceColor } from "../world/WorldCover";
 import { varyGroundColor } from "../terrain/GroundVariation";
-import { createSeededRandom } from "../core/Random";
 import {
-  createPlacementGrid,
+  createFieldPlacement,
   addProceduralVariantPlacement,
   packInstanceMatrices,
   sampleTerrainNormal,
-  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
 import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
@@ -119,34 +116,14 @@ export async function createGrassField(
   options: GrassFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
-    meshWidth,
-    meshDepth,
-    metersPerUnit,
-    seed = 0x47524153,
-    modelVariantSeed = DEFAULT_WORLD_SEED,
-    spacingMeters = GRASS_SPACING_METERS,
-    waterLineMeters = 0,
-    landCover,
-    exclusionMask,
-    lakeExclusionMask,
-    densityScale,
-    renderMode = "auto",
-    yieldControl,
-    startDisabled = false,
-  } = options;
-  const grassHeight = GRASS_HEIGHT_METERS / metersPerUnit;
-  const root = new TransformNode("grassField", scene);
-  if (startDisabled) root.setEnabled(false);
-  const random = createSeededRandom(seed);
-  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
-    meshWidth,
-    meshDepth,
-    spacingMeters,
-    metersPerUnit,
-  );
+    meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
+    landCover, exclusionMask, lakeExclusionMask, densityScale, renderMode, yieldControl,
+    root, random, columns, rows, cellWidth, cellDepth, matrices,
+    renderHeight: grassHeight, variantBuckets,
+  } = createFieldPlacement(scene, "grassField", options, {
+    seed: 0x47524153, spacingMeters: GRASS_SPACING_METERS, heightMeters: GRASS_HEIGHT_METERS,
+  });
   const maximumHalfWidth = grassRenderedCaptureSize(grassHeight) * 0.72;
-  const matrices: Matrix[] = [];
-  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {

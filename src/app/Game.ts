@@ -1294,87 +1294,52 @@ export class Game {
     }
   }
 
-  /** Builds one merged massing layer for buildings outside the detail rings. */
-  private async buildFarBuildings(record: StreamedTile, generation: number): Promise<void> {
-    const metersPerUnit = this.terrainMetersPerUnit;
-    if (!metersPerUnit) return;
-    const mapWays = await this.loadMapTiles(record);
-    if (generation !== this.streamingGeneration) return;
-    const layer = await OpenStreetMap.createBuildingLayer(
-      this.scene,
-      mapWays,
-      record.terrainData,
-      {
-        meshWidth: record.meshWidth,
-        meshDepth: record.meshDepth,
-        metersPerUnit,
-        showRoofs: this.sceneSettings.value.showRoofs,
-        snowCover: this.tileSnowCover(record.terrainData),
-        startDisabled: true,
-        planning: record.roadAndBuildingPlan,
-      },
-      "far",
-      this.streamingYielder,
-    );
-    if (generation !== this.streamingGeneration || record.farBuildings) {
-      OpenStreetMap.disposeLayer(layer.root);
-      return;
-    }
-    setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
-    record.farBuildings = layer.root;
-    registerStaticMeshCandidates(this.scene, layer.root.getChildMeshes());
-    setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), metersPerUnit);
-    if (record.detailed) {
-      layer.root.setEnabled(false);
-    } else {
-      layer.root.setEnabled(true);
-      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(layer.root, fade));
-    }
+  private buildFarBuildings(record: StreamedTile, generation: number): Promise<void> {
+    return this.buildFarMapLayer(record, generation, "farBuildings");
   }
 
-  /** Builds coarsely sampled road surfaces for tiles outside the detail rings. */
-  private async buildFarRoads(record: StreamedTile, generation: number): Promise<void> {
+  private buildFarRoads(record: StreamedTile, generation: number): Promise<void> {
+    return this.buildFarMapLayer(record, generation, "farRoads");
+  }
+
+  /** Builds, publishes, and fades one map layer outside the detail rings. */
+  private async buildFarMapLayer(
+    record: StreamedTile, generation: number, kind: "farBuildings" | "farRoads",
+  ): Promise<void> {
     const metersPerUnit = this.terrainMetersPerUnit;
     if (!metersPerUnit) return;
     const mapWays = await this.loadMapTiles(record);
     if (generation !== this.streamingGeneration) return;
-    const layer = await OpenStreetMap.createRoadLayer(
-      this.scene,
-      mapWays,
-      record.terrainData,
-      {
-        meshWidth: record.meshWidth,
-        meshDepth: record.meshDepth,
-        metersPerUnit,
-        preCarvingElevations: record.preCarvingElevations,
-        startDisabled: true,
-        planning: record.roadAndBuildingPlan,
-        terrainSurface: TerrainSurface.fromGroundMesh(
-          record.terrain,
-          record.meshWidth,
-          record.meshDepth,
-        ),
-      },
-      this.streamingYielder,
-    );
-    if (generation !== this.streamingGeneration || record.farRoads) {
+    const options = {
+      meshWidth: record.meshWidth, meshDepth: record.meshDepth, metersPerUnit,
+      startDisabled: true, planning: record.roadAndBuildingPlan,
+    };
+    const layer = kind === "farBuildings"
+      ? await OpenStreetMap.createBuildingLayer(this.scene, mapWays, record.terrainData, {
+        ...options, showRoofs: this.sceneSettings.value.showRoofs,
+        snowCover: this.tileSnowCover(record.terrainData),
+      }, "far", this.streamingYielder)
+      : await OpenStreetMap.createRoadLayer(this.scene, mapWays, record.terrainData, {
+        ...options, preCarvingElevations: record.preCarvingElevations,
+        terrainSurface: TerrainSurface.fromGroundMesh(record.terrain, record.meshWidth, record.meshDepth),
+      }, this.streamingYielder);
+    if (generation !== this.streamingGeneration || record[kind]) {
       OpenStreetMap.disposeLayer(layer.root);
       return;
     }
     setTransformNodeOffset(layer.root, record.offsetX, record.offsetZ);
-    record.farRoads = layer.root;
+    record[kind] = layer.root;
     registerStaticMeshCandidates(this.scene, layer.root.getChildMeshes());
-    setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData), this.terrainMetersPerUnit ?? 1);
-    for (const mesh of layer.root.getChildMeshes()) {
-      if (mesh instanceof Mesh) this.staticBatches.add(mesh,
-        `${Math.floor(record.id.x / 4)}/${Math.floor(record.id.y / 4)}`, metersPerUnit);
+    setHierarchySnowCover(layer.root, this.tileSnowCover(record.terrainData),
+      kind === "farBuildings" ? metersPerUnit : this.terrainMetersPerUnit ?? 1);
+    if (kind === "farRoads") {
+      for (const mesh of layer.root.getChildMeshes()) {
+        if (mesh instanceof Mesh) this.staticBatches.add(mesh,
+          Math.floor(record.id.x / 4) + "/" + Math.floor(record.id.y / 4), metersPerUnit);
+      }
     }
-    if (record.detailed) {
-      layer.root.setEnabled(false);
-    } else {
-      layer.root.setEnabled(true);
-      this.layerFades.begin(0, 1, (fade) => setMapLayerFade(layer.root, fade));
-    }
+    layer.root.setEnabled(!record.detailed);
+    if (!record.detailed) this.layerFades.begin(0, 1, (fade) => setMapLayerFade(layer.root, fade));
   }
 
   private loadMapTiles(record: StreamedTile): Promise<MapTile[]> {

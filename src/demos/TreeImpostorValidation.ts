@@ -1,3 +1,4 @@
+import { gridCell } from "../core/GridSampling";
 import { atlasSamplerShader } from "../rendering/ImpostorShaderParts";
 import { vertexShader as demoVertexShader } from "./ImpostorPreviewShaders";
 import {
@@ -196,12 +197,7 @@ export class TreeImpostorValidation {
       for (let step = 0; step < 48; step++) {
         const azimuth = (step / 48) * Math.PI * 2;
         const orbitDirection = new Vector3(Math.cos(azimuth), 0.3, Math.sin(azimuth)).normalize();
-        this.camera.position.copyFrom(center.add(orbitDirection.scale(captureSize * 2)));
-        this.camera.upVector.copyFrom(Vector3.Up());
-        this.camera.setTarget(center);
-        target.render(true);
-        const orbitPixels = await target.readPixels();
-        if (!orbitPixels) throw new Error(`Orbit validation readback failed at step ${step}.`);
+        const orbitPixels = await renderValidationView(this.camera, target, center, orbitDirection, captureSize, `Orbit validation readback failed at step ${step}.`);
         const coverage = alphaCoverage(topDownPixels(orbitPixels, resolution));
         if (step === 0) firstOrbitCoverage = coverage;
         else maximumOrbitCoverageJump = Math.max(maximumOrbitCoverageJump, Math.abs(coverage - previousOrbitCoverage));
@@ -223,12 +219,7 @@ export class TreeImpostorValidation {
             0.3,
             Math.sin(boundary + offset),
           ).normalize();
-          this.camera.position.copyFrom(center.add(direction.scale(captureSize * 2)));
-          this.camera.upVector.copyFrom(Vector3.Up());
-          this.camera.setTarget(center);
-          target.render(true);
-          const seamPixels = await target.readPixels();
-          if (!seamPixels) throw new Error(`Face-seam validation failed at seam ${seam}.`);
+          const seamPixels = await renderValidationView(this.camera, target, center, direction, captureSize, `Face-seam validation failed at seam ${seam}.`);
           seamViews.push(topDownPixels(seamPixels, resolution));
         }
         minimumFaceSeamIou = Math.min(
@@ -575,12 +566,8 @@ function interpolatedAtlasFrame(
   sampleX: number,
   sampleY: number,
 ): Uint8ClampedArray {
-  const lowX = Math.floor(sampleX);
-  const lowY = Math.floor(sampleY);
-  const highX = Math.min(lowX + 1, gridSize - 1);
-  const highY = Math.min(lowY + 1, gridSize - 1);
-  const blendX = sampleX - lowX;
-  const blendY = sampleY - lowY;
+  const { x0: lowX, y0: lowY, x1: highX, y1: highY, fx: blendX, fy: blendY } =
+    gridCell(sampleX, sampleY, gridSize, gridSize);
   const thresholds = [
     (1 - blendX) * (1 - blendY),
     (1 - blendX) * (1 - blendY) + blendX * (1 - blendY),
@@ -699,4 +686,17 @@ function imageCanvas(pixels: Uint8ClampedArray, size: number): HTMLCanvasElement
   const context = canvas.getContext("2d")!;
   context.putImageData(new ImageData(Uint8ClampedArray.from(pixels), size, size), 0, 0);
   return canvas;
+}
+
+async function renderValidationView(
+  camera: FreeCamera, target: RenderTargetTexture, center: Vector3, direction: Vector3,
+  captureSize: number, errorMessage: string,
+): Promise<ArrayBufferView> {
+  camera.position.copyFrom(center.add(direction.scale(captureSize * 2)));
+  camera.upVector.copyFrom(Vector3.Up());
+  camera.setTarget(center);
+  target.render(true);
+  const pixels = await target.readPixels();
+  if (!pixels) throw new Error(errorMessage);
+  return pixels;
 }

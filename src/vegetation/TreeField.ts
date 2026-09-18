@@ -1,9 +1,9 @@
+import { distanceTransformRow } from "../core/DistanceTransform";
+import { bindVegetationLighting } from "../vegetation/VegetationLighting";
 import { bayer4Shader, atlasSamplerShader } from "../rendering/ImpostorShaderParts";
 import {
   Camera,
   Color3,
-  DirectionalLight,
-  HemisphericLight,
   Matrix,
   Mesh,
   Scene,
@@ -1404,36 +1404,13 @@ export function createImpostorMaterial(
       assets.lowResolutionTextures[Math.min(index, assets.lowResolutionTextures.length - 1)],
     );
   }
-  const fallbackSky = new Color3(0.38, 0.42, 0.48);
-  const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
     bindWindPhase(material);
     material.setFloat(
       "cameraOrthographic",
       scene.activeCamera?.mode === Camera.ORTHOGRAPHIC_CAMERA ? 1 : 0,
     );
-    const sun = scene.lights.find((light): light is DirectionalLight => (
-      light instanceof DirectionalLight && light.name === "sunLight"
-    ));
-    const ambient = scene.lights.find((light): light is HemisphericLight => (
-      light instanceof HemisphericLight && light.name === "skyAmbientLight"
-    ));
-    material.setVector3(
-      "sunDirection",
-      sun?.isEnabled() ? sun.direction.scale(-1).normalize() : Vector3.Up(),
-    );
-    material.setColor3(
-      "sunColor",
-      sun?.isEnabled() ? sun.diffuse.scale(sun.intensity) : Color3.Black(),
-    );
-    material.setColor3(
-      "skyColor",
-      ambient ? ambient.diffuse.scale(ambient.intensity) : fallbackSky,
-    );
-    material.setColor3(
-      "groundColor",
-      ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
-    );
+    bindVegetationLighting(material, scene);
     const fogEnabled = scene.fogMode === Scene.FOGMODE_LINEAR;
     material.setColor3("fogColor", scene.fogColor);
     material.setFloat("fogStart", fogEnabled ? scene.fogStart : 1e19);
@@ -1520,28 +1497,6 @@ function distancePass(
 ): void {
   for (let row = 0; row < height; row++) {
     const y = reverse ? height - 1 - row : row;
-    for (let column = 0; column < width; column++) {
-      const x = reverse ? width - 1 - column : column;
-      const index = y * width + x;
-      const horizontal = x + (reverse ? 1 : -1);
-      const vertical = y + (reverse ? 1 : -1);
-
-      if (horizontal >= 0 && horizontal < width) {
-        distance[index] = Math.min(distance[index], distance[y * width + horizontal] + horizontalStep);
-      }
-      if (vertical >= 0 && vertical < height) {
-        distance[index] = Math.min(distance[index], distance[vertical * width + x] + verticalStep);
-        if (horizontal >= 0 && horizontal < width) {
-          distance[index] = Math.min(distance[index], distance[vertical * width + horizontal] + diagonalStep);
-        }
-        const otherHorizontal = x + (reverse ? -1 : 1);
-        if (otherHorizontal >= 0 && otherHorizontal < width) {
-          distance[index] = Math.min(
-            distance[index],
-            distance[vertical * width + otherHorizontal] + diagonalStep,
-          );
-        }
-      }
-    }
+    distanceTransformRow(distance, width, height, horizontalStep, verticalStep, diagonalStep, reverse, y);
   }
 }

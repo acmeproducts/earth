@@ -1,4 +1,4 @@
-import { Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Matrix, Scene, Vector3 } from "@babylonjs/core";
 import {
   acquireBushImpostorAssets,
   bushRenderedCaptureSize,
@@ -6,21 +6,18 @@ import {
 } from "./BushImpostor";
 import { setVegetationWindShear } from "../procedural/ProceduralCaptureMaterial";
 import { windShearFraction } from "./Wind";
-import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "../world/Geo";
-import { habitatField } from "./HabitatNoise";
+import { isTerrainFootprintAbove, sampleElevation } from "../world/Geo";
 import type { TerrainData } from "../terrain/TerrainData";
 import { LandCoverClass } from "../world/WorldCover";
-import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 import type { VegetationFieldResult } from "./VegetationField";
-import { createSeededRandom } from "../core/Random";
 import { createRegionalVegetationField } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import type { HabitatFieldSpec } from "./HabitatNoise";
 import {
-  createPlacementGrid,
+  createHabitatPlacement,
+  jitteredPlacementRow,
   addProceduralVariantPlacement,
   packInstanceMatrices,
-  ProceduralPlacementBucket,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
 
@@ -63,41 +60,20 @@ export async function createBushField(
   options: BushFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
-    meshWidth,
-    meshDepth,
-    metersPerUnit,
-    seed = 0x42555348,
-    modelVariantSeed = DEFAULT_WORLD_SEED,
-    spacingMeters = 6,
-    waterLineMeters = 0,
-    landCover,
-    exclusionMask,
-    densityScale,
-    renderMode = "auto",
-    yieldControl,
-    startDisabled = false,
-  } = options;
-  const bushHeight = 1.8 / metersPerUnit;
-  const root = new TransformNode("bushField", scene);
-  if (startDisabled) root.setEnabled(false);
-  const random = createSeededRandom(seed);
-  const habitat = habitatField("bushes", modelVariantSeed, HABITAT);
-  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
-    meshWidth,
-    meshDepth,
-    spacingMeters,
-    metersPerUnit,
-  );
+    meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
+    landCover, exclusionMask, densityScale, renderMode, yieldControl,
+    root, random, columns, rows, cellWidth, cellDepth, matrices,
+    renderHeight: bushHeight, variantBuckets, habitat,
+  } = createHabitatPlacement(scene, "bushField", options, {
+    seed: 0x42555348, spacingMeters: 6, heightMeters: 1.8,
+  }, "bushes", HABITAT);
   const maximumHalfWidth = bushRenderedCaptureSize(bushHeight) * 0.71;
-  const matrices: Matrix[] = [];
-  const variantBuckets = new Map<string, ProceduralPlacementBucket>();
 
   if (landCover) {
     for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const x = -meshWidth / 2 + (column + 0.08 + random() * 0.84) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.08 + random() * 0.84) * cellDepth;
-        const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+      for (const { x, z, lon, lat } of jitteredPlacementRow(
+        row, { columns, cellWidth, cellDepth }, meshWidth, meshDepth, terrain.bounds, random,
+      )) {
         const occupancy = OCCUPANCY[landCover.sample(lon, lat)] ?? 0;
         if (occupancy === 0) continue;
         const stand = habitat.sample(lon, lat);

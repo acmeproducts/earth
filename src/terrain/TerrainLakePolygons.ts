@@ -1,3 +1,6 @@
+import { visitTerrainRaster } from "./TerrainRaster";
+import { ringEdges } from "../core/Geometry2D";
+import { sampleGridBilinear, bilinear } from "../core/GridSampling";
 import type { TerrainData } from "./TerrainData";
 import type { SharedValueMap } from "../core/OwnedValueCache";
 import { smoothstep } from "../core/MathUtils";
@@ -128,48 +131,42 @@ export async function conformTerrainToLakePolygons(
   const shelfWidth = Math.max(sampleSpacing, options.renderedVertexSpacing ?? 0) * Math.SQRT2;
 
   trace?.stage("lake terrain raster shaping");
-  for (let row = 0; row < terrain.height; row++) {
-    const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
-    for (let column = 0; column < terrain.width; column++) {
-      const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
-      let repair = 0;
-      let targetSum = 0;
-      let targetWeight = 0;
-      let strongestShore = 0;
+  await visitTerrainRaster(terrain, options, (index, x, z) => {
+    let repair = 0;
+    let targetSum = 0;
+    let targetWeight = 0;
+    let strongestShore = 0;
 
-      for (const { polygon, bounds, shapes } of lakes) {
-        if (!withinExpandedBounds(x, z, bounds, repairWidth)) continue;
-        const inside = pointInLake(x, z, polygon);
-        const distance = distanceToRings(x, z, polygon);
-        repair = Math.max(repair, inside || distance <= fullRepairWidth
-          ? 1
-          : 1 - smoothstep(fullRepairWidth, repairWidth, distance));
-        if (!shapes || (!inside && distance >= shorelineWidth)) continue;
+    for (const { polygon, bounds, shapes } of lakes) {
+      if (!withinExpandedBounds(x, z, bounds, repairWidth)) continue;
+      const inside = pointInLake(x, z, polygon);
+      const distance = distanceToRings(x, z, polygon);
+      repair = Math.max(repair, inside || distance <= fullRepairWidth
+        ? 1
+        : 1 - smoothstep(fullRepairWidth, repairWidth, distance));
+      if (!shapes || (!inside && distance >= shorelineWidth)) continue;
 
-        const shore = inside ? 1 : 1 - smoothstep(0, shorelineWidth, distance);
-        const depth = inside
-          ? bedDepth * smoothstep(shelfWidth, shelfWidth + bedSlopeWidth, distance)
-          : 0;
-        targetSum += (polygon.elevationMeters - depth) * shore;
-        targetWeight += shore;
-        strongestShore = Math.max(strongestShore, shore);
-      }
-
-      const index = row * terrain.width + column;
-      const restored = carvedElevations[index] +
-        (rawElevations[index] - carvedElevations[index]) * repair;
-      const shaped = targetWeight === 0
-        ? restored
-        : restored + (targetSum / targetWeight - restored) * strongestShore;
-      // Bound only lake shaping, not restoration of an obsolete raster carve.
-      // Use raw DEM heights so repeated shaping cannot accumulate uplift.
-      terrain.elevations[index] = Math.min(
-        shaped,
-        Math.max(restored, rawElevations[index] + LAKE_MAX_TERRAIN_RAISE_METERS),
-      );
+      const shore = inside ? 1 : 1 - smoothstep(0, shorelineWidth, distance);
+      const depth = inside
+        ? bedDepth * smoothstep(shelfWidth, shelfWidth + bedSlopeWidth, distance)
+        : 0;
+      targetSum += (polygon.elevationMeters - depth) * shore;
+      targetWeight += shore;
+      strongestShore = Math.max(strongestShore, shore);
     }
-    await yieldControl?.();
-  }
+
+    const restored = carvedElevations[index] +
+      (rawElevations[index] - carvedElevations[index]) * repair;
+    const shaped = targetWeight === 0
+      ? restored
+      : restored + (targetSum / targetWeight - restored) * strongestShore;
+    // Bound only lake shaping, not restoration of an obsolete raster carve.
+    // Use raw DEM heights so repeated shaping cannot accumulate uplift.
+    terrain.elevations[index] = Math.min(
+      shaped,
+      Math.max(restored, rawElevations[index] + LAKE_MAX_TERRAIN_RAISE_METERS),
+    );
+  }, yieldControl);
 
   trace?.stage("lake elevation range and surface assembly", "synchronous");
   updateElevationRange(terrain);
@@ -293,16 +290,11 @@ function isUnsupportedSmallWater(
   let perimeter = 0;
   let unsupported = 0;
   for (const piece of pieces) {
-    for (let index = 0; index < piece.outline.length; index++) {
-      const a = piece.outline[index];
-      const b = piece.outline[(index + 1) % piece.outline.length];
+    for (const [a, b] of ringEdges(piece.outline)) {
       const length = Math.hypot(b.x - a.x, b.z - a.z) * options.metersPerUnit;
       if (length === 0) continue;
       const count = Math.max(1, Math.ceil(length / 2));
-      for (let sample = 0; sample < count; sample++) {
-        const t = (sample + 0.5) / count;
-        const x = a.x + (b.x - a.x) * t;
-        const z = a.z + (b.z - a.z) * t;
+      for (const { x, z } of segmentMidpointSamples(a, b, count)) {
         const dx = -(b.z - a.z) * 2 / length;
         const dz = (b.x - a.x) * 2 / length;
         const side = pieces.some((candidate) => pointInLake(x + dx, z + dz, candidate)) ? -1 : 1;
@@ -370,16 +362,11 @@ export function measureLakeSupport(
     let unsupported = 0;
     let maxGap = 0;
     for (const ring of [polygon.outline, ...polygon.holes]) {
-      for (let index = 0; index < ring.length; index++) {
-        const a = ring[index];
-        const b = ring[(index + 1) % ring.length];
+      for (const [a, b] of ringEdges(ring)) {
         const length = Math.hypot(b.x - a.x, b.z - a.z);
         if (length === 0 || onTileEdge(a, b)) continue;
         const count = Math.max(1, Math.ceil(length / step));
-        for (let sample = 0; sample < count; sample++) {
-          const t = (sample + 0.5) / count;
-          const x = a.x + (b.x - a.x) * t;
-          const z = a.z + (b.z - a.z) * t;
+        for (const { x, z } of segmentMidpointSamples(a, b, count)) {
           if (x < -halfWidth || x > halfWidth || z < -halfDepth || z > halfDepth) continue;
           const ground = sampleMeshElevation(terrain, x, z, options, subdivisions, elevations);
           const gap = polygon.elevationMeters - ground;
@@ -426,9 +413,8 @@ function sampleMeshElevation(
     options.meshDepth,
     elevations,
   );
-  const top = vertex(u0, v0) * (1 - fu) + vertex(u0 + 1, v0) * fu;
-  const bottom = vertex(u0, v0 + 1) * (1 - fu) + vertex(u0 + 1, v0 + 1) * fu;
-  return top * (1 - fv) + bottom * fv;
+  return bilinear(vertex(u0, v0), vertex(u0 + 1, v0),
+    vertex(u0, v0 + 1), vertex(u0 + 1, v0 + 1), fu, fv);
 }
 
 function percentile(sorted: readonly number[], fraction: number): number {
@@ -445,17 +431,7 @@ function sampleGridElevation(
 ): number {
   const px = Math.max(0, Math.min(terrain.width - 1, (x / meshWidth + 0.5) * (terrain.width - 1)));
   const py = Math.max(0, Math.min(terrain.height - 1, (0.5 - z / meshDepth) * (terrain.height - 1)));
-  const x0 = Math.floor(px);
-  const y0 = Math.floor(py);
-  const x1 = Math.min(x0 + 1, terrain.width - 1);
-  const y1 = Math.min(y0 + 1, terrain.height - 1);
-  const fx = px - x0;
-  const fy = py - y0;
-  const top = elevations[y0 * terrain.width + x0] * (1 - fx) +
-    elevations[y0 * terrain.width + x1] * fx;
-  const bottom = elevations[y1 * terrain.width + x0] * (1 - fx) +
-    elevations[y1 * terrain.width + x1] * fx;
-  return top * (1 - fy) + bottom * fy;
+  return sampleGridBilinear(elevations, terrain.width, terrain.height, px, py);
 }
 
 function pointInLake(x: number, z: number, polygon: TerrainLakeSource): boolean {
@@ -533,5 +509,12 @@ function updateElevationRange(terrain: TerrainData): void {
   for (const elevation of terrain.elevations) {
     terrain.minElevation = Math.min(terrain.minElevation, elevation);
     terrain.maxElevation = Math.max(terrain.maxElevation, elevation);
+  }
+}
+
+function* segmentMidpointSamples(a: TerrainLakePoint, b: TerrainLakePoint, count: number) {
+  for (let sample = 0; sample < count; sample++) {
+    const t = (sample + 0.5) / count;
+    yield { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
   }
 }

@@ -1,3 +1,4 @@
+import { pointInPolygon } from "../core/Geometry2D";
 import { Mesh, Scene, VertexData } from "@babylonjs/core";
 import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
 import type { BuildingInteriorUse } from "../buildings/BuildingPlanner";
@@ -45,12 +46,7 @@ function distance(point: Point2D, a: Point2D, b: Point2D): number {
   return Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy);
 }
 function inside(point: Point2D, polygon: readonly Point2D[]): boolean {
-  let result = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i], b = polygon[j];
-    if ((a.y > point.y) !== (b.y > point.y) && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) result = !result;
-  }
-  return result;
+  return pointInPolygon(point.x, point.y, polygon, p => p.x, p => p.y);
 }
 function segmentGap(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number {
   return segmentsIntersect(a, b, c, d) ? 0 : Math.min(distance(a, c, d), distance(b, c, d), distance(c, a, b), distance(d, a, b));

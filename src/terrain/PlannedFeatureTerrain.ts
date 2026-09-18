@@ -1,3 +1,4 @@
+import { visitTerrainRaster } from "./TerrainRaster";
 import { sampleElevation } from "../world/Geo";
 import { smoothstep } from "../core/MathUtils";
 import {
@@ -109,48 +110,36 @@ export async function conformTerrainToPlannedFeatures(
   const touched = new Uint8Array(original.length);
   // Finish every building pad before aligning the road bed and its shoulders.
   trace?.stage("building pad raster shaping");
-  for (let row = 0; row < terrain.height; row++) {
-    const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
-    for (let column = 0; column < terrain.width; column++) {
-      const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
-      const sample = { x, z };
-      const buildingTarget = strongestBuildingTarget(
-        sample,
-        buildingCells.queryPoint(sample),
-        buildingFlatMargin,
-        buildingBlendWidth,
-      );
-      if (!buildingTarget) continue;
+  await visitTerrainRaster(terrain, options, (index, x, z) => {
+    const sample = { x, z };
+    const buildingTarget = strongestBuildingTarget(
+      sample,
+      buildingCells.queryPoint(sample),
+      buildingFlatMargin,
+      buildingBlendWidth,
+    );
+    if (!buildingTarget) return;
 
-      const index = row * terrain.width + column;
-      terrain.elevations[index] = original[index] +
-        (buildingTarget.elevation - original[index]) * buildingTarget.weight;
-      touched[index] = 1;
-      modified++;
-    }
-    await yieldControl?.();
-  }
+    terrain.elevations[index] = original[index] +
+      (buildingTarget.elevation - original[index]) * buildingTarget.weight;
+    touched[index] = 1;
+    modified++;
+  }, yieldControl);
   trace?.stage("road grade raster shaping");
-  for (let row = 0; row < terrain.height; row++) {
-    const z = (0.5 - row / Math.max(1, terrain.height - 1)) * options.meshDepth;
-    for (let column = 0; column < terrain.width; column++) {
-      const x = (column / Math.max(1, terrain.width - 1) - 0.5) * options.meshWidth;
-      const sample = { x, z };
-      const roadTarget = strongestRoadTarget(
-        sample, roadCells.queryPoint(sample), rasterMargin, roadBlendWidth, options.metersPerUnit,
-      );
-      if (!roadTarget) continue;
-      const index = row * terrain.width + column;
-      // Sample grades from the original terrain so building pad edges cannot
-      // introduce bumps. Fill depressions fully, including those deeper than
-      // the excavation limit, then blend into the completed building pass.
-      const roadElevation = Math.max(original[index] - MAX_ROAD_CUT_METERS, roadTarget.elevation);
-      const elevation = terrain.elevations[index];
-      terrain.elevations[index] = elevation + (roadElevation - elevation) * roadTarget.weight;
-      if (!touched[index]) modified++;
-    }
-    await yieldControl?.();
-  }
+  await visitTerrainRaster(terrain, options, (index, x, z) => {
+    const sample = { x, z };
+    const roadTarget = strongestRoadTarget(
+      sample, roadCells.queryPoint(sample), rasterMargin, roadBlendWidth, options.metersPerUnit,
+    );
+    if (!roadTarget) return;
+    // Sample grades from the original terrain so building pad edges cannot
+    // introduce bumps. Fill depressions fully, including those deeper than
+    // the excavation limit, then blend into the completed building pass.
+    const roadElevation = Math.max(original[index] - MAX_ROAD_CUT_METERS, roadTarget.elevation);
+    const elevation = terrain.elevations[index];
+    terrain.elevations[index] = elevation + (roadElevation - elevation) * roadTarget.weight;
+    if (!touched[index]) modified++;
+  }, yieldControl);
   trace?.stage("planned terrain elevation range", "synchronous");
   updateElevationRange(terrain);
   return modified;

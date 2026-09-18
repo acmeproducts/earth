@@ -50,10 +50,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           if [ -f duplicated_segments.json ]; then mv duplicated_segments.json previous_segments.json; fi
-          if [ -f duplication_severity.txt ]; then mv duplication_severity.txt previous_severity.txt; fi
 
       - name: Run duplicate code checker
-        run: node scripts/check-duplication.mjs
+        run: node scripts/check-duplication.mjs 0
 
       - name: Upload baseline artifact
         if: github.event_name == 'push'

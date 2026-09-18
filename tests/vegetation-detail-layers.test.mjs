@@ -26,7 +26,10 @@ test("fern undergrowth shares one directional source between its model and impos
   assert.match(capture, /export function createFernModel/);
   assert.match(field, /\[fern\],\s*\[fernModel\],\s*matrixData/);
   assert.match(field, /one renderer per terrain tile/);
-  assert.match(field, /renderMode = "auto"/);
+  assert.match(field, /createHabitatPlacement\(scene, "fernField", options/);
+  const placement = source("vegetation/VegetationPlacement.ts");
+  assert.match(placement, /const placement = createFieldPlacement\(scene, name, options, defaults\)/);
+  assert.match(placement, /renderMode = "auto"/);
 });
 
 test("undergrowth is restricted to plausible WorldCover classes", () => {

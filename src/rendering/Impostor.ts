@@ -895,48 +895,42 @@ async function dilateTransparentTileEdgeColors(
 ): Promise<void> {
   const source = new Uint8ClampedArray(image.data);
   const slice = captureWorkSlice();
-  for (let tileY = 0; tileY < gridHeight; tileY++) {
-    for (let tileX = 0; tileX < gridWidth; tileX++) {
-      const startX = tileX * tileWidth;
-      const startY = tileY * tileHeight;
-      for (let localY = 0; localY < tileHeight; localY++) {
-        for (let localX = 0; localX < tileWidth; localX++) {
-          const x = startX + localX;
-          const y = startY + localY;
-          const destination = (y * image.width + x) * 4;
-          if (source[destination + 3] !== 0) continue;
+  for (const { startX, startY, localY } of atlasRows(gridWidth, gridHeight, tileWidth, tileHeight)) {
+    for (let localX = 0; localX < tileWidth; localX++) {
+      const x = startX + localX;
+      const y = startY + localY;
+      const destination = (y * image.width + x) * 4;
+      if (source[destination + 3] !== 0) continue;
 
-          let nearest = -1;
-          let nearestDistanceSquared = Number.POSITIVE_INFINITY;
-          const minY = Math.max(0, localY - radius);
-          const maxY = Math.min(tileHeight - 1, localY + radius);
-          const minX = Math.max(0, localX - radius);
-          const maxX = Math.min(tileWidth - 1, localX + radius);
-          for (let sampleY = minY; sampleY <= maxY; sampleY++) {
-            const offsetY = sampleY - localY;
-            for (let sampleX = minX; sampleX <= maxX; sampleX++) {
-              const offsetX = sampleX - localX;
-              const distanceSquared = offsetX * offsetX + offsetY * offsetY;
-              if (distanceSquared > radius * radius || distanceSquared >= nearestDistanceSquared) {
-                continue;
-              }
-              const sample = (
-                (startY + sampleY) * image.width + startX + sampleX
-              ) * 4;
-              if (source[sample + 3] === 0) continue;
-              nearest = sample;
-              nearestDistanceSquared = distanceSquared;
-            }
+      let nearest = -1;
+      let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+      const minY = Math.max(0, localY - radius);
+      const maxY = Math.min(tileHeight - 1, localY + radius);
+      const minX = Math.max(0, localX - radius);
+      const maxX = Math.min(tileWidth - 1, localX + radius);
+      for (let sampleY = minY; sampleY <= maxY; sampleY++) {
+        const offsetY = sampleY - localY;
+        for (let sampleX = minX; sampleX <= maxX; sampleX++) {
+          const offsetX = sampleX - localX;
+          const distanceSquared = offsetX * offsetX + offsetY * offsetY;
+          if (distanceSquared > radius * radius || distanceSquared >= nearestDistanceSquared) {
+            continue;
           }
-          if (nearest >= 0) {
-            image.data[destination] = source[nearest];
-            image.data[destination + 1] = source[nearest + 1];
-            image.data[destination + 2] = source[nearest + 2];
-          }
+          const sample = (
+            (startY + sampleY) * image.width + startX + sampleX
+          ) * 4;
+          if (source[sample + 3] === 0) continue;
+          nearest = sample;
+          nearestDistanceSquared = distanceSquared;
         }
-        await yieldCaptureWorkIfNeeded(cooperative, slice);
+      }
+      if (nearest >= 0) {
+        image.data[destination] = source[nearest];
+        image.data[destination + 1] = source[nearest + 1];
+        image.data[destination + 2] = source[nearest + 2];
       }
     }
+    await yieldCaptureWorkIfNeeded(cooperative, slice);
   }
 }
 
@@ -1023,26 +1017,20 @@ async function fillDistantSilhouetteRows(
   cooperative: boolean,
 ): Promise<void> {
   const slice = captureWorkSlice();
-  for (let tileY = 0; tileY < gridHeight; tileY++) {
-    for (let tileX = 0; tileX < gridWidth; tileX++) {
-      const startX = tileX * tileWidth;
-      const startY = tileY * tileHeight;
-      for (let localY = 0; localY < tileHeight; localY++) {
-        const y = startY + localY;
-        let firstCovered = tileWidth;
-        let lastCovered = -1;
-        for (let localX = 0; localX < tileWidth; localX++) {
-          const alpha = image.data[(y * image.width + startX + localX) * 4 + 3];
-          if (alpha === 0) continue;
-          firstCovered = Math.min(firstCovered, localX);
-          lastCovered = localX;
-        }
-        for (let localX = firstCovered; localX <= lastCovered; localX++) {
-          image.data[(y * image.width + startX + localX) * 4 + 3] = 255;
-        }
-        await yieldCaptureWorkIfNeeded(cooperative, slice);
-      }
+  for (const { startX, startY, localY } of atlasRows(gridWidth, gridHeight, tileWidth, tileHeight)) {
+    const y = startY + localY;
+    let firstCovered = tileWidth;
+    let lastCovered = -1;
+    for (let localX = 0; localX < tileWidth; localX++) {
+      const alpha = image.data[(y * image.width + startX + localX) * 4 + 3];
+      if (alpha === 0) continue;
+      firstCovered = Math.min(firstCovered, localX);
+      lastCovered = localX;
     }
+    for (let localX = firstCovered; localX <= lastCovered; localX++) {
+      image.data[(y * image.width + startX + localX) * 4 + 3] = 255;
+    }
+    await yieldCaptureWorkIfNeeded(cooperative, slice);
   }
 }
 
@@ -1105,4 +1093,14 @@ async function yieldCaptureWorkIfNeeded(
   if (!cooperative || performance.now() - slice.startedAt < cooperativeCaptureBudgetMilliseconds) return;
   await nextFrame();
   slice.startedAt = performance.now();
+}
+
+function* atlasRows(gridWidth: number, gridHeight: number, tileWidth: number, tileHeight: number) {
+  for (let tileY = 0; tileY < gridHeight; tileY++) {
+    for (let tileX = 0; tileX < gridWidth; tileX++) {
+      for (let localY = 0; localY < tileHeight; localY++) {
+        yield { startX: tileX * tileWidth, startY: tileY * tileHeight, localY };
+      }
+    }
+  }
 }

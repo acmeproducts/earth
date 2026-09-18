@@ -1,3 +1,4 @@
+import { memoizeByKey } from "../core/Memoize";
 import { groundMetersAt } from "../world/Geo";
 import { SimplexNoise2D } from "../core/SimplexNoise";
 import { LandCoverClass } from "../world/WorldCover";
@@ -27,18 +28,9 @@ const BANDS = [
  * fields: a rise being the dry one is a property of the place, not of whichever
  * tile is streaming it.
  */
-const fields = new Map<number, readonly SimplexNoise2D[]>();
 
-function bandNoise(worldSeed: number): readonly SimplexNoise2D[] {
-  let noise = fields.get(worldSeed);
-  if (!noise) {
-    noise = BANDS.map((band) => new SimplexNoise2D(
-      layerSeed(worldSeed, `groundVariation/${band.meters}`),
-    ));
-    fields.set(worldSeed, noise);
-  }
-  return noise;
-}
+const bandNoise = memoizeByKey((worldSeed: number): readonly SimplexNoise2D[] =>
+  BANDS.map((band) => new SimplexNoise2D(layerSeed(worldSeed, `groundVariation/${band.meters}`))));
 
 /**
  * How much of the variation each surface accepts. Engineered and frozen

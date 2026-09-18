@@ -1,3 +1,4 @@
+import { sampleGridBilinear } from "../core/GridSampling";
 import {
   Mesh,
   MeshBuilder,
@@ -109,21 +110,9 @@ export async function createTerrainMesh(
       const v = row / subdivisions;
       const pixelX = u * (elevationWidth - 1);
       const pixelY = v * (elevationHeight - 1);
-      const x0 = Math.floor(pixelX);
-      const y0 = Math.floor(pixelY);
-      const x1 = Math.min(x0 + 1, elevationWidth - 1);
-      const y1 = Math.min(y0 + 1, elevationHeight - 1);
-      const fractionX = pixelX - x0;
-      const fractionY = pixelY - y0;
-      const elevation00 = elevations[y0 * elevationWidth + x0];
-      const elevation10 = elevations[y0 * elevationWidth + x1];
-      const elevation01 = elevations[y1 * elevationWidth + x0];
-      const elevation11 = elevations[y1 * elevationWidth + x1];
-      const interpolatedElevation =
-        elevation00 * (1 - fractionX) * (1 - fractionY) +
-        elevation10 * fractionX * (1 - fractionY) +
-        elevation01 * (1 - fractionX) * fractionY +
-        elevation11 * fractionX * fractionY;
+      const interpolatedElevation = sampleGridBilinear(
+        elevations, elevationWidth, elevationHeight, pixelX, pixelY,
+      );
       // Classified coastlines already contain their shallow-to-deep profile.
       const elevation = terrain.waterMask
         ? interpolatedElevation
@@ -368,40 +357,26 @@ async function smoothVertexColors(
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
   const horizontal = new Float32Array(colors.length);
-  const vertexCount = colors.length / 4;
-
-  for (let row = 0; row < rowSize; row++) {
-    for (let column = 0; column < rowSize; column++) {
-      const target = (row * rowSize + column) * 4;
-      const start = Math.max(0, column - radius);
-      const end = Math.min(rowSize - 1, column + radius);
-      const count = end - start + 1;
-      for (let channel = 0; channel < 3; channel++) {
-        let sum = 0;
-        for (let sample = start; sample <= end; sample++) {
-          sum += colors[(row * rowSize + sample) * 4 + channel];
+  for (const vertical of [false, true]) {
+    const source = vertical ? horizontal : colors;
+    const destination = vertical ? colors : horizontal;
+    for (let row = 0; row < rowSize; row++) {
+      for (let column = 0; column < rowSize; column++) {
+        const target = (row * rowSize + column) * 4;
+        const coordinate = vertical ? row : column;
+        const start = Math.max(0, coordinate - radius);
+        const end = Math.min(rowSize - 1, coordinate + radius);
+        for (let channel = 0; channel < 3; channel++) {
+          let sum = 0;
+          for (let sample = start; sample <= end; sample++) {
+            const index = vertical ? sample * rowSize + column : row * rowSize + sample;
+            sum += source[index * 4 + channel];
+          }
+          destination[target + channel] = sum / (end - start + 1);
         }
-        horizontal[target + channel] = sum / count;
+        destination[target + 3] = 1;
       }
-      horizontal[target + 3] = 1;
+      await yieldControl?.();
     }
-    await yieldControl?.();
-  }
-
-  for (let index = 0; index < vertexCount; index++) {
-    const row = Math.floor(index / rowSize);
-    const column = index % rowSize;
-    const start = Math.max(0, row - radius);
-    const end = Math.min(rowSize - 1, row + radius);
-    const count = end - start + 1;
-    for (let channel = 0; channel < 3; channel++) {
-      let sum = 0;
-      for (let sample = start; sample <= end; sample++) {
-        sum += horizontal[(sample * rowSize + column) * 4 + channel];
-      }
-      colors[index * 4 + channel] = sum / count;
-    }
-    colors[index * 4 + 3] = 1;
-    if (index % rowSize === rowSize - 1) await yieldControl?.();
   }
 }

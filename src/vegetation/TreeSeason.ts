@@ -1,3 +1,4 @@
+import { sampleValueNoise3D } from "../core/ValueNoise";
 import type { TreeSpecies } from "../procedural/ProceduralTree";
 import { lerp, smoothstep } from "../core/MathUtils";
 import { cellRandom, unitFromSeed } from "../core/Random";
@@ -271,7 +272,6 @@ function deciduousAppearance(
   }
 }
 
-
 /** Center of one leaf card in the tree's source space. */
 export interface LeafCardPosition {
   x: number;
@@ -332,23 +332,5 @@ export function autumnLeafSamples(cards: readonly LeafCardPosition[], seed: numb
 
 /** One octave of 3D value noise in [0, 1), smooth across lattice cells. */
 function valueNoise3(x: number, y: number, z: number, seed: number): number {
-  const cellX = Math.floor(x);
-  const cellY = Math.floor(y);
-  const cellZ = Math.floor(z);
-  const blendX = smoothstep(0, 1, x - cellX);
-  const blendY = smoothstep(0, 1, y - cellY);
-  const blendZ = smoothstep(0, 1, z - cellZ);
-  const corner = (offsetX: number, offsetY: number, offsetZ: number): number =>
-    cellRandom(seed, cellX + offsetX, cellY + offsetY, cellZ + offsetZ);
-  const lower = lerp(
-    lerp(corner(0, 0, 0), corner(1, 0, 0), blendX),
-    lerp(corner(0, 1, 0), corner(1, 1, 0), blendX),
-    blendY,
-  );
-  const upper = lerp(
-    lerp(corner(0, 0, 1), corner(1, 0, 1), blendX),
-    lerp(corner(0, 1, 1), corner(1, 1, 1), blendX),
-    blendY,
-  );
-  return lerp(lower, upper, blendZ);
+  return sampleValueNoise3D(x, y, z, (cx, cy, cz) => cellRandom(seed, cx, cy, cz));
 }

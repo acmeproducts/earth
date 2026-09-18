@@ -1,3 +1,4 @@
+import { mapGridRange } from "../core/GridSampling";
 import { ResourceCache } from "../core/ResourceCache";
 import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import type { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
@@ -196,12 +197,8 @@ export class OpenStreetMap {
     // east and south edges as exclusive so we do not fetch an unused extra row
     // and column of vector tiles.
     const southEast = worldTileAtLocation(bounds.latSouth + 1e-10, bounds.lonEast - 1e-10, zoom);
-    const requests: Array<Promise<MapTile | undefined>> = [];
-    for (let x = northWest.x; x <= southEast.x; x++) {
-      for (let y = northWest.y; y <= southEast.y; y++) {
-        requests.push(this.fetchTile(x, y, zoom));
-      }
-    }
+    const requests = mapGridRange(northWest.x, southEast.x, northWest.y, southEast.y,
+      (x, y) => this.fetchTile(x, y, zoom));
     return (await Promise.all(requests)).filter((tile): tile is MapTile => tile !== undefined);
   }
 
@@ -1318,13 +1315,7 @@ function createRoadMeshes(
     right = [];
   };
   for (let index = 0; index < points.length; index++) {
-    const previous = points[Math.max(0, index - 1)];
-    const next = points[Math.min(points.length - 1, index + 1)];
-    const dx = next.x - previous.x;
-    const dz = next.z - previous.z;
-    const length = Math.hypot(dx, dz) || 1;
-    const offsetX = (-dz / length) * halfWidth;
-    const offsetZ = (dx / length) * halfWidth;
+    const { offsetX, offsetZ } = pathRibbonOffset(points, index, halfWidth);
     // Roads are planar across their width. Sample the centerline once and
     // use that elevation for both edges; sampling each edge independently
     // reintroduces the terrain's cross-slope and lets one edge clip through.
@@ -1529,13 +1520,7 @@ function createWaterwayMeshes(
   const left: Array<{ x: number; z: number }> = [];
   const right: Array<{ x: number; z: number }> = [];
   for (let index = 0; index < points.length; index++) {
-    const previous = points[Math.max(0, index - 1)];
-    const next = points[Math.min(points.length - 1, index + 1)];
-    const dx = next.x - previous.x;
-    const dz = next.z - previous.z;
-    const length = Math.hypot(dx, dz) || 1;
-    const offsetX = (-dz / length) * halfWidth;
-    const offsetZ = (dx / length) * halfWidth;
+    const { offsetX, offsetZ } = pathRibbonOffset(points, index, halfWidth);
     left.push({ x: points[index].x + offsetX, z: points[index].z + offsetZ });
     right.push({ x: points[index].x - offsetX, z: points[index].z - offsetZ });
   }
@@ -1612,9 +1597,7 @@ function roadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "ford"
-    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
-    : 4;
+  const repeatMeters = roadTextureRepeatMeters(visualStyle);
   const leftUvs = [new Vector2(0, 0)];
   const rightUvs = [new Vector2(0, 1)];
   let distanceMeters = 0;
@@ -1638,9 +1621,7 @@ function worldPositionRoadUvs(
   metersPerUnit: number,
   visualStyle: RoadVisualStyle,
 ): Vector2[] {
-  const repeatMeters = visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "ford"
-    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS
-    : 4;
+  const repeatMeters = roadTextureRepeatMeters(visualStyle);
   const scale = metersPerUnit / repeatMeters;
   return [
     ...left.map((point) => new Vector2(point.x * scale, point.z * scale)),
@@ -1794,4 +1775,20 @@ function createRoadTexture(
 
 function truthy(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function pathRibbonOffset(points: readonly { x: number; z: number }[], index: number, halfWidth: number) {
+  const previous = points[Math.max(0, index - 1)];
+  const next = points[Math.min(points.length - 1, index + 1)];
+  const dx = next.x - previous.x;
+  const dz = next.z - previous.z;
+  const length = Math.hypot(dx, dz) || 1;
+  const offsetX = (-dz / length) * halfWidth;
+  const offsetZ = (dx / length) * halfWidth;
+  return { offsetX, offsetZ };
+}
+
+function roadTextureRepeatMeters(visualStyle: RoadVisualStyle): number {
+  return visualStyle === "dirt" || visualStyle === "unpaved" || visualStyle === "ford"
+    ? LOOSE_ROAD_TEXTURE_REPEAT_METERS : 4;
 }

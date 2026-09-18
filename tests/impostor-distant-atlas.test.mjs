@@ -15,6 +15,7 @@ function loadFunction(name, dependencies) {
 
 test("transparent atlas colors respect the radius, preserve alpha, and never cross tile boundaries", async () => {
   const dilate = loadFunction("dilateTransparentTileEdgeColors", {
+    atlasRows: loadFunction("atlasRows", {}),
     captureWorkSlice: () => ({}),
     yieldCaptureWorkIfNeeded: async () => {},
   });

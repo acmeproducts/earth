@@ -1,4 +1,4 @@
-import { Color3, Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Matrix, Scene, Vector3 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation } from "../world/Geo";
 import {
   acquireFernImpostorAssets,
@@ -7,9 +7,7 @@ import {
 } from "./FernImpostor";
 import { setVegetationWindShear } from "../procedural/ProceduralCaptureMaterial";
 import { snowCoveredVariant } from "../rendering/Impostor";
-import { habitatField } from "./HabitatNoise";
 import type { HabitatFieldSpec } from "./HabitatNoise";
-import { createSeededRandom } from "../core/Random";
 import type { TerrainData } from "../terrain/TerrainData";
 import { rainforestInfluenceAt } from "./TreeDistribution";
 import {
@@ -21,14 +19,13 @@ import { createVegetationFieldRenderers } from "./VegetationFieldRenderers";
 import { configureVegetationMaterials } from "./VegetationMaterial";
 import { SHADOW_DARKNESS } from "./VegetationShadowReceiver";
 import {
-  createPlacementGrid,
+  createHabitatPlacement,
   packInstanceMatrices,
   VegetationPlacementOptions,
 } from "./VegetationPlacement";
 import { proceduralVariantAtLocation, type ProceduralVariant } from "../procedural/ProceduralRegions";
 import { windShearFraction } from "./Wind";
 import { LandCoverClass } from "../world/WorldCover";
-import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
 
 type FernFieldOptions = VegetationPlacementOptions;
 
@@ -72,34 +69,14 @@ export async function createFernField(
   options: FernFieldOptions,
 ): Promise<VegetationFieldResult> {
   const {
-    meshWidth,
-    meshDepth,
-    metersPerUnit,
-    seed = 0x4645524e,
-    modelVariantSeed = DEFAULT_WORLD_SEED,
-    spacingMeters = FERN_SPACING_METERS,
-    waterLineMeters = 0,
-    landCover,
-    exclusionMask,
-    densityScale,
-    renderMode = "auto",
-    yieldControl,
-    startDisabled = false,
-  } = options;
-  const renderHeight = FERN_HEIGHT_METERS / metersPerUnit;
-  const root = new TransformNode("fernField", scene);
-  if (startDisabled) root.setEnabled(false);
-
-  const random = createSeededRandom(seed);
-  const habitat = habitatField("ferns", modelVariantSeed, HABITAT);
-  const { columns, rows, cellWidth, cellDepth } = createPlacementGrid(
-    meshWidth,
-    meshDepth,
-    spacingMeters,
-    metersPerUnit,
-  );
+    meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
+    landCover, exclusionMask, densityScale, renderMode, yieldControl,
+    root, random, columns, rows, cellWidth, cellDepth, matrices,
+    renderHeight, habitat,
+  } = createHabitatPlacement(scene, "fernField", options, {
+    seed: 0x4645524e, spacingMeters: FERN_SPACING_METERS, heightMeters: FERN_HEIGHT_METERS,
+  }, "ferns", HABITAT);
   const maximumHalfWidth = fernRenderedCaptureSize(renderHeight) * 0.62;
-  const matrices: Matrix[] = [];
   let variant: ProceduralVariant | undefined;
 
   if (landCover) {

@@ -1,5 +1,8 @@
-import { Matrix, Vector3 } from "@babylonjs/core";
-import { sampleElevation, type HorizontalExclusionMask } from "../world/Geo";
+import { Matrix, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { createSeededRandom } from "../core/Random";
+import { habitatField, type HabitatFieldSpec } from "./HabitatNoise";
+import { DEFAULT_WORLD_SEED } from "../world/WorldGrid";
+import { sampleElevation, sceneToLonLat, type HorizontalExclusionMask } from "../world/Geo";
 import type { TerrainData } from "../terrain/TerrainData";
 import type { VegetationRenderMode } from "./VegetationField";
 import type { LandCoverSampler } from "../world/WorldCover";
@@ -57,6 +60,27 @@ export interface PlacementGrid {
   cellDepth: number;
 }
 
+export function createFieldPlacement<T extends VegetationPlacementOptions>(
+  scene: Scene,
+  name: string,
+  options: T,
+  defaults: { seed: number; spacingMeters: number; heightMeters: number },
+) {
+  const { seed = defaults.seed, modelVariantSeed = DEFAULT_WORLD_SEED,
+    spacingMeters = defaults.spacingMeters, waterLineMeters = 0,
+    renderMode = "auto", startDisabled = false } = options;
+  const root = new TransformNode(name, scene);
+  if (startDisabled) root.setEnabled(false);
+  return {
+    ...options, modelVariantSeed, waterLineMeters, renderMode, root,
+    renderHeight: defaults.heightMeters / options.metersPerUnit,
+    random: createSeededRandom(seed),
+    ...createPlacementGrid(options.meshWidth, options.meshDepth, spacingMeters, options.metersPerUnit),
+    matrices: [] as Matrix[],
+    variantBuckets: new Map<string, ProceduralPlacementBucket>(),
+  };
+}
+
 export function createPlacementGrid(
   meshWidth: number,
   meshDepth: number,
@@ -72,6 +96,47 @@ export function createPlacementGrid(
     cellWidth: meshWidth / columns,
     cellDepth: meshDepth / rows,
   };
+}
+
+export function createHabitatPlacement<T extends VegetationPlacementOptions>(
+  scene: Scene,
+  name: string,
+  options: T,
+  defaults: { seed: number; spacingMeters: number; heightMeters: number },
+  layer: string,
+  spec: HabitatFieldSpec,
+) {
+  const placement = createFieldPlacement(scene, name, options, defaults);
+  return { ...placement, habitat: habitatField(layer, placement.modelVariantSeed, spec) };
+}
+
+/** Draw x before z so placement keeps the seeded random sequence stable. */
+export function jitteredPlacementPoint(
+  column: number, row: number,
+  meshWidth: number, meshDepth: number,
+  cellWidth: number, cellDepth: number,
+  random: () => number,
+) {
+  return {
+    x: -meshWidth / 2 + (column + 0.08 + random() * 0.84) * cellWidth,
+    z: meshDepth / 2 - (row + 0.08 + random() * 0.84) * cellDepth,
+  };
+}
+
+/** Lazily sample one row; callers can still yield between rows. */
+export function* jitteredPlacementRow(
+  row: number,
+  grid: Pick<PlacementGrid, "columns" | "cellWidth" | "cellDepth">,
+  meshWidth: number, meshDepth: number,
+  bounds: TerrainData["bounds"],
+  random: () => number,
+) {
+  for (let column = 0; column < grid.columns; column++) {
+    const point = jitteredPlacementPoint(
+      column, row, meshWidth, meshDepth, grid.cellWidth, grid.cellDepth, random,
+    );
+    yield { ...point, ...sceneToLonLat(point.x, point.z, bounds, meshWidth, meshDepth) };
+  }
 }
 
 export async function packInstanceMatrices(

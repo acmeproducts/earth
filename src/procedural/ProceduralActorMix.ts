@@ -1,3 +1,4 @@
+import { memoizeByKey } from "../core/Memoize";
 import { SimplexNoise2D } from "../core/SimplexNoise";
 import {
   DEFAULT_WORLD_SEED,
@@ -33,18 +34,9 @@ const MIX_NOISE_SPAN_TILES = 32;
  * One field per family per world, built once. Each `SimplexNoise2D` shuffles a
  * 256-entry permutation on construction, and this runs for every streamed tile.
  */
-const fields = new Map<number, readonly SimplexNoise2D[]>();
 
-function familyNoise(worldSeed: number): readonly SimplexNoise2D[] {
-  let noise = fields.get(worldSeed);
-  if (!noise) {
-    noise = PROCEDURAL_ACTOR_FAMILIES.map((family) => new SimplexNoise2D(
-      layerSeed(worldSeed, `proceduralActorMix/${family}`),
-    ));
-    fields.set(worldSeed, noise);
-  }
-  return noise;
-}
+const familyNoise = memoizeByKey((worldSeed: number): readonly SimplexNoise2D[] =>
+  PROCEDURAL_ACTOR_FAMILIES.map((family) => new SimplexNoise2D(layerSeed(worldSeed, `proceduralActorMix/${family}`))));
 
 /** Creates a stable, spatially smooth actor composition at one tile ID. */
 export function proceduralActorMixAtTile(

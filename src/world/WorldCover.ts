@@ -1,3 +1,4 @@
+import { gridCell, bilinear, mapGridRange } from "../core/GridSampling";
 import type { TerrainData } from "../terrain/TerrainData";
 import { ResourceCache } from "../core/ResourceCache";
 import type { TileBounds } from "./WorldGrid";
@@ -87,12 +88,8 @@ export class WorldCover {
     if (west > east || south > north) return new WorldCover(new Map(), resolution);
     const northWest = this.tileFor(west, north, resolution);
     const southEast = this.tileFor(east, south, resolution);
-    const requests: Array<Promise<readonly [string, Lerc.LercData]>> = [];
-    for (let row = northWest.row; row <= southEast.row; row++) {
-      for (let column = northWest.column; column <= southEast.column; column++) {
-        requests.push(this.fetchTile(clampedLevel, row, column));
-      }
-    }
+    const requests = mapGridRange(northWest.row, southEast.row, northWest.column, southEast.column,
+      (row, column) => this.fetchTile(clampedLevel, row, column));
     return new WorldCover(new Map(await Promise.all(requests)), resolution);
   }
 
@@ -133,10 +130,7 @@ export class WorldCover {
       tintBoundaryNoise.sample(sourceX / 6, sourceY / 6) * 0.65;
     const pixelY = sourceY - 0.5 +
       tintBoundaryNoise.sample(sourceX / 6 + 73, sourceY / 6 - 41) * 0.65;
-    const x0 = Math.floor(pixelX);
-    const y0 = Math.floor(pixelY);
-    const fx = pixelX - x0;
-    const fy = pixelY - y0;
+    const { x0, y0, fx, fy } = gridCell(pixelX, pixelY);
     const fallback = this.sample(longitude, latitude);
     const colorAt = (x: number, y: number): readonly [number, number, number] =>
       landCoverSurfaceColor(this.classAtPixel(x, y, fallback));
@@ -255,16 +249,12 @@ export class WorldCover {
   private waterCoverage(longitude: number, latitude: number): number {
     const pixelX = (longitude - WorldCover.ORIGIN_X) / this.resolution - 0.5;
     const pixelY = (WorldCover.ORIGIN_Y - latitude) / this.resolution - 0.5;
-    const x0 = Math.floor(pixelX);
-    const y0 = Math.floor(pixelY);
-    const fx = pixelX - x0;
-    const fy = pixelY - y0;
+    const { x0, y0, fx, fy } = gridCell(pixelX, pixelY);
     const fallback = this.sample(longitude, latitude);
     const waterAt = (px: number, py: number): number =>
       this.classAtPixel(px, py, fallback) === LandCoverClass.Water ? 1 : 0;
-    const top = waterAt(x0, y0) * (1 - fx) + waterAt(x0 + 1, y0) * fx;
-    const bottom = waterAt(x0, y0 + 1) * (1 - fx) + waterAt(x0 + 1, y0 + 1) * fx;
-    return top * (1 - fy) + bottom * fy;
+    return bilinear(waterAt(x0, y0), waterAt(x0 + 1, y0),
+      waterAt(x0, y0 + 1), waterAt(x0 + 1, y0 + 1), fx, fy);
   }
 
   private lastTileRow = NaN;

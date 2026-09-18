@@ -1,3 +1,6 @@
+import { sampleGridBilinear } from "../core/GridSampling";
+import { ringEdges } from "../core/Geometry2D";
+import { PlanarCellIndex, pointBounds, pointInRing } from "../core/PlanarGeometry";
 interface GeographicBounds {
   lonWest: number;
   lonEast: number;
@@ -179,44 +182,18 @@ export function combineHorizontalExclusionMasks(
 
 /** Excludes circular object footprints from filled polygons while preserving holes. */
 export class PolygonExclusionMask implements HorizontalExclusionMask {
-  private readonly cells = new Map<string, HorizontalPolygon[]>();
-  private readonly cellSize: number;
+  private readonly index: PlanarCellIndex<HorizontalPolygon>;
 
   constructor(polygons: readonly HorizontalPolygon[], cellSize = 20) {
-    this.cellSize = cellSize;
+    this.index = new PlanarCellIndex(cellSize);
     for (const polygon of polygons) {
-      if (polygon.outer.length === 0) continue;
-      const xs = polygon.outer.map((point) => point.x);
-      const zs = polygon.outer.map((point) => point.z);
-      const minimumX = Math.floor(Math.min(...xs) / cellSize);
-      const maximumX = Math.floor(Math.max(...xs) / cellSize);
-      const minimumZ = Math.floor(Math.min(...zs) / cellSize);
-      const maximumZ = Math.floor(Math.max(...zs) / cellSize);
-      for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-        for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-          const key = `${cellX},${cellZ}`;
-          const cell = this.cells.get(key);
-          if (cell) cell.push(polygon);
-          else this.cells.set(key, [polygon]);
-        }
-      }
+      if (polygon.outer.length) this.index.add(polygon, pointBounds(polygon.outer));
     }
   }
 
   intersects(x: number, z: number, radius: number): boolean {
     const radiusSquared = radius * radius;
-    const candidates = new Set<HorizontalPolygon>();
-    const minimumX = Math.floor((x - radius) / this.cellSize);
-    const maximumX = Math.floor((x + radius) / this.cellSize);
-    const minimumZ = Math.floor((z - radius) / this.cellSize);
-    const maximumZ = Math.floor((z + radius) / this.cellSize);
-    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-        for (const polygon of this.cells.get(`${cellX},${cellZ}`) ?? []) {
-          candidates.add(polygon);
-        }
-      }
-    }
+    const candidates = this.index.query({ minX: x, maxX: x, minZ: z, maxZ: z }, radius);
     for (const polygon of candidates) {
       if (pointInHorizontalRing(x, z, polygon.outer) &&
           !(polygon.holes ?? []).some((hole) => pointInHorizontalRing(x, z, hole))) {
@@ -231,41 +208,14 @@ export class PolygonExclusionMask implements HorizontalExclusionMask {
   }
 }
 
-function pointInHorizontalRing(
-  x: number,
-  z: number,
-  ring: ReadonlyArray<{ x: number; z: number }>,
-): boolean {
-  let inside = false;
-  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
-    const a = ring[index];
-    const b = ring[previous];
-    if ((a.z > z) !== (b.z > z) &&
-        x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) {
-      inside = !inside;
-    }
-  }
-  return inside;
+function pointInHorizontalRing(x: number, z: number, ring: readonly HorizontalPoint[]): boolean {
+  return pointInRing({ x, z }, ring);
 }
 
-function horizontalRingDistanceSquared(
-  x: number,
-  z: number,
-  ring: ReadonlyArray<{ x: number; z: number }>,
-): number {
+function horizontalRingDistanceSquared(x: number, z: number, ring: readonly HorizontalPoint[]): number {
   let closest = Infinity;
-  for (let index = 0; index < ring.length; index++) {
-    const start = ring[index];
-    const end = ring[(index + 1) % ring.length];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0
-      ? 0
-      : Math.max(0, Math.min(1, ((x - start.x) * dx + (z - start.z) * dz) / lengthSquared));
-    const offsetX = x - (start.x + dx * amount);
-    const offsetZ = z - (start.z + dz * amount);
-    closest = Math.min(closest, offsetX * offsetX + offsetZ * offsetZ);
+  for (const [start, end] of ringEdges(ring)) {
+    closest = Math.min(closest, pointSegmentDistanceSquared(x, z, start, end));
   }
   return closest;
 }
@@ -359,20 +309,7 @@ export function sampleElevation(
   const v = Math.min(1, Math.max(0, 0.5 - z / meshDepth));
   const px = u * (terrain.width - 1);
   const py = v * (terrain.height - 1);
-  const x0 = Math.floor(px);
-  const y0 = Math.floor(py);
-  const x1 = Math.min(x0 + 1, terrain.width - 1);
-  const y1 = Math.min(y0 + 1, terrain.height - 1);
-  const fx = px - x0;
-  const fy = py - y0;
-  const values = elevations;
-
-  return (
-    values[y0 * terrain.width + x0] * (1 - fx) * (1 - fy) +
-    values[y0 * terrain.width + x1] * fx * (1 - fy) +
-    values[y1 * terrain.width + x0] * (1 - fx) * fy +
-    values[y1 * terrain.width + x1] * fx * fy
-  );
+  return sampleGridBilinear(elevations, terrain.width, terrain.height, px, py);
 }
 
 /** Returns true when the center and full rectangular footprint are above an elevation. */
@@ -405,42 +342,19 @@ export interface HorizontalSegment {
 }
 
 export class SegmentExclusionMask implements HorizontalExclusionMask {
-  private readonly cells = new Map<string, HorizontalSegment[]>();
-  private readonly cellSize: number;
+  private readonly index: PlanarCellIndex<HorizontalSegment>;
 
   constructor(segments: readonly HorizontalSegment[], cellSize: number) {
-    this.cellSize = cellSize;
+    this.index = new PlanarCellIndex(cellSize);
     for (const segment of segments) {
-      const minimumX = Math.floor((Math.min(segment.start.x, segment.end.x) - segment.halfWidth) / cellSize);
-      const maximumX = Math.floor((Math.max(segment.start.x, segment.end.x) + segment.halfWidth) / cellSize);
-      const minimumZ = Math.floor((Math.min(segment.start.z, segment.end.z) - segment.halfWidth) / cellSize);
-      const maximumZ = Math.floor((Math.max(segment.start.z, segment.end.z) + segment.halfWidth) / cellSize);
-      for (let z = minimumZ; z <= maximumZ; z++) {
-        for (let x = minimumX; x <= maximumX; x++) {
-          const key = `${x},${z}`;
-          const cell = this.cells.get(key);
-          if (cell) cell.push(segment);
-          else this.cells.set(key, [segment]);
-        }
-      }
+      this.index.add(segment, pointBounds([segment.start, segment.end]), segment.halfWidth);
     }
   }
 
   intersects(x: number, z: number, radius: number): boolean {
-    const minimumX = Math.floor((x - radius) / this.cellSize);
-    const maximumX = Math.floor((x + radius) / this.cellSize);
-    const minimumZ = Math.floor((z - radius) / this.cellSize);
-    const maximumZ = Math.floor((z + radius) / this.cellSize);
-    for (let cellZ = minimumZ; cellZ <= maximumZ; cellZ++) {
-      for (let cellX = minimumX; cellX <= maximumX; cellX++) {
-        for (const segment of this.cells.get(`${cellX},${cellZ}`) ?? []) {
-          const clearance = radius + segment.halfWidth;
-          if (pointSegmentDistanceSquared(x, z, segment.start, segment.end) <= clearance * clearance) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
+    return this.index.some({ minX: x, maxX: x, minZ: z, maxZ: z }, segment => {
+      const clearance = radius + segment.halfWidth;
+      return pointSegmentDistanceSquared(x, z, segment.start, segment.end) <= clearance * clearance;
+    }, radius);
   }
 }

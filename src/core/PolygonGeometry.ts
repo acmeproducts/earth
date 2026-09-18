@@ -1,6 +1,12 @@
+import { ringEdges } from "./Geometry2D";
 import type { Point2D, Polygon2D } from "../buildings/FloorPlan";
 
 export type CartesianAxis = "x" | "y";
+
+export function edgeVector(start: Point2D, end: Point2D) {
+  const dx = end.x - start.x, dy = end.y - start.y;
+  return { dx, dy, length: Math.hypot(dx, dy) };
+}
 
 export interface PolygonSplit {
   first: Point2D[];
@@ -16,12 +22,8 @@ export function longestSharedSegment(
 ): readonly [Point2D, Point2D] | undefined {
   let longest: readonly [Point2D, Point2D] | undefined;
   let longestLength = 0;
-  for (let firstIndex = 0; firstIndex < first.length; firstIndex++) {
-    const a = first[firstIndex];
-    const b = first[(firstIndex + 1) % first.length];
-    for (let secondIndex = 0; secondIndex < second.length; secondIndex++) {
-      const c = second[secondIndex];
-      const d = second[(secondIndex + 1) % second.length];
+  for (const [a, b] of ringEdges(first)) {
+    for (const [c, d] of ringEdges(second)) {
       const candidate = overlappingSegment(a, b, c, d);
       if (!candidate) continue;
       const length = Math.hypot(candidate[1].x - candidate[0].x, candidate[1].y - candidate[0].y);
@@ -112,7 +114,7 @@ export function polygonMinimumMeanWidth(points: readonly Point2D[]): number {
   for (let edge = 0; edge < points.length; edge++) {
     const start = points[edge];
     const end = points[(edge + 1) % points.length];
-    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    const { length } = edgeVector(start, end);
     if (length < 1e-7) continue;
     const dx = (end.x - start.x) / length;
     const dy = (end.y - start.y) / length;

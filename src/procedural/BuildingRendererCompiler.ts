@@ -1,4 +1,5 @@
-import { pointOnSegment2D } from "../core/PolygonGeometry";
+import { segmentVector } from "../core/PlanarGeometry";
+import { pointOnSegment2D, edgeVector } from "../core/PolygonGeometry";
 import {
   BaseTexture,
   Color3,
@@ -125,20 +126,16 @@ function advanceBuilding<T>(
 function compileBuildingSynchronously(
   id: string, steps: BuildingCompileSteps<Mesh | undefined>,
 ): Mesh | undefined {
-  const owned = new Set<Mesh>();
-  let complete = false;
+  const compilation = createBuildingCompilation(id, steps);
   let response: BuildingPlanningResult | undefined;
-  let stage = "setup";
   try {
     for (;;) {
-      const next = advanceBuilding(owned, id, stage, steps, response);
-      if (next.done) { complete = true; return next.value; }
-      stage = typeof next.value === "string" ? next.value : `${next.value.kind} layout result`;
+      const next = compilation.advance(response);
+      if (next.done) return next.value;
       response = typeof next.value === "string" ? undefined : runBuildingPlanning(next.value);
     }
   } finally {
-    steps.return(undefined);
-    if (!complete) for (const mesh of owned) if (!mesh.isDisposed()) mesh.dispose();
+    compilation.close();
   }
 }
 
@@ -178,22 +175,18 @@ export class ProceduralBuildingRenderer {
     isCancelled: () => boolean = () => false,
   ): Promise<Mesh | undefined> {
     const steps = this.createDetailedSteps(scene, plan, terrain, options);
-    const owned = new Set<Mesh>();
-    let complete = false;
+    const compilation = createBuildingCompilation(plan.id, steps);
     let response: BuildingPlanningResult | undefined;
-    let stage = "setup";
     try {
       for (;;) {
         await yieldControl();
         if (isCancelled() || scene.isDisposed) throw new DOMException("Building cancelled", "AbortError");
-        const next = advanceBuilding(owned, plan.id, stage, steps, response);
-        if (next.done) { complete = true; return next.value; }
-        stage = typeof next.value === "string" ? next.value : `${next.value.kind} layout result`;
+        const next = compilation.advance(response);
+        if (next.done) return next.value;
         response = typeof next.value === "string" ? undefined : await worker.plan(next.value, `building=${plan.id}`);
       }
     } finally {
-      steps.return(undefined);
-      if (!complete) for (const mesh of owned) if (!mesh.isDisposed()) mesh.dispose();
+      compilation.close();
     }
   }
 
@@ -1364,7 +1357,7 @@ function stairLayoutCandidatesFromPlan(
   for (let index = 0; index < points.length; index++) {
     const start = points[index];
     const end = points[(index + 1) % points.length];
-    const edgeLength = Math.hypot(end.x - start.x, end.y - start.y);
+    const { length: edgeLength } = edgeVector(start, end);
     if (edgeLength < BUILDING_STAIR_MIN_RUN_METERS + 2 * landing) continue;
     const direction = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
     let inward = { x: -direction.y, y: direction.x };
@@ -1850,9 +1843,7 @@ function findSharedFacadeEdges(
     for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex++) {
       const start = outline[edgeIndex];
       const end = outline[(edgeIndex + 1) % outline.length];
-      const dx = end.x - start.x;
-      const dz = end.z - start.z;
-      const length = Math.hypot(dx, dz);
+      const { dx, dz, length } = segmentVector(start, end);
       if (length < minimumOverlap) continue;
       for (let index = 0; index < ring.length; index++) {
         const otherStart = ring[index];
@@ -2716,45 +2707,21 @@ function parseBuildingColor(value: string | undefined): Color3 | undefined {
 }
 
 function colorBuildingMass(mesh: Mesh, appearance: BuildingAppearance): void {
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
-  if (!positions) return;
-  const colors: number[] = [];
-  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
-    const normalX = normals?.[vertex * 3] ?? 0;
-    const normalY = normals?.[vertex * 3 + 1] ?? 0;
-    const normalZ = normals?.[vertex * 3 + 2] ?? 0;
+  if (!shadeMeshVertices(mesh, (normalX, normalY, normalZ) => {
     const base = normalY > 0.55 ? appearance.roof : appearance.wall;
-    const light = normalY > 0.55
-      ? 1
-      : Math.max(0.7, Math.min(1.03, 0.84 + normalX * 0.11 - normalZ * 0.07));
-    colors.push(
-      clamp01(base.r * light),
-      clamp01(base.g * light),
-      clamp01(base.b * light),
-      1,
-    );
-  }
-  mesh.setVerticesData(VertexBuffer.ColorKind, colors);
-  mesh.useVertexColors = true;
+    const light = normalY > 0.55 ? 1 : Math.max(0.7, Math.min(1.03, 0.84 + normalX * 0.11 - normalZ * 0.07));
+    return [clamp01(base.r * light), clamp01(base.g * light), clamp01(base.b * light)];
+  })) return;
   setBuildingSurfaces(mesh, (normalY) => normalY > 0.55
     ? appearance.roofSurface
     : appearance.wallSurface);
 }
 
 function colorRoofMesh(mesh: Mesh, color: Color3, surface: BuildingSurface): void {
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
-  if (!positions) return;
-  const colors: number[] = [];
-  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
-    const normalX = Math.abs(normals?.[vertex * 3] ?? 0);
-    const normalZ = Math.abs(normals?.[vertex * 3 + 2] ?? 0);
-    const light = 0.86 + normalX * 0.08 + normalZ * 0.04;
-    colors.push(color.r * light, color.g * light, color.b * light, 1);
-  }
-  mesh.setVerticesData(VertexBuffer.ColorKind, colors);
-  mesh.useVertexColors = true;
+  if (!shadeMeshVertices(mesh, (normalX, _normalY, normalZ) => {
+    const light = 0.86 + Math.abs(normalX) * 0.08 + Math.abs(normalZ) * 0.04;
+    return [color.r * light, color.g * light, color.b * light];
+  })) return;
   setBuildingSurface(mesh, surface);
 }
 
@@ -2845,10 +2812,8 @@ function lineIntersection(
   c: ScenePoint,
   d: ScenePoint,
 ): ScenePoint | undefined {
-  const abX = b.x - a.x;
-  const abZ = b.z - a.z;
-  const cdX = d.x - c.x;
-  const cdZ = d.z - c.z;
+  const { dx: abX, dz: abZ } = segmentVector(a, b);
+  const { dx: cdX, dz: cdZ } = segmentVector(c, d);
   const denominator = abX * cdZ - abZ * cdX;
   if (Math.abs(denominator) < 1e-8) return undefined;
   const amount = ((c.x - a.x) * cdZ - (c.z - a.z) * cdX) / denominator;
@@ -2927,4 +2892,36 @@ function stageBuildingMesh<T extends Mesh>(mesh: T): T {
   compilingMeshes?.add(mesh);
   mesh.setEnabled(false);
   return mesh;
+}
+
+function createBuildingCompilation(id: string, steps: BuildingCompileSteps<Mesh | undefined>) {
+  const owned = new Set<Mesh>();
+  let complete = false;
+  let stage = "setup";
+  return {
+    advance(response: BuildingPlanningResult | undefined) {
+      const next = advanceBuilding(owned, id, stage, steps, response);
+      complete = !!next.done;
+      if (!next.done) stage = typeof next.value === "string" ? next.value : next.value.kind + " layout result";
+      return next;
+    },
+    close() {
+      steps.return(undefined);
+      if (!complete) for (const mesh of owned) if (!mesh.isDisposed()) mesh.dispose();
+    },
+  };
+}
+
+function shadeMeshVertices(mesh: Mesh, shade: (x: number, y: number, z: number) => readonly [number, number, number]): boolean {
+  const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+  if (!positions) return false;
+  const normals = mesh.getVerticesData(VertexBuffer.NormalKind);
+  const colors: number[] = [];
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const color = shade(normals?.[vertex * 3] ?? 0, normals?.[vertex * 3 + 1] ?? 0, normals?.[vertex * 3 + 2] ?? 0);
+    colors.push(color[0], color[1], color[2], 1);
+  }
+  mesh.setVerticesData(VertexBuffer.ColorKind, colors);
+  mesh.useVertexColors = true;
+  return true;
 }

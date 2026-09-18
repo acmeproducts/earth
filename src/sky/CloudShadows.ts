@@ -1,3 +1,4 @@
+import { createWhiteTexture } from "../rendering/FallbackTexture";
 import {
   RawTexture,
   Scene,
@@ -313,16 +314,7 @@ export function createCloudShadowProjector(
 function cloudShadowState(scene: Scene): CloudShadowSceneState {
   const existing = sceneStates.get(scene);
   if (existing) return existing;
-  const fallback = RawTexture.CreateRGBATexture(
-    new Uint8Array([255, 255, 255, 255]),
-    1,
-    1,
-    scene,
-    false,
-    false,
-    Texture.NEAREST_SAMPLINGMODE,
-  );
-  fallback.name = "fallbackCloudShadowTexture";
+  const fallback = createWhiteTexture(scene, "fallbackCloudShadowTexture");
   const state: CloudShadowSceneState = {
     fallback,
     lighting: Vector4.Zero(),

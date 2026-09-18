@@ -1,3 +1,4 @@
+import { textureGrain } from "../rendering/TextureGrain";
 /**
  * Procedural rock surface textures. Pure arithmetic with no renderer
  * dependency so the encoding can be verified on its own.
@@ -52,20 +53,12 @@ export function createRockTextureData(): RockTextureData {
   const coarse = shapedField(size, 5, 3, 0.55, NOISE_SEED ^ 0x3b9aca, 0.75);
   const fine = shapedField(size, 29, 3, 0.5, NOISE_SEED ^ 0x6f4a7c, 0.95);
   const specks = shapedField(size, 83, 2, 0.5, NOISE_SEED ^ 0xc2b2ae, 0.95);
-  const grains = new Float32Array(size * size);
-  const microHeights = new Float32Array(size * size);
-  let grainSum = 0;
-  for (let index = 0; index < grains.length; index++) {
-    grains[index] = (coarse[index] - 0.5) * 0.3 +
-      (fine[index] - 0.5) * 0.6 +
-      (specks[index] - 0.5) * 0.55;
-    grainSum += grains[index];
-    microHeights[index] = coarse[index] * 0.24 + fine[index] * 0.44 + specks[index] * 0.32;
-  }
+  const { grains, heights: microHeights, grainMean } = textureGrain(
+    coarse, fine, specks, [0.3, 0.6, 0.55], [0.24, 0.44, 0.32],
+  );
 
   // Re-centre the grain so distant rocks average back to their vertex colour
   // instead of picking up a tint once the texture is too far away to resolve.
-  const grainMean = grainSum / grains.length;
   // The speck band changes every few texels, so a gentler scale keeps the
   // micro-relief from folding over to edge-on.
   const microNormals = encodeNormalMap(microHeights, size, 4.5);

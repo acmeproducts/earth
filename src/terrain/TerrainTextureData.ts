@@ -1,3 +1,4 @@
+import { textureGrain } from "../rendering/TextureGrain";
 /**
  * Procedural ground texture data. Pure arithmetic with no renderer dependency so
  * the detail cascade can be reasoned about and tested on its own.
@@ -141,21 +142,13 @@ function createDetailTextureData(size: number): Uint8Array {
   const fine = shapedField(size, 53, 3, 0.5, NOISE_SEED ^ 0x6f4a7c, 0.95);
   const specks = shapedField(size, 96, 2, 0.5, NOISE_SEED ^ 0xc2b2ae, 0.95);
 
-  const grains = new Float32Array(size * size);
-  const heights = new Float32Array(size * size);
-  let grainSum = 0;
-  for (let index = 0; index < grains.length; index++) {
-    grains[index] = (coarse[index] - 0.5) * 0.34 +
-      (fine[index] - 0.5) * 0.72 +
-      (specks[index] - 0.5) * 0.5;
-    grainSum += grains[index];
-    heights[index] = coarse[index] * 0.26 + fine[index] * 0.46 + specks[index] * 0.28;
-  }
+  const { grains, heights: heights, grainMean } = textureGrain(
+    coarse, fine, specks, [0.34, 0.72, 0.5], [0.26, 0.46, 0.28],
+  );
 
   // Re-centre the grain so the coarsest mip level averages back to an exactly
   // neutral 0.5. Without this the layer would tint the whole terrain once it is
   // too far away to resolve, instead of quietly fading out.
-  const grainMean = grainSum / grains.length;
   const normals = encodeNormalMap(heights, size, 3.4);
   for (let index = 0; index < grains.length; index++) {
     const target = index * 4;

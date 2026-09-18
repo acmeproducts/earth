@@ -1,3 +1,4 @@
+import { pointInPolygon, ringEdges } from "./Geometry2D";
 /**
  * The project's shared 2D polygon math for scene-space (x/z) geometry.
  *
@@ -18,6 +19,11 @@ export interface PlanarBounds {
   maxX: number;
   minZ: number;
   maxZ: number;
+}
+
+export function segmentVector(start: PlanarPoint, end: PlanarPoint) {
+  const dx = end.x - start.x, dz = end.z - start.z;
+  return { dx, dz, length: Math.hypot(dx, dz) };
 }
 
 export function cross(a: PlanarPoint, b: PlanarPoint, p: PlanarPoint): number {
@@ -79,31 +85,14 @@ export function boundsIntersect(left: PlanarBounds, right: PlanarBounds): boolea
 }
 
 export function pointInRing(point: PlanarPoint, polygon: readonly PlanarPoint[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
-    const a = polygon[index];
-    const b = polygon[previous];
-    if ((a.z > point.z) !== (b.z > point.z) &&
-        point.x < (b.x - a.x) * (point.z - a.z) / (b.z - a.z) + a.x) inside = !inside;
-  }
-  return inside;
+  return pointInPolygon(point.x, point.z, polygon, p => p.x, p => p.z);
 }
 
 export function distanceToRing(point: PlanarPoint, polygon: readonly PlanarPoint[]): number {
   let distance = Infinity;
-  for (let index = 0; index < polygon.length; index++) {
-    const start = polygon[index];
-    const end = polygon[(index + 1) % polygon.length];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
-      ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared
-    ));
-    distance = Math.min(distance, Math.hypot(
-      point.x - start.x - dx * amount,
-      point.z - start.z - dz * amount,
-    ));
+  for (const [start, end] of ringEdges(polygon)) {
+    const nearest = closestPointOnSegment(point, start, end);
+    distance = Math.min(distance, Math.hypot(point.x - nearest.x, point.z - nearest.z));
   }
   return distance;
 }
@@ -205,10 +194,8 @@ export function segmentIntersection(
   c: PlanarPoint,
   d: PlanarPoint,
 ): { firstAmount: number; secondAmount: number } | undefined {
-  const adx = b.x - a.x;
-  const adz = b.z - a.z;
-  const bdx = d.x - c.x;
-  const bdz = d.z - c.z;
+  const { dx: adx, dz: adz } = segmentVector(a, b);
+  const { dx: bdx, dz: bdz } = segmentVector(c, d);
   const denominator = adx * bdz - adz * bdx;
   if (Math.abs(denominator) <= 1e-10) return undefined;
   const ox = c.x - a.x;
@@ -230,12 +217,8 @@ export function polygonsOverlapArea(
   b: readonly PlanarPoint[],
 ): boolean {
   const epsilon = 1e-8;
-  for (let ai = 0; ai < a.length; ai++) {
-    const a1 = a[ai];
-    const a2 = a[(ai + 1) % a.length];
-    for (let bi = 0; bi < b.length; bi++) {
-      const b1 = b[bi];
-      const b2 = b[(bi + 1) % b.length];
+  for (const [a1, a2] of ringEdges(a)) {
+    for (const [b1, b2] of ringEdges(b)) {
       if (cross(a1, a2, b1) * cross(a1, a2, b2) < -epsilon &&
           cross(b1, b2, a1) * cross(b1, b2, a2) < -epsilon) return true;
     }
@@ -253,9 +236,7 @@ export function convexPolygonsOverlap(
   second: readonly PlanarPoint[],
 ): boolean {
   for (const ring of [first, second]) {
-    for (let index = 0; index < ring.length; index++) {
-      const start = ring[index];
-      const end = ring[(index + 1) % ring.length];
+    for (const [start, end] of ringEdges(ring)) {
       const axisX = end.z - start.z;
       const axisZ = start.x - end.x;
       const project = (points: readonly PlanarPoint[]) => {
@@ -373,6 +354,14 @@ export class PlanarCellIndex<T> {
     return [...result];
   }
 
+  /** Stops at the first match without allocating a deduplicated candidate set. */
+  some(bounds: PlanarBounds, predicate: (item: T) => boolean, margin = 0, group = ""): boolean {
+    for (const key of this.keys(bounds, margin, group)) {
+      if (this.cells.get(key)?.some(predicate)) return true;
+    }
+    return false;
+  }
+
   queryPoint(point: PlanarPoint, group = ""): readonly T[] {
     const key = `${group}/${Math.floor(point.x / this.cellSize)}/${Math.floor(point.z / this.cellSize)}`;
     return this.cells.get(key) ?? [];
@@ -387,4 +376,14 @@ export class PlanarCellIndex<T> {
       for (let x = minX; x <= maxX; x++) yield `${group}/${x}/${z}`;
     }
   }
+}
+
+export function closestPointOnSegment(point: PlanarPoint, start: PlanarPoint, end: PlanarPoint): PlanarPoint {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const lengthSquared = dx * dx + dz * dz;
+  const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared,
+  ));
+  return { x: start.x + dx * amount, z: start.z + dz * amount };
 }

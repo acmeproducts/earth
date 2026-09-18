@@ -1,3 +1,4 @@
+import { pointInPolygon } from "../core/Geometry2D";
 import { buildingInteriorUse, normalizeBuildingClass, type BuildingInteriorUse, type BuildingSource, type BuildingPolygon, type LonLat } from "./BuildingPlanner";
 
 export interface BuildingUseContext {
@@ -6,13 +7,7 @@ export interface BuildingUseContext {
 }
 
 function containsRing(point: LonLat, ring: readonly LonLat[]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i], b = ring[j];
-    if ((a[1] > point[1]) !== (b[1] > point[1]) &&
-      point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
-  }
-  return inside;
+  return pointInPolygon(point[0], point[1], ring, p => p[0], p => p[1]);
 }
 
 function contains(point: LonLat, polygon: BuildingPolygon): boolean {

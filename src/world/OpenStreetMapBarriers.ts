@@ -1,3 +1,4 @@
+import { segmentVector } from "../core/PlanarGeometry";
 import {
   Color3,
   Matrix,
@@ -292,9 +293,7 @@ function createHedgeMatrices(
   for (let index = 1; index < points.length; index++) {
     const start = points[index - 1];
     const end = points[index];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const length = Math.hypot(dx, dz);
+    const { dx, dz, length } = segmentVector(start, end);
     const steps = Math.max(1, Math.ceil(length / spacing));
     const normalX = length > 0 ? -dz / length : 0;
     const normalZ = length > 0 ? dx / length : 0;
@@ -346,16 +345,10 @@ function createFence(
   for (let index = 1; index < points.length; index++) {
     const start = points[index - 1];
     const end = points[index];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const length = Math.hypot(dx, dz);
+    const { dx, dz, length } = segmentVector(start, end);
     if (length === 0) continue;
       const yaw = Math.atan2(dx, dz);
-    const steps = Math.max(1, Math.ceil(length / postSpacing));
-    for (let step = 0; step <= steps; step++) {
-      const amount = Math.min(1, step / steps);
-      const x = start.x + dx * amount;
-      const z = start.z + dz * amount;
+    for (const { x, z } of fencePostPositions(start, end, length, postSpacing)) {
       const ground = sampleElevation(terrain, x, z, options.meshWidth, options.meshDepth) / options.metersPerUnit;
       const post = MeshBuilder.CreateCylinder("fencePost", {
         height: heightMeters / options.metersPerUnit,
@@ -408,15 +401,9 @@ function createChainlinkFence(
   for (let index = 1; index < points.length; index++) {
     const start = points[index - 1];
     const end = points[index];
-    const dx = end.x - start.x;
-    const dz = end.z - start.z;
-    const length = Math.hypot(dx, dz);
+    const { length } = segmentVector(start, end);
     if (length === 0) continue;
-    const steps = Math.max(1, Math.ceil(length / postSpacing));
-    for (let step = 0; step <= steps; step++) {
-      const amount = Math.min(1, step / steps);
-      const x = start.x + dx * amount;
-      const z = start.z + dz * amount;
+    for (const { x, z } of fencePostPositions(start, end, length, postSpacing)) {
       const ground = sampleElevation(terrain, x, z, options.meshWidth, options.meshDepth) /
         options.metersPerUnit;
       const post = MeshBuilder.CreateCylinder("chainlinkPost", {
@@ -549,4 +536,11 @@ function createBarrierMaterial(scene: Scene, style: BarrierAppearance["style"]):
       break;
   }
   return material;
+}
+
+function* fencePostPositions(
+  start: { x: number; z: number }, end: { x: number; z: number }, length: number, spacing: number,
+) {
+  const steps = Math.max(1, Math.ceil(length / spacing));
+  for (let step = 0; step <= steps; step++) yield pointAlong(start, end, Math.min(1, step / steps));
 }

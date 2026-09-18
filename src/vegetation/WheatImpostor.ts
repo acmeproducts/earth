@@ -1,4 +1,4 @@
-import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
+import { createPlantMesh, appendBladeIndices, perpendicularFrame } from "./PlantGeometry";
 import { Color3, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import {
   AXISYMMETRIC_IMPOSTOR_FACES,
@@ -98,9 +98,7 @@ function createWheatSource(scene: Scene, liveLighting = false, seed = 0x57484541
   }
   function addTube(start: Vector3, end: Vector3, radius: number, color: Color3, sides: number): void {
     const axis = end.subtract(start).normalize();
-    const helper = Math.abs(axis.y) < 0.9 ? Vector3.Up() : Vector3.Right();
-    const tangent = Vector3.Cross(axis, helper).normalize();
-    const bitangent = Vector3.Cross(axis, tangent).normalize();
+    const { side: tangent, across: bitangent } = perpendicularFrame(axis);
     const ringStart = positions.length / 3;
     for (const point of [start, end]) {
       for (let side = 0; side < sides; side++) {

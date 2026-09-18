@@ -27,11 +27,14 @@ test("streamed tiles own one provider-backed data bundle", () => {
 test("detail and distant layers reuse their tile's online data", () => {
   const detailStart = game.indexOf("private async buildTileDetail");
   const farTreesStart = game.indexOf("private async buildFarTrees", detailStart);
-  const farBuildingsStart = game.indexOf("private async buildFarBuildings", farTreesStart);
+  const farBuildingsStart = game.indexOf("private buildFarBuildings", farTreesStart);
   const loadMapTilesStart = game.indexOf("private loadMapTiles", farBuildingsStart);
   const detail = game.slice(detailStart, farTreesStart);
   const farTrees = game.slice(farTreesStart, farBuildingsStart);
   const farBuildings = game.slice(farBuildingsStart, loadMapTilesStart);
+  assert.ok(farBuildingsStart > farTreesStart && loadMapTilesStart > farBuildingsStart);
+  assert.match(farBuildings, /buildFarMapLayer\(record, generation, "farBuildings"\)/);
+  assert.match(farBuildings, /buildFarMapLayer\(record, generation, "farRoads"\)/);
 
   assert.match(detail, /const mapWays = await this\.loadMapTiles\(record\)/);
   assert.match(detail, /record\.landCover/);

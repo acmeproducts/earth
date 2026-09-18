@@ -1,3 +1,6 @@
+import { ringEdges } from "../core/Geometry2D";
+import { segmentVector } from "../core/PlanarGeometry";
+import { closestPointOnSegment } from "../core/PlanarGeometry";
 import type { RoadPlan, RoadSurface, RoadVisualStyle } from "./RoadPlanner";
 import earcut from "earcut";
 import { traceStreamingSynchronous } from "../diagnostics/StreamingDiagnostics";
@@ -283,9 +286,7 @@ function planPlotBoundaries(
     const candidates: Array<{
       start: PlanningPoint; end: PlanningPoint; key: string; score: number; facesRoad: boolean;
     }> = [];
-    for (let index = 0; index < plot.outline.length; index++) {
-      const start = plot.outline[index];
-      const end = plot.outline[(index + 1) % plot.outline.length];
+    for (const [start, end] of ringEdges(plot.outline)) {
       const length = Math.hypot(end.x - start.x, end.z - start.z);
       if (length < minimumRun || liesOnPlanningBounds(start, end, bounds)) continue;
       const edgeBounds = pointBounds([start, end]);
@@ -341,9 +342,7 @@ function plotEdgeContacts(
   contacts: readonly { outline: readonly PlanningPoint[]; facesRoad: boolean }[],
   tolerance: number,
 ): Array<{ from: number; to: number; facesRoad: boolean }> {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const length = Math.hypot(dx, dz);
+  const { dx, dz, length } = segmentVector(start, end);
   const spans: Array<{ from: number; to: number; facesRoad: boolean }> = [];
   for (const contact of contacts) {
     for (let index = 0; index < contact.outline.length; index++) {
@@ -491,9 +490,7 @@ function planStreetLamps(
       for (let index = 1; index < path.length; index++) {
         const start = path[index - 1];
         const end = path[index];
-        const dx = end.x - start.x;
-        const dz = end.z - start.z;
-        const length = Math.hypot(dx, dz);
+        const { dx, dz, length } = segmentVector(start, end);
         if (length < 1e-8) continue;
         while (distance <= length) {
           const amount = distance / length;
@@ -607,9 +604,7 @@ function roadEdgeLineTowards(
   options: RoadAndBuildingPlanningOptions,
 ): { a: PlanningPoint; b: PlanningPoint } | undefined {
   const [start, end] = candidate.centerline;
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const length = Math.hypot(dx, dz);
+  const { dx, dz, length } = segmentVector(start, end);
   if (length > 1e-8) {
     const outerHalfWidth = (
       candidate.widthMeters / 2 + candidate.shoulderWidthMeters
@@ -679,13 +674,7 @@ function closestPointsBetweenRings(
       for (let index = 0; index < ring.length; index++) {
         const start = ring[index];
         const end = ring[(index + 1) % ring.length];
-        const dx = end.x - start.x;
-        const dz = end.z - start.z;
-        const lengthSquared = dx * dx + dz * dz;
-        const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
-          ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared
-        ));
-        const nearest = { x: start.x + dx * amount, z: start.z + dz * amount };
+        const nearest = closestPointOnSegment(point, start, end);
         const distance = Math.hypot(point.x - nearest.x, point.z - nearest.z);
         if (distance < best.distance) {
           best = pointsAreFirst
@@ -1249,9 +1238,7 @@ function approachPolygon(
   startRadius: number,
   endRadius: number,
 ): PlanningPoint[] {
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const length = Math.hypot(dx, dz);
+  const { dx, dz, length } = segmentVector(start, end);
   if (length <= startRadius + endRadius + 1e-8) return [];
   const ux = dx / length;
   const uz = dz / length;

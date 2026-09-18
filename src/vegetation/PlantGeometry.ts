@@ -1,4 +1,4 @@
-import { Mesh, Scene, VertexData } from "@babylonjs/core";
+import { Mesh, Scene, VertexData, Vector3 } from "@babylonjs/core";
 
 export function createPlantMesh(
   scene: Scene,
@@ -29,4 +29,10 @@ export function appendBladeIndices(indices: number[], start: number, segments: n
     const left = start + segment * 2;
     indices.push(left, left + 2, left + 1, left + 1, left + 2, left + 3);
   }
+}
+
+export function perpendicularFrame(axis: Vector3): { side: Vector3; across: Vector3 } {
+  const reference = Math.abs(axis.y) < 0.9 ? Vector3.Up() : Vector3.Right();
+  const side = Vector3.Cross(axis, reference).normalize();
+  return { side, across: Vector3.Cross(axis, side).normalize() };
 }

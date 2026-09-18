@@ -1,3 +1,4 @@
+import { sampleValueNoise3D } from "../core/ValueNoise";
 import { CLOUD_VARIANT_COUNT } from "./CloudDistribution";
 import { cellRandom } from "../core/Random";
 import { clamp01, lerp, smoothstep } from "../core/MathUtils";
@@ -393,20 +394,7 @@ function fractalNoise3D(x: number, y: number, z: number, seed: number): number {
 }
 
 function valueNoise3D(x: number, y: number, z: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const z0 = Math.floor(z);
-  const tx = smoothstep(0, 1, x - x0);
-  const ty = smoothstep(0, 1, y - y0);
-  const tz = smoothstep(0, 1, z - z0);
-  const sample = (dx: number, dy: number, dz: number): number => (
-    cellRandom(seed * 1_009 + y0 + dy, x0 + dx, z0 + dz, 13)
-  );
-  const x00 = lerp(sample(0, 0, 0), sample(1, 0, 0), tx);
-  const x10 = lerp(sample(0, 1, 0), sample(1, 1, 0), tx);
-  const x01 = lerp(sample(0, 0, 1), sample(1, 0, 1), tx);
-  const x11 = lerp(sample(0, 1, 1), sample(1, 1, 1), tx);
-  return lerp(lerp(x00, x10, ty), lerp(x01, x11, ty), tz);
+  return sampleValueNoise3D(x, y, z, (cx, cy, cz) => cellRandom(seed * 1_009 + cy, cx, cz, 13));
 }
 
 function writeAtlasTile(

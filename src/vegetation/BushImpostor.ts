@@ -1,4 +1,4 @@
-import { createPlantMesh, appendBladeIndices } from "./PlantGeometry";
+import { createPlantMesh, appendBladeIndices, perpendicularFrame } from "./PlantGeometry";
 import { Color3, Mesh, Scene, Vector3 } from "@babylonjs/core";
 import {
   createVertexColorCaptureMaterial,
@@ -306,9 +306,7 @@ function addBranch(
   const axis = end.subtract(start);
   if (axis.lengthSquared() < 0.000001) return;
   axis.normalize();
-  const reference = Math.abs(axis.y) < 0.9 ? Vector3.Up() : Vector3.Right();
-  const side = Vector3.Cross(axis, reference).normalize();
-  const across = Vector3.Cross(axis, side).normalize();
+  const { side, across } = perpendicularFrame(axis);
   const first = positions.length / 3;
   const sides = 6;
   for (let ring = 0; ring < 2; ring++) {

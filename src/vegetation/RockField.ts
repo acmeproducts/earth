@@ -19,6 +19,7 @@ import { getRockTextureData } from "./RockTextureData";
 import type { TerrainData } from "../terrain/TerrainData";
 import {
   createPlacementGrid,
+  jitteredPlacementRow,
   packInstanceMatrices,
   type VegetationPlacementOptions,
 } from "./VegetationPlacement";
@@ -189,10 +190,9 @@ export async function createRockField(
       buckets,
     };
     for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const x = -meshWidth / 2 + (column + 0.08 + random() * 0.84) * cellWidth;
-        const z = meshDepth / 2 - (row + 0.08 + random() * 0.84) * cellDepth;
-        const { lon, lat } = sceneToLonLat(x, z, terrain.bounds, meshWidth, meshDepth);
+      for (const { x, z, lon, lat } of jitteredPlacementRow(
+        row, { columns, cellWidth, cellDepth }, meshWidth, meshDepth, terrain.bounds, random,
+      )) {
         const cover = landCover.sample(lon, lat);
         if (cover === LandCoverClass.Water || cover === LandCoverClass.BuiltUp) continue;
 

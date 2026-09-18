@@ -1,17 +1,15 @@
+import { bindVegetationLighting } from "../vegetation/VegetationLighting";
 import { fallbackWhiteTexture } from "../rendering/FallbackTexture";
 import { bayer4Shader } from "../rendering/ImpostorShaderParts";
 import { directionalExposureDeclaration, registerExposureCutout } from "../vegetation/DirectionalExposure";
 import {
   Color3,
-  DirectionalLight,
   DynamicTexture,
-  HemisphericLight,
   Mesh,
   Scene,
   ShadowDepthWrapper,
   ShaderMaterial,
   Texture,
-  Vector3,
 } from "@babylonjs/core";
 import { createSeededRandom } from "../core/Random";
 import {
@@ -743,34 +741,9 @@ export function createVertexColorCaptureMaterial(
     material.setTexture("barkTexture", barkTexture);
   }
 
-  const black = Color3.Black();
-  const fallbackSky = new Color3(0.38, 0.42, 0.48);
-  const fallbackGround = new Color3(0.08, 0.09, 0.07);
   material.onBindObservable.add(() => {
     bindWindPhase(material);
-    const sun = scene.lights.find((light): light is DirectionalLight => (
-      light instanceof DirectionalLight && light.name === "sunLight"
-    ));
-    const ambient = scene.lights.find((light): light is HemisphericLight => (
-      light instanceof HemisphericLight && light.name === "skyAmbientLight"
-    ));
-
-    material.setVector3(
-      "sunDirection",
-      sun?.isEnabled() ? sun.direction.scale(-1).normalize() : Vector3.Up(),
-    );
-    material.setColor3(
-      "sunColor",
-      sun?.isEnabled() ? sun.diffuse.scale(sun.intensity) : black,
-    );
-    material.setColor3(
-      "skyColor",
-      ambient ? ambient.diffuse.scale(ambient.intensity) : fallbackSky,
-    );
-    material.setColor3(
-      "groundColor",
-      ambient ? ambient.groundColor.scale(ambient.intensity) : fallbackGround,
-    );
+    bindVegetationLighting(material, scene);
   });
   return material;
 }

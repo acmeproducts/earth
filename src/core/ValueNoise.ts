@@ -66,3 +66,25 @@ export function fractalValueNoise(
   }
   return value / total;
 }
+
+export function sampleValueNoise3D(x: number, y: number, z: number, sample: (x: number, y: number, z: number) => number): number {
+  const cellX = Math.floor(x);
+  const cellY = Math.floor(y);
+  const cellZ = Math.floor(z);
+  const blendX = smoothstep(0, 1, x - cellX);
+  const blendY = smoothstep(0, 1, y - cellY);
+  const blendZ = smoothstep(0, 1, z - cellZ);
+  const corner = (offsetX: number, offsetY: number, offsetZ: number): number =>
+    sample(cellX + offsetX, cellY + offsetY, cellZ + offsetZ);
+  const lower = lerp(
+    lerp(corner(0, 0, 0), corner(1, 0, 0), blendX),
+    lerp(corner(0, 1, 0), corner(1, 1, 0), blendX),
+    blendY,
+  );
+  const upper = lerp(
+    lerp(corner(0, 0, 1), corner(1, 0, 1), blendX),
+    lerp(corner(0, 1, 1), corner(1, 1, 1), blendX),
+    blendY,
+  );
+  return lerp(lower, upper, blendZ);
+}

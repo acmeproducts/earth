@@ -1,17 +1,11 @@
-import { WorkerTaskClient } from "../core/workers/WorkerTaskClient";
-import { recordWorkerStages } from "../diagnostics/StreamingDiagnostics";
+import { PlanningWorkerClient } from "../core/workers/PlanningWorkerClient";
 import type { RoadPlanningInput, RoadPlanningOutput } from "./RoadPlanningTask";
 
-export class RoadPlanningWorker {
-  private readonly client = new WorkerTaskClient<RoadPlanningInput, RoadPlanningOutput>(() =>
-    new Worker(new URL("./RoadPlanning.worker.ts", import.meta.url), { type: "module", name: "road-planning" }));
-
-  async plan(input: RoadPlanningInput, label: string) {
-    const result = await this.client.run(input);
-    recordWorkerStages(label, result.timings, result.timeOrigin);
-    return result.plan;
+export class RoadPlanningWorker extends PlanningWorkerClient<
+  RoadPlanningInput, RoadPlanningOutput, RoadPlanningOutput["plan"]
+> {
+  constructor() {
+    super(() => new Worker(new URL("./RoadPlanning.worker.ts", import.meta.url),
+      { type: "module", name: "road-planning" }), output => output.plan);
   }
-
-  reset(): void { this.client.reset(); }
-  dispose(): void { this.client.dispose(); }
 }
