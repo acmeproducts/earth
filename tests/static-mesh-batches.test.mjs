@@ -26,6 +26,12 @@ test("static batches preserve shader attributes, source terrain and collision qu
     assert.ok(batch);
     assert.equal(batch.material, material);
     assert.equal(batch.getTotalVertices(), 8);
+    for (const mesh of [...sources, batch]) {
+      assert.ok(mesh.getVerticesData("position") instanceof Float32Array,
+        "Resident source and batch geometry must use packed vertex buffers");
+      assert.ok(mesh.getIndices() instanceof Uint32Array,
+        "Resident source and batch indices must stay packed");
+    }
     assert.deepEqual([...batch.getVerticesData("snowMask")], [0, 0, 0, 0, 1, 1, 1, 1]);
     const positions = batch.getVerticesData("position");
     assert.equal(positions[12], original[1][0] + 4, "world translation is baked into the batch");

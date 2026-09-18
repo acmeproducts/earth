@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Matrix, Vector3 } from "@babylonjs/core";
+import { BoundingInfo, Matrix, Vector3 } from "@babylonjs/core";
 
 // node's type stripping cannot resolve without this hook.
 const { createVegetationFieldResult } = await import("../src/vegetation/VegetationField.ts");
@@ -20,11 +20,15 @@ function createMeshStub(name) {
     alwaysSelectAsActiveMesh: false,
     partialUpdateCalls: 0,
     fullUpdateCalls: 0,
+    getVerticesDataKinds() { return []; },
+    getIndices() { return null; },
     thinInstanceSetBuffer(kind, buffer) {
       cpuBuffers.set(kind, buffer);
       gpuBuffers.set(kind, buffer.slice());
     },
     thinInstanceRefreshBoundingInfo() {},
+    refreshBoundingInfo() {},
+    getBoundingInfo() { return new BoundingInfo(Vector3.Zero(), Vector3.One()); },
     freezeWorldMatrix() {},
     setEnabled(enabled) { this.enabled = enabled; },
     thinInstanceBufferUpdated(kind) {

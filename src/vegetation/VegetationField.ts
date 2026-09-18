@@ -1,6 +1,7 @@
-import { Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
+import { BoundingInfo, Mesh, ShaderMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { SpatialReferenceGrid } from "../world/SpatialReferenceGrid";
 import type { TreeTrunkIndex } from "./TreeTrunkCollision";
+import { compactMeshBuffers } from "../rendering/CompactMeshBuffers";
 
 export type VegetationRenderMode = "impostors" | "auto" | "models";
 type LodUpdateScope = "rebuild" | "nearby" | "transition";
@@ -46,6 +47,33 @@ export interface VegetationFieldResult {
   /** Updates packed model/impostor instances; true when instance buffers changed. */
   updateLod(cameraPosition: Vector3, distanceMeters: number): boolean;
   consumeLodDebugStats(): VegetationLodDebugStats;
+}
+
+/** Far trees never swap models or sort LOD slots; retain just their draw buffers. */
+export async function createStaticImpostorField(
+  root: TransformNode,
+  meshes: Mesh[],
+  matrices: Float32Array,
+  yieldControl?: () => Promise<void>,
+): Promise<VegetationFieldResult> {
+  const count = matrices.length / 16;
+  await initializeMeshes(meshes, matrices, new Float32Array(count * 3).fill(1),
+    new Float32Array(count), yieldControl);
+  return {
+    root, meshes, impostorMeshes: meshes, modelMeshes: [], shadowCasterMeshes: [],
+    instanceMatrices: matrices, count,
+    setRenderMode: () => {},
+    setFade: fade => {
+      for (const mesh of meshes) {
+        if (mesh.material instanceof ShaderMaterial) mesh.material.setFloat("fieldFade", fade);
+      }
+    },
+    prepareLod: async () => false,
+    updateLod: () => false,
+    consumeLodDebugStats: () => ({ totalInstances: count, updates: 0, processedInstances: 0,
+      peakProcessedInstances: 0, currentGridCandidates: 0, currentTransitionInstances: 0,
+      membershipChanges: 0, fullRebuilds: 0 }),
+  };
 }
 
 export async function createVegetationFieldResult(
@@ -593,6 +621,13 @@ async function initializeMeshes(
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
   for (const mesh of meshes) {
+    compactMeshBuffers(mesh);
+    // Babylon's default thin-instance bounds refresh also caches one Vector3
+    // per source vertex. Render-only vegetation needs only the packed bounds.
+    mesh.refreshBoundingInfo({ updatePositionsArray: false });
+    const bounds = mesh.getBoundingInfo();
+    mesh.rawBoundingInfo = new BoundingInfo(bounds.minimum, bounds.maximum);
+    mesh.doNotSyncBoundingInfo = true;
     // Small species buckets should share a frame; only yield once the shared
     // streaming budget is spent, rather than paying three frames per mesh.
     await yieldControl?.();
@@ -606,7 +641,7 @@ async function initializeMeshes(
       mesh.thinInstanceSetBuffer("instanceLodBlend", instanceLodBlend, 1, false);
     }
     await yieldControl?.();
-    mesh.thinInstanceRefreshBoundingInfo(true);
+    mesh.thinInstanceRefreshBoundingInfo(false);
     // The bounds were computed from every source instance and remain a safe
     // superset while LOD packing changes the active prefix of the buffers.
     // Babylon otherwise re-derives thin-instance bounds from the *current*
@@ -615,7 +650,6 @@ async function initializeMeshes(
     // stale or degenerate box behind and frustum-culls the whole mesh from
     // some camera directions. Freeze the superset instead; StreamedTile keeps
     // the world-space copy in step when the tile root moves.
-    mesh.doNotSyncBoundingInfo = true;
     mesh.alwaysSelectAsActiveMesh = false;
     mesh.freezeWorldMatrix();
   }

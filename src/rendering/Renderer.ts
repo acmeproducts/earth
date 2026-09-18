@@ -3,6 +3,7 @@ import {
   Engine,
   WebGPUEngine,
 } from "@babylonjs/core";
+import { guardUnusedRenderPassCleanup } from "./RenderPassCleanup";
 
 export type RendererBackend = "webgl" | "webgpu";
 
@@ -26,6 +27,7 @@ export async function createRenderingEngine(
   requestedBackend: RendererBackend,
   options: RenderingEngineOptions,
 ): Promise<RenderingEngine> {
+  guardUnusedRenderPassCleanup();
   if (requestedBackend === "webgpu") {
     let webgpu: WebGPUEngine | undefined;
     try {

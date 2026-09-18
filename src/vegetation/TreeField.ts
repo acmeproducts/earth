@@ -33,6 +33,7 @@ import {
 import { ImpostorAssets, snowCoveredVariant } from "../rendering/Impostor";
 import {
   combineVegetationFieldResults,
+  createStaticImpostorField,
   createVegetationFieldResult,
   VegetationFieldResult,
 } from "./VegetationField";
@@ -988,6 +989,7 @@ export async function createTreeField(
         species,
         variant,
         impostorCaptureMode === "cooperative",
+        forceLowestImpostorLod && !includeModels,
       );
       prototype.root.parent = root;
       if (prototype.mesh.material instanceof ShaderMaterial) {
@@ -1024,17 +1026,20 @@ export async function createTreeField(
     const fields: VegetationFieldResult[] = [];
     for (const { bucket, prototype, modelMeshes, fallenLogModel } of resources) {
       const ownMatrices = await packInstanceMatrices(bucket.matrices, yieldControl);
-      const field = await createVegetationFieldResult(
-        prototype.root,
-        [prototype.mesh],
-        modelMeshes,
-        ownMatrices,
-        metersPerUnit,
-        renderMode,
-        undefined,
-        yieldControl,
-      );
-      field.shadowCasterMeshes.push(...createTreeShadowCasters(
+      const distantOnly = forceLowestImpostorLod && !includeModels;
+      const field = distantOnly
+        ? await createStaticImpostorField(prototype.root, [prototype.mesh], ownMatrices, yieldControl)
+        : await createVegetationFieldResult(
+          prototype.root,
+          [prototype.mesh],
+          modelMeshes,
+          ownMatrices,
+          metersPerUnit,
+          renderMode,
+          undefined,
+          yieldControl,
+        );
+      if (!distantOnly) field.shadowCasterMeshes.push(...createTreeShadowCasters(
         scene,
         prototype.root,
         prototype.mesh,
@@ -1201,12 +1206,13 @@ export async function createTreeImpostorPrototype(
   species: TreeSpecies = "birch",
   variant?: TreeImpostorVariant,
   cooperativeCapture = true,
+  distantOnly = false,
 ): Promise<ImpostorPrototype> {
   const root = new TransformNode(rootName, scene);
   let lease: Awaited<ReturnType<typeof acquireTreeImpostorAssets>> | undefined;
   try {
     lease = variant
-      ? await acquireTreeImpostorAssets(scene, species, variant, cooperativeCapture)
+      ? await acquireTreeImpostorAssets(scene, species, variant, cooperativeCapture, distantOnly)
       : undefined;
     const assets = lease?.assets ?? await getTreeImpostorAssets(
       scene,

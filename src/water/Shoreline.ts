@@ -31,8 +31,8 @@ export async function attachShoreline(
   const scene = ground.getScene();
   const mesh = new Mesh(`${ground.name} shoreline`, scene);
   const data = new VertexData();
-  data.positions = geometry.positions;
-  data.indices = geometry.indices;
+  data.positions = Float32Array.from(geometry.positions);
+  data.indices = Uint32Array.from(geometry.indices);
   data.normals = new Float32Array(geometry.positions.length);
   for (let index = 1; index < data.normals.length; index += 3) data.normals[index] = 1;
   data.applyToMesh(mesh);

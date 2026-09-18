@@ -9,17 +9,23 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runOsloWalk } from './oslo-walk.mjs';
 import { runVistaPerformance } from './vista-performance.mjs';
+import { runMemorySoak } from './memory-soak.mjs';
 
 const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
 const pixelTest = process.argv.includes('--pixels');
 const osloWalk = process.argv.includes('--oslo-walk');
 const vista = process.argv.includes('--vista');
+const memorySoak = process.argv.includes('--memory-soak');
 // --snapshot: settle the world, save one screenshot and the browser errors, exit.
 const snapshot = process.argv.includes('--snapshot');
 const sceneDate = process.argv.find(a => a.startsWith('--date='))?.slice(7) ?? '2026-09-05';
 // --fixture=<query>: replaces the default 3x3 tile fixture query for --snapshot (e.g. oslo-walk).
 const snapshotFixture = process.argv.find(a => a.startsWith('--fixture='))?.slice(10);
+const heapMegabytes = process.argv.find(a => a.startsWith('--heap-mb='))?.slice(10);
+if (heapMegabytes !== undefined && (!/^\d+$/.test(heapMegabytes) || Number(heapMegabytes) < 128)) {
+  throw new Error('--heap-mb must be an integer of at least 128');
+}
 console.log('Artifacts:', output);
 if (!reuseBundle) await new Promise((resolve, reject) => {
   const build = spawn(process.execPath, [
@@ -49,6 +55,7 @@ const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
   '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`,
   '--headless=new', '--window-size=1100,850', '--no-first-run',
   '--disable-extensions', '--disable-default-apps',
+  ...(heapMegabytes ? [`--js-flags=--max-old-space-size=${heapMegabytes}`] : []),
   ...(process.argv.includes('--no-direct-composition') ? ['--disable-direct-composition'] : []),
   ...(process.argv.includes('--trace-gpu') ? ['--enable-gpu-service-tracing'] : []),
   ...(process.argv.includes('--uncapped') ? ['--disable-frame-rate-limit', '--disable-gpu-vsync'] : []),
@@ -79,6 +86,7 @@ try {
   socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   let id = 0;
+  let rendererCrashed = false;
   const pending = new Map();
   socket.onmessage = event => {
     const message = JSON.parse(event.data);
@@ -90,6 +98,13 @@ try {
       else request?.resolve(message.result);
     }
     if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails);
+    if (message.method === 'Inspector.targetCrashed') {
+      rendererCrashed = true;
+      console.error('Browser renderer crashed');
+      errors.push({ error: 'Browser renderer crashed' });
+      for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('Browser renderer crashed')); }
+      pending.clear();
+    }
     if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
       const error = message.params.args.map(a => a.value ?? a.description);
       errors.push(error); console.log('Browser error:', JSON.stringify(error).slice(0,600));
@@ -100,6 +115,7 @@ try {
     pending.clear();
   };
   send = (method, params = {}) => new Promise((resolve, reject) => {
+    if (rendererCrashed && method !== 'Browser.close') { reject(new Error('Browser renderer crashed')); return; }
     if (socket.readyState !== WebSocket.OPEN) { reject(new Error('Test browser is not connected')); return; }
     const requestId = ++id;
     const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`${method} timed out`)); }, 60000);
@@ -111,11 +127,14 @@ try {
     return result.result?.value;
   };
   await send('Runtime.enable');
+  await send('Inspector.enable');
   await send('Page.enable');
-  if (osloWalk || vista) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk || vista ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? 'terrain-size=3&detail-size=1&clouds=off'}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
+  if (osloWalk || vista || memorySoak) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk || vista ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? (memorySoak ? 'terrain-size=33' : 'terrain-size=3&detail-size=1&clouds=off')}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
   if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
-  if (vista) {
+  if (memorySoak) {
+    await runMemorySoak({ evaluate, send, output, errors });
+  } else if (vista) {
     await runVistaPerformance({ evaluate, send, output, errors });
   } else if (osloWalk) {
     await runOsloWalk({ evaluate, send, output, errors, browserLog, readTrace: async (stop = true) => {

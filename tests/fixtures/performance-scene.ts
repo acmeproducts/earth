@@ -11,7 +11,10 @@ void (async () => {
     antialias: !new URLSearchParams(location.search).has('no-aa'), stencil: false,
   });
   const game = new Game(canvas, engine);
-  if (new URLSearchParams(location.search).has('oslo-walk')) {
+  const query = new URLSearchParams(location.search);
+  if (query.has('lat') && query.has('lon')) {
+    (game as any).worldLocation.requestDestination({ lat: Number(query.get('lat')), lon: Number(query.get('lon')) });
+  } else if (query.has('oslo-walk')) {
     (game as any).worldLocation.requestDestination({ lat: 59.9116, lon: 10.7334 });
   }
   probe.performanceGame = game;

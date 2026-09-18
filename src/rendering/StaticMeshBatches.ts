@@ -2,6 +2,7 @@ import { Mesh, MultiMaterial, VertexBuffer } from "@babylonjs/core";
 import type { Observer, Node, Scene } from "@babylonjs/core";
 import { meshSnowCover, setMeshSnowCover } from "./SnowCover";
 import { registerStaticMeshCandidates } from "./StaticMeshCandidates";
+import { compactMeshBuffers } from "./CompactMeshBuffers";
 
 interface BatchGroup {
   sources: Map<Mesh, Observer<Node>>;
@@ -22,6 +23,9 @@ export class StaticMeshBatches {
 
   add(mesh: Mesh, region: string, metersPerUnit: number): void {
     if (!mesh.material || mesh.material instanceof MultiMaterial || mesh.hasThinInstances) return;
+    // Sources stay resident for collision queries; keep both them and the
+    // merged output on Babylon's packed-array path across the whole horizon.
+    compactMeshBuffers(mesh);
     const key = `${region}/${mesh.material.uniqueId}/${mesh.receiveShadows}/${mesh.getVerticesDataKinds().sort().join(",")}`;
     let group = this.groups.get(key);
     if (!group) {

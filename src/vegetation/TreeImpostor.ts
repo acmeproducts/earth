@@ -96,9 +96,15 @@ export async function acquireTreeImpostorAssets(
   species: TreeSpecies,
   variant: TreeImpostorVariant,
   cooperative = true,
+  distantOnly = false,
 ): Promise<ImpostorAssetLease> {
   await measureFoliageTextures();
-  return treeImpostors[species].acquireAssets(scene, undefined, variant, { cooperative });
+  // Far fields use 20px/4px color tiers. Keep a 64px silhouette instead of
+  // retaining full 192px color and exposure captures for every distant species.
+  const sampling = distantOnly
+    ? { resolution: Math.min(64, treeImpostors[species].getDefaultSampling().resolution) }
+    : undefined;
+  return treeImpostors[species].acquireAssets(scene, sampling, variant, { cooperative });
 }
 
 /** Builds the original procedural geometry at the requested rendered height. */

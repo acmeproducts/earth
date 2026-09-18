@@ -90,6 +90,23 @@ yarn build
 
 The output will be in the `dist/` directory.
 
+### Memory Regression Test
+
+Run `yarn test:memory` for a five-minute stationary soak at Reso with the default
+33-tile terrain diameter. It uses an isolated headless Chrome profile, samples
+garbage-collected heap and backing buffers, and fails above 1.5 GiB or if memory
+keeps growing after all scenery loads. Measurements, allocation profiles, and a
+final screenshot are saved under `.cache/memory-soak/`.
+
+Use `--seconds=600` for a longer run or `--heap-mb=512` to stress the renderer
+with a smaller JavaScript heap. To replay another location and settings:
+
+```bash
+yarn test:memory --fixture="terrain-size=33&detail-size=2&lat=58.79605454&lon=11.18236156"
+```
+
+The runner requires Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`.
+
 ### Duplicate Code Check
 
 With Python 3.12 and Node.js installed, run `corepack yarn check:duplication`.
