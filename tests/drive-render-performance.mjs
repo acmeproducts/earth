@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runOsloWalk } from './oslo-walk.mjs';
 import { runVistaPerformance } from './vista-performance.mjs';
 import { runMemorySoak } from './memory-soak.mjs';
+import { runLoadingPerformance } from './loading-performance.mjs';
 
 const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
@@ -18,11 +19,15 @@ const pixelTest = process.argv.includes('--pixels') || floorStreaming;
 const osloWalk = process.argv.includes('--oslo-walk');
 const vista = process.argv.includes('--vista');
 const memorySoak = process.argv.includes('--memory-soak');
+const loading = process.argv.includes('--loading');
 // --snapshot: settle the world, save one screenshot and the browser errors, exit.
 const snapshot = process.argv.includes('--snapshot');
 const sceneDate = process.argv.find(a => a.startsWith('--date='))?.slice(7) ?? '2026-09-05';
-// --fixture=<query>: replaces the default 3x3 tile fixture query for --snapshot (e.g. oslo-walk).
+// --fixture=<query>: replaces the default scene query for --snapshot or --loading.
 const snapshotFixture = process.argv.find(a => a.startsWith('--fixture='))?.slice(10);
+const fixtureQuery = snapshotFixture ?? (loading
+  ? 'lat=40.70562745934957&lon=-74.01329094009722&terrain-size=33&detail-size=1'
+  : memorySoak ? 'terrain-size=33' : 'terrain-size=3&detail-size=1&clouds=off');
 const heapMegabytes = process.argv.find(a => a.startsWith('--heap-mb='))?.slice(10);
 if (heapMegabytes !== undefined && (!/^\d+$/.test(heapMegabytes) || Number(heapMegabytes) < 128)) {
   throw new Error('--heap-mb must be an integer of at least 128');
@@ -131,10 +136,23 @@ try {
   await send('Runtime.enable');
   await send('Inspector.enable');
   await send('Page.enable');
-  if (osloWalk || vista || memorySoak) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk || vista ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : snapshotFixture ?? (memorySoak ? 'terrain-size=33' : 'terrain-size=3&detail-size=1&clouds=off')}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
+  if (osloWalk || vista || memorySoak || loading) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  if (loading) await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    window.loadingWorkerInputs = [];
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function(message, ...args) {
+      if (message.input?.roads && message.input?.options) {
+        window.loadingWorkerInputs.push({time: performance.now(), input: message.input});
+        if (window.loadingWorkerInputs.length > 4) window.loadingWorkerInputs.shift();
+      }
+      return post.call(this, message, ...args);
+    };
+  ` });
+  const navigation = await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/?${osloWalk || vista ? 'oslo-walk' + (process.argv.includes('--metrics') ? '&performance-debug' : '') : fixtureQuery}&seed=1161908820&clock=manual&date=${sceneDate}&time=14&wind-speed=0${process.argv.includes('--no-aa') ? '&no-aa' : ''}` });
   if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
-  if (memorySoak) {
+  if (loading) {
+    await runLoadingPerformance({ evaluate, send, output, errors });
+  } else if (memorySoak) {
     await runMemorySoak({ evaluate, send, output, errors });
   } else if (vista) {
     await runVistaPerformance({ evaluate, send, output, errors });

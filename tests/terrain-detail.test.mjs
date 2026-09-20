@@ -85,6 +85,22 @@ function rootMeanSquare(values) {
 
 const uniformCover = (landCover) => ({ sample: () => landCover });
 
+test("relief and sand classify each shared halo sample only once", async () => {
+  const data = terrain(TILE, 32, () => 100);
+  const visited = new Set();
+  await applyTerrainDetail(data, { meshVertexSpacingMeters: FAR_SPACING_METERS,
+    landCover: { sample(longitude, latitude) {
+      const key = `${longitude}/${latitude}`;
+      assert.ok(!visited.has(key), 'land-cover classification must be reused between fields');
+      visited.add(key);
+      return longitude < (data.bounds.lonWest + data.bounds.lonEast) / 2
+        ? LandCoverClass.Sand : LandCoverClass.TreeCover;
+    } },
+  });
+  assert.ok(visited.size > data.width * data.height, 'include the cross-tile blending halo');
+  assert.ok(data.sandCoverage.some(value => value > 0 && value < 0.55));
+});
+
 test("dune crests vary across successive nominal wavelengths", () => {
   let squaredDifference = 0;
   for (let i = 0; i < 100; i++) {

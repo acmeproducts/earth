@@ -3,6 +3,7 @@ import { Game } from '../../src/app/Game';
 import { createRenderingEngine } from '../../src/rendering/Renderer';
 import { EngineInstrumentation, PassPostProcess, ShadowGenerator } from '@babylonjs/core';
 import { streamingDiagnosticsSnapshot, tileTimingSummary } from '../../src/diagnostics/StreamingDiagnostics';
+import { worldTileCoordinatesAtLocation, worldTileIntersectsCircle } from '../../src/world/WorldGrid';
 
 const probe = window as any;
 void (async () => {
@@ -18,7 +19,29 @@ void (async () => {
     (game as any).worldLocation.requestDestination({ lat: 59.9116, lon: 10.7334 });
   }
   probe.performanceGame = game;
-  probe.performanceTools = { EngineInstrumentation, PassPostProcess, ShadowGenerator, streamingDiagnosticsSnapshot, tileTimingSummary };
+  probe.performanceTools = { EngineInstrumentation, PassPostProcess, ShadowGenerator, streamingDiagnosticsSnapshot, tileTimingSummary,
+    loadingCoverage: () => {
+      const g = game as any;
+      const location = g.worldLocation.value;
+      const coordinates = worldTileCoordinatesAtLocation(location.lat, location.lon, g.gridLevel);
+      const scale = 2 ** g.gridLevel;
+      const x = Math.floor(coordinates.x), y = Math.floor(coordinates.y);
+      const radius = g.sceneSettings.value.terrainTilesAcross / 2;
+      const detailRadius = g.sceneSettings.value.detailTilesAcross / 2;
+      let expected = 0, complete = 0;
+      for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
+        if (y + dy < 0 || y + dy >= scale) continue;
+        for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
+          const detail = worldTileIntersectsCircle(dx, dy, coordinates.x - x, coordinates.y - y, detailRadius);
+          if (!detail && !worldTileIntersectsCircle(dx, dy, coordinates.x - x, coordinates.y - y, radius)) continue;
+          expected++;
+          const tile = g.tiles.get(`${g.gridLevel}/${((x + dx) % scale + scale) % scale}/${y + dy}`);
+          if (tile?.sceneryRevision === g.sceneryRevision && (detail ? tile.detailed && tile.nativeTerrain
+            : tile && (tile.detailed || (tile.farTreeField && tile.farBuildings && tile.farRoads)))) complete++;
+        }
+      }
+      return { expected, complete };
+    } };
   await game.initialize((step) => {
     probe.performanceProgress = step;
     if (new URLSearchParams(location.search).has('oslo-walk')) {

@@ -161,11 +161,7 @@ export async function applyTerrainDetail(
 
   const fields = reliefFields(options.worldSeed ?? DEFAULT_WORLD_SEED);
   const steepness = await steepnessField(terrain, yieldControl);
-  const strength = await reliefStrengthField(terrain, options.landCover, yieldControl);
-  const sand = await reliefStrengthField(terrain, options.landCover, yieldControl, {
-    [LandCoverClass.Sand]: 0.55,
-    [LandCoverClass.Dune]: 1,
-  }, 0);
+  const { strength, sand } = await reliefSurfaceFields(terrain, options.landCover, yieldControl);
   terrain.sandCoverage = sand;
 
   for (let row = 0; row < height; row++) {
@@ -311,22 +307,23 @@ async function steepnessField(
 }
 
 /**
- * Per-sample relief strength from land cover, blended across class edges.
+ * Relief strength and sand coverage from one land-cover grid, blended across class edges.
  *
  * Land-cover classes change at hard raster edges, and a step in relief
  * amplitude along such an edge would read as a fault line. The classes are
  * sampled on a halo wider than the blend so the blur has real neighbours at
  * the tile boundary and adjacent tiles compute identical strengths there.
  */
-async function reliefStrengthField(
+async function reliefSurfaceFields(
   terrain: TerrainData,
   landCover: LandCoverSampler | undefined,
   yieldControl?: () => Promise<void>,
-  strengths: Readonly<Record<number, number>> = RELIEF_STRENGTH,
-  fallback = 1,
-): Promise<Float32Array> {
+): Promise<{ strength: Float32Array; sand: Float32Array }> {
   const { width, height } = terrain;
-  if (!landCover) return new Float32Array(width * height).fill(fallback);
+  if (!landCover) return {
+    strength: new Float32Array(width * height).fill(1),
+    sand: new Float32Array(width * height),
+  };
 
   const haloX = Math.max(1, Math.round(
     STRENGTH_BLEND_METERS / (terrain.groundWidthMeters / (width - 1)),
@@ -337,15 +334,23 @@ async function reliefStrengthField(
   const paddedWidth = width + haloX * 2;
   const paddedHeight = height + haloY * 2;
   const padded = new Float32Array(paddedWidth * paddedHeight);
+  const paddedSand = new Float32Array(padded.length);
   for (let row = 0; row < paddedHeight; row++) {
     for (let column = 0; column < paddedWidth; column++) {
       const { longitude, latitude } = rasterLocation(terrain, column - haloX, row - haloY);
-      padded[row * paddedWidth + column] =
-        strengths[landCover.sample(longitude, latitude)] ?? fallback;
+      // Both fields use the same grid and halo. Geographic classification is
+      // expensive in dense mapped areas, so sample it once for both outputs.
+      const cover = landCover.sample(longitude, latitude);
+      const index = row * paddedWidth + column;
+      padded[index] = RELIEF_STRENGTH[cover] ?? 1;
+      paddedSand[index] = cover === LandCoverClass.Dune ? 1 : cover === LandCoverClass.Sand ? 0.55 : 0;
     }
     await yieldControl?.();
   }
-  return boxBlurInterior(padded, paddedWidth, paddedHeight, haloX, haloY);
+  return {
+    strength: boxBlurInterior(padded, paddedWidth, paddedHeight, haloX, haloY),
+    sand: boxBlurInterior(paddedSand, paddedWidth, paddedHeight, haloX, haloY),
+  };
 }
 
 /**

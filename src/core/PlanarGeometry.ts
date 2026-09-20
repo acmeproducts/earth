@@ -140,6 +140,7 @@ export function clipHalfPlane(
   a: PlanarPoint,
   b: PlanarPoint,
   keepLeft: boolean,
+  epsilon = 1e-9,
 ): PlanarPoint[] {
   const result: PlanarPoint[] = [];
   for (let index = 0; index < polygon.length; index++) {
@@ -147,8 +148,8 @@ export function clipHalfPlane(
     const previous = polygon[(index + polygon.length - 1) % polygon.length];
     const currentSide = cross(a, b, current);
     const previousSide = cross(a, b, previous);
-    const currentInside = keepLeft ? currentSide >= -1e-9 : currentSide <= 1e-9;
-    const previousInside = keepLeft ? previousSide >= -1e-9 : previousSide <= 1e-9;
+    const currentInside = keepLeft ? currentSide >= -epsilon : currentSide <= epsilon;
+    const previousInside = keepLeft ? previousSide >= -epsilon : previousSide <= epsilon;
     if (currentInside !== previousInside) {
       const amount = previousSide / (previousSide - currentSide);
       result.push({
@@ -272,9 +273,11 @@ export function subtractConvex(
   for (let index = 0; index < ccwClip.length && inside.length >= 3; index++) {
     const a = ccwClip[index];
     const b = ccwClip[(index + 1) % ccwClip.length];
-    const removed = clipHalfPlane(inside, a, b, false);
+    // Subtraction must partition the plane: overlapping tolerance bands can
+    // duplicate a thin fragment on every edge and grow exponentially.
+    const removed = clipHalfPlane(inside, a, b, false, 0);
     if (removed.length >= 3) outside.push(removed);
-    inside = clipHalfPlane(inside, a, b, true);
+    inside = clipHalfPlane(inside, a, b, true, 0);
   }
   return outside;
 }
