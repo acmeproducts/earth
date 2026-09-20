@@ -3,6 +3,7 @@ import { ResourceCache } from "../core/ResourceCache";
 import { BuildingTrace } from "../buildings/BuildingDiagnostics";
 import type { BuildingPlanningWorker } from "../buildings/BuildingPlanningWorker";
 import { createFrameBudgetYielder } from "../diagnostics/FrameBudget";
+import { yieldToNearbyInteriors } from "../procedural/InteriorStreaming";
 import { DIRT_ROAD_EDGE_KIND, DIRT_ROAD_EDGE_ALPHA_GLSL, dirtRoadEdgeCoordinates } from "../roads/DirtRoadEdges";
 import { CustomMaterial } from "@babylonjs/materials/custom/customMaterial.js";
 import { SnowCoverPlugin } from "../rendering/SnowCover";
@@ -752,21 +753,27 @@ async function createBuildingBatches(
       renderWholeBuildingFootprints: true,
       neighboringBuildingFootprints: compositeBuildingSources(tiles).map((source) => source.polygon),
     };
-    const yieldBuilding = yieldControl ?? createFrameBudgetYielder();
+    const prioritizeInteriors = (yieldBudget?: () => Promise<void>) => async (): Promise<void> => {
+      await yieldBudget?.();
+      await yieldToNearbyInteriors(scene, options.isCancelled);
+      if (options.isCancelled?.()) throw new DOMException("Building layer cancelled", "AbortError");
+    };
+    const yieldBuilding = prioritizeInteriors(yieldControl);
+    const yieldDetailedBuilding = prioritizeInteriors(yieldControl ?? createFrameBudgetYielder());
     try {
       for (const source of compositeBuildingSources(tiles)) {
         if (options.isCancelled?.()) throw new DOMException("Building layer cancelled", "AbortError");
         trace.stage("building ownership");
         if (!buildingBelongsToWorldTile(source.polygon, terrain.worldTile)) continue;
         trace.stage("frame yield before building");
-        await yieldControl?.();
+        await yieldBuilding();
         trace.stage(`building=${source.id} plan/geometry/merge (inclusive)`);
         const plan = BuildingTrace.run(`building=${source.id} semantic plan`, () => planBuilding(source));
         const mesh = detail === "far"
           ? ProceduralBuildingRenderer.createFar(scene, plan, terrain, renderOptions)
           : options.buildingPlanningWorker
             ? await ProceduralBuildingRenderer.createDetailedAsync(scene, plan, terrain, renderOptions,
-              options.buildingPlanningWorker, yieldBuilding, options.isCancelled)
+              options.buildingPlanningWorker, yieldDetailedBuilding, options.isCancelled)
             : ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, renderOptions);
         if (mesh) {
           buildings.push(mesh);
@@ -785,7 +792,7 @@ async function createBuildingBatches(
           }
         }
         trace.stage("frame yield after building");
-        await yieldControl?.();
+        await yieldBuilding();
       }
 
       trace.stage("final merge (inclusive)");

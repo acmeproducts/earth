@@ -17,6 +17,14 @@ of roads, buildings, water, vegetation, weather, seasons, stars, and a fictional
 ![Webpack 5](https://img.shields.io/badge/Webpack-5-8dd6f9)
 ![License: MIT](https://img.shields.io/badge/license-MIT-397354)
 
+## Screenshots
+
+![Waterfront house surrounded by trees and grass](examples/GESOsrvGO2.jpg)
+
+![Aerial view of forested hills, roads, and buildings with the settings panel open](examples/chrome_xXVI3f2PjG.jpg)
+
+![Grassy hills with colorful wildflowers](examples/ptZyiZROBw.jpg)
+
 ## Highlights
 
 - Streams elevation, ESA WorldCover, and OpenStreetMap data around the player.

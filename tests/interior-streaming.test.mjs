@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Observable } from "@babylonjs/core";
-import { enqueueInteriorBuild, INTERIOR_STEPS_PER_FRAME } from "../src/procedural/InteriorStreaming.ts";
+import { enqueueInteriorBuild, INTERIOR_STEPS_PER_FRAME, yieldToNearbyInteriors } from "../src/procedural/InteriorStreaming.ts";
 import { creationStats } from "../src/diagnostics/CreationStats.ts";
 
 function fakeScene() {
@@ -12,6 +12,66 @@ function tick(scene) {
   scene.frame++;
   scene.onAfterRenderObservable.notifyObservers(scene);
 }
+
+function mockAnimationFrame(t, callback) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
+  globalThis.requestAnimationFrame = callback;
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, "requestAnimationFrame", original);
+    else delete globalThis.requestAnimationFrame;
+  });
+}
+
+test("exteriors wait for nearby interiors and resume after completion", async (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const scene = fakeScene();
+  let completed = false, frames = 0;
+  mockAnimationFrame(t, (callback) => {
+    frames++;
+    tick(scene);
+    callback();
+  });
+  enqueueInteriorBuild(scene, {
+    label: "nearby", priority: () => 18, valid: () => true,
+    steps: (function* () { for (let i = 0; i < 20; i++) yield "geometry"; })(),
+    complete: () => { completed = true; }, cancel: () => {},
+  });
+  await yieldToNearbyInteriors(scene);
+  assert.equal(completed, true);
+  assert.equal(frames, 3);
+});
+
+test("exterior priority responds to movement, invalidation, cancellation and stopped rendering", async (t) => {
+  const scene = fakeScene();
+  let distance = 19, valid = true, frames = 0;
+  let onFrame = () => {};
+  mockAnimationFrame(t, (callback) => {
+    frames++;
+    onFrame();
+    callback();
+  });
+  enqueueInteriorBuild(scene, {
+    label: "moving", priority: () => distance, valid: () => valid,
+    steps: (function* () { while (true) yield "geometry"; })(),
+    complete: () => {}, cancel: () => {},
+  });
+  await yieldToNearbyInteriors(scene);
+  assert.equal(frames, 0, "resident work beyond the load radius does not block exteriors");
+  distance = 1;
+  valid = false;
+  await yieldToNearbyInteriors(scene);
+  valid = true;
+  await yieldToNearbyInteriors(scene, () => true);
+  assert.equal(frames, 0, "invalid jobs and cancelled callers do not wait");
+  onFrame = () => { tick(scene); distance = 20; };
+  await yieldToNearbyInteriors(scene);
+  assert.equal(frames, 1, "moving away releases exterior work");
+  distance = 1;
+  onFrame = () => {};
+  await yieldToNearbyInteriors(scene);
+  assert.equal(frames, 2, "stopped rendering does not deadlock exterior loading");
+  scene.onDisposeObservable.notifyObservers(scene);
+});
 
 test("nearest building takes priority and moving the player pauses and resumes existing work", (t) => {
   t.mock.method(performance, "now", () => 0);

@@ -85,9 +85,7 @@ test("loaded and newly committed grass fields use the current detail setting", (
   );
 });
 
-test("grass uses ground-aware ambient light and a lifted deep-shadow floor", () => {
-  assert.match(fieldSource, /GRASS_SHADOW_DARKNESS = 0\.3;/);
-  assert.match(fieldSource, /impostorAmbientUpward: GRASS_AMBIENT_UPWARD/);
-  assert.match(fieldSource, /vegetationShadowDarkness: GRASS_SHADOW_DARKNESS/);
-  assert.match(impostorSource, /mix\(groundColor, skyColor, impostorAmbientUpward\)/);
+test("grass retains the full skylight default instead of darkening its impostors", () => {
+  assert.doesNotMatch(fieldSource, /impostorAmbientUpward:/);
+  assert.match(impostorSource, /setFloat\("impostorAmbientUpward", 1\)/);
 });

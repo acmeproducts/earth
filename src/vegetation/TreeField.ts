@@ -1,5 +1,5 @@
 import { distanceTransformRow } from "../core/DistanceTransform";
-import { bindVegetationLighting } from "../vegetation/VegetationLighting";
+import { bindVegetationLighting, vegetationLightingFragmentDeclaration } from "../vegetation/VegetationLighting";
 import { bayer4Shader, atlasSamplerShader } from "../rendering/ImpostorShaderParts";
 import {
   Camera,
@@ -334,6 +334,7 @@ uniform float forceLowestLod;
 uniform float cameraOrthographic;
 uniform float captureCenterY;
 uniform vec3 sunColor;
+uniform vec3 sunDirection;
 uniform vec3 skyColor;
 uniform vec3 groundColor;
 uniform float lowLightAlbedoScale;
@@ -352,6 +353,7 @@ uniform vec3 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
 ${vegetationShadowFragmentDeclaration}
+${vegetationLightingFragmentDeclaration}
 ${cloudShadowFragmentDeclaration}
 ${directionalExposureDeclaration}
 #ifdef TREE_EXPOSURE
@@ -691,8 +693,7 @@ void main(void) {
   // change brightness when the camera orbits it. Light the canopy from its
   // stable world-up axis instead, matching the orientation-independent leaf
   // lighting used by the close model.
-  // Grass uses the same ground/sky ambient balance as its live model. Trees
-  // retain the sky-lit canopy default through impostorAmbientUpward = 1.
+  // Ground cover and canopies receive full skylight by default.
   vec3 ambientColor = mix(groundColor, skyColor, impostorAmbientUpward);
   float direct = max(
     0.0,
@@ -707,10 +708,8 @@ void main(void) {
     texture2D(exposureLowAtlas, exposureUV), texture2D(exposureHighAtlas, exposureUV), normalize(vLocalSunDirection)
   ));
   #endif
-  vec3 lighting = clamp(
-    ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility * exposureScale,
-    vec3(0.0),
-    vec3(1.25)
+  vec3 lighting = vegetationLighting(
+    ambientColor, skyColor, sunColor, sunDirection.y, direct, shadowVisibility, exposureScale
   );
 
   // Open sky lights the crown more strongly than the lower foliage. Low, wide
@@ -1397,6 +1396,7 @@ export function createImpostorMaterial(
   material.setFloat("distanceFadeNear", 1e6);
   material.setFloat("distanceFadeFar", 1e6 + 1);
   material.setFloat("groundColorBlend", 0);
+  material.setFloat("terrainLighting", 0);
   material.setFloat("distanceGroundBlend", 0);
   material.setColor3("distanceGroundColor", Color3.White());
   material.setFloat("snowAmount", 0);

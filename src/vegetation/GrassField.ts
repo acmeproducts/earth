@@ -44,12 +44,6 @@ const GRASS_GROUND_COLOR_INFLUENCE = 1;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
 const DEFAULT_DETAIL_TILES_ACROSS = 3;
 const GRASS_GROUND_COLOR_BLEND = 0.42;
-/** Average upward response of the crossed grass cards in the live model. */
-const GRASS_AMBIENT_UPWARD = 0.58;
-// Crossed blade cards have more self-darkening than the comparatively flat
-// terrain. Retain a little direct fill in full shadow so grass settles into
-// the shaded ground instead of forming an unnaturally darker carpet over it.
-const GRASS_SHADOW_DARKNESS = 0.3;
 /** Per-instance width spread applied at placement, kept as its own constants
  * so the impostor's depth plane can account for the average clump footprint. */
 const GRASS_WIDTH_SCALE_MINIMUM = 1.1;
@@ -211,7 +205,7 @@ function configureGrassRenderers(
       instanceColorCoverage: 1,
       groundColorBlend: GRASS_GROUND_COLOR_BLEND,
       vegetationShadowAtInstanceRoot: 1,
-      vegetationShadowDarkness: GRASS_SHADOW_DARKNESS,
+      terrainLighting: 1,
       // Both LODs thin out over the same range so a clump's model and impostor
       // shrink and drop together (see DistanceDropout).
       distanceFadeNear: fade.near,
@@ -229,7 +223,6 @@ function configureGrassRenderers(
       // shadowing and lit up the whole transition as a bright band between the
       // near grass and the bare ground.
       distanceGroundBlend: GRASS_GROUND_COLOR_BLEND,
-      impostorAmbientUpward: GRASS_AMBIENT_UPWARD,
       // A grass clump is three times wider than it is tall, so the impostor's
       // height term reads the proxy entry height rather than blade height and
       // lit whole clumps as canopy tops. The gradient is baked into the grass

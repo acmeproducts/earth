@@ -1,4 +1,4 @@
-import { bindVegetationLighting } from "../vegetation/VegetationLighting";
+import { bindVegetationLighting, vegetationLightingFragmentDeclaration } from "../vegetation/VegetationLighting";
 import { fallbackWhiteTexture } from "../rendering/FallbackTexture";
 import { bayer4Shader } from "../rendering/ImpostorShaderParts";
 import { directionalExposureDeclaration, registerExposureCutout } from "../vegetation/DirectionalExposure";
@@ -489,6 +489,7 @@ export function createVertexColorCaptureMaterial(
         #endif
         ${directionalExposureDeclaration}
         ${vegetationShadowFragmentDeclaration}
+        ${vegetationLightingFragmentDeclaration}
         ${cloudShadowFragmentDeclaration}
         ${bayer4Shader}
         float rockHash(vec3 point) {
@@ -584,10 +585,8 @@ export function createVertexColorCaptureMaterial(
           vec3 ambientColor = mix(groundColor, skyColor, upward);
           float direct = max(0.0, (dot(normal, sunDirection) + 0.42) / 1.42);
           float shadowVisibility = vegetationShadowVisibility();
-          vec3 lighting = clamp(
-            ambientColor + sunColor * (0.16 + direct * 0.62) * shadowVisibility * exposureScale,
-            vec3(0.0),
-            vec3(1.25)
+          vec3 lighting = vegetationLighting(
+            ambientColor, skyColor, sunColor, sunDirection.y, direct, shadowVisibility, exposureScale
           );
           // Ground patches opt out of the crown gradient so the live model matches
           // its impostor, which cannot measure world height per pixel.
@@ -698,6 +697,7 @@ export function createVertexColorCaptureMaterial(
   material.setFloat("distanceFadeNear", 1e6);
   material.setFloat("distanceFadeFar", 1e6 + 1);
   material.setFloat("groundColorBlend", 0);
+  material.setFloat("terrainLighting", 0);
   material.setColor3("distanceGroundColor", Color3.White());
   let resolveTextureReadiness: (() => void) | undefined;
   const ready = leafTextureUrl

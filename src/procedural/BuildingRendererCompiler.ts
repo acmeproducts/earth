@@ -4,6 +4,7 @@ import {
   BaseTexture,
   Color3,
   Material,
+  Matrix,
   Mesh,
   MeshBuilder,
   MultiMaterial,
@@ -335,9 +336,13 @@ export class ProceduralBuildingRenderer {
           radiusMeters: interiorRadiusMeters,
           distanceTo: (position: Vector3) => pointInRing(position, prepared.outline) ? 0 :
             Math.sqrt(nearestFootprintPoint(position, prepared.outline).distanceSquared) * options.metersPerUnit,
-          createGate: (parent: TransformNode) => createInteriorGate(
-            scene, prepared.outline, prepared.baseElevation, wallTopElevation, options, parent,
-          ),
+          createGate: (parent: TransformNode) => {
+            const gate = createInteriorGate(
+              scene, prepared.outline, prepared.baseElevation, wallTopElevation, options, parent,
+            );
+            detailed.createShellDoors(gate);
+            return gate;
+          },
           build: (root: TransformNode) => buildInteriorChunks(interiorParts, root, options),
         } satisfies PendingBuildingInterior,
       };
@@ -536,6 +541,7 @@ function* createComplexEnterableBuilding(
     })));
   const parts: Mesh[] = [];
   const sections: InteriorSection[] = [];
+  const facades: DetailedBuildingParts[] = [];
   let windowCount = 0;
   const profile = buildingProfile(plan.buildingClass);
   const usableHeight = plan.heightMeters - plan.minimumHeightMeters;
@@ -562,6 +568,7 @@ function* createComplexEnterableBuilding(
           appearance, "exterior", ring === polygon.outline
             ? findSharedFacadeEdges(plan.footprint, ring, terrain, options) : new Set(), true);
         parts.push(...facade.parts);
+        facades.push(facade);
         windowCount += facade.windowCount;
         openings.push(...plannedEntranceOpenings(ring, facade.entranceEdgeIndex, buildingWindowStyle(plan), options));
         facadeOpenings.push(...plannedFacadeOpenings(bandPlan, ring, storyHeight,
@@ -688,10 +695,13 @@ function* createComplexEnterableBuilding(
         root.parent = parent;
         for (const section of sections) createInteriorGate(scene, section.outline,
           section.bottom, section.top, options, root, section.holes);
+        for (const facade of facades) facade.createShellDoors(root);
         return root;
       },
-      build: (root: TransformNode) => buildInteriorChunks((interiorParts) =>
-        createComplexInteriorParts(interiorParts, scene, plan, sections, options, appearance), root, options),
+      build: (root: TransformNode) => buildInteriorChunks(function* (interiorParts) {
+        for (const facade of facades) yield* facade.facadeInteriorParts(interiorParts);
+        yield* createComplexInteriorParts(interiorParts, scene, plan, sections, options, appearance);
+      }, root, options),
     } satisfies PendingBuildingInterior,
   };
   return mesh;
@@ -1113,6 +1123,8 @@ function* createEnterableBuilding(
       }
     }
     const parts: Mesh[] = [];
+    const facadeDepth: FacadeDepthBuilder[] = [];
+    const shellDoors: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
     const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
     let windowCount = 0;
 
@@ -1146,11 +1158,27 @@ function* createEnterableBuilding(
       const bayCount = facadeBayCount(edgeLengthMeters, windowStyle);
       const bayWidth = edgeLengthMeters / bayCount;
 
+      if (shellOnly && options.showRoofs !== false) {
+        // Complex roof caps end at the footprint; bridge to the outer shell face.
+        const direction = unitDirection(start, end);
+        const offset = scalePoint(outwardNormal(direction),
+          BUILDING_WALL_THICKNESS_METERS / (2 * options.metersPerUnit));
+        const outerStart = addPoint(start, offset);
+        const outerEnd = addPoint(end, offset);
+        const roofJoin: WindowGeometry = { positions: [], indices: [0, 2, 1, 0, 3, 2], normals: [], colors: [] };
+        for (const point of [start, end, outerEnd, outerStart]) {
+          roofJoin.positions.push(point.x, topElevation / options.metersPerUnit, point.z);
+          roofJoin.normals.push(0, 1, 0);
+          roofJoin.colors.push(appearance.wall.r, appearance.wall.g, appearance.wall.b, 1);
+        }
+        parts.push(createWindowMesh(scene, roofJoin)!);
+      }
+
       if (blockedFacadeEdges.has(edgeIndex)) {
         for (let floor = 0; floor < floorCount; floor++) {
           addFacadePanel(parts, scene, start, end, edgeLengthMeters, 0,
             edgeLengthMeters, baseElevation + floor * storyHeight, storyHeight,
-            options, appearance.wall);
+            options, appearance.wall, BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
         }
         continue;
       }
@@ -1166,10 +1194,15 @@ function* createEnterableBuilding(
             const doorHeight = Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28);
             if (doorHeight > 0.35) {
               addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
-                storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall);
+                storyBottom, storyHeight, doorWidth, doorHeight, 0, options, appearance.wall,
+                (bayWidth - doorWidth) / 2, facadeDepth);
+              addWindowQuad(shellDoors, start, end, edgeLengthMeters,
+                bayStart + (bayWidth - doorWidth) / 2, doorWidth, storyBottom, doorHeight,
+                options, new Color3(0.28, 0.35, 0.32), 1, -BUILDING_WALL_THICKNESS_METERS * 0.06);
             } else {
               addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
-                bayWidth, storyBottom, storyHeight, options, appearance.wall);
+                bayWidth, storyBottom, storyHeight, options, appearance.wall,
+                BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
             }
             continue;
           }
@@ -1179,7 +1212,8 @@ function* createEnterableBuilding(
             unitFromSeed(windowSeed ^ 0x68bc21eb) < windowStyle.blankBayChance;
           if (blankBay) {
             addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
-              bayWidth, storyBottom, storyHeight, options, appearance.wall);
+              bayWidth, storyBottom, storyHeight, options, appearance.wall,
+              BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
             continue;
           }
           const apertureWidth = windowStyle.widthMeters;
@@ -1195,11 +1229,11 @@ function* createEnterableBuilding(
             const apertureOffset = (bayWidth - apertureWidth) / 2;
             addApertureFacade(parts, scene, start, end, edgeLengthMeters, bayStart, bayWidth,
               storyBottom, storyHeight, apertureWidth, apertureHeight, sillHeight,
-              options, appearance.wall, apertureOffset);
+              options, appearance.wall, apertureOffset, facadeDepth);
             addWindowQuad(windows, start, end, edgeLengthMeters,
               bayStart + apertureOffset, apertureWidth,
               storyBottom + sillHeight, apertureHeight, options, glass,
-              BUILDING_WINDOW_CLOSE_ALPHA, -windowStyle.recessMeters);
+              BUILDING_WINDOW_CLOSE_ALPHA, -BUILDING_WALL_THICKNESS_METERS * 0.06);
             addWindowMullions(
               windows, start, end, edgeLengthMeters, bayStart + apertureOffset,
               storyBottom + sillHeight, windowStyle, options,
@@ -1207,7 +1241,8 @@ function* createEnterableBuilding(
             windowCount++;
           } else {
             addFacadePanel(parts, scene, start, end, edgeLengthMeters, bayStart,
-              bayWidth, storyBottom, storyHeight, options, appearance.wall);
+              bayWidth, storyBottom, storyHeight, options, appearance.wall,
+              BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
           }
         }
       }
@@ -1223,12 +1258,33 @@ function* createEnterableBuilding(
       }
     }
 
+    const facadeInteriorParts = function* (interiorParts: Mesh[]): Generator<string, void, void> {
+      for (const build of facadeDepth) {
+        const mesh = build();
+        setBuildingSurface(mesh, appearance.wallSurface);
+        interiorParts.push(mesh);
+        yield "facade thickness";
+      }
+    };
     return {
-      interiorParts: (interiorParts: Mesh[]) => createInteriorParts(
-        interiorParts, scene, plan, outline, baseElevation, options, appearance,
-        floorCount, storyHeight, stairs, plannedInterior, entranceOpenings, facadeOpenings, interiorUse,
-        roofAccess, roofElevation,
-      ),
+      facadeInteriorParts,
+      createShellDoors: (parent: TransformNode) => {
+        const doors = createWindowMesh(scene, shellDoors);
+        if (!doors) return;
+        doors.name = "buildingShellDoors";
+        setBuildingSurface(doors, "plaster");
+        doors.material = createBuildingSolidMaterial("buildingShellDoorMaterial", scene, options.metersPerUnit);
+        doors.parent = parent;
+        doors.setEnabled(true);
+      },
+      interiorParts: function* (interiorParts: Mesh[]) {
+        yield* facadeInteriorParts(interiorParts);
+        yield* createInteriorParts(
+          interiorParts, scene, plan, outline, baseElevation, options, appearance,
+          floorCount, storyHeight, stairs, plannedInterior, entranceOpenings, facadeOpenings, interiorUse,
+          roofAccess, roofElevation,
+        );
+      },
       parts,
       windowCount,
       floorCount,
@@ -1774,7 +1830,7 @@ function addWindowMullions(
   const color = new Color3(0.56, 0.58, 0.6);
   // Reserved alpha marker routes opaque bars to their metal material after merging.
   const metalMarker = 0.5;
-  const frameDepth = -style.recessMeters + 0.012;
+  const frameDepth = -BUILDING_WALL_THICKNESS_METERS * 0.06 + 0.001;
   for (const fraction of style.verticalBars) {
     addWindowQuad(
       geometry, edgeStart, edgeEnd, edgeLengthMeters,
@@ -1808,21 +1864,22 @@ function addApertureFacade(
   options: BuildingRenderOptions,
   color: Color3,
   apertureOffset = (bayWidth - apertureWidth) / 2,
+  facadeDepth?: FacadeDepthBuilder[],
 ): void {
   const leftWidth = Math.max(0, apertureOffset);
   const rightWidth = Math.max(0, bayWidth - apertureOffset - apertureWidth);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters, bayStart,
-    leftWidth, storyBottom, storyHeight, options, color);
+    leftWidth, storyBottom, storyHeight, options, color, BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
     bayStart + apertureOffset + apertureWidth, rightWidth,
-    storyBottom, storyHeight, options, color);
+    storyBottom, storyHeight, options, color, BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
     bayStart + apertureOffset, apertureWidth, storyBottom,
-    apertureBottom, options, color);
+    apertureBottom, options, color, BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
   addFacadePanel(parts, scene, edgeStart, edgeEnd, edgeLengthMeters,
     bayStart + apertureOffset, apertureWidth,
     storyBottom + apertureBottom + apertureHeight,
-    storyHeight - apertureBottom - apertureHeight, options, color);
+    storyHeight - apertureBottom - apertureHeight, options, color, BUILDING_WALL_THICKNESS_METERS, 0, facadeDepth);
 }
 
 function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefined {
@@ -1839,6 +1896,8 @@ function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefi
   return mesh;
 }
 
+type FacadeDepthBuilder = () => Mesh;
+
 function addFacadePanel(
   parts: Mesh[],
   scene: Scene,
@@ -1853,8 +1912,30 @@ function addFacadePanel(
   color: Color3,
   thicknessMeters = BUILDING_WALL_THICKNESS_METERS,
   outwardOffsetMeters = 0,
+  facadeDepth?: FacadeDepthBuilder[],
 ): void {
   if (widthMeters <= 0.02 || heightMeters <= 0.02) return;
+  if (facadeDepth) {
+    const face: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
+    addWindowQuad(face, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters, widthMeters,
+      bottomElevation, heightMeters, options, color, 1,
+      outwardOffsetMeters + thicknessMeters / 2 - BUILDING_WALL_THICKNESS_METERS * 0.56);
+    const mesh = createWindowMesh(scene, face)!;
+    mesh.name = "buildingFacadeShell";
+    parts.push(mesh);
+    facadeDepth.push(() => {
+      const depthParts: Mesh[] = [];
+      addFacadePanel(depthParts, scene, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters,
+        widthMeters, bottomElevation, heightMeters, options, color, thicknessMeters, outwardOffsetMeters);
+      const depth = depthParts[0];
+      const normals = depth.getVerticesData(VertexBuffer.NormalKind)!;
+      // The outward face already belongs to the persistent shell.
+      const indices = Array.from(depth.getIndices()!);
+      depth.setIndices(indices.filter((_, index) => normals[indices[index - index % 3] * 3 + 2] > -0.5));
+      return depth;
+    });
+    return;
+  }
   const directionX = (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters;
   const directionZ = (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters;
   const centerAlongMeters = offsetMeters + widthMeters / 2;
@@ -2504,6 +2585,9 @@ function createInteriorGate(
   holes: ScenePoint[][] = [],
 ): Mesh {
   const gate = createBuildingPrism(scene, outline, top, bottom, options, holes);
+  // Child entrance covers already use building-space elevations.
+  gate.bakeTransformIntoVertices(Matrix.Translation(0, gate.position.y, 0));
+  gate.position.y = 0;
   gate.name = "buildingInteriorGate";
   gate.metadata = { buildingInteriorGate: true };
   gate.parent = parent;

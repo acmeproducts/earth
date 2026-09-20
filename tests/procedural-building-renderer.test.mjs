@@ -14,6 +14,7 @@ import {
   VertexBuffer,
 } from "@babylonjs/core";
 import { moveWalkerWithCollisions } from "../src/app/WalkerCollision.ts";
+import { lonLatToScene } from "../src/world/Geo.ts";
 
 const { planBuilding } = await import("../src/buildings/BuildingPlanner.ts");
 const { ProceduralBuildingRenderer, stairLayoutFromPlan } = await import(
@@ -74,6 +75,33 @@ test("flat roof caps reach the outside faces of the facade walls", () => {
         assert.ok(hit.pickedPoint.y * scale > 22.09, "ray reaches the cap above the wall");
       }
       assert.equal(mesh.getChildMeshes().filter((child) => child.metadata?.buildingDoor).length, 1);
+      mesh.dispose(false, true);
+    }
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
+test("unloaded courtyard roofs meet the outer facade without a perimeter gap", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    for (const scale of [1, 10]) {
+      const building = plan(123, { render_height: 12, roof_shape: "flat" });
+      building.footprint = { ...building.footprint,
+        holes: [[[0.45, 0.46], [0.55, 0.46], [0.55, 0.54], [0.45, 0.54], [0.45, 0.46]]] };
+      const mesh = ProceduralBuildingRenderer.createDetailed(scene, building, terrain,
+        { meshWidth: 100 / scale, meshDepth: 100 / scale, metersPerUnit: scale });
+      mesh.computeWorldMatrix(true);
+      const south = lonLatToScene(0.5, 0.42, terrain.bounds, 100, 100).z;
+      const north = lonLatToScene(0.5, 0.58, terrain.bounds, 100, 100).z;
+      for (const [x, z] of [[-15.06, 0], [15.06, 0], [0, south - 0.06], [0, north + 0.06]]) {
+        const hit = new Ray(new Vector3(x / scale, 22.02 / scale, z / scale),
+          Vector3.Down(), 0.04 / scale).intersectsMesh(mesh);
+        assert.ok(hit.hit, `roof joins the facade at ${x}, ${z}, scale ${scale}`);
+      }
+      assert.equal(mesh.metadata.interiorsLoaded, false);
       mesh.dispose(false, true);
     }
   } finally {
@@ -488,6 +516,54 @@ test("disabled tile staging never loads interiors at its temporary origin", () =
     camera.getViewMatrix(true);
     drainInteriorBuilds(scene);
     assert.equal(merged.metadata.loadedInteriorCount, 1);
+  } finally {
+    scene.dispose();
+    engine.dispose();
+  }
+});
+
+test("unloaded facades keep windows and entrance covers flush with the shell", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    for (const scale of [1, 10]) {
+      const detailed = ProceduralBuildingRenderer.createDetailed(scene,
+        plan(123, { render_height: 9.3, levels: 3 }), terrain,
+        { meshWidth: 100 / scale, meshDepth: 100 / scale, metersPerUnit: scale, showRoofs: false });
+      const positions = detailed.getVerticesData(VertexBuffer.PositionKind);
+      const facadeZ = lonLatToScene(0.5, 0.42, terrain.bounds, 100, 100).z - 0.12;
+      let facadeVertices = 0;
+      for (let i = 0; i < positions.length; i += 3) {
+        const x = (positions[i] + detailed.position.x) * scale;
+        const y = (positions[i + 1] + detailed.position.y) * scale;
+        const z = (positions[i + 2] + detailed.position.z) * scale;
+        if (Math.abs(x) >= 14 || y <= 10.01 || y >= 19.29 || z >= -7) continue;
+        facadeVertices++;
+        assert.ok(Math.abs(z - facadeZ) < 0.002, `facade vertex is recessed at ${z}`);
+      }
+      assert.ok(facadeVertices > 0);
+      detailed.setEnabled(true);
+      const pending = detailed.metadata.pendingInterior;
+      const gate = pending.createGate(detailed);
+      const doors = gate.getChildMeshes().find((mesh) => mesh.name === "buildingShellDoors");
+      assert.ok(doors);
+      assert.equal(doors.getTotalVertices(), 4);
+      assert.equal(doors.getTotalIndices(), 6);
+      assert.equal(doors.isEnabled(), true);
+      const doorPositions = doors.getVerticesData(VertexBuffer.PositionKind);
+      const doorWorld = doors.computeWorldMatrix(true);
+      const elevations = [];
+      for (let i = 0; i < doorPositions.length; i += 3) {
+        elevations.push(Vector3.TransformCoordinates(Vector3.FromArray(doorPositions, i), doorWorld).y * scale);
+      }
+      assert.ok(Math.abs(Math.min(...elevations) - terrain.minElevation) < 0.002,
+        `entrance cover must start at ground level, got ${Math.min(...elevations)}`);
+      assert.ok(Math.max(...elevations) < terrain.minElevation + 2.3,
+        "entrance cover must remain at door height, not above the roof");
+      gate.setEnabled(false);
+      assert.equal(doors.isEnabled(), false);
+      detailed.dispose(false, true);
+    }
   } finally {
     scene.dispose();
     engine.dispose();

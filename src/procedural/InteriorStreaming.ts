@@ -1,5 +1,7 @@
 import type { Scene } from "@babylonjs/core";
 import { creationStats } from "../diagnostics/CreationStats";
+import { waitForNextFrame } from "../diagnostics/FrameBudget";
+import { BUILDING_INTERIOR_LOAD_DISTANCE_METERS } from "./BuildingRendererConstants";
 
 export const INTERIOR_WORK_BUDGET_MS = 2;
 export const INTERIOR_STEPS_PER_FRAME = 8;
@@ -43,6 +45,11 @@ class InteriorBuildQueue {
     const entry = new BuildProgress(job);
     this.jobs.push(entry);
     return () => this.cancel(entry);
+  }
+
+  hasNearbyWork(): boolean {
+    return this.jobs.some(({ job }) => job.valid() &&
+      (job.priority?.() ?? Infinity) <= BUILDING_INTERIOR_LOAD_DISTANCE_METERS);
   }
 
   private remove(entry: BuildProgress): boolean {
@@ -138,6 +145,17 @@ class InteriorBuildQueue {
 }
 
 const queues = new WeakMap<Scene, InteriorBuildQueue>();
+
+/** Let nearby interiors finish before spending more time constructing exteriors. */
+export async function yieldToNearbyInteriors(scene: Scene, isCancelled?: () => boolean): Promise<void> {
+  while (!isCancelled?.() && queues.get(scene)?.hasNearbyWork()) {
+    const frame = scene.getFrameId();
+    await waitForNextFrame();
+    // Interiors advance on rendered frames. Do not park background loading when rendering stops.
+    if (scene.getFrameId() === frame) break;
+  }
+}
+
 export function enqueueInteriorBuild(scene: Scene, job: InteriorBuildJob): () => void {
   let queue = queues.get(scene);
   if (!queue) { queue = new InteriorBuildQueue(scene); queues.set(scene, queue); }

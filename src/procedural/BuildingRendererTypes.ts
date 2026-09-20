@@ -48,6 +48,8 @@ export interface Bounds {
 }
 
 export interface DetailedBuildingParts {
+  facadeInteriorParts: (parts: Mesh[]) => Generator<string, void, void>;
+  createShellDoors: (parent: TransformNode) => void;
   /** Reuses exterior planning; creates no interior geometry until advanced. */
   interiorParts: (parts: Mesh[]) => Generator<string, void, void>;
   parts: Mesh[];

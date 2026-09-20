@@ -145,10 +145,11 @@ test("grass models and impostors share terrain-root shadow sampling", () => {
   assert.match(models, /finalWorld \* vec4\(0\.0, 0\.0, 0\.0, 1\.0\)/);
 });
 
-test("shadowed grass retains enough fill to sit on the shaded terrain", () => {
-  assert.match(grass, /const GRASS_SHADOW_DARKNESS = 0\.3/);
+test("grass uses the shared terrain shadow strength without extra fill", () => {
   assert.match(grass, /configureVegetationMaterials\(\[grass, grassModel\]/);
-  assert.match(grass, /vegetationShadowDarkness: GRASS_SHADOW_DARKNESS/);
+  assert.doesNotMatch(grass, /vegetationShadowDarkness:|vegetationShadowSkyFill:/);
+  assert.match(receivers, /setFloat\("vegetationShadowDarkness", SHADOW_DARKNESS\)/);
+  assert.match(solarLighting, /this\.shadows\.darkness = SHADOW_DARKNESS/);
 });
 
 test("shadows custom vegetation direct light while preserving ambient light", () => {
@@ -156,7 +157,7 @@ test("shadows custom vegetation direct light while preserving ambient light", ()
     assert.match(shader, /float shadowVisibility = vegetationShadowVisibility\(\)/);
     assert.match(
       shader,
-      /ambientColor \+ sunColor \* \(0\.16 \+ direct \* 0\.62\) \* shadowVisibility/,
+      /vegetationLighting\(\s*ambientColor, skyColor, sunColor, sunDirection\.y, direct, shadowVisibility, exposureScale/,
     );
     assert.doesNotMatch(shader, /lighting \*= vegetationShadowVisibility\(\)/);
   }
