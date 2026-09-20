@@ -26,8 +26,13 @@ The output will be in the `dist/` directory.
 ## Deployment
 
 GitHub Actions builds every push and pull request to `main` or `master` and
-uploads `dist/` as a workflow artifact. Hosting is intentionally separate from
-the build workflow.
+uploads `dist/` as a workflow artifact. Successful builds on `main` also deploy
+to [GitHub Pages](https://magnificus.github.io/earth/). Pull requests build without
+publishing. The workflow can also be run manually from the Actions tab.
+
+In repository Settings > Pages, select **GitHub Actions** as the build and
+deployment source. Pages hosts the static app; the optional WebSocket/SQLite
+game server requires separate hosting.
 
 ### Manual Deployment
 
