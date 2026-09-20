@@ -45,7 +45,9 @@ export class WaterMotionPlugin extends MaterialPluginBase {
     const variable = (name: string, value: string, size = 1) => wgsl
       ? `var ${name}: ${size === 1 ? 'f32' : vec(size)} = ${value};`
       : `${size === 1 ? 'float' : vec(size)} ${name} = ${value};`;
-    const varying = wgsl ? 'varying vWaterWave: vec4f;' : 'varying vec4 vWaterWave;';
+    const varying = wgsl
+      ? 'varying vWaterWave: vec4f; varying vWaterShore: f32;'
+      : 'varying vec4 vWaterWave; varying float vWaterShore;';
     if (type === 'vertex') {
       const shore = wgsl ? 'vertexInputs.waterShore' : 'waterShore';
       const output = wgsl ? 'vertexOutputs.' : '';
@@ -67,8 +69,9 @@ export class WaterMotionPlugin extends MaterialPluginBase {
           variable('waterCycle', 'sin(waterPhase)'),
           variable('waterHeave', `waterCycle * mix(${shape}.w, ${shape}.x, step(0.0, waterCycle))`),
           variable('waterLift', `(waterHeave + waterCrest * ${shape}.y) * ${state}.y`),
-          `positionUpdated.y += (waterLift + ${shore}.y * 0.001) / ${state}.z;`,
+          `positionUpdated.y += waterLift / ${state}.z;`,
           `${output}vWaterWave = ${vec(4)}(${shore}.x, waterLift, waterCrest, ${shore}.y * waterFade);`,
+          `${output}vWaterShore = ${shore}.y;`,
           // Texture coordinates are physical metres and identical on ocean,
           // shore and lake meshes, regardless of their dimensions or offsets.
           this.profile?.currentMetersPerSecond === undefined
@@ -79,6 +82,7 @@ export class WaterMotionPlugin extends MaterialPluginBase {
     }
     if (type !== 'fragment') return null;
     const wave = wgsl ? 'fragmentInputs.vWaterWave' : 'vWaterWave';
+    const shore = wgsl ? 'fragmentInputs.vWaterShore' : 'vWaterShore';
     const world = wgsl ? 'fragmentInputs.vPositionW' : 'vPositionW';
     const dx = wgsl ? 'dpdx' : 'dFdx';
     const dy = wgsl ? 'dpdy' : 'dFdy';
@@ -98,6 +102,9 @@ export class WaterMotionPlugin extends MaterialPluginBase {
     const pbr = this._material instanceof PBRMaterial;
     return {
       CUSTOM_FRAGMENT_DEFINITIONS: varying,
+      // Inactive ribbons coincide with the broad surface. Reject them in every
+      // pass, including prepass depth, instead of relying on a millimetre lift.
+      CUSTOM_FRAGMENT_MAIN_BEGIN: `if (${shore} > 0.5 && ${wave}.z * ${shape}.y * ${state}.y < 0.005) { discard; }`,
       CUSTOM_FRAGMENT_BEFORE_LIGHTS: common + '\n' + (pbr
         ? `surfaceAlbedo = mix(surfaceAlbedo, ${vec(3)}(0.65, 0.72, 0.67), waterFoam);`
         : `diffuseColor = mix(diffuseColor, ${vec(3)}(0.82, 0.86, 0.82), waterFoam);`),

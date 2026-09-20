@@ -6,26 +6,47 @@ interface RiverTriangle {
   elevation: number;
 }
 
+/** Shared footprint clearance for road triangles and complete bridge spans. */
+export class RoadWaterClearance {
+  readonly empty: boolean;
+  private readonly water: PlanarCellIndex<RiverTriangle>;
+  private readonly metersPerUnit: number;
+  constructor(rivers: readonly Pick<VertexData, 'positions' | 'indices'>[], metersPerUnit: number) {
+    this.metersPerUnit = metersPerUnit;
+    this.empty = !rivers.some(data => data.positions?.length && data.indices?.length);
+    this.water = new PlanarCellIndex<RiverTriangle>(20 / metersPerUnit);
+    for (const { positions, indices } of rivers) {
+      if (!positions || !indices) continue;
+      for (let i = 0; i < indices.length; i += 3) {
+        const corners = [indices[i], indices[i + 1], indices[i + 2]];
+        const outline = corners.map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
+        const elevation = Math.max(...corners.map(v => positions[v * 3 + 1]));
+        this.water.add({ outline, elevation }, pointBounds(outline));
+      }
+    }
+  }
+
+  minimumElevation(outline: PlanarPoint[]): number {
+    let minimum = -Infinity;
+    for (const river of this.water.query(pointBounds(outline))) {
+      if (convexPolygonsOverlap(outline, river.outline)) {
+        minimum = Math.max(minimum, river.elevation + 0.12 / this.metersPerUnit);
+      }
+    }
+    return minimum;
+  }
+}
+
 /** Roads must clear the actual water geometry, including narrow diagonal crossings. */
 export async function raiseRoadsAboveRivers(
   roads: readonly Mesh[],
-  rivers: readonly Pick<VertexData, 'positions' | 'indices'>[],
+  rivers: readonly Pick<VertexData, 'positions' | 'indices'>[] | RoadWaterClearance,
   metersPerUnit: number,
   yieldControl?: () => Promise<void>,
 ): Promise<void> {
-  if (!rivers.length) return;
-  const water = new PlanarCellIndex<RiverTriangle>(20 / metersPerUnit);
-  for (const { positions, indices } of rivers) {
-    if (!positions || !indices) continue;
-    for (let i = 0; i < indices.length; i += 3) {
-      const corners = [indices[i], indices[i + 1], indices[i + 2]];
-      const outline = corners.map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
-      const elevation = Math.max(...corners.map(v => positions[v * 3 + 1]));
-      water.add({ outline, elevation }, pointBounds(outline));
-    }
-  }
-  // Also covers the river shader's millimetre-scale vertical motion.
-  const clearance = 0.12 / metersPerUnit;
+  if (!(rivers instanceof RoadWaterClearance) && !rivers.length) return;
+  const water = rivers instanceof RoadWaterClearance ? rivers : new RoadWaterClearance(rivers, metersPerUnit);
+  if (water.empty) return;
   const key = (x: number, z: number) => `${Math.round(x * 1e6)},${Math.round(z * 1e6)}`;
   for (const mesh of roads) {
     const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
@@ -35,10 +56,7 @@ export async function raiseRoadsAboveRivers(
     for (let i = 0; i < indices.length; i += 3) {
       const corners = [indices[i], indices[i + 1], indices[i + 2]];
       const outline = corners.map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
-      let minimum = -Infinity;
-      for (const river of water.query(pointBounds(outline))) {
-        if (convexPolygonsOverlap(outline, river.outline)) minimum = Math.max(minimum, river.elevation + clearance);
-      }
+      const minimum = water.minimumElevation(outline);
       if (minimum !== -Infinity) {
         for (const point of outline) {
           const id = key(point.x, point.z);

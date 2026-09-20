@@ -1,6 +1,7 @@
 import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type Polygon2D, type PolygonLayout } from "./FloorPlan";
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame, type PlanningFrame2D } from "../core/PlanningFrame.mjs";
 import { decomposeToConvexPolygons, mergeConvexNeighbours } from "../core/PolygonDecomposition.mjs";
+import { LayoutPlanCache } from "./LayoutPlanCache";
 import {
   longestSharedSegment as sharedSegment,
   splitAtCoordinate,
@@ -76,7 +77,17 @@ export function planApartmentLayout(input: ApartmentPlannerInput): ApartmentLayo
   };
 }
 
+export const apartmentLayoutCache = new LayoutPlanCache<ApartmentLayout>(16 * 1024 * 1024, 4096);
+
 function planApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): ApartmentLayout {
+  return apartmentLayoutCache.getOrCreate({
+    apartmentPolygon: input.apartmentPolygon,
+    minimumRoomAreaSquareMeters: input.minimumRoomAreaSquareMeters ?? MINIMUM_ROOM_AREA_SQUARE_METERS,
+    openings: input.openings ?? [],
+  }, () => createApartmentLayoutInLocalFrame(input));
+}
+
+function createApartmentLayoutInLocalFrame(input: ApartmentPlannerInput): ApartmentLayout {
   const minimumRoomArea = input.minimumRoomAreaSquareMeters ?? MINIMUM_ROOM_AREA_SQUARE_METERS;
   const boundary = validatedConvexPolygon(input.apartmentPolygon, "apartment");
   if (polygonArea(boundary.outer) < minimumRoomArea - 1e-7) {

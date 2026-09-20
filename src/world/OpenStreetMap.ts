@@ -88,7 +88,8 @@ import type { TerrainLakeSource } from "../terrain/TerrainLakePolygons";
 import { collectPreparedLakePolygons, prepareLakeCandidate, type LakeCollectionInput } from "../water/LakeCollectionTask";
 import { isSurfaceWaterFeature } from "../water/WaterFeatureVisibility";
 import { riverChannelDepth, riverFlowSign, riverSurfaceFrame, riverSurfaceLevels } from "../water/RiverSurface";
-import { raiseRoadsAboveRivers } from "../roads/RiverRoadCrossings";
+import { raiseRoadsAboveRivers, RoadWaterClearance } from "../roads/RiverRoadCrossings";
+import { bridgeProfile } from "../roads/BridgeProfile";
 
 export interface MapTile {
   x: number;
@@ -108,7 +109,6 @@ const ROAD_SURFACE_DEPTH_BIAS = -2;
 const ROAD_SHOULDER_DEPTH_BIAS = -1;
 const BRIDGE_DECK_THICKNESS_METERS = 0.32;
 const BRIDGE_EDGE_WIDTH_METERS = 0.45;
-const BRIDGE_TERRAIN_CLEARANCE_METERS = 0.15;
 const BRIDGE_WATER_CLEARANCE_METERS = 3;
 // Planned roads use depth bias as decals, so waterways only need enough height
 // to clear the exact terrain surface. Keeping this below the carriageway's
@@ -259,6 +259,9 @@ export class OpenStreetMap {
       const junctionCandidates: RoadJunctionCandidate[] = [];
       const lakePolygons = this.collectLakePolygons(tiles, terrain, options);
       const waterways: Mesh[] = [];
+      const riverGeometry = collectRiverGeometry(tiles, terrain, options);
+      const waterClearance = new RoadWaterClearance(riverGeometry, options.metersPerUnit);
+      const bridgeSurfaces = new Set<Mesh>();
       try {
         if (options.planning) {
           trace.stage("planned road/shoulder geometry");
@@ -303,8 +306,9 @@ export class OpenStreetMap {
           if (options.planning && appearance.structure !== "bridge") continue;
           const target = roadMeshes[appearance.visualStyle];
           for (const line of source.paths) {
-            const created = createRoad(scene, line, terrain, options, appearance);
+            const created = createRoad(scene, line, terrain, options, appearance, "detailed", waterClearance);
             target.push(...created.surfaces);
+            if (appearance.structure === "bridge") created.surfaces.forEach(mesh => bridgeSurfaces.add(mesh));
             if (appearance.visualStyle !== "dirt") {
               roadShoulders[appearance.surface].push(...created.shoulders);
             }
@@ -327,14 +331,12 @@ export class OpenStreetMap {
           }
         }
         await yieldControl?.();
-        forEachFeature(tile, "waterway", (feature) => {
-          if (!isSurfaceWaterFeature(feature.properties)) return;
-          const widthMeters = waterwayWidthMeters(feature.properties.class);
-          if (widthMeters === undefined) return;
-          for (const line of lines(feature, tile)) {
-            waterways.push(...createWaterway(scene, line, terrain, options, widthMeters));
-          }
-        });
+      }
+      for (const data of riverGeometry) {
+        const mesh = new Mesh("waterway", scene);
+        data.applyToMesh(mesh, false);
+        mesh.isPickable = false;
+        waterways.push(stageMapMesh(mesh));
         await yieldControl?.();
       }
 
@@ -349,11 +351,9 @@ export class OpenStreetMap {
       }
 
       trace.stage("final building/road/water merges (inclusive)");
-      const riverGeometry = waterways.map(mesh => ({
-        positions: mesh.getVerticesData(VertexBuffer.PositionKind), indices: mesh.getIndices(),
-      }));
       await raiseRoadsAboveRivers(
-        Object.values(roadMeshes).flat(), riverGeometry, options.metersPerUnit, yieldControl,
+        Object.values(roadMeshes).flat().filter(mesh => !bridgeSurfaces.has(mesh)),
+        waterClearance, options.metersPerUnit, yieldControl,
       );
       const meshes = [
         ...buildings.meshes,
@@ -573,6 +573,8 @@ export class OpenStreetMap {
       ford: [],
     };
     let count = 0;
+    const waterClearance = new RoadWaterClearance(collectRiverGeometry(tiles, terrain, options), options.metersPerUnit);
+    const bridgeSurfaces = new Set<Mesh>();
     if (options.planning) {
       const plannedMeshes = await createPlannedRoadMeshes(scene, options.planning.roads, terrain, options, yieldControl)
         .catch((error) => { root.dispose(); throw error; });
@@ -589,20 +591,15 @@ export class OpenStreetMap {
         if (options.planning && appearance.structure !== "bridge") continue;
         if (!options.planning || appearance.structure === "bridge") count++;
         for (const line of source.paths) {
-          const created = createRoad(scene, line, terrain, options, appearance, "far");
+          const created = createRoad(scene, line, terrain, options, appearance, "far", waterClearance);
           roadMeshes[appearance.visualStyle].push(...created.surfaces);
+          if (appearance.structure === "bridge") created.surfaces.forEach(mesh => bridgeSurfaces.add(mesh));
         }
       }
       await yieldControl?.();
     }
-    const riverGeometry: VertexData[] = [];
-    for (const tile of tiles) forEachFeature(tile, "waterway", feature => {
-      if (!isSurfaceWaterFeature(feature.properties)) return;
-      const width = waterwayWidthMeters(feature.properties.class);
-      if (width === undefined) return;
-      for (const line of lines(feature, tile)) riverGeometry.push(...waterwayGeometry(line, terrain, options, width));
-    });
-    await raiseRoadsAboveRivers(Object.values(roadMeshes).flat(), riverGeometry, options.metersPerUnit, yieldControl);
+    await raiseRoadsAboveRivers(Object.values(roadMeshes).flat().filter(mesh => !bridgeSurfaces.has(mesh)),
+      waterClearance, options.metersPerUnit, yieldControl);
     const meshes = [
       mergeRoads(roadMeshes.marked, "farMarkedRoads", "marked", root),
       mergeRoads(roadMeshes.paved, "farPavedRoads", "paved", root),
@@ -1261,11 +1258,12 @@ function createRoad(
   options: MapLayerOptions,
   appearance: RoadPlan,
   detail: "detailed" | "far" = "detailed",
+  waterClearance?: RoadWaterClearance,
 ): CreatedRoad {
   const points = coordinates.map(([lon, lat]) =>
     lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth),
   );
-  const renderWidthMeters = detail === "far"
+  const renderWidthMeters = detail === "far" && appearance.structure !== "bridge"
     ? Math.max(appearance.widthMeters, 3)
     : appearance.widthMeters;
   const halfWidth = renderWidthMeters / options.metersPerUnit / 2;
@@ -1278,16 +1276,17 @@ function createRoad(
     options.meshWidth / Math.max(1, terrain.width - 1),
     options.meshDepth / Math.max(1, terrain.height - 1),
   ) / 2;
-  const sampleSpacing = detail === "far"
-    ? Math.max(terrainSampleSpacing, 12 / options.metersPerUnit)
-    : terrainSampleSpacing;
+  const sampleSpacing = appearance.structure === "bridge"
+    ? Math.min(terrainSampleSpacing, 4 / options.metersPerUnit)
+    : detail === "far" ? Math.max(terrainSampleSpacing, 12 / options.metersPerUnit) : terrainSampleSpacing;
   const paths = clippedPaths.map((path) => resamplePath(path, sampleSpacing));
   const surfaces: Mesh[] = [];
   const shoulders: Mesh[] = [];
   const bridgeDecks: Mesh[] = [];
   for (const path of paths) {
     const bridgeElevations = appearance.structure === "bridge"
-      ? bridgeElevationProfile(path, terrain, options)
+      ? bridgeElevationProfile(path, terrain, options,
+        halfWidth + BRIDGE_EDGE_WIDTH_METERS / options.metersPerUnit, waterClearance)
       : undefined;
     surfaces.push(...createRoadMeshes(
       scene,
@@ -1309,8 +1308,9 @@ function createRoad(
         options,
         halfWidth + BRIDGE_EDGE_WIDTH_METERS / options.metersPerUnit,
         "paved",
-        -BRIDGE_DECK_THICKNESS_METERS,
+        0,
         bridgeElevations,
+        BRIDGE_DECK_THICKNESS_METERS / options.metersPerUnit,
       ));
     } else {
       shoulders.push(...createRoadMeshes(
@@ -1336,12 +1336,32 @@ function createRoadMeshes(
   visualStyle: RoadVisualStyle,
   clearanceMeters: number,
   centerElevations?: readonly number[],
+  deckThickness = 0,
 ): Mesh[] {
   const meshes: Mesh[] = [];
   let left: Vector3[] = [];
   let right: Vector3[] = [];
   const finishPath = (): void => {
     if (left.length >= 2) {
+      if (deckThickness > 0) {
+        const bottomLeft = left.map(point => point.subtract(new Vector3(0, deckThickness, 0)));
+        const bottomRight = right.map(point => point.subtract(new Vector3(0, deckThickness, 0)));
+        const shell = MeshBuilder.CreateRibbon("bridgeShell", {
+          pathArray: [left, right, bottomRight, bottomLeft], closeArray: true,
+          sideOrientation: Mesh.DOUBLESIDE,
+        }, scene);
+        shell.convertToFlatShadedMesh();
+        meshes.push(stageMapMesh(shell));
+        for (const index of [0, left.length - 1]) {
+          meshes.push(stageMapMesh(MeshBuilder.CreateRibbon("bridgeEnd", {
+            pathArray: [[left[index], right[index]], [bottomLeft[index], bottomRight[index]]],
+            sideOrientation: Mesh.DOUBLESIDE,
+          }, scene)));
+        }
+        left = [];
+        right = [];
+        return;
+      }
       // Only markings need an across-road coordinate. World-projected dirt
       // grain stays continuous through bends and connecting road pieces.
       const uvs = visualStyle === "marked"
@@ -1399,9 +1419,12 @@ function bridgeElevationProfile(
   points: readonly { x: number; z: number }[],
   terrain: TerrainData,
   options: MapLayerOptions,
+  halfWidth: number,
+  waterClearance?: RoadWaterClearance,
 ): number[] {
   if (points.length === 0) return [];
-  const observations = points.map((point) => {
+  const offsets = points.map((_, index) => pathRibbonOffset(points, index, halfWidth));
+  const observations = points.map((point, index) => {
     const ground = sampleElevation(
       terrain,
       point.x,
@@ -1416,30 +1439,26 @@ function bridgeElevationProfile(
       options.meshWidth,
       options.meshDepth,
     ) || ground <= SEA_LEVEL_METERS;
-    const obstacle = water && options.preCarvingElevations
-      ? sampleElevation(
-        terrain,
-        point.x,
-        point.z,
-        options.meshWidth,
-        options.meshDepth,
-        options.preCarvingElevations,
-      )
-      : ground;
-    return { obstacle, clearance: water ? BRIDGE_WATER_CLEARANCE_METERS : BRIDGE_TERRAIN_CLEARANCE_METERS };
+    const { offsetX, offsetZ } = offsets[index];
+    const edgeGround = Math.max(...[-1, 1].map(side => sampleElevation(terrain,
+      point.x + side * offsetX, point.z + side * offsetZ, options.meshWidth, options.meshDepth)));
+    // Land endpoints meet their approach; the slab embeds into each abutment.
+    const interior = index > 0 && index < points.length - 1;
+    return Math.max(ground, interior ? edgeGround + BRIDGE_DECK_THICKNESS_METERS : ground,
+      water ? SEA_LEVEL_METERS + BRIDGE_WATER_CLEARANCE_METERS + BRIDGE_DECK_THICKNESS_METERS : -Infinity);
   });
-  const startElevation = observations[0].obstacle;
-  const endElevation = observations[observations.length - 1].obstacle;
-  const baseline = observations.map((_, index) => {
-    const amount = index / Math.max(1, observations.length - 1);
-    return startElevation + (endElevation - startElevation) * amount;
-  });
-  const lift = observations.reduce(
-    (maximum, observation, index) =>
-      Math.max(maximum, observation.obstacle + observation.clearance - baseline[index]),
-    0,
-  );
-  return baseline.map((elevation) => elevation + lift);
+  for (let i = 1; i < points.length; i++) {
+    const corners = [i - 1, i].flatMap(index => [-1, 1].map(side => ({
+      x: points[index].x + side * offsets[index].offsetX,
+      z: points[index].z + side * offsets[index].offsetZ,
+    })));
+    const outline = [corners[0], corners[1], corners[3], corners[2]];
+    const waterMinimum = waterClearance?.minimumElevation(outline) ?? -Infinity;
+    const minimum = waterMinimum * options.metersPerUnit + BRIDGE_DECK_THICKNESS_METERS;
+    observations[i - 1] = Math.max(observations[i - 1], minimum);
+    observations[i] = Math.max(observations[i], minimum);
+  }
+  return bridgeProfile(points, observations);
 }
 
 function sampleTerrainWaterMask(
@@ -1539,19 +1558,19 @@ function junctionVisualStyle(candidates: readonly RoadJunctionCandidate[]): Road
   return "paved";
 }
 
-function createWaterway(
-  scene: Scene,
-  coordinates: LonLat[],
+function collectRiverGeometry(
+  tiles: MapTile[],
   terrain: TerrainData,
   options: MapLayerOptions,
-  widthMeters: number,
-): Mesh[] {
-  return waterwayGeometry(coordinates, terrain, options, widthMeters).map(data => {
-    const mesh = new Mesh("waterway", scene);
-    data.applyToMesh(mesh, false);
-    mesh.isPickable = false;
-    return stageMapMesh(mesh);
+): VertexData[] {
+  const geometry: VertexData[] = [];
+  for (const tile of tiles) forEachFeature(tile, "waterway", feature => {
+    if (!isSurfaceWaterFeature(feature.properties)) return;
+    const width = waterwayWidthMeters(feature.properties.class);
+    if (width === undefined) return;
+    for (const line of lines(feature, tile)) geometry.push(...waterwayGeometry(line, terrain, options, width));
   });
+  return geometry;
 }
 
 function waterwayGeometry(

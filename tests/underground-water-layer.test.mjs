@@ -26,6 +26,52 @@ const hook = registerHooks({
 const { OpenStreetMap } = await import("../src/world/OpenStreetMap.ts");
 hook.deregister();
 
+test('sea, valley and river bridges share a joined profile and solid deck at both detail levels', async () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    for (const kind of ['sea', 'valley', 'river']) for (const metersPerUnit of [1, 10]) {
+      const feature = (properties, coordinates) => ({ id: 1, properties,
+        toGeoJSON: () => ({ geometry: { type: 'LineString', coordinates } }) });
+      const tile = { x: 0, y: 0, zoom: 14, data: { layers: {
+        transportation: { length: 1, feature: () => feature({ class: 'secondary', brunnel: 'bridge' }, [[0, .5], [1, .5]]) },
+        ...(kind === 'river' ? { waterway: { length: 1, feature: () => feature({ class: 'river' }, [[.5, 0], [.5, 1]]) } } : {}),
+      } } };
+      const elevations = Float32Array.from({ length: 33 * 33 }, (_, i) => {
+        const distance = Math.abs(i % 33 - 16) / 16;
+        return kind === 'river' ? 10 : (kind === 'sea' ? -8 : 2) + distance * distance * (kind === 'sea' ? 28 : 18);
+      });
+      const terrain = { bounds: { lonWest: 0, lonEast: 1, latSouth: 0, latNorth: 1 },
+        width: 33, height: 33, elevations, minElevation: -8, maxElevation: 20,
+        groundWidthMeters: 100, groundHeightMeters: 100 };
+      const options = { meshWidth: 100 / metersPerUnit, meshDepth: 100 / metersPerUnit, metersPerUnit,
+        preCarvingElevations: new Float32Array(33 * 33).fill(80) };
+      const detailed = await OpenStreetMap.createLayer(scene, [tile], terrain, options);
+      const distant = await OpenStreetMap.createRoadLayer(scene, [tile], terrain, options);
+      const surface = detailed.meshes.find(mesh => mesh.name === 'markedRoads').getVerticesData('position');
+      const far = distant.meshes.find(mesh => mesh.name === 'farMarkedRoads').getVerticesData('position');
+      assert.deepEqual([...far], [...surface], `${kind}: no profile jump between detail levels`);
+      const heights = Array.from(surface).filter((_, index) => index % 3 === 1).map(y => y * metersPerUnit);
+      const approach = kind === 'river' ? 10.025 : 20.025;
+      assert.ok(Math.abs(heights[0] - approach) < 1e-4, `${kind}: land endpoint remains joined`);
+      const deck = detailed.meshes.find(mesh => mesh.name === 'bridgeDecks').getVerticesData('position');
+      const deckHeights = Array.from(deck).filter((_, index) => index % 3 === 1).map(y => y * metersPerUnit);
+      assert.ok(deckHeights.every(Number.isFinite));
+      assert.ok(deckHeights.some(y => Math.abs(y - (approach - .025)) < 1e-4), 'slab top meets road');
+      assert.ok(deckHeights.some(y => Math.abs(y - (approach - .345)) < 1e-4), 'slab has thickness');
+      if (kind === 'river') {
+        const river = detailed.meshes.find(mesh => mesh.name === 'waterways').getVerticesData('position');
+        const waterHeight = Math.max(...Array.from(river).filter((_, index) => index % 3 === 1)) * metersPerUnit;
+        for (let i = 0; i < deck.length; i += 3) {
+          if (Math.abs(deck[i] * metersPerUnit) < 2) assert.ok(deck[i + 1] * metersPerUnit >= waterHeight + .119);
+        }
+      }
+      OpenStreetMap.disposeLayer(detailed.root);
+      OpenStreetMap.disposeLayer(distant.root);
+    }
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test('planned and distant road crossings both stay above the river surface', async () => {
   const { TerrainSurface } = await import('../src/terrain/TerrainSurface.ts');
   const engine = new NullEngine();

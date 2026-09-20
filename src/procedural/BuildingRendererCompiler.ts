@@ -503,6 +503,7 @@ type InteriorSection = {
   top: number;
   incoming: StairLayout[];
   outgoing: StairLayout[];
+  clearances: ScenePoint[][];
   openings: Opening2D[];
   facadeOpenings: Opening2D[];
   interior?: PlannedInterior;
@@ -577,7 +578,7 @@ function* createComplexEnterableBuilding(
       }
       for (let floor = 0; floor < floors; floor++) {
         sections.push({ ...polygon, bottom: bottom + floor * storyHeight,
-          top: bottom + (floor + 1) * storyHeight, incoming: [], outgoing: [],
+          top: bottom + (floor + 1) * storyHeight, incoming: [], outgoing: [], clearances: [],
           openings: floor === 0 ? openings : [], facadeOpenings });
       }
     }
@@ -604,11 +605,11 @@ function* createComplexEnterableBuilding(
     }
   }
   const interiorUse = resolvedInteriorUse(plan);
+  shareSectionClearances(sections, options);
   for (const section of sections) {
     if (profile.interiorLayout !== "rooms") continue;
     const attempt = yield* createPlannedInterior(section.outline, section.openings, options, section.holes,
-      [...section.incoming, ...section.outgoing, ...(section.roofAccess ? [section.roofAccess.stair] : [])]
-        .map((stair) => stairClearance(stair, options)));
+      section.clearances);
     section.interior = attempt.interior;
     if (section.interior) {
       const apartments = yield* planInteriorApartments(section.interior.building, section.facadeOpenings,
@@ -707,6 +708,40 @@ function* createComplexEnterableBuilding(
   return mesh;
 }
 
+function shareSectionClearances(sections: InteriorSection[], options: BuildingRenderOptions): void {
+  const ringKey = (ring: readonly ScenePoint[]): string => {
+    const points = ring.map((p) => [p.x, p.z]);
+    if (points.length > 1 && points[0][0] === points.at(-1)![0] && points[0][1] === points.at(-1)![1]) points.pop();
+    let first = 0;
+    for (let i = 1; i < points.length; i++) {
+      if (points[i][0] < points[first][0] ||
+          (points[i][0] === points[first][0] && points[i][1] < points[first][1])) first = i;
+    }
+    const forward = JSON.stringify(points.map((_, i) => points[(first + i) % points.length]));
+    const reverse = JSON.stringify(points.map((_, i) => points[(first - i + points.length) % points.length]));
+    return forward < reverse ? forward : reverse;
+  };
+  const groups = new Map<string, { sections: InteriorSection[]; clearances: Map<string, ScenePoint[]> }>();
+  for (const section of sections) {
+    const key = JSON.stringify([ringKey(section.outline), section.holes.map(ringKey).sort()]);
+    let group = groups.get(key);
+    if (!group) groups.set(key, group = { sections: [], clearances: new Map() });
+    group.sections.push(section);
+    for (const stair of [...section.incoming, ...section.outgoing,
+      ...(section.roofAccess ? [section.roofAccess.stair] : [])]) {
+      const clearance = stairClearance(stair, options);
+      group.clearances.set(ringKey(clearance), clearance);
+    }
+  }
+  // Reserve the entire stair core on every matching floor, even where a flight
+  // starts or ends. Slab cutouts and stair meshes still use actual connections.
+  for (const group of groups.values()) {
+    const clearances = [...group.clearances.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([, ring]) => ring);
+    for (const section of group.sections) section.clearances = clearances;
+  }
+}
+
 function* connectInteriorSections(sections: InteriorSection[], plan: BuildingPlan, options: BuildingRenderOptions): BuildingCompileSteps<void> {
   if (!buildingProfile(plan.buildingClass).hasStairs) return;
   // Each overlap component gets a connection, including separate towers above one podium.
@@ -754,8 +789,7 @@ function* createComplexInteriorParts(
     yield* createFloorContents(parts, scene, plan, section.outline, section.bottom, options, appearance,
       elevations.indexOf(section.bottom), elevations.length, section.top - section.bottom,
       section.interior, section.openings, section.facadeOpenings, resolvedInteriorUse(plan),
-      [...section.holes, ...[...section.incoming, ...section.outgoing,
-        ...(section.roofAccess ? [section.roofAccess.stair] : [])].map((stair) => stairClearance(stair, options))]);
+      [...section.holes, ...section.clearances]);
   }
 }
 

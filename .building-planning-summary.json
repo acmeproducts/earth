@@ -1,0 +1,823 @@
+{
+  "requests": 40,
+  "uniqueExactInputs": 28,
+  "measuredRuns": 5,
+  "groups": [
+    {
+      "kind": "building",
+      "requests": 20,
+      "medianTotalMs": 811.962
+    },
+    {
+      "kind": "apartments",
+      "requests": 20,
+      "medianTotalMs": 303.047
+    }
+  ],
+  "requestsByCost": [
+    {
+      "index": 0,
+      "kind": "building",
+      "vertices": 51,
+      "medianMs": 603.6,
+      "maxMs": 699.875
+    },
+    {
+      "index": 4,
+      "kind": "building",
+      "vertices": 58,
+      "medianMs": 143.575,
+      "maxMs": 163.926
+    },
+    {
+      "index": 1,
+      "kind": "apartments",
+      "vertices": 51,
+      "apartments": 507,
+      "failure": "Apartment planning failed for apartment-19-1: An apartment needs at least 10 square meters.; apartment-19-2: An apartment needs at least 10 square meters.; apartment-20-1: An apartment needs at least 10 square meters.; apartment-21-1: An apartment needs at least 10 square meters.; apartment-26-1: An apartment needs at least 10 square meters.; apartment-34-1: An apartment needs at least 10 square meters.; apartment-42-1: An apartment needs at least 10 square meters.; apartment-50-1: An apartment needs at least 10 square meters.; apartment-58-1: An apartment needs at least 10 square meters.; apartment-66-1: An apartment needs at least 10 square meters.; apartment-70-1: An apartment needs at least 10 square meters.; apartment-74-1: An apartment needs at least 10 square meters.; apartment-78-1: An apartment needs at least 10 square meters.; apartment-96-1: An apartment needs at least 10 square meters.; apartment-104-1: An apartment needs at least 10 square meters.; apartment-153-0: An apartment needs at least 10 square meters.; apartment-182-1: An apartment needs at least 10 square meters.; apartment-184-0: An apartment needs at least 10 square meters.; apartment-186-1: An apartment needs at least 10 square meters.; apartment-188-0: An apartment needs at least 10 square meters.; apartment-190-1: An apartment needs at least 10 square meters.; apartment-192-0: An apartment needs at least 10 square meters.; apartment-194-1: An apartment needs at least 10 square meters.; apartment-196-0: An apartment needs at least 10 square meters.; apartment-198-1: An apartment needs at least 10 square meters.; apartment-200-0: An apartment needs at least 10 square meters.; apartment-202-1: An apartment needs at least 10 square meters.; apartment-204-0: An apartment needs at least 10 square meters.; apartment-206-1: An apartment needs at least 10 square meters.; apartment-206-2: An apartment needs at least 10 square meters.; apartment-208-0: An apartment needs at least 10 square meters.; apartment-263-0: An apartment needs at least 10 square meters.; apartment-264-0: An apartment needs at least 10 square meters.; apartment-265-0: An apartment needs at least 10 square meters.; apartment-280-0: An apartment needs at least 10 square meters.; apartment-281-0: An apartment needs at least 10 square meters.; apartment-282-0: An apartment needs at least 10 square meters.; apartment-283-0: An apartment needs at least 10 square meters.; apartment-284-0: An apartment needs at least 10 square meters.; apartment-367-1: An apartment needs at least 10 square meters.; apartment-442-0: An apartment needs at least 10 square meters.",
+      "medianMs": 120.357,
+      "maxMs": 147.689
+    },
+    {
+      "index": 5,
+      "kind": "apartments",
+      "vertices": 58,
+      "apartments": 207,
+      "failure": "Apartment planning failed for apartment-47-0: An apartment needs at least 10 square meters.; apartment-126-0: An apartment needs at least 10 square meters.; apartment-201-0: An apartment needs at least 10 square meters.; apartment-201-1: An apartment needs at least 10 square meters.; apartment-205-0: An apartment needs at least 10 square meters.",
+      "medianMs": 63.026,
+      "maxMs": 74.16
+    },
+    {
+      "index": 3,
+      "kind": "apartments",
+      "vertices": 51,
+      "apartments": 507,
+      "failure": "Apartment planning failed for apartment-19-1: An apartment needs at least 10 square meters.; apartment-19-2: An apartment needs at least 10 square meters.; apartment-20-1: An apartment needs at least 10 square meters.; apartment-21-1: An apartment needs at least 10 square meters.; apartment-26-1: An apartment needs at least 10 square meters.; apartment-34-1: An apartment needs at least 10 square meters.; apartment-42-1: An apartment needs at least 10 square meters.; apartment-50-1: An apartment needs at least 10 square meters.; apartment-58-1: An apartment needs at least 10 square meters.; apartment-66-1: An apartment needs at least 10 square meters.; apartment-70-1: An apartment needs at least 10 square meters.; apartment-74-1: An apartment needs at least 10 square meters.; apartment-78-1: An apartment needs at least 10 square meters.; apartment-96-1: An apartment needs at least 10 square meters.; apartment-104-1: An apartment needs at least 10 square meters.; apartment-153-0: An apartment needs at least 10 square meters.; apartment-182-1: An apartment needs at least 10 square meters.; apartment-184-0: An apartment needs at least 10 square meters.; apartment-186-1: An apartment needs at least 10 square meters.; apartment-188-0: An apartment needs at least 10 square meters.; apartment-190-1: An apartment needs at least 10 square meters.; apartment-192-0: An apartment needs at least 10 square meters.; apartment-194-1: An apartment needs at least 10 square meters.; apartment-196-0: An apartment needs at least 10 square meters.; apartment-198-1: An apartment needs at least 10 square meters.; apartment-200-0: An apartment needs at least 10 square meters.; apartment-202-1: An apartment needs at least 10 square meters.; apartment-204-0: An apartment needs at least 10 square meters.; apartment-206-1: An apartment needs at least 10 square meters.; apartment-206-2: An apartment needs at least 10 square meters.; apartment-208-0: An apartment needs at least 10 square meters.; apartment-263-0: An apartment needs at least 10 square meters.; apartment-264-0: An apartment needs at least 10 square meters.; apartment-265-0: An apartment needs at least 10 square meters.; apartment-280-0: An apartment needs at least 10 square meters.; apartment-281-0: An apartment needs at least 10 square meters.; apartment-282-0: An apartment needs at least 10 square meters.; apartment-283-0: An apartment needs at least 10 square meters.; apartment-284-0: An apartment needs at least 10 square meters.; apartment-367-1: An apartment needs at least 10 square meters.; apartment-442-0: An apartment needs at least 10 square meters.",
+      "medianMs": 42.26,
+      "maxMs": 46.632
+    },
+    {
+      "index": 6,
+      "kind": "building",
+      "vertices": 25,
+      "medianMs": 22.579,
+      "maxMs": 27.857
+    },
+    {
+      "index": 13,
+      "kind": "apartments",
+      "vertices": 29,
+      "apartments": 67,
+      "failure": "Apartment planning failed for apartment-4-1: An apartment needs at least 10 square meters.; apartment-6-1: An apartment needs at least 10 square meters.; apartment-8-1: An apartment needs at least 10 square meters.; apartment-55-0: An apartment needs at least 10 square meters.",
+      "medianMs": 21.913,
+      "maxMs": 23.887
+    },
+    {
+      "index": 7,
+      "kind": "apartments",
+      "vertices": 25,
+      "apartments": 74,
+      "failure": "Apartment planning failed for apartment-6-1: An apartment needs at least 10 square meters.; apartment-7-0: An apartment needs at least 10 square meters.; apartment-7-1: An apartment needs at least 10 square meters.; apartment-10-1: An apartment needs at least 10 square meters.; apartment-12-1: An apartment needs at least 10 square meters.; apartment-14-1: An apartment needs at least 10 square meters.",
+      "medianMs": 21.871,
+      "maxMs": 26.712
+    },
+    {
+      "index": 12,
+      "kind": "building",
+      "vertices": 29,
+      "medianMs": 18.287,
+      "maxMs": 20.141
+    },
+    {
+      "index": 33,
+      "kind": "apartments",
+      "vertices": 11,
+      "apartments": 19,
+      "failure": "Apartment planning failed for apartment-1-1: An apartment needs at least 10 square meters.",
+      "medianMs": 12.192,
+      "maxMs": 15.03
+    },
+    {
+      "index": 31,
+      "kind": "apartments",
+      "vertices": 11,
+      "apartments": 21,
+      "failure": "Apartment planning failed for apartment-1-1: An apartment needs at least 10 square meters.",
+      "medianMs": 10.713,
+      "maxMs": 11.92
+    },
+    {
+      "index": 14,
+      "kind": "building",
+      "vertices": 22,
+      "medianMs": 6.818,
+      "maxMs": 8.394
+    },
+    {
+      "index": 30,
+      "kind": "building",
+      "vertices": 11,
+      "medianMs": 4.393,
+      "maxMs": 6.636
+    },
+    {
+      "index": 32,
+      "kind": "building",
+      "vertices": 11,
+      "medianMs": 4.199,
+      "maxMs": 5.064
+    },
+    {
+      "index": 2,
+      "kind": "building",
+      "vertices": 51,
+      "medianMs": 3.91,
+      "maxMs": 5.189
+    },
+    {
+      "index": 35,
+      "kind": "apartments",
+      "vertices": 4,
+      "apartments": 7,
+      "medianMs": 3.809,
+      "maxMs": 5.244
+    },
+    {
+      "index": 37,
+      "kind": "apartments",
+      "vertices": 4,
+      "apartments": 8,
+      "medianMs": 3.755,
+      "maxMs": 4.567
+    },
+    {
+      "index": 19,
+      "kind": "apartments",
+      "vertices": 10,
+      "apartments": 7,
+      "medianMs": 3.054,
+      "maxMs": 4.984
+    },
+    {
+      "index": 10,
+      "kind": "building",
+      "vertices": 15,
+      "medianMs": 1.833,
+      "maxMs": 1.967
+    },
+    {
+      "index": 18,
+      "kind": "building",
+      "vertices": 10,
+      "medianMs": 1.557,
+      "maxMs": 2.104
+    },
+    {
+      "index": 34,
+      "kind": "building",
+      "vertices": 4,
+      "medianMs": 1.49,
+      "maxMs": 1.606
+    },
+    {
+      "index": 36,
+      "kind": "building",
+      "vertices": 4,
+      "medianMs": 1.42,
+      "maxMs": 2.042
+    },
+    {
+      "index": 28,
+      "kind": "building",
+      "vertices": 8,
+      "medianMs": 1.136,
+      "maxMs": 1.364
+    },
+    {
+      "index": 20,
+      "kind": "building",
+      "vertices": 8,
+      "medianMs": 1.008,
+      "maxMs": 1.178
+    },
+    {
+      "index": 8,
+      "kind": "building",
+      "vertices": 12,
+      "medianMs": 0.749,
+      "maxMs": 1.233
+    },
+    {
+      "index": 39,
+      "kind": "apartments",
+      "vertices": 4,
+      "apartments": 8,
+      "medianMs": 0.523,
+      "maxMs": 0.54
+    },
+    {
+      "index": 9,
+      "kind": "apartments",
+      "vertices": 12,
+      "apartments": 1,
+      "medianMs": 0.21,
+      "maxMs": 0.223
+    },
+    {
+      "index": 38,
+      "kind": "building",
+      "vertices": 4,
+      "medianMs": 0.155,
+      "maxMs": 0.172
+    },
+    {
+      "index": 22,
+      "kind": "building",
+      "vertices": 22,
+      "medianMs": 0.138,
+      "maxMs": 0.176
+    },
+    {
+      "index": 16,
+      "kind": "building",
+      "vertices": 12,
+      "medianMs": 0.12,
+      "maxMs": 0.639
+    },
+    {
+      "index": 24,
+      "kind": "building",
+      "vertices": 12,
+      "medianMs": 0.091,
+      "maxMs": 0.13
+    },
+    {
+      "index": 17,
+      "kind": "apartments",
+      "vertices": 12,
+      "apartments": 1,
+      "medianMs": 0.077,
+      "maxMs": 0.118
+    },
+    {
+      "index": 25,
+      "kind": "apartments",
+      "vertices": 12,
+      "apartments": 1,
+      "medianMs": 0.069,
+      "maxMs": 0.089
+    },
+    {
+      "index": 26,
+      "kind": "building",
+      "vertices": 8,
+      "medianMs": 0.056,
+      "maxMs": 0.074
+    },
+    {
+      "index": 15,
+      "kind": "apartments",
+      "vertices": 22,
+      "apartments": 0,
+      "medianMs": 0.009,
+      "maxMs": 0.091
+    },
+    {
+      "index": 21,
+      "kind": "apartments",
+      "vertices": 8,
+      "apartments": 0,
+      "medianMs": 0.008,
+      "maxMs": 0.009
+    },
+    {
+      "index": 11,
+      "kind": "apartments",
+      "vertices": 15,
+      "apartments": 0,
+      "medianMs": 0.005,
+      "maxMs": 0.006
+    },
+    {
+      "index": 29,
+      "kind": "apartments",
+      "vertices": 8,
+      "apartments": 0,
+      "medianMs": 0.005,
+      "maxMs": 0.007
+    },
+    {
+      "index": 23,
+      "kind": "apartments",
+      "vertices": 22,
+      "apartments": 0,
+      "medianMs": 0.004,
+      "maxMs": 0.008
+    },
+    {
+      "index": 27,
+      "kind": "apartments",
+      "vertices": 8,
+      "apartments": 0,
+      "medianMs": 0.003,
+      "maxMs": 0.005
+    }
+  ],
+  "hotspots": {
+    "totalMs": 6256.056000000032,
+    "self": [
+      {
+        "function": "overlappingSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 137,
+        "selfMs": 1179.47,
+        "inclusiveMs": 1190.8
+      },
+      {
+        "function": "longestSharedSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 19,
+        "selfMs": 650.17,
+        "inclusiveMs": 2137.91
+      },
+      {
+        "function": "(garbage collector)",
+        "file": "",
+        "line": 0,
+        "selfMs": 595.69,
+        "inclusiveMs": 595.69
+      },
+      {
+        "function": "post",
+        "file": "node:inspector",
+        "line": 112,
+        "selfMs": 501.71,
+        "inclusiveMs": 502.93
+      },
+      {
+        "function": "ringEdges",
+        "file": "file:///C:/earth/src/core/Geometry2D.ts",
+        "line": 2,
+        "selfMs": 400.01,
+        "inclusiveMs": 400.01
+      },
+      {
+        "function": "concaveBuildingPlan",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 189,
+        "selfMs": 266.05,
+        "inclusiveMs": 1586.51
+      },
+      {
+        "function": "cutSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 179,
+        "selfMs": 260.33,
+        "inclusiveMs": 398.32
+      },
+      {
+        "function": "structuredClone",
+        "file": "node:internal/worker/js_transferable",
+        "line": 112,
+        "selfMs": 232.46,
+        "inclusiveMs": 249.81
+      },
+      {
+        "function": "constrainedBuildingPlan",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 145,
+        "selfMs": 217.99,
+        "inclusiveMs": 3674.22
+      },
+      {
+        "function": "openingTouchesBoundary",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 98,
+        "selfMs": 196.42,
+        "inclusiveMs": 196.42
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 197,
+        "selfMs": 137.99,
+        "inclusiveMs": 137.99
+      },
+      {
+        "function": "getOrCreate",
+        "file": "file:///C:/earth/src/buildings/LayoutPlanCache.ts",
+        "line": 18,
+        "selfMs": 127.04,
+        "inclusiveMs": 4881.86
+      },
+      {
+        "function": "compare",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 656,
+        "selfMs": 120.48,
+        "inclusiveMs": 134.84
+      },
+      {
+        "function": "polygonBounds",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 96,
+        "selfMs": 118.81,
+        "inclusiveMs": 118.81
+      },
+      {
+        "function": "compare",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 508,
+        "selfMs": 96.29,
+        "inclusiveMs": 166.51
+      },
+      {
+        "function": "bestSplit",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 314,
+        "selfMs": 88.2,
+        "inclusiveMs": 730.25
+      },
+      {
+        "function": "polygonMinimumMeanWidth",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 110,
+        "selfMs": 87.08,
+        "inclusiveMs": 188.83
+      },
+      {
+        "function": "splitAtCoordinate",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 39,
+        "selfMs": 70.93,
+        "inclusiveMs": 518.86
+      },
+      {
+        "function": "splitConvexPolygonEqual",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 51,
+        "selfMs": 55.52,
+        "inclusiveMs": 129.5
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 59,
+        "selfMs": 54.34,
+        "inclusiveMs": 1399.44
+      },
+      {
+        "function": "RingIn",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 1182,
+        "selfMs": 51.69,
+        "inclusiveMs": 122.46
+      },
+      {
+        "function": "process",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 1542,
+        "selfMs": 40.24,
+        "inclusiveMs": 202.6
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 828,
+        "selfMs": 38.35,
+        "inclusiveMs": 252.38
+      },
+      {
+        "function": "u",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/splaytree-npm-3.2.3-3c296710e7-10c0.zip/node_modules/splaytree/dist/splaytree.umd.cjs",
+        "line": 1,
+        "selfMs": 37.14,
+        "inclusiveMs": 235.37
+      },
+      {
+        "function": "inside",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 164,
+        "selfMs": 36.85,
+        "inclusiveMs": 36.85
+      },
+      {
+        "function": "round",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 121,
+        "selfMs": 35.39,
+        "inclusiveMs": 51.35
+      },
+      {
+        "function": "run",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 1680,
+        "selfMs": 33.17,
+        "inclusiveMs": 635.99
+      },
+      {
+        "function": "getIntersection",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 884,
+        "selfMs": 26.98,
+        "inclusiveMs": 34.57
+      },
+      {
+        "function": "clipPolygonAtAxis",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 157,
+        "selfMs": 26.51,
+        "inclusiveMs": 82.21
+      },
+      {
+        "function": "afterState",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 1075,
+        "selfMs": 26.48,
+        "inclusiveMs": 26.48
+      },
+      {
+        "function": "c",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/splaytree-npm-3.2.3-3c296710e7-10c0.zip/node_modules/splaytree/dist/splaytree.umd.cjs",
+        "line": 1,
+        "selfMs": 25.28,
+        "inclusiveMs": 25.28
+      },
+      {
+        "function": "pop",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/splaytree-npm-3.2.3-3c296710e7-10c0.zip/node_modules/splaytree/dist/splaytree.umd.cjs",
+        "line": 2,
+        "selfMs": 23.95,
+        "inclusiveMs": 133.41
+      },
+      {
+        "function": "isUsableRoom",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 359,
+        "selfMs": 21.45,
+        "inclusiveMs": 161.31
+      },
+      {
+        "function": "comparePoint",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 843,
+        "selfMs": 19.89,
+        "inclusiveMs": 19.89
+      },
+      {
+        "function": "subdivideRooms",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 288,
+        "selfMs": 19.31,
+        "inclusiveMs": 772.58
+      }
+    ],
+    "inclusive": [
+      {
+        "function": "(root)",
+        "file": "",
+        "line": 0,
+        "selfMs": 0,
+        "inclusiveMs": 6256.06
+      },
+      {
+        "function": "profilePlanningRequests",
+        "file": "file:///C:/earth/scripts/profile-building-planning.mjs",
+        "line": 8,
+        "selfMs": 0,
+        "inclusiveMs": 5660.37
+      },
+      {
+        "function": "runBuildingPlanning",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 17,
+        "selfMs": 0,
+        "inclusiveMs": 5157.44
+      },
+      {
+        "function": "runBuildingPlanningTask",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 29,
+        "selfMs": 0,
+        "inclusiveMs": 5157.44
+      },
+      {
+        "function": "getOrCreate",
+        "file": "file:///C:/earth/src/buildings/LayoutPlanCache.ts",
+        "line": 18,
+        "selfMs": 127.04,
+        "inclusiveMs": 4881.86
+      },
+      {
+        "function": "planBuildingLayout",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 56,
+        "selfMs": 1.33,
+        "inclusiveMs": 3745.21
+      },
+      {
+        "function": "planBuildingLayoutInLocalFrame",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 100,
+        "selfMs": 0,
+        "inclusiveMs": 3741.87
+      },
+      {
+        "function": "createBuildingLayoutInLocalFrame",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 110,
+        "selfMs": 1,
+        "inclusiveMs": 3674.22
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 107,
+        "selfMs": 0,
+        "inclusiveMs": 3674.22
+      },
+      {
+        "function": "constrainedBuildingPlan",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 145,
+        "selfMs": 217.99,
+        "inclusiveMs": 3674.22
+      },
+      {
+        "function": "longestSharedSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 19,
+        "selfMs": 650.17,
+        "inclusiveMs": 2137.91
+      },
+      {
+        "function": "concaveBuildingPlan",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 189,
+        "selfMs": 266.05,
+        "inclusiveMs": 1586.51
+      },
+      {
+        "function": "planInteriorApartments",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 39,
+        "selfMs": 0,
+        "inclusiveMs": 1412.22
+      },
+      {
+        "function": "planApartmentLayouts",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 50,
+        "selfMs": 5.59,
+        "inclusiveMs": 1411.22
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingPlanningTask.ts",
+        "line": 59,
+        "selfMs": 54.34,
+        "inclusiveMs": 1399.44
+      },
+      {
+        "function": "overlappingSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 137,
+        "selfMs": 1179.47,
+        "inclusiveMs": 1190.8
+      },
+      {
+        "function": "planApartmentLayout",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 52,
+        "selfMs": 0,
+        "inclusiveMs": 1149.44
+      },
+      {
+        "function": "planApartmentLayoutInLocalFrame",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 82,
+        "selfMs": 1.03,
+        "inclusiveMs": 1141.03
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 87,
+        "selfMs": 2.11,
+        "inclusiveMs": 857.03
+      },
+      {
+        "function": "createApartmentLayoutInLocalFrame",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 90,
+        "selfMs": 16.62,
+        "inclusiveMs": 854.92
+      },
+      {
+        "function": "subdivideRooms",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 288,
+        "selfMs": 19.31,
+        "inclusiveMs": 772.58
+      },
+      {
+        "function": "bestSplit",
+        "file": "file:///C:/earth/src/buildings/ApartmentLayoutPlanner.ts",
+        "line": 314,
+        "selfMs": 88.2,
+        "inclusiveMs": 730.25
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 169,
+        "selfMs": 10.06,
+        "inclusiveMs": 651.01
+      },
+      {
+        "function": "run",
+        "file": "file:///C:/Users/Tobias/AppData/Local/Yarn/Berry/cache/polygon-clipping-npm-0.15.7-52c2015a67-10c0.zip/node_modules/polygon-clipping/dist/polygon-clipping.cjs.js",
+        "line": 1680,
+        "selfMs": 33.17,
+        "inclusiveMs": 635.99
+      },
+      {
+        "function": "(garbage collector)",
+        "file": "",
+        "line": 0,
+        "selfMs": 595.69,
+        "inclusiveMs": 595.69
+      },
+      {
+        "function": "splitAtCoordinate",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 39,
+        "selfMs": 70.93,
+        "inclusiveMs": 518.86
+      },
+      {
+        "function": "post",
+        "file": "node:inspector",
+        "line": 112,
+        "selfMs": 501.71,
+        "inclusiveMs": 502.93
+      },
+      {
+        "function": "(anonymous)",
+        "file": "node:internal/util",
+        "line": 442,
+        "selfMs": 0,
+        "inclusiveMs": 502.93
+      },
+      {
+        "function": "fn",
+        "file": "node:internal/util",
+        "line": 441,
+        "selfMs": 0,
+        "inclusiveMs": 502.93
+      },
+      {
+        "function": "ringEdges",
+        "file": "file:///C:/earth/src/core/Geometry2D.ts",
+        "line": 2,
+        "selfMs": 400.01,
+        "inclusiveMs": 400.01
+      },
+      {
+        "function": "cutSegment",
+        "file": "file:///C:/earth/src/core/PolygonGeometry.ts",
+        "line": 179,
+        "selfMs": 260.33,
+        "inclusiveMs": 398.32
+      },
+      {
+        "function": "partitionToMaximumArea",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 499,
+        "selfMs": 8.38,
+        "inclusiveMs": 265.24
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 252,
+        "selfMs": 0,
+        "inclusiveMs": 263.16
+      },
+      {
+        "function": "safePolygonSplit",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 814,
+        "selfMs": 0,
+        "inclusiveMs": 253.73
+      },
+      {
+        "function": "(anonymous)",
+        "file": "file:///C:/earth/src/buildings/BuildingLayoutPlanner.ts",
+        "line": 828,
+        "selfMs": 38.35,
+        "inclusiveMs": 252.38
+      }
+    ]
+  }
+}

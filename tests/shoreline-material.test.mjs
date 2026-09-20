@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Mesh, MeshBuilder, NullEngine, Scene, VertexBuffer } from '@babylonjs/core';
+import { Mesh, MeshBuilder, NullEngine, Scene, ShaderLanguage, VertexBuffer } from '@babylonjs/core';
 import { attachShoreline } from '../src/water/Shoreline.ts';
 import { createWaterPlane, disposeWaterPlane } from '../src/water/Water.ts';
 import { createTerrainLakeLayer, disposeTerrainLakeLayer } from '../src/terrain/TerrainLakeSurface.ts';
@@ -49,6 +49,24 @@ test('lake and ocean use the same shader with different motion parameters', () =
     assert.ok(lakeMotion.profile.heaveMeters < seaMotion.profile.heaveMeters);
     assert.ok(lakeMotion.profile.foamStrength < seaMotion.profile.foamStrength);
     assert.ok(sea.getBoundingInfo().maximum.y >= seaMotion.profile.heaveMeters + seaMotion.profile.crestMeters);
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
+test('inactive shoreline fragments are rejected before depth and reflection output on both backends', () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const sea = createWaterPlane(scene);
+    const plugin = sea.material.pluginManager.getPlugin('WaterMotion');
+    for (const language of [ShaderLanguage.GLSL, ShaderLanguage.WGSL]) {
+      const vertex = plugin.getCustomCode('vertex', language).CUSTOM_VERTEX_UPDATE_POSITION;
+      const fragment = plugin.getCustomCode('fragment', language).CUSTOM_FRAGMENT_MAIN_BEGIN;
+      assert.match(vertex, /vWaterShore = (?:vertexInputs\.)?waterShore\.y/);
+      assert.doesNotMatch(vertex, /0\.001/);
+      assert.match(fragment, /vWaterShore > 0\.5/);
+      assert.match(fragment, /vWaterWave\.z \* (?:uniforms\.)?waterShape\.y \* (?:uniforms\.)?waterState\.y < 0\.005/);
+      assert.match(fragment, /discard/);
+    }
   } finally { scene.dispose(); engine.dispose(); }
 });
 

@@ -103,7 +103,7 @@ test("styles OSM road classes, path types, and surfaces separately", () => {
 test("builds a coarse road-only layer for the far render", () => {
   assert.match(openStreetMap, /static async createRoadLayer/);
   assert.match(openStreetMap, /new TransformNode\("farRoads"/);
-  assert.match(openStreetMap, /createRoad\(scene, line, terrain, options, appearance, "far"\)/);
+  assert.match(openStreetMap, /createRoad\(scene, line, terrain, options, appearance, "far", waterClearance\)/);
   assert.match(openStreetMap, /Math\.max\(terrainSampleSpacing, 12 \/ options\.metersPerUnit\)/);
   assert.match(openStreetMap, /Math\.max\(appearance\.widthMeters, 3\)/);
 });
@@ -119,7 +119,7 @@ test("profiles bridges independently and closes shared road endpoints", () => {
 test("renders permanent mapped waterways as terrain-following water ribbons", () => {
   assert.match(openStreetMap, /forEachFeature\(tile, "waterway"/);
   assert.match(openStreetMap, /!isSurfaceWaterFeature\(feature\.properties\)/);
-  assert.match(openStreetMap, /createWaterway\(scene, line, terrain, options, widthMeters\)/);
+  assert.match(openStreetMap, /collectRiverGeometry\(tiles, terrain, options\)/);
   assert.match(openStreetMap, /mergeWaterways\(waterways, root, options\)/);
   assert.match(openStreetMap, /conformDecalPolygon\([\s\S]*?options\.terrainSurface,[\s\S]*?true,/);
   assert.match(openStreetMap, /kind: "river"/);

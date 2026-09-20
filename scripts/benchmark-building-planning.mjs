@@ -9,6 +9,11 @@ import { worldTileBounds } from "../src/world/WorldGrid.ts";
 import { ProceduralBuildingRenderer } from "../src/procedural/ProceduralBuildingRenderer.ts";
 import { WorkerTaskClient } from "../src/core/workers/WorkerTaskClient.ts";
 import { streamingDiagnosticsSnapshot } from "../src/diagnostics/StreamingDiagnostics.ts";
+import { runBuildingPlanningTask } from "../src/buildings/BuildingPlanningTask.ts";
+import { profilePlanningRequests } from "./profile-building-planning.mjs";
+
+const profilePlanning = process.argv.includes("--profile");
+const planningRequests = [];
 
 const worldTile = { level: 17, x: 69445, y: 38124 };
 const x = Math.floor(worldTile.x / 8), y = Math.floor(worldTile.y / 8);
@@ -60,6 +65,7 @@ try {
         ? ProceduralBuildingRenderer.createDetailed(scene, plan, terrain, options)
         : await ProceduralBuildingRenderer.createDetailedAsync(scene, plan, terrain, options, {
           plan: async (input) => {
+            if (profilePlanning) planningRequests.push(structuredClone(input));
             tasks++;
             const output = await client.run(input);
             workerMilliseconds += output.timings[0].durationMilliseconds;
@@ -84,3 +90,4 @@ try {
 } finally {
   client.dispose();
 }
+if (profilePlanning) await profilePlanningRequests(planningRequests, runBuildingPlanningTask);

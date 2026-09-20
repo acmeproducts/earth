@@ -2,6 +2,7 @@ import { segmentsIntersect, type LayoutRoom, type Opening2D, type Point2D, type 
 import { planningFrameForPolygon, pointFromPlanningFrame, pointInPlanningFrame } from "../core/PlanningFrame.mjs";
 import { decomposeToConvexPolygons, isConvexPolygon } from "../core/PolygonDecomposition.mjs";
 import polygonClipping from "polygon-clipping";
+import { LayoutPlanCache } from "./LayoutPlanCache";
 import {
   clipPolygonAtAxis,
   longestSharedSegment,
@@ -94,7 +95,19 @@ export function planBuildingLayout(input: BuildingPlannerInput): BuildingLayout 
   };
 }
 
+export const buildingLayoutCache = new LayoutPlanCache<BuildingLayout>();
+
 function planBuildingLayoutInLocalFrame(input: BuildingPlannerInput): BuildingLayout {
+  // Cache below the coordinate transform, including the unconstrained base plan
+  // reused by floors with the same shell but different stair connections.
+  return buildingLayoutCache.getOrCreate({
+    buildingType: input.buildingType,
+    buildingPolygon: { outer: input.buildingPolygon.outer, holes: input.buildingPolygon.holes ?? [] },
+    openings: input.openings ?? [], circulation: input.circulation ?? [],
+  }, () => createBuildingLayoutInLocalFrame(input));
+}
+
+function createBuildingLayoutInLocalFrame(input: BuildingPlannerInput): BuildingLayout {
   if (input.buildingPolygon.holes?.length || input.circulation?.length) {
     return constrainedBuildingPlan(input);
   }
