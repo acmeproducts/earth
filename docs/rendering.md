@@ -1,0 +1,211 @@
+# Rendering and World Generation
+
+[Back to Earth](../README.md)
+
+## Tree Impostor Experiment
+
+Open `http://localhost:3000/?tree-impostor` to run the tree-only capture tool.
+The controls configure the number of samples along each cube-face edge and the
+resolution of each capture. The default produces 125 captures: five faces,
+each with a 5 by 5 grid of 192 px frames. Streamed regional tree atlases use
+the same directional grid and frame resolution; only their capture scheduling
+is cooperative so the work can be spread across gameplay frames.
+
+The source family contains deterministic procedural birch, pine, and spruce trees. Birch uses
+tapered branches with runtime-generated bark and textured leaf cards; pine and spruce use distinct
+procedural conifer silhouettes. Forest placements mix all three species in the scene.
+
+`treeDistributionAt(longitude, latitude)` in `src/vegetation/TreeDistribution.ts` supplies the next-stage
+geographic species mix. It returns a broad biome, coarse tree-cover potential, and normalized ratios
+for eleven common visual tree groups. Exact forest presence should continue to come from ESA
+WorldCover 2021; the coordinate-only distribution is an offline approximation, not a botanical survey.
+Every group now has its own deterministic procedural source. Tree placement samples the geographic
+ratios from each tile's longitude/latitude coordinates first, then captures impostors only for the
+species that were actually encountered in that tile.
+After capture, that source mesh is disabled and the scene renders only a
+camera-facing impostor. Its shader selects the dominant cube face and
+bilinearly blends the four nearest frames. `Export ZIP` writes the five face
+atlas PNGs and a JSON manifest; captured alpha is strictly 0 or 255 and RGB is
+black wherever alpha is zero.
+
+## Vegetation and Seasons
+
+The Earth view generates mature trees, saplings, grass, wildflower colonies, bushes, fern
+undergrowth, and low-poly rocks procedurally at startup and thin-instances them across suitable ESA
+WorldCover classes. Mature trees and 3.5 m saplings share the five-face tree
+impostor pipeline and geographic species groves. Grass captures only one side and
+the top; directional wildflowers, bushes, and ferns retain several side views. Their atlases use the optional
+upper-hemisphere mode, spending every vertical row on level-to-overhead views
+because these low vegetation types are not normally seen from below. Tree captures
+retain the full below-to-above range and use 5 horizontal by 5 vertical samples
+per face. Each tree frame keeps a 192 px height and derives its narrower width
+from the generated tree's bounding box.
+
+Rocks are low-poly procedural meshes with smooth surface normals. Most are partly
+buried, while a smaller set barely peeks through the soil. Damp biomes increase
+the chance of moss, which colors only upward-facing patches. Along shorelines,
+coherent noise selects intermittent formations of tightly spaced rocks stretched
+parallel to the local water boundary; the regular inland scatter is suppressed
+inside that shoreline band.
+Selected natural shore stretches also receive dense procedural pebble patches.
+These use the grass-style model/impostor pipeline: nearby patches retain their
+low-poly stones while distance switches to an upper-hemisphere atlas. Mapped bare
+and shingle shore has the strongest coverage, with world-anchored broad variation
+preventing the effect from appearing uniformly along every beach.
+
+Tree foliage is baked for the calendar date captured at world startup.
+Temperate deciduous trees gain sparse spring crowns, autumn color and leaf loss,
+or bare winter silhouettes; seasons reverse in the southern hemisphere, while
+tropical and evergreen crowns remain stable. Models and their impostors are
+generated from the same seasonal geometry. Changing the date control later only
+updates the sky and intentionally does not rebuild vegetation.
+During that hemisphere's winter, non-tropical terrain uses a shared snow
+material and grass placement is suppressed as well.
+
+`tree-impostor-x-samples`,
+`tree-impostor-y-samples`, and `tree-impostor-resolution` query parameters can
+override those defaults for quality testing, up to a maximum resolution of 256
+px. Grass uses a 5 by 5 grid at
+128 px by default. `grass-impostor-x-samples`,
+`grass-impostor-y-samples`, and `grass-impostor-resolution` query parameters
+can override those values for quality testing.
+
+Bushes are generated from procedural branches and dense curved shoots, captured
+into their own directional atlases, and scattered in noise-shaped clusters most
+densely through WorldCover shrubland with lighter placement elsewhere.
+Wildflower regions choose between tall fireweed-like spires and the former short
+daisy patches. Both share one denser colony field, model/impostor lifecycle, and
+regional variant bank.
+Fern clumps use paired tapered leaflets and form rare patches predominantly
+beneath tree cover, with occasional growth in shrubland, wetlands, and
+mangroves. Saplings and ferns are created only for the
+fully detailed tile rings; distant tiles retain their cheaper mature-tree layer.
+
+## Wind
+
+Grass, wildflowers, bushes, and ferns lean in a looping wind cycle; trees remain still.
+`src/vegetation/Wind.ts` owns the shared cycle and its GLSL shear. Displacement grows
+linearly with height above the base, so roots stay planted and tips lean
+furthest. Gusts travel across the world, making an instance's position set its
+phase so nearby vegetation reads as one moving air mass.
+All vegetation materials share one wind sample per scene frame, including across
+the loop reset. Gust travel uses a fixed spatial direction so changing weather
+does not shift the pattern at distant world positions; the lean still follows
+the current wind direction.
+
+The shear needs no captured animation frames. Real geometry adds the gradient
+to its vertices, while an impostor subtracts the same gradient from the point it
+samples inside its static atlas frame. Both LODs therefore lean by the same
+amount without adding a time dimension to the atlas. Because nothing is baked,
+the wind can follow one world direction and include a second harmonic even for
+the rotationally symmetric grass and bush atlases.
+
+Displacing the sample point *after* it has been projected is what anchors the
+lean to the subject rather than to its proxy box, which for grass is over four
+times the clump's own height. Side on, image height is capture height, so the
+frame shears progressively. From overhead the projection plane is level and the
+whole frame shifts by the lean at mid-height, which is as close as a flat lookup
+gets to a silhouette smeared through every height. The technique needs slack
+around the subject inside its frame; the square captures of low vegetation have
+it, and a tightly fitted capture like the trees' would clip.
+
+`?wind=0` removes grass, wildflower, bush, and fern motion; values up to 3 scale it.
+
+Vegetation shadows remain cached and therefore do not animate with wind. The
+shadow map renders once and refreshes when the LOD packing or sun changes;
+redrawing every grass caster continuously would be substantially more expensive.
+
+## Adding Impostor Models
+
+Impostor capture is model-agnostic. `src/rendering/Impostor.ts` owns sampling validation,
+URL overrides, per-scene reuse, source disposal, optional bounds fitting, and
+atlas generation. To add another procedural model, define an
+`ImpostorDefinition` with its geometry factory, capture dimensions, sampling
+limits, faces, and symmetry, then create its provider with
+`createImpostorAssetProvider`. The tree, bush, and grass files are examples;
+they contain only model-specific geometry and descriptor values.
+
+## Regional Variation
+
+Procedural vegetation models are location-bound through virtual 256 by 256
+application-tile regions. Trees, bushes, grass, wildflowers, and ferns use
+independently shifted region grids, so their model captures normally change at
+different locations. A four-tile-per-side border band assigns nearby placements to either
+neighbor with deterministic spatial weights; this creates a gradual population
+transition without drawing two models per plant. Mature trees and saplings share
+the tree grid. Every region receives its own deterministic procedural model;
+there is no repeating model palette during long-distance travel. Regional model
+and impostor sources use the same seed, while leased per-scene atlas caches retain
+active regions and evict older captures so infinite variation does not imply
+unbounded GPU memory.
+Use `?procedural-region-size=8` to make boundaries frequent during testing; the
+value is normalized to a power of two so regions wrap cleanly at the date line.
+
+Each application tile also samples a normalized procedural-actor mix from
+world-seeded simplex fields using its tile X/Y coordinates. The mix biases the
+relative density of trees, bushes, grass, ferns, wildflowers, and rocks. Nearby
+tiles therefore transition gradually while distant areas gain distinct character;
+the same world seed and tile ID always reproduce the same mix.
+
+## Vegetation Detail
+
+The production view renders grass and bushes as dense impostor clumps. Mature
+trees, saplings, and fern undergrowth can switch between impostors, automatic
+distance LOD, and original geometry. Auto mode uses a
+dithered 6 m transition around the configurable model range (50 m by default)
+to blend real models into impostors. Press `V` to cycle the tree mode.
+The top-right counter reports live FPS and active triangles; use
+`?vegetation=models` to force tree models or
+`?vegetation-distance=20` to change the initial Auto range.
+
+## Clouds and Clock
+
+The sky includes distant procedural cloud impostors. Eight density variants span
+bank, clustered, broken, and tower-like formations generated at startup by
+integrating deterministic three-dimensional cloud volumes. Each formation is
+captured from eight azimuths and blends between adjacent views at runtime, so it
+retains the low draw cost of a thin-instanced billboard while its silhouette
+changes like a volume as the camera moves around it. Runtime clouds use compact
+cumulus-like proportions and are independently mirrored to make repeated
+captures less apparent. A separate top-down density capture projects the four
+cloud footprints nearest the visible terrain directly along the current sun
+direction. The terrain samples these impostors in world space without expanding
+or continuously invalidating the local tree and building shadow map. Clouds share a 7 km altitude and drift
+together with the prevailing wind; their shadows follow the same drift. Their deterministic world
+grid is sampled in that moving frame so new formations remain beyond the visible
+horizon. Each geographic area receives a weighted clear, sparse, scattered, or
+dense weather regime. Cloud-bearing skies dominate: scattered conditions are most
+common, dense banks remain significant, and clear weather is rare. Grayscale
+density provides smooth alpha coverage without a screen-space dither pattern,
+with solid shaded cores and softer edge coverage. Clouds fade out before the
+camera reaches them and through their own high-altitude haze beyond the terrain
+fog; use `?clouds=off` for a cloud-free performance comparison.
+Use `?time=12` to hold the sun at noon when comparing cloud shape and ground
+shadows, and `?date=2026-08-23` to hold the simulation on a specific local
+calendar date. The automatic clock follows the device's real local date and time.
+The settings menu's Manual clock
+toggle switches the date and time together. Clock mode and the last manual date
+and time persist across reloads. Settings apply live; changing seasons rebuilds
+trees and ground cover in place as tiles stream, without a page reload.
+`?clock=automatic` or `?clock=manual` can override the
+persisted mode; supplying `?date` or `?time` selects manual mode by default.
+
+## World Grid and Streaming
+
+The world uses an application-owned Web Mercator grid at fixed level 17. A tile
+is identified by the app's level/x/y coordinates and receives a stable seed from
+the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
+coordinates are source implementation details used only to populate the app
+tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
+with latitude (a tile is about 154 m wide around Oslo). Use `?seed=123`
+to select another deterministic world seed.
+
+Terrain streams across a moving 33 by 33 tile window around the camera. The
+nearest 2 by 2 tiles include native terrain, map features, and full vegetation;
+the outer rings
+use coarse terrain and tree impostors so the visible horizon reaches farther
+without paying the full detail cost. Overlapping elevation, WorldCover, and
+OpenStreetMap source requests are cached between tile loads. CPU-heavy terrain,
+map, vegetation, and LOD-index construction runs in small post-render slices.
+Large terrain and vegetation GPU uploads are committed on separate animation
+frames so replacement tiles have less impact on frame rate.
