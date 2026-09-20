@@ -5,13 +5,6 @@ import { readFileSync } from "node:fs";
 import { NullEngine, Scene, RawTexture, ShaderLanguage } from "@babylonjs/core";
 
 const hook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "lerc") return {
-      url: "data:text/javascript,export function decode(){throw new Error('Unexpected raster decode')} export function load(){throw new Error('Unexpected raster load')}",
-      shortCircuit: true,
-    };
-    return nextResolve(specifier, context);
-  },
   load(url, context, nextLoad) {
     if (url.endsWith("/WorldCover.ts")) return {
       format: "module", shortCircuit: true,

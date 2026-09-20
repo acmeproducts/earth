@@ -6,7 +6,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { isTerrainFootprintAbove, sceneToLonLat, sampleElevation, type HorizontalExclusionMask } from "../world/Geo";
-import { clamp } from "../core/MathUtils";
+import { terrainAverageAlbedo } from "../terrain/TerrainTextureData";
 import {
   acquireGrassImpostorAssets,
   createGrassModel,
@@ -39,17 +39,18 @@ const GRASS_HEIGHT_METERS = 0.55;
 const GRASS_SPACING_METERS = 1.3;
 /** Let the sparse outer blades reach road verges; keep the roots clear. */
 const GRASS_SURFACE_CLEARANCE_METERS = 1.2;
-/** How strongly each clump adopts the hue and brightness of its local ground. */
-const GRASS_GROUND_COLOR_INFLUENCE = 1;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
 const DEFAULT_DETAIL_TILES_ACROSS = 3;
-const GRASS_GROUND_COLOR_BLEND = 0.42;
+// Retain blade variation while anchoring brightness and saturation to ground.
+const GRASS_GROUND_COLOR_BLEND = 0.72;
 /** Per-instance width spread applied at placement, kept as its own constants
  * so the impostor's depth plane can account for the average clump footprint. */
 const GRASS_WIDTH_SCALE_MINIMUM = 1.1;
 const GRASS_WIDTH_SCALE_SPAN = 0.42;
 
 interface GrassFieldOptions extends VegetationPlacementOptions {
+  /** Walls need clearance for the full clump, including its wind-driven fringe. */
+  buildingExclusionMask?: HorizontalExclusionMask;
   /** Lake outlines and river channels exclude the full grass clump footprint. */
   lakeExclusionMask?: HorizontalExclusionMask;
 }
@@ -74,13 +75,14 @@ export async function createGrassField(
 ): Promise<VegetationFieldResult> {
   const {
     meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
-    landCover, exclusionMask, lakeExclusionMask, densityScale, renderMode, yieldControl,
+    landCover, exclusionMask, buildingExclusionMask, lakeExclusionMask, densityScale, renderMode, yieldControl,
     root, random, columns, rows, cellWidth, cellDepth, matrices,
     renderHeight: grassHeight, variantBuckets,
   } = createFieldPlacement(scene, "grassField", options, {
     seed: 0x47524153, spacingMeters: GRASS_SPACING_METERS, heightMeters: GRASS_HEIGHT_METERS,
   });
   const maximumHalfWidth = grassRenderedCaptureSize(grassHeight) * 0.72;
+  const buildingClearance = maximumHalfWidth + 0.35 / metersPerUnit;
 
   // Snow whitens the ground before the shared low-plant density reaches zero.
   // Keep summer-green grass out of snowy tiles, including light winter cover.
@@ -103,6 +105,7 @@ export async function createGrassField(
 
         const elevation = sampleElevation(terrain, x, z, meshWidth, meshDepth);
         if (exclusionMask?.intersects(x, z, GRASS_SURFACE_CLEARANCE_METERS / metersPerUnit)) continue;
+        if (buildingExclusionMask?.intersects(x, z, buildingClearance)) continue;
         if (lakeExclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
@@ -195,7 +198,10 @@ function configureGrassRenderers(
   meshDepth: number,
   grassHeight: number,
 ): void {
-  const distanceGroundColor = Color3.FromArray(GRASSLAND_REFERENCE_COLOR);
+  const albedo = terrainAverageAlbedo();
+  const distanceGroundColor = Color3.FromArray(
+    GRASSLAND_REFERENCE_COLOR.map((channel, index) => channel * albedo[index]),
+  );
   const fade = grassDistanceFadeRange(
     Math.min(meshWidth, meshDepth),
     DEFAULT_DETAIL_TILES_ACROSS,
@@ -234,10 +240,8 @@ function configureGrassRenderers(
 }
 
 /**
- * Converts the local rendered ground color into a restrained RGB multiplier.
- * Grassland is the neutral reference, so blade-level color variation survives;
- * other covers and world-anchored dry/lush bands pull the whole clump toward
- * the terrain beneath it.
+ * Encodes the local ground tint relative to grassland. Preserve the full ratio
+ * so dark forest floors and pale, dry ground retain their brightness and hue.
  */
 export function grassGroundColorMultiplier(
   longitude: number,
@@ -254,8 +258,7 @@ export function grassGroundColorMultiplier(
     0,
     worldSeed,
   );
-  return ground.map((channel, index) => {
-    const ratio = channel / GRASSLAND_REFERENCE_COLOR[index];
-    return clamp(1 + (ratio - 1) * GRASS_GROUND_COLOR_INFLUENCE, 0.55, 1.35);
-  }) as [number, number, number];
+  return ground.map((channel, index) =>
+    channel / GRASSLAND_REFERENCE_COLOR[index],
+  ) as [number, number, number];
 }

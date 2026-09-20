@@ -7,13 +7,6 @@ import { MeshBuilder, NullEngine, Scene } from "@babylonjs/core";
 // Match the terrain integration harness: transform its enum and reject any
 // unexpected raster I/O in this entirely synthetic map fixture.
 const hook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "lerc") return {
-      url: "data:text/javascript,export function decode(){throw new Error('Unexpected raster decode')} export function load(){throw new Error('Unexpected raster load')}",
-      shortCircuit: true,
-    };
-    return nextResolve(specifier, context);
-  },
   load(url, context, nextLoad) {
     if (url.endsWith("/WorldCover.ts")) return {
       format: "module", shortCircuit: true,

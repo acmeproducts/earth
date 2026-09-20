@@ -615,7 +615,7 @@ export class Game {
     const landCoverRequest = previous?.landCover
       ? Promise.resolve(previous.landCover)
       : WorldCover.fetchForTerrain(terrainData).catch((error: unknown) => {
-        console.warn("ESA WorldCover unavailable; land-cover layers were skipped.", error);
+        console.warn("LCM-10 unavailable; land-cover layers were skipped.", error);
         return undefined;
       });
     await reportInitializationProgress(onProgress, "Loading land cover", 24);
@@ -1084,6 +1084,13 @@ export class Game {
       { kind: "grassField", label: "Growing grass", progress: 68,
         create: () => createGrassField(this.scene, terrainData, {
           ...fieldOptions,
+          buildingExclusionMask: new PolygonExclusionMask(
+            record.roadAndBuildingPlan.buildingSites.map((site) => ({
+              outer: site.outline,
+              holes: site.holes,
+            })),
+            Math.max(0.25, 20 / metersPerUnit),
+          ),
           lakeExclusionMask: record.lakeExclusionMask,
           seed: layerSeed(terrainData.generationSeed, "grass"),
           renderMode: this.vegetationModes.grass,
@@ -2100,19 +2107,16 @@ export class Game {
 
   private async changeToRandomTerrainLocation(): Promise<void> {
     const target = await randomLandWorldLocation(async (location) => {
+      const elevation = await TerrainElevationSource.fetchElevationAtLocation(location.lat, location.lon);
+      if (!(elevation > 0)) return false;
       const bounds = worldTileBounds(worldTileAtLocation(
         location.lat,
         location.lon,
         this.gridLevel,
       ));
-      const [landCover, elevation] = await Promise.all([
-        WorldCover.fetch(bounds),
-        TerrainElevationSource.fetchElevationAtLocation(location.lat, location.lon),
-      ]);
-      return (
-        landCover.sample(location.lon, location.lat) !== LandCoverClass.Water &&
-        elevation > 0
-      );
+      const landCover = await WorldCover.fetch(bounds);
+      const classification = landCover.sampleKnown(location.lon, location.lat);
+      return classification !== undefined && classification !== LandCoverClass.Water;
     });
     console.log(`Random location: lon ${target.lon.toFixed(6)}, lat ${target.lat.toFixed(6)}`);
     await this.reloadAtLocation(target);

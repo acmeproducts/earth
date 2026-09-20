@@ -76,6 +76,25 @@ export function metersPerTexel(layer: TerrainTextureLayer): number {
   return layer.metersPerRepeat / layer.size;
 }
 
+let cachedTextureData: TerrainTextureData | undefined;
+let cachedAverageAlbedo: readonly [number, number, number] | undefined;
+
+export function getTerrainTextureData(): TerrainTextureData {
+  return cachedTextureData ??= createTerrainTextureData();
+}
+
+/** Broad ground-cover tint includes the terrain texture's coarsest mip color. */
+export function terrainAverageAlbedo(): readonly [number, number, number] {
+  if (cachedAverageAlbedo) return cachedAverageAlbedo;
+  const { albedo } = getTerrainTextureData();
+  const sum: [number, number, number] = [0, 0, 0];
+  for (let offset = 0; offset < albedo.length; offset += 4) {
+    for (let channel = 0; channel < 3; channel++) sum[channel] += albedo[offset + channel];
+  }
+  const scale = 4 / (albedo.length * 255);
+  return cachedAverageAlbedo = [sum[0] * scale, sum[1] * scale, sum[2] * scale];
+}
+
 export function createTerrainTextureData(): TerrainTextureData {
   const { albedo, normal } = createBaseTextureData(TERRAIN_ALBEDO_LAYER.size);
   return { albedo, normal, detail: createDetailTextureData(TERRAIN_DETAIL_LAYER.size) };

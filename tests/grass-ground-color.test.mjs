@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { getTerrainTextureData, terrainAverageAlbedo } from "../src/terrain/TerrainTextureData.ts";
+
+test("grass ground target includes the actual terrain texture average", () => {
+  const { albedo } = getTerrainTextureData();
+  const average = terrainAverageAlbedo();
+  for (let channel = 0; channel < 3; channel++) {
+    let sum = 0;
+    for (let offset = channel; offset < albedo.length; offset += 4) sum += albedo[offset];
+    assert.ok(Math.abs(average[channel] - sum / (albedo.length / 4) / 255) < 1e-12);
+    assert.ok(average[channel] > 0.5 && average[channel] < 0.9);
+  }
+});
 
 const fieldSource = readFileSync(new URL("../src/vegetation/GrassField.ts", import.meta.url), "utf8");
 const impostorSource = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");

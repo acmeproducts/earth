@@ -10,7 +10,6 @@ const compiler = webpack({ mode: 'development', devtool: false,
   module: { rules: [
     { test: /\.ts$/, use: { loader: 'ts-loader', options: { transpileOnly: true, compilerOptions: { rootDir: process.cwd() } } } },
     { test: /\.png$/, type: 'asset/resource' },
-    { test: /\.wasm$/, type: 'asset/resource', generator: { filename: 'lerc-wasm.wasm' } },
   ] },
 });
 await new Promise((resolve, reject) => compiler.run((error, stats) => {

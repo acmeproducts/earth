@@ -49,7 +49,6 @@
     "@mapbox/vector-tile": "^3.0.0",
     "astronomy-engine": "^2.1.19",
     "earcut": "^3.2.3",
-    "lerc": "^4.2.0",
     "pbf": "^5.1.2",
     "polygon-clipping": "^0.15.7",
     "suncalc": "^2.0.1",

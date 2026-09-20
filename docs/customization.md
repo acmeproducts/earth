@@ -5,7 +5,7 @@
 ## Adding Textures
 
 The normal terrain appearance is isolated in `src/terrain/TerrainMaterial.ts`. Its
-procedural detail texture is tinted with softly blended ESA WorldCover surface
+procedural detail texture is tinted with softly blended Copernicus LCM-10 surface
 colors so vegetated ground visually supports the grass, bush, and tree layers.
 Place texture images under `assets/`, resolve them through Webpack, and assign
 them in that factory:
@@ -20,7 +20,7 @@ const terrainTextureUrl = new URL(
 material.diffuseTexture = new Texture(terrainTextureUrl, scene);
 ```
 
-Detailed tiles refine ESA WorldCover 2021 with globally available OpenStreetMap
+Detailed tiles refine Copernicus LCM-10 2020 with globally available OpenStreetMap
 land-cover and land-use polygons. OSM also supplies building-part visibility,
 road class, path and service type, surface, tunnels, and permanent waterways;
 those attributes drive building filtering, road widths and materials, vegetation

@@ -20,8 +20,7 @@ test("streamed tiles own one provider-backed data bundle", () => {
   assert.match(game, /const mapTiles = previous\?\.mapTiles \?\? this\.requestMapTiles\(area\.bounds\)/);
   assert.equal((game.match(/TerrainElevationSource\.fetchWorldArea\(/g) ?? []).length, 1);
   assert.equal((game.match(/OpenStreetMap\.fetch\(/g) ?? []).length, 1);
-  assert.match(worldCover, /private static decoderReady\?: Promise<void>/);
-  assert.equal((worldCover.match(/Lerc\.load\(/g) ?? []).length, 1);
+  assert.match(worldCover, /new WorldCover\(await fetchLcm10\(bounds\)\)/);
 });
 
 test("detail and distant layers reuse their tile's online data", () => {

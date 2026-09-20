@@ -1,11 +1,11 @@
-import { gridCell, bilinear, mapGridRange } from "../core/GridSampling";
+import { gridCell, bilinear } from "../core/GridSampling";
 import type { TerrainData } from "../terrain/TerrainData";
-import { ResourceCache } from "../core/ResourceCache";
 import type { TileBounds } from "./WorldGrid";
 import { shapeCoastlineElevations } from "../water/Coastline";
 import { SUBMERGED_TERRAIN_CEILING_METERS } from "./Geo";
-import * as Lerc from "lerc";
 import { SimplexNoise2D } from "../core/SimplexNoise";
+import { fetchLcm10, LCM10_RESOLUTION, LCM10_TILE_SIZE } from "./Lcm10Source";
+import type { LandCoverRaster } from "./Lcm10Source";
 
 const tintBoundaryNoise = new SimplexNoise2D(0x47524153);
 
@@ -59,42 +59,17 @@ const COASTLINE_CONTEXT_METERS =
   COASTLINE_WATER_BLEND_METERS + COASTLINE_SMOOTHING_METERS * 2;
 
 export class WorldCover {
-  private static readonly TILE_URL =
-    "https://tiledimageservices.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/" +
-    "European_Space_Agency_WorldCover_2021_Land_Cover_WGS84_7/ImageServer/tile";
-  private static readonly LEVEL = 13;
-  private static readonly TILE_SIZE = 256;
-  private static readonly RESOLUTION = 1 / 12_000;
   private static readonly ORIGIN_X = -180;
   private static readonly ORIGIN_Y = 84;
-  private static readonly MIN_LONGITUDE = -180;
-  private static readonly MAX_LONGITUDE = 180;
-  private static readonly MIN_LATITUDE = -60;
-  private static readonly MAX_LATITUDE = 84;
-  private static readonly cache = new ResourceCache<Lerc.LercData>(16 * 1024 * 1024,
-    (tile) => tile.pixels.reduce((bytes, pixels) => bytes + pixels.byteLength, 0) +
-      (tile.mask?.byteLength ?? 0));
-  private static decoderReady?: Promise<void>;
 
   private constructor(
-    private readonly tiles: Map<string, Lerc.LercData>,
-    private readonly resolution: number,
+    private readonly tiles: Map<string, LandCoverRaster>,
+    private readonly resolution = LCM10_RESOLUTION,
+    private readonly tileSize = LCM10_TILE_SIZE,
   ) {}
 
-  static async fetch(bounds: TileBounds, level = this.LEVEL): Promise<WorldCover> {
-    await this.loadDecoder();
-    const clampedLevel = Math.max(0, Math.min(this.LEVEL, Math.round(level)));
-    const resolution = this.RESOLUTION * Math.pow(2, this.LEVEL - clampedLevel);
-    const west = Math.max(this.MIN_LONGITUDE, bounds.lonWest);
-    const east = Math.min(this.MAX_LONGITUDE - resolution / 2, bounds.lonEast);
-    const north = Math.min(this.MAX_LATITUDE - resolution / 2, bounds.latNorth);
-    const south = Math.max(this.MIN_LATITUDE + resolution / 2, bounds.latSouth);
-    if (west > east || south > north) return new WorldCover(new Map(), resolution);
-    const northWest = this.tileFor(west, north, resolution);
-    const southEast = this.tileFor(east, south, resolution);
-    const requests = mapGridRange(northWest.row, southEast.row, northWest.column, southEast.column,
-      (row, column) => this.fetchTile(clampedLevel, row, column));
-    return new WorldCover(new Map(await Promise.all(requests)), resolution);
+  static async fetch(bounds: TileBounds): Promise<WorldCover> {
+    return new WorldCover(await fetchLcm10(bounds));
   }
 
   /** Loads enough classification around a terrain tile to shape shared edges consistently. */
@@ -110,9 +85,14 @@ export class WorldCover {
   }
 
   sample(longitude: number, latitude: number): LandCoverClass {
+    return this.sampleKnown(longitude, latitude) ?? LandCoverClass.Bare;
+  }
+
+  /** Unlike visual sampling, navigation must not treat missing coverage as bare land. */
+  sampleKnown(longitude: number, latitude: number): LandCoverClass | undefined {
     const pixelX = Math.floor((longitude - WorldCover.ORIGIN_X) / this.resolution);
     const pixelY = Math.floor((WorldCover.ORIGIN_Y - latitude) / this.resolution);
-    return this.classAtPixel(pixelX, pixelY, LandCoverClass.Bare);
+    return this.classAtPixel(pixelX, pixelY);
   }
 
   /**
@@ -263,13 +243,15 @@ export class WorldCover {
 
   private lastTileRow = NaN;
   private lastTileColumn = NaN;
-  private lastTile: Lerc.LercData | undefined;
+  private lastTile: LandCoverRaster | undefined;
 
-  private classAtPixel(pixelX: number, pixelY: number, fallback: LandCoverClass): LandCoverClass {
-    const column = Math.floor(pixelX / WorldCover.TILE_SIZE);
-    const row = Math.floor(pixelY / WorldCover.TILE_SIZE);
+  private classAtPixel(pixelX: number, pixelY: number, fallback: LandCoverClass): LandCoverClass;
+  private classAtPixel(pixelX: number, pixelY: number): LandCoverClass | undefined;
+  private classAtPixel(pixelX: number, pixelY: number, fallback?: LandCoverClass): LandCoverClass | undefined {
+    const column = Math.floor(pixelX / this.tileSize);
+    const row = Math.floor(pixelY / this.tileSize);
     // Consecutive samples almost always hit the same raster tile.
-    let tile: Lerc.LercData | undefined;
+    let tile: LandCoverRaster | undefined;
     if (row === this.lastTileRow && column === this.lastTileColumn) tile = this.lastTile;
     else {
       tile = this.tiles.get(`${row}/${column}`);
@@ -278,51 +260,10 @@ export class WorldCover {
       this.lastTile = tile;
     }
     if (!tile) return fallback;
-    const x = pixelX - column * WorldCover.TILE_SIZE;
-    const y = pixelY - row * WorldCover.TILE_SIZE;
+    const x = pixelX - column * this.tileSize;
+    const y = pixelY - row * this.tileSize;
     const index = y * tile.width + x;
-    return (!tile.mask || tile.mask[index] ? tile.pixels[0][index] : fallback) as LandCoverClass;
-  }
-
-  private static tileFor(
-    longitude: number,
-    latitude: number,
-    resolution: number,
-  ): { row: number; column: number } {
-    const span = this.TILE_SIZE * resolution;
-    return {
-      row: Math.floor((this.ORIGIN_Y - latitude) / span),
-      column: Math.floor((longitude - this.ORIGIN_X) / span),
-    };
-  }
-
-  private static async fetchTile(
-    level: number,
-    row: number,
-    column: number,
-  ): Promise<readonly [string, Lerc.LercData]> {
-    const tileKey = `${row}/${column}`;
-    const cacheKey = `${level}/${tileKey}`;
-    const request = this.cache.getOrCreate(cacheKey, () =>
-      fetch(`${this.TILE_URL}/${cacheKey}`, {
-        signal: AbortSignal.timeout(15_000),
-      }).then(async (response) => {
-        if (!response.ok) throw new Error(`WorldCover tile request failed (${response.status}).`);
-        return Lerc.decode(await response.arrayBuffer());
-      }));
-    return [tileKey, await request];
-  }
-
-  private static loadDecoder(): Promise<void> {
-    if (!this.decoderReady) {
-      this.decoderReady = Lerc.load({
-        locateFile: () => new URL("lerc-wasm.wasm", document.baseURI).toString(),
-      }).catch((error: unknown) => {
-        this.decoderReady = undefined;
-        throw error;
-      });
-    }
-    return this.decoderReady;
+    return (!tile.mask || tile.mask[index] ? tile.pixels[0][index] : fallback) as LandCoverClass | undefined;
   }
 }
 export function landCoverSurfaceColor(

@@ -8,17 +8,16 @@ import {
   Texture,
 } from "@babylonjs/core";
 import {
-  createTerrainTextureData,
+  getTerrainTextureData,
   TERRAIN_ALBEDO_LAYER,
   TERRAIN_DETAIL_LAYER,
   TERRAIN_NORMAL_LAYER,
 } from "./TerrainTextureData";
-import type { TerrainTextureData, TerrainTextureLayer } from "./TerrainTextureData";
+import type { TerrainTextureLayer } from "./TerrainTextureData";
 import { createCloudShadowTerrainMaterial } from "../sky/CloudShadows";
 import { TerrainReliefNormalsPlugin } from "./TerrainReliefNormals";
 import { SnowCoverPlugin } from "../rendering/SnowCover";
 
-let cachedTextureData: TerrainTextureData | undefined;
 const sceneMaterials = new WeakMap<Scene, {
   tinted: StandardMaterial;
   untinted: StandardMaterial;
@@ -56,8 +55,7 @@ export function createTerrainMaterial(
     return options.usesLandCoverTint ? cached.tinted : cached.untinted;
   }
 
-  cachedTextureData ??= createTerrainTextureData();
-  const textures = cachedTextureData;
+  const textures = getTerrainTextureData();
 
   const albedo = createTiledTexture(
     textures.albedo,

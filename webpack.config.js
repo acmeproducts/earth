@@ -17,13 +17,6 @@ module.exports = (env, argv) => {
     module: {
       rules: [
         {
-          test: /lerc-wasm\.wasm$/,
-          type: 'asset/resource',
-          generator: {
-            filename: 'lerc-wasm.wasm',
-          },
-        },
-        {
           test: /assets[\\/]vegetation[\\/].*\.png$/i,
           type: 'asset/resource',
           generator: {

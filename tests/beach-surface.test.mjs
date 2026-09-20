@@ -23,15 +23,6 @@ test("rendered terrain applies beach tint after smoothing grass colors", async (
   // This integration path imports WorldCover's enum, which needs transformation
   // in addition to the test runner's normal TypeScript stripping.
   const hook = registerHooks({
-    resolve(specifier, context, nextResolve) {
-      // No raster fetching occurs in this mesh fixture. Lerc's browser entry
-      // cannot load in Node, so fail explicitly if it is unexpectedly used.
-      if (specifier === "lerc") return {
-        url: "data:text/javascript,export function decode(){throw new Error('Unexpected raster decode')} export function load(){throw new Error('Unexpected raster load')}",
-        shortCircuit: true,
-      };
-      return nextResolve(specifier, context);
-    },
     load(url, context, nextLoad) {
       if (url.endsWith("/WorldCover.ts")) {
         return { format: "module", shortCircuit: true,

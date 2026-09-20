@@ -4,16 +4,8 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 
 // TerrainDetail reads WorldCover's land-cover enum, which needs transformation
-// in addition to the runner's type stripping. Lerc's browser entry cannot load
-// in Node and no raster is decoded here, so stub it out explicitly.
+// in addition to the runner's type stripping.
 registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "lerc") return {
-      url: "data:text/javascript,export function decode(){throw new Error('Unexpected raster decode')} export function load(){throw new Error('Unexpected raster load')}",
-      shortCircuit: true,
-    };
-    return nextResolve(specifier, context);
-  },
   load(url, context, nextLoad) {
     if (url.endsWith("/WorldCover.ts")) {
       return { format: "module", shortCircuit: true,

@@ -17,8 +17,8 @@ procedural conifer silhouettes. Forest placements mix all three species in the s
 
 `treeDistributionAt(longitude, latitude)` in `src/vegetation/TreeDistribution.ts` supplies the next-stage
 geographic species mix. It returns a broad biome, coarse tree-cover potential, and normalized ratios
-for eleven common visual tree groups. Exact forest presence should continue to come from ESA
-WorldCover 2021; the coordinate-only distribution is an offline approximation, not a botanical survey.
+for eleven common visual tree groups. Forest presence comes from Copernicus
+LCM-10 2020; the coordinate-only distribution is an offline approximation, not a botanical survey.
 Every group now has its own deterministic procedural source. Tree placement samples the geographic
 ratios from each tile's longitude/latitude coordinates first, then captures impostors only for the
 species that were actually encountered in that tile.
@@ -31,8 +31,8 @@ black wherever alpha is zero.
 ## Vegetation and Seasons
 
 The Earth view generates mature trees, saplings, grass, wildflower colonies, bushes, fern
-undergrowth, and low-poly rocks procedurally at startup and thin-instances them across suitable ESA
-WorldCover classes. Mature trees and 3.5 m saplings share the five-face tree
+undergrowth, and low-poly rocks procedurally at startup and thin-instances them across suitable
+LCM-10 classes. Mature trees and 3.5 m saplings share the five-face tree
 impostor pipeline and geographic species groves. Grass captures only one side and
 the top; directional wildflowers, bushes, and ferns retain several side views. Their atlases use the optional
 upper-hemisphere mode, spending every vertical row on level-to-overhead views
@@ -72,7 +72,7 @@ can override those values for quality testing.
 
 Bushes are generated from procedural branches and dense curved shoots, captured
 into their own directional atlases, and scattered in noise-shaped clusters most
-densely through WorldCover shrubland with lighter placement elsewhere.
+densely through LCM-10 shrubland with lighter placement elsewhere.
 Wildflower regions choose between tall fireweed-like spires and the former short
 daisy patches. Both share one denser colony field, model/impostor lifecycle, and
 regional variant bank.
@@ -194,7 +194,7 @@ persisted mode; supplying `?date` or `?time` selects manual mode by default.
 
 The world uses an application-owned Web Mercator grid at fixed level 17. A tile
 is identified by the app's level/x/y coordinates and receives a stable seed from
-the world seed and that identity. Elevation, WorldCover, and OpenStreetMap tile
+the world seed and that identity. Elevation, LCM-10, and OpenStreetMap tile
 coordinates are source implementation details used only to populate the app
 tile's geographic bounds. Because this is Web Mercator, ground dimensions vary
 with latitude (a tile is about 154 m wide around Oslo). Use `?seed=123`
@@ -204,7 +204,7 @@ Terrain streams across a moving 33 by 33 tile window around the camera. The
 nearest 2 by 2 tiles include native terrain, map features, and full vegetation;
 the outer rings
 use coarse terrain and tree impostors so the visible horizon reaches farther
-without paying the full detail cost. Overlapping elevation, WorldCover, and
+without paying the full detail cost. Overlapping elevation, LCM-10, and
 OpenStreetMap source requests are cached between tile loads. CPU-heavy terrain,
 map, vegetation, and LOD-index construction runs in small post-render slices.
 Large terrain and vegetation GPU uploads are committed on separate animation
