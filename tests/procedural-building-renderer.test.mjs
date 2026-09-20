@@ -74,7 +74,8 @@ test("flat roof caps reach the outside faces of the facade walls", () => {
         assert.equal(hit?.hit, true, "roof covers the outer wall thickness");
         assert.ok(hit.pickedPoint.y * scale > 22.09, "ray reaches the cap above the wall");
       }
-      assert.equal(mesh.getChildMeshes().filter((child) => child.metadata?.buildingDoor).length, 1);
+      assert.equal(mesh.getChildMeshes().filter((child) => child.metadata?.buildingDoor).length,
+        mesh.metadata.roofAccess ? 1 : 0, "roof doors require a reachable stair flight");
       mesh.dispose(false, true);
     }
   } finally {
@@ -1189,6 +1190,34 @@ test("small-footprint high-rises keep fallback stairs on every floor", () => {
   engine.dispose();
 });
 
+for (const scale of [1, 10]) test(`stair runs account for floor height at scale ${scale}`, () => {
+  const boundary = { outer: [{ x: 0, y: 0 }, { x: 12, y: 0 }, { x: 12, y: 4 }, { x: 0, y: 4 }], holes: [] };
+  const layout = { boundary, rooms: [{ id: "stairs-1", type: "stairs", polygon: boundary }], openings: [] };
+  const stair = stairLayoutFromPlan(layout, { ...options, metersPerUnit: scale }, 8);
+  assert.ok(stair);
+  assert.ok(stair.runMeters >= 8, "tall floors require a longer flight even beyond the usual run cap");
+  assert.equal(stairLayoutFromPlan(layout, { ...options, metersPerUnit: scale }, 11), undefined,
+    "reject flights that cannot fit both a safe slope and landings");
+});
+
+test("compact footprints reject steep fallback stairs", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    const building = ProceduralBuildingRenderer.createDetailed(scene, planBuilding({
+      id: "steep-stair-regression",
+      polygon: {
+        outer: [[0.4775, 0.485], [0.5225, 0.485], [0.5225, 0.515], [0.4775, 0.515], [0.4775, 0.485]],
+        holes: [],
+      },
+      properties: { render_height: 9.3, levels: 3, roof_shape: "flat" },
+    }), terrain, options);
+    assert.ok(building);
+    assert.equal(building.metadata.stairFlightCount, 0);
+    assert.deepEqual(building.metadata.stairFlightCenters, []);
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test("compact fallback stairs preserve two meters of headroom beneath the next flight", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
@@ -1196,7 +1225,7 @@ test("compact fallback stairs preserve two meters of headroom beneath the next f
     const building = ProceduralBuildingRenderer.createDetailed(scene, planBuilding({
       id: "compact-stair-headroom",
       polygon: {
-        outer: [[0.4775, 0.485], [0.5225, 0.485], [0.5225, 0.515], [0.4775, 0.515], [0.4775, 0.485]],
+        outer: [[0.4725, 0.485], [0.5275, 0.485], [0.5275, 0.515], [0.4725, 0.515], [0.4725, 0.485]],
         holes: [],
       },
       properties: { render_height: 9.3, levels: 3, roof_shape: "flat" },

@@ -5,6 +5,7 @@ import {
 import { attachShoreline } from '../../src/water/Shoreline';
 import { createWaterPlane } from '../../src/water/Water';
 import { createTerrainLakeLayer } from '../../src/terrain/TerrainLakeSurface';
+import { enableWebGLHalfRangeDepth } from '../../src/rendering/WebGLDepth';
 
 async function main(): Promise<void> {
   const canvas = document.createElement('canvas');
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
   const kind = new URLSearchParams(location.search).has('lake') ? 'lake' : 'ocean';
   const engine = webgpu ? new WebGPUEngine(canvas) : new Engine(canvas, true);
   if (engine instanceof WebGPUEngine) await engine.initAsync();
+  else enableWebGLHalfRangeDepth(engine);
   engine.useReverseDepthBuffer = !webgpu;
   const scene = new Scene(engine);
   scene.clearColor = new Color4(0.53, 0.71, 0.82, 1);

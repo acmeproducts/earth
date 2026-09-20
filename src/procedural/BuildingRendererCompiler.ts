@@ -31,7 +31,6 @@ import { lonLatToScene, sceneToLonLat, sampleElevation, SEA_LEVEL_METERS } from 
 import { clamp01 } from "../core/MathUtils";
 import { averagePoint, clipToBounds, pointInRing, signedArea } from "../core/PlanarGeometry";
 import { unitFromSeed } from "../core/Random";
-import { overlappingSegment } from "../core/PolygonGeometry";
 import type { BuildingPlan, BuildingPolygon, LonLat } from "../buildings/BuildingPlanner";
 import type { planBuildingLayout, BuildingLayout } from "../buildings/BuildingLayoutPlanner";
 import type { ApartmentLayout } from "../buildings/ApartmentLayoutPlanner";
@@ -50,6 +49,7 @@ import { buildingProfile } from "../buildings/BuildingProfile";
 import { createInteriorFurniture, planInteriorFurniture, type FurniturePlacement } from "./InteriorFurniture";
 import { createRooftopEquipment, planRoofAccess, type RoofAccess } from "./RooftopEquipment";
 import { createBuildingDoor } from "./BuildingDoor";
+import { mergeDoorOpenings, wallDoorInterval } from "./InteriorOpenings";
 import type { TerrainData } from "../terrain/TerrainData";
 import { buildingGroundElevation } from "../terrain/BuildingGroundElevation";
 import type {
@@ -609,9 +609,11 @@ function* createComplexEnterableBuilding(
       for (const section of sections) {
         if (Math.abs(section.top - prepared.baseElevation - band.heightMeters) > 1e-6 || !section.incoming.length) continue;
         const candidates = [...section.incoming, ...findStairLayouts(section.outline, options,
-          { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 24, plan.detailSeed, section.holes)];
-        const access = candidates.filter((stair) => section.incoming.includes(stair) ||
-          section.incoming.every((incoming) => !stairLayoutsOverlap(stair, incoming, options)))
+          { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 24, plan.detailSeed,
+          section.top - section.bottom, section.holes)];
+        const access = candidates.filter((stair) => stair.runMeters >= minimumStairRun(section.top - section.bottom) &&
+          (section.incoming.includes(stair) ||
+          section.incoming.every((incoming) => !stairLayoutsOverlap(stair, incoming, options))))
           .map((stair) => planRoofAccess(stair, polygon.outline, polygon.holes, options.metersPerUnit))
           .find((candidate) => candidate !== undefined);
         if (!access) continue;
@@ -799,13 +801,19 @@ function* connectInteriorSections(sections: InteriorSection[], plan: BuildingPla
     for (const overlap of intersectInteriorSections(sectionRings(lower), sectionRings(upper), options.metersPerUnit)) {
       const polygon = scenePolygon(overlap);
       const stair = findStairLayouts(polygon.outline, options,
-        { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1, plan.detailSeed,
+        { edgeIndex: -1, centerMeters: 0, widthMeters: 0 }, 1, plan.detailSeed, lower.top - lower.bottom,
         [...polygon.holes, ...lower.openings.map((opening) => doorwayClearance(opening, options))])[0];
       if (!stair) continue;
       lower.outgoing.push(stair);
       upper.incoming.push(stair);
     }
   }
+}
+
+function sectionSlabPolygons(section: InteriorSection, options: BuildingRenderOptions): LonLat[][][] {
+  const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
+  const rings = sectionRings(section);
+  return openings.length ? polygonClipping.difference(rings, ...openings) : [rings];
 }
 
 function* createComplexInteriorParts(
@@ -818,9 +826,7 @@ function* createComplexInteriorParts(
   for (const section of sections) {
     if (selectedBottom !== undefined && section.bottom !== selectedBottom) continue;
     if (contents !== "furniture") {
-      const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
-      const floors = openings.length ? polygonClipping.difference(sectionRings(section), ...openings) : [sectionRings(section)];
-      for (const floor of floors) {
+      for (const floor of sectionSlabPolygons(section, options)) {
         const polygon = scenePolygon(floor);
         const slab = createBuildingPrism(scene, polygon.outline,
           section.bottom + BUILDING_FLOOR_THICKNESS_METERS, section.bottom, options, polygon.holes);
@@ -847,9 +853,7 @@ function* createComplexInteriorParts(
   if (selectedBottom !== undefined && contents === "structure") {
     const tops = new Set(sections.filter((section) => section.bottom === selectedBottom).map((section) => section.top));
     for (const upper of sections.filter((section) => tops.has(section.bottom))) {
-      const openings = upper.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
-      const caps = openings.length ? polygonClipping.difference(sectionRings(upper), ...openings) : [sectionRings(upper)];
-      for (const cap of caps) {
+      for (const cap of sectionSlabPolygons(upper, options)) {
         const polygon = scenePolygon(cap);
         const ceiling = createBuildingPrism(scene, polygon.outline, upper.bottom + BUILDING_FLOOR_THICKNESS_METERS,
           upper.bottom, options, polygon.holes);
@@ -1077,8 +1081,7 @@ function* createFloorContents(
       floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
       options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
       plan.detailSeed + floor);
-  } else if (contents !== "structure" &&
-      (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage")) {
+  } else if (contents !== "structure") {
     const boundary = floorPolygon(outline, holes, options);
     const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
       openings: [...entranceOpenings, ...facadeOpenings] };
@@ -1088,13 +1091,10 @@ function* createFloorContents(
       floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
       options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
   }
-  const seenDoors = new Set<string>();
   if (contents === "furniture") return;
-  for (const opening of doorOpenings) {
+  for (const opening of mergeDoorOpenings(doorOpenings)) {
     if (opening.type !== "door" || opening.fullHeight) continue;
     const key = canonicalSegmentKey(opening.start, opening.end);
-    if (seenDoors.has(key)) continue;
-    seenDoors.add(key);
     const exterior = entranceOpenings.some((entrance) => canonicalSegmentKey(entrance.start, entrance.end) === key);
     const height = exterior
       ? Math.min(BUILDING_DOOR_HEIGHT_METERS, storyHeight - 0.28) - BUILDING_FLOOR_THICKNESS_METERS
@@ -1183,7 +1183,7 @@ function* createEnterableBuilding(
     let plannedInterior = planningAttempt?.interior;
     trace.stage("stair layout");
     const plannedStairs = plannedInterior && profile.hasStairs && floorCount > 1
-      ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed)
+      ? stairLayoutsFromPlan(plannedInterior.building, options, floorCount - 1, plan.detailSeed, storyHeight)
       : [];
     // Perimeter fallback flights are placed in the building footprint, outside
     // the planned core. Keep that fallback interior open so apartment walls
@@ -1236,15 +1236,17 @@ function* createEnterableBuilding(
     const stairs = !shellOnly && profile.hasStairs && floorCount > 1
       ? plannedStairs.length > 0
         ? plannedStairs
-        : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed)
+        : findStairLayouts(outline, options, entranceClearance, floorCount - 1, plan.detailSeed, storyHeight)
       : [];
     let roofAccess: RoofAccess | undefined;
     if (roofElevation !== undefined && stairs.length) {
       const incoming = stairs[stairs.length - 1];
-      roofAccess = planRoofAccess(incoming, outline, [], options.metersPerUnit);
+      const roofRise = roofElevation - (baseElevation + (floorCount - 1) * storyHeight) - BUILDING_FLOOR_THICKNESS_METERS;
+      roofAccess = incoming.runMeters >= minimumStairRun(roofRise)
+        ? planRoofAccess(incoming, outline, [], options.metersPerUnit) : undefined;
       if (!roofAccess) {
-        const candidates = plannedInterior ? stairLayoutCandidatesFromPlan(plannedInterior.building, options)
-          : findStairLayouts(outline, options, entranceClearance, 24, plan.detailSeed);
+        const candidates = plannedInterior ? stairLayoutCandidatesFromPlan(plannedInterior.building, options, roofRise)
+          : findStairLayouts(outline, options, entranceClearance, 24, plan.detailSeed, roofRise);
         for (const stair of candidates) {
           if (stairLayoutsOverlap(stair, incoming, options)) continue;
           roofAccess = planRoofAccess(stair, outline, [], options.metersPerUnit);
@@ -1611,8 +1613,9 @@ function facadeOpeningServesApartment(opening: Opening2D, layout: BuildingLayout
 export function stairLayoutFromPlan(
   layout: BuildingLayout,
   options: BuildingRenderOptions,
+  storyHeight = 3.1,
 ): StairLayout | undefined {
-  return stairLayoutCandidatesFromPlan(layout, options)[0];
+  return stairLayoutCandidatesFromPlan(layout, options, storyHeight)[0];
 }
 
 function stairLayoutsFromPlan(
@@ -1620,8 +1623,9 @@ function stairLayoutsFromPlan(
   options: BuildingRenderOptions,
   flightCount: number,
   detailSeed: number,
+  storyHeight: number,
 ): StairLayout[] {
-  const candidates = stairLayoutCandidatesFromPlan(layout, options);
+  const candidates = stairLayoutCandidatesFromPlan(layout, options, storyHeight);
   if (candidates.length === 0) return [];
   const layouts: StairLayout[] = [];
   for (let flight = 0; flight < flightCount; flight++) {
@@ -1644,7 +1648,9 @@ function stairLayoutsFromPlan(
 function stairLayoutCandidatesFromPlan(
   layout: BuildingLayout,
   options: BuildingRenderOptions,
+  storyHeight: number,
 ): StairLayout[] {
+  const minimumRun = minimumStairRun(storyHeight);
   const stair = layout.rooms.find((room) => room.type === "stairs");
   if (!stair) return [];
   const points = stair.polygon.outer;
@@ -1662,15 +1668,15 @@ function stairLayoutCandidatesFromPlan(
     const start = points[index];
     const end = points[(index + 1) % points.length];
     const { length: edgeLength } = edgeVector(start, end);
-    if (edgeLength < BUILDING_STAIR_MIN_RUN_METERS + 2 * landing) continue;
+    if (edgeLength < minimumRun + 2 * landing) continue;
     const direction = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
     let inward = { x: -direction.y, y: direction.x };
     if ((center.x - (start.x + end.x) / 2) * inward.x +
         (center.y - (start.y + end.y) / 2) * inward.y < 0) {
       inward = { x: -inward.x, y: -inward.y };
     }
-    const maxRun = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLength - 2 * landing);
-    for (let run = maxRun; run >= BUILDING_STAIR_MIN_RUN_METERS; run -= 0.1) {
+    const maxRun = Math.min(Math.max(BUILDING_STAIR_MAX_RUN_METERS, minimumRun), edgeLength - 2 * landing);
+    for (let run = maxRun; run >= minimumRun; run -= 0.1) {
       const alongStarts = [landing, (edgeLength - run) / 2, edgeLength - run - landing]
         .filter((along) => along >= landing - 1e-7 && along + run <= edgeLength - landing + 1e-7);
       // Keep a comfortable flight width; an undersized core uses perimeter stairs.
@@ -1815,23 +1821,14 @@ function addInteriorWall(
 ): void {
   const length = Math.hypot(end.x - start.x, end.y - start.y);
   if (length < 0.05) return;
-  // A clipped room edge can cross the exterior entrance without containing
-  // both doorway endpoints. Do not put an opaque panel across that opening.
-  if (openings.some((opening) => opening.type === "door" &&
-      segmentsIntersect(start, end, opening.start, opening.end) &&
-      !(pointOnSegment2D(opening.start, start, end) &&
-        pointOnSegment2D(opening.end, start, end)))) return;
-  const direction = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
   const doors = openings
     .flatMap((opening) => {
-      const overlap = opening.type === "door" && overlappingSegment(start, end, opening.start, opening.end);
-      if (!overlap) return [];
-      const project = (p: Point2D) => (p.x - start.x) * direction.x + (p.y - start.y) * direction.y;
-      const first = project(overlap[0]), second = project(overlap[1]);
-      return [{ minimum: Math.max(0, Math.min(first, second)), maximum: Math.min(length, Math.max(first, second)),
+      const interval = wallDoorInterval(start, end, opening);
+      if (!interval) return [];
+      return [{ ...interval,
         height: opening.fullHeight ? heightMeters : Math.min(BUILDING_DOOR_HEIGHT_METERS, heightMeters - 0.12) }];
     })
-    .filter((door) => door.maximum - door.minimum > 0.2)
+    .filter((door) => door.maximum - door.minimum > 1e-7)
     .sort((a, b) => a.minimum - b.minimum);
   const sceneStart = { x: start.x / options.metersPerUnit, z: start.y / options.metersPerUnit };
   const sceneEnd = { x: end.x / options.metersPerUnit, z: end.y / options.metersPerUnit };
@@ -2240,14 +2237,21 @@ function createBuildingPrism(
   return mesh;
 }
 
+function minimumStairRun(storyHeight: number): number {
+  // A flight must have at least as much horizontal run as rise (45 degrees).
+  return Math.max(BUILDING_STAIR_MIN_RUN_METERS, storyHeight);
+}
+
 function findStairLayouts(
   outline: ScenePoint[],
   options: BuildingRenderOptions,
   entrance: EntranceClearance,
   flightCount: number,
   detailSeed: number,
+  storyHeight: number,
   holes: ScenePoint[][] = [],
 ): StairLayout[] {
+  const minimumRun = minimumStairRun(storyHeight);
   const edges = outline.map((_, index) => index).sort((a, b) =>
     Number(a === entrance.edgeIndex) - Number(b === entrance.edgeIndex) ||
     pointDistance(outline[b], outline[(b + 1) % outline.length]) -
@@ -2259,8 +2263,8 @@ function findStairLayouts(
     const edgeEnd = outline[(edgeIndex + 1) % outline.length];
     const edgeLengthMeters = pointDistance(edgeStart, edgeEnd) * options.metersPerUnit;
     const landing = BUILDING_STAIR_LANDING_METERS;
-    const runMeters = Math.min(BUILDING_STAIR_MAX_RUN_METERS, edgeLengthMeters - 2 * landing);
-    if (runMeters < BUILDING_STAIR_MIN_RUN_METERS) continue;
+    const runMeters = Math.min(Math.max(BUILDING_STAIR_MAX_RUN_METERS, minimumRun), edgeLengthMeters - 2 * landing);
+    if (runMeters < minimumRun) continue;
     const direction = {
       x: (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters,
       z: (edgeEnd.z - edgeStart.z) * options.metersPerUnit / edgeLengthMeters,

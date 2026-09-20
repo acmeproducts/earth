@@ -14,6 +14,18 @@ const ringArea = (ring) => Math.abs(ring.reduce((sum, a, i) => {
 }, 0)) / 2;
 const area = ({ polygon }) => ringArea(polygon.outer) - polygon.holes.reduce((sum, ring) => sum + ringArea(ring), 0);
 
+test("same provider building joins across a tile edge without merging independent neighbors", () => {
+  const fragments = [source("same", rectangle(0, 0, 2, 2)), source("same", rectangle(2, 0, 2, 2))];
+  const neighbor = source("neighbor", rectangle(4, 0, 2, 2));
+  const result = mergeOverlappingBuildings([...fragments, neighbor]);
+  assert.equal(result.length, 2);
+  assert.equal(area(result[0]), 8);
+  assert.equal(result[0].id, "same");
+  assert.deepEqual(mergeOverlappingBuildings([...fragments].reverse()), [result[0]]);
+  assert.equal(result[1], neighbor);
+  assert.equal(mergeOverlappingBuildings([fragments[0], source("same", rectangle(2, 2, 2, 2))]).length, 2);
+});
+
 test("unions partially overlapping footprints without filling their concave boundary", () => {
   const result = mergeOverlappingBuildings([
     source("a", rectangle(0, 0, 4, 2)), source("b", rectangle(2, 1, 2, 3)),

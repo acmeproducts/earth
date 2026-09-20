@@ -13,6 +13,19 @@ function tick(scene) {
   scene.onAfterRenderObservable.notifyObservers(scene);
 }
 
+test("furniture makes bounded progress while structural work remains continuously queued", (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const scene = fakeScene(), work = [0, 0];
+  for (let id = 0; id < 2; id++) enqueueInteriorBuild(scene, {
+    label: `fairness-${id}`, background: id === 1, priority: () => id, valid: () => true,
+    steps: (function* () { while (true) { work[id]++; yield "geometry"; } })(),
+    complete: () => {}, cancel: () => {},
+  });
+  for (let frame = 0; frame < 8; frame++) tick(scene);
+  assert.deepEqual(work, [6 * INTERIOR_STEPS_PER_FRAME, 2 * INTERIOR_STEPS_PER_FRAME]);
+  scene.onDisposeObservable.notifyObservers(scene);
+});
+
 function mockAnimationFrame(t, callback) {
   const original = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
   globalThis.requestAnimationFrame = callback;

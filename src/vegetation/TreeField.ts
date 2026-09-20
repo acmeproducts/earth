@@ -606,7 +606,11 @@ void main(void) {
     if (groundHit <= 0.0) discard;
     vec4 groundClip = viewProjection * vec4(cameraPosition + groundRay * groundHit, 1.0);
     if (groundClip.w <= 0.0) discard;
+    #ifdef IS_NDC_HALF_ZRANGE
+    gl_FragDepthEXT = groundClip.z / groundClip.w;
+    #else
     gl_FragDepthEXT = 0.5 + 0.5 * groundClip.z / groundClip.w;
+    #endif
   }
   #endif
 #endif
@@ -654,7 +658,11 @@ void main(void) {
     // Behind the eye there is no meaningful depth to write, so those fragments
     // keep the flattened plane the rasterizer already interpolated.
     gl_FragDepthEXT = depthClip.w > 0.0
+      #ifdef IS_NDC_HALF_ZRANGE
+      ? depthClip.z / depthClip.w
+      #else
       ? 0.5 + 0.5 * depthClip.z / depthClip.w
+      #endif
       : gl_FragCoord.z;
   } else {
     gl_FragDepthEXT = gl_FragCoord.z;

@@ -4,6 +4,7 @@ import {
   WebGPUEngine,
 } from "@babylonjs/core";
 import { guardUnusedRenderPassCleanup } from "./RenderPassCleanup";
+import { enableWebGLHalfRangeDepth } from "./WebGLDepth";
 
 export type RendererBackend = "webgl" | "webgpu";
 
@@ -58,6 +59,7 @@ export async function createRenderingEngine(
     stencil: options.stencil,
     antialias: options.antialias,
   });
+  enableWebGLHalfRangeDepth(webgl);
   console.info("[Renderer] Using WebGL.", webgl.getInfo());
   return { canvas, engine: webgl };
 }

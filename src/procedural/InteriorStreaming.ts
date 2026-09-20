@@ -36,6 +36,7 @@ class InteriorBuildQueue {
   private readonly jobs: BuildProgress[] = [];
   private current?: BuildProgress;
   private lastFrame = -1;
+  private foregroundSlices = 0;
 
   constructor(scene: Scene) {
     scene.onAfterRenderObservable.add(() => this.advance(scene.getFrameId()));
@@ -76,12 +77,15 @@ class InteriorBuildQueue {
       if (!entry.job.valid()) this.cancel(entry);
     }
     let selected: BuildProgress | undefined;
+    // Give furnishings one bounded slice in four even while structures keep arriving.
+    const serviceBackground = this.foregroundSlices >= 3 && this.jobs.some(({ job }) => job.background);
+    const rank = (entry: BuildProgress): number => Number(!!entry.job.background !== serviceBackground);
     let nearest = Infinity;
     let currentDistance = Infinity;
     for (const entry of this.jobs) {
       const distance = entry.job.priority?.() ?? 0;
       if (entry === this.current) currentDistance = distance;
-      if (!selected || Number(!!entry.job.background) < Number(!!selected.job.background) ||
+      if (!selected || rank(entry) < rank(selected) ||
           (!!entry.job.background === !!selected.job.background && distance < nearest)) {
         selected = entry;
         nearest = distance;
@@ -91,6 +95,7 @@ class InteriorBuildQueue {
     if (this.current && selected && !!this.current.job.background === !!selected.job.background &&
         currentDistance <= nearest + FOCUS_HYSTERESIS_METERS) selected = this.current;
     if (!selected) return;
+    this.foregroundSlices = selected.job.background ? 0 : this.foregroundSlices + 1;
     const previous = this.current;
     this.current = selected;
     const entry = selected;

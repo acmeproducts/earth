@@ -49,13 +49,16 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
   const sorted = [...entries].sort((a, b) => a.minX - b.minX);
   for (let i = 0; i < sorted.length; i++) {
     const a = sorted[i];
-    for (let j = i + 1; j < sorted.length && sorted[j].minX < a.maxX; j++) {
+    for (let j = i + 1; j < sorted.length && sorted[j].minX <= a.maxX; j++) {
       const b = sorted[j];
-      if (b.maxY <= a.minY || b.minY >= a.maxY || b.maxX <= a.minX ||
+      if (b.maxY < a.minY || b.minY > a.maxY || b.maxX < a.minX ||
           b.bottom > a.top || a.bottom > b.top || root(a.index) === root(b.index)) continue;
       try {
-        // Intersection excludes shared walls, point contacts, and courtyard interiors.
-        if (polygonClipping.intersection(rings(a.source.polygon), rings(b.source.polygon)).length) {
+        // Separate buildings stay separate at shared walls; tile fragments of one
+        // provider building may join there, but never through a point contact.
+        if (polygonClipping.intersection(rings(a.source.polygon), rings(b.source.polygon)).length ||
+            (a.source.id === b.source.id &&
+              polygonClipping.union(rings(a.source.polygon), rings(b.source.polygon)).length === 1)) {
           entries[root(b.index)].parent = root(a.index);
         }
       } catch {

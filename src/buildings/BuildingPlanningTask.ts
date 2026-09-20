@@ -71,7 +71,10 @@ function planApartmentLayouts(
         })];
       } catch (error) {
         failures.push(`${room.id}: ${errorMessage(error)}`);
-        return [];
+        return [{ boundary: room.polygon,
+          rooms: [{ id: room.id, type: "room" as const, polygon: room.polygon }],
+          openings: [...(building.openings ?? []), ...facadeOpenings]
+            .filter((opening) => openingTouchesBoundary(opening, room.polygon.outer)) }];
       }
     });
   return {

@@ -116,3 +116,8 @@ test("stone patches write ground-aligned pixel depth only in the camera pass", (
   const renderers = readFileSync(new URL("../src/vegetation/VegetationFieldRenderers.ts", import.meta.url), "utf8");
   assert.match(renderers, /options\.impostorName,\s*options\.depth,/);
 });
+
+test("impostor pixel depths follow the renderer's NDC depth range", () => {
+  assert.match(treeSource, /#ifdef IS_NDC_HALF_ZRANGE\s+gl_FragDepthEXT = groundClip\.z \/ groundClip\.w;\s+#else/);
+  assert.match(treeSource, /#ifdef IS_NDC_HALF_ZRANGE\s+\? depthClip\.z \/ depthClip\.w\s+#else/);
+});

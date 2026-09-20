@@ -6,6 +6,11 @@ interface RiverTriangle {
   elevation: number;
 }
 
+function triangleOutline(positions: ArrayLike<number>, indices: ArrayLike<number>, offset: number): PlanarPoint[] {
+  return [indices[offset], indices[offset + 1], indices[offset + 2]]
+    .map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
+}
+
 /** Shared footprint clearance for road triangles and complete bridge spans. */
 export class RoadWaterClearance {
   readonly empty: boolean;
@@ -18,9 +23,9 @@ export class RoadWaterClearance {
     for (const { positions, indices } of rivers) {
       if (!positions || !indices) continue;
       for (let i = 0; i < indices.length; i += 3) {
-        const corners = [indices[i], indices[i + 1], indices[i + 2]];
-        const outline = corners.map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
-        const elevation = Math.max(...corners.map(v => positions[v * 3 + 1]));
+        const outline = triangleOutline(positions, indices, i);
+        const elevation = Math.max(positions[indices[i] * 3 + 1],
+          positions[indices[i + 1] * 3 + 1], positions[indices[i + 2] * 3 + 1]);
         this.water.add({ outline, elevation }, pointBounds(outline));
       }
     }
@@ -54,8 +59,7 @@ export async function raiseRoadsAboveRivers(
     if (!positions || !indices) continue;
     const levels = new Map<string, number>();
     for (let i = 0; i < indices.length; i += 3) {
-      const corners = [indices[i], indices[i + 1], indices[i + 2]];
-      const outline = corners.map(v => ({ x: positions[v * 3], z: positions[v * 3 + 2] }));
+      const outline = triangleOutline(positions, indices, i);
       const minimum = water.minimumElevation(outline);
       if (minimum !== -Infinity) {
         for (const point of outline) {

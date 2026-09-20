@@ -6,6 +6,27 @@ import type { TerrainData } from "./TerrainData";
 const COLOR_SPACING_METERS = 6;
 const BLEND_RADIUS_METERS = 12;
 
+async function filterColorAxis(
+  source: Float32Array, width: number, height: number, insetX: number, insetY: number,
+  radius: number, stride: number, yieldControl?: () => Promise<void>,
+): Promise<Float32Array> {
+  const filtered = new Float32Array(source.length);
+  for (let y = insetY; y < height - insetY; y++) {
+    for (let x = insetX; x < width - insetX; x++) {
+      for (let channel = 0; channel < 3; channel++) {
+        const index = (y * width + x) * 3 + channel;
+        let sum = 0;
+        for (let offset = -radius; offset <= radius; offset++) {
+          sum += source[index + offset * stride];
+        }
+        filtered[index] = sum / (radius * 2 + 1);
+      }
+    }
+    await yieldControl?.();
+  }
+  return filtered;
+}
+
 /** A padded color field independent of the render mesh's level of detail. */
 export async function createTerrainSurfaceColors(
   terrain: TerrainData,
@@ -30,32 +51,8 @@ export async function createTerrainSurfaceColors(
     }
     await yieldControl?.();
   }
-  const horizontal = new Float32Array(source.length);
-  const filtered = new Float32Array(source.length);
-  for (let y = 0; y < height; y++) {
-    for (let x = radiusX; x < width - radiusX; x++) {
-      for (let channel = 0; channel < 3; channel++) {
-        let sum = 0;
-        for (let dx = -radiusX; dx <= radiusX; dx++) {
-          sum += source[(y * width + x + dx) * 3 + channel];
-        }
-        horizontal[(y * width + x) * 3 + channel] = sum / (radiusX * 2 + 1);
-      }
-    }
-    await yieldControl?.();
-  }
-  for (let y = radiusY; y < height - radiusY; y++) {
-    for (let x = radiusX; x < width - radiusX; x++) {
-      for (let channel = 0; channel < 3; channel++) {
-        let sum = 0;
-        for (let dy = -radiusY; dy <= radiusY; dy++) {
-          sum += horizontal[((y + dy) * width + x) * 3 + channel];
-        }
-        filtered[(y * width + x) * 3 + channel] = sum / (radiusY * 2 + 1);
-      }
-    }
-    await yieldControl?.();
-  }
+  const horizontal = await filterColorAxis(source, width, height, radiusX, 0, radiusX, 3, yieldControl);
+  const filtered = await filterColorAxis(horizontal, width, height, radiusX, radiusY, radiusY, width * 3, yieldControl);
   return (u, v) => {
     const x = Math.max(0, Math.min(1, u)) * columns;
     const y = Math.max(0, Math.min(1, v)) * rows;
