@@ -1,5 +1,6 @@
 import { segmentVector } from "../core/PlanarGeometry";
 import { pointOnSegment2D, edgeVector } from "../core/PolygonGeometry";
+import { enableBatchedMeshCollisions } from "../rendering/MeshCollision";
 import {
   BaseTexture,
   Color3,
@@ -452,6 +453,8 @@ export class ProceduralBuildingRenderer {
         trace.stage("register interior streaming");
         configureLazyInteriors(result, parent, pendingInteriors);
       }
+      // Tile offset changes explicitly refresh frozen child matrices.
+      if (result.checkCollisions) enableBatchedMeshCollisions(result).freezeWorldMatrix();
       return result;
     }, logTiming);
   }
@@ -1255,7 +1258,9 @@ function* createEnterableBuilding(
       }
     }
     const parts: Mesh[] = [];
-    const facadeDepth: FacadeDepthBuilder[] = [];
+    const facadeDepth: FacadeShellBuilder = {
+      panels: [], geometry: { positions: [], indices: [], normals: [], colors: [] },
+    };
     const shellDoors: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
     const windows: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
     let windowCount = 0;
@@ -1381,6 +1386,7 @@ function* createEnterableBuilding(
     }
 
     trace.stage("window mesh/upload");
+    flushFacadeShell(parts, scene, facadeDepth);
     const windowMesh = createWindowMesh(scene, windows);
     if (windowMesh) parts.push(windowMesh);
     trace.stage("surface attributes");
@@ -1391,7 +1397,7 @@ function* createEnterableBuilding(
     }
 
     const facadeInteriorParts = function* (interiorParts: Mesh[], bottom = -Infinity, top = Infinity): Generator<string, void, void> {
-      for (const panel of facadeDepth) {
+      for (const panel of facadeDepth.panels) {
         if (panel.bottom < bottom - 1e-6 || panel.bottom >= top - 1e-6) continue;
         const mesh = panel.build();
         setBuildingSurface(mesh, appearance.wallSurface);
@@ -2007,7 +2013,7 @@ function addApertureFacade(
   options: BuildingRenderOptions,
   color: Color3,
   apertureOffset = (bayWidth - apertureWidth) / 2,
-  facadeDepth?: FacadeDepthBuilder[],
+  facadeDepth?: FacadeShellBuilder,
 ): void {
   const leftWidth = Math.max(0, apertureOffset);
   const rightWidth = Math.max(0, bayWidth - apertureOffset - apertureWidth);
@@ -2040,6 +2046,19 @@ function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefi
 }
 
 type FacadeDepthBuilder = { bottom: number; build: () => Mesh };
+interface FacadeShellBuilder {
+  panels: FacadeDepthBuilder[];
+  geometry: WindowGeometry;
+}
+
+function flushFacadeShell(parts: Mesh[], scene: Scene, builder: FacadeShellBuilder): void {
+  const mesh = createWindowMesh(scene, builder.geometry);
+  if (mesh) {
+    mesh.name = "buildingFacadeShell";
+    parts.push(mesh);
+  }
+  builder.geometry = { positions: [], indices: [], normals: [], colors: [] };
+}
 
 function addFacadePanel(
   parts: Mesh[],
@@ -2055,18 +2074,16 @@ function addFacadePanel(
   color: Color3,
   thicknessMeters = BUILDING_WALL_THICKNESS_METERS,
   outwardOffsetMeters = 0,
-  facadeDepth?: FacadeDepthBuilder[],
+  facadeDepth?: FacadeShellBuilder,
 ): void {
   if (widthMeters <= 0.02 || heightMeters <= 0.02) return;
   if (facadeDepth) {
-    const face: WindowGeometry = { positions: [], indices: [], normals: [], colors: [] };
-    addWindowQuad(face, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters, widthMeters,
+    addWindowQuad(facadeDepth.geometry, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters, widthMeters,
       bottomElevation, heightMeters, options, color, 1,
       outwardOffsetMeters + thicknessMeters / 2 - BUILDING_WALL_THICKNESS_METERS * 0.56);
-    const mesh = createWindowMesh(scene, face)!;
-    mesh.name = "buildingFacadeShell";
-    parts.push(mesh);
-    facadeDepth.push({ bottom: bottomElevation, build: () => {
+    // Upload bounded batches, not one GPU mesh per four-vertex wall face.
+    if (facadeDepth.geometry.positions.length >= 4096 * 3) flushFacadeShell(parts, scene, facadeDepth);
+    facadeDepth.panels.push({ bottom: bottomElevation, build: () => {
       const depthParts: Mesh[] = [];
       addFacadePanel(depthParts, scene, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters,
         widthMeters, bottomElevation, heightMeters, options, color, thicknessMeters, outwardOffsetMeters);

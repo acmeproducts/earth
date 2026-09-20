@@ -8,6 +8,7 @@
     "test:oslo-walk": "node tests/drive-render-performance.mjs --oslo-walk",
     "test:vista": "node tests/drive-render-performance.mjs --vista",
     "test:loading": "node tests/drive-render-performance.mjs --loading",
+    "test:promotion": "node tests/drive-render-performance.mjs --promotion",
     "benchmark:nyc-roads": "node --import ./tests/register-typescript.mjs scripts/benchmark-nyc-roads.mjs",
     "test:memory": "node tests/drive-render-performance.mjs --memory-soak",
     "dev": "webpack serve --mode development",

@@ -46,6 +46,23 @@ function plan(id, properties = {}) {
   return planBuilding({ id: `building/14/${id}/0`, polygon: footprint, properties });
 }
 
+test("high-rise facade faces upload in bounded batches rather than one mesh per panel", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  try {
+    let uploads = 0;
+    const addMesh = scene.addMesh.bind(scene);
+    scene.addMesh = (mesh, ...args) => {
+      if (mesh.name === "buildingWindows") uploads++;
+      return addMesh(mesh, ...args);
+    };
+    const mesh = ProceduralBuildingRenderer.createDetailed(scene,
+      plan(321, { render_height: 90, levels: 30, roof_shape: "flat" }), terrain, options);
+    assert.ok(mesh.metadata.windowCount > 100, "the full high-rise retains its windows");
+    assert.ok(uploads > 0 && uploads < 30, `expected batched wall/window uploads, got ${uploads}`);
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test("flat roof caps reach the outside faces of the facade walls", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

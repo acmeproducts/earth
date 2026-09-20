@@ -1125,38 +1125,48 @@ export class Game {
           renderMode: this.vegetationModes.grass,
         }) },
     ];
-    for (const { kind, label, progress, create } of fields) {
-      await reportInitializationProgress(onProgress, label, progress);
-      trace?.stage(kind + " and initial LOD");
-      const field = await create();
-      await this.prepareTileFieldLod(record, field, this.fieldLodDistance(kind), yieldControl);
-      if (!this.stageTileField(record, kind, field, generation)) return;
-    }
+    const buildVegetation = async () => {
+      for (const { kind, label, progress, create } of fields) {
+        await reportInitializationProgress(onProgress, label, progress);
+        trace?.stage(kind + " and initial LOD");
+        const field = await create();
+        await this.prepareTileFieldLod(record, field, this.fieldLodDistance(kind), yieldControl);
+        if (!this.stageTileField(record, kind, field, generation)) return;
+      }
 
-    await reportInitializationProgress(onProgress, "Scattering rocks", 86);
-    trace?.stage("rocks and vegetation activation");
-    const rockField = await createRockField(this.scene, terrainData, {
-      ...fieldOptions,
-      seed: layerSeed(terrainData.generationSeed, "rocks"),
-      densityScale: () => actorMix.rocks.densityScale,
-    });
-    if (generation !== this.streamingGeneration) {
-      rockField.root.dispose(false, true);
+      await reportInitializationProgress(onProgress, "Scattering rocks", 86);
+      trace?.stage("rocks and vegetation activation");
+      const rockField = await createRockField(this.scene, terrainData, {
+        ...fieldOptions,
+        seed: layerSeed(terrainData.generationSeed, "rocks"),
+        densityScale: () => actorMix.rocks.densityScale,
+      });
+      if (generation !== this.streamingGeneration) {
+        rockField.root.dispose(false, true);
+        return;
+      }
+      setTransformNodeOffset(rockField.root, record.offsetX, record.offsetZ);
+      record.rockField = rockField;
+      await this.activateTileVegetation(record, generation);
+      return rockField;
+    };
+
+    // Both phases stage disabled resources and use the same cooperative budget.
+    // Settle both before cleanup so a failed phase cannot leak a later result.
+    const [vegetationResult, mapResult] = await Promise.allSettled([
+      buildVegetation(),
+      OpenStreetMap.createLayer(this.scene, mapWays, terrainData, mapOptions, yieldControl),
+    ]);
+    if (mapResult.status === "rejected") throw mapResult.reason;
+    const mapFeatures = mapResult.value;
+    if (vegetationResult.status === "rejected" || !vegetationResult.value || generation !== this.streamingGeneration) {
+      OpenStreetMap.disposeLayer(mapFeatures.root);
+      if (vegetationResult.status === "rejected") throw vegetationResult.reason;
       return;
     }
-    setTransformNodeOffset(rockField.root, record.offsetX, record.offsetZ);
-    record.rockField = rockField;
-    await this.activateTileVegetation(record, generation);
-
+    const rockField = vegetationResult.value;
     await reportInitializationProgress(onProgress, "Creating map features", 88);
     trace?.stage("map features, boundaries, lamps and commit");
-    const mapFeatures = await OpenStreetMap.createLayer(
-      this.scene,
-      mapWays,
-      terrainData,
-      mapOptions,
-      yieldControl,
-    );
     trace?.stage("plot boundaries");
     const plotBoundaryLayer = await OpenStreetMapBarriers.createPlannedLayer(
       this.scene,
@@ -1189,6 +1199,8 @@ export class Game {
     await this.streamingYielder.nextFrame();
     trace?.stage("map world matrices/offset");
     setTransformNodeOffset(mapFeatures.root, record.offsetX, record.offsetZ);
+    // Only the static layer meshes, not their animated doors or lazy interiors.
+    registerStaticMeshCandidates(this.scene, mapFeatures.meshes);
     trace?.stage("map activation frame wait");
     await this.streamingYielder.nextFrame();
     if (generation !== this.streamingGeneration) {

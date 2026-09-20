@@ -27,6 +27,7 @@ const hook = registerHooks({
   },
 });
 const { OpenStreetMap } = await import("../src/world/OpenStreetMap.ts");
+const { setTransformNodeOffset } = await import("../src/world/StreamedTile.ts");
 hook.deregister();
 const { ProceduralBuildingRenderer } = await import("../src/procedural/ProceduralBuildingRenderer.ts");
 const { buildingOwnerWorldTile } = await import("../src/buildings/BuildingTileOwnership.ts");
@@ -254,7 +255,13 @@ test("dense standalone and mixed map layers preserve batching, staging and detai
       assert.equal(layer.meshes.length, 16);
       assert.ok(yields >= 32);
       assert.ok(layer.meshes.every((mesh) => mesh.parent === layer.root && mesh.isEnabled()));
-      assert.ok(layer.meshes.every((mesh) => mesh.checkCollisions));
+      assert.ok(layer.meshes.every((mesh) => mesh.checkCollisions ||
+        mesh.getChildMeshes().some(child => child.checkCollisions && child.geometry === mesh.geometry)));
+      setTransformNodeOffset(layer.root, 100, 200);
+      for (const mesh of layer.root.getChildMeshes().filter(mesh => mesh.checkCollisions)) {
+        assert.equal(mesh.getWorldMatrix().m[12], 100, "frozen colliders follow tile translation");
+        assert.equal(mesh.getWorldMatrix().m[14], 200);
+      }
       OpenStreetMap.disposeLayer(layer.root);
     }
   } finally {

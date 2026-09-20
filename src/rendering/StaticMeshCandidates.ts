@@ -29,6 +29,9 @@ export function registerStaticMeshCandidates(scene: Scene, meshes: readonly Abst
       let count = 0;
       for (let index = 0; index < source.length; index++) {
         const mesh = source.data[index];
+        // Cooperative builders can leave thousands of disabled parts in the
+        // scene across frames. Skip them before Babylon updates their bounds.
+        if (!mesh.isEnabled()) continue;
         if (staticMeshes.has(mesh)) {
           if (!mesh.isVisible) continue;
           if (!mesh.alwaysSelectAsActiveMesh) {

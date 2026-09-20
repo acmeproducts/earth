@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MeshBuilder, NullEngine, Scene, UniversalCamera, Vector3 } from "@babylonjs/core";
+import { MeshBuilder, NullEngine, Scene, TransformNode, UniversalCamera, Vector3 } from "@babylonjs/core";
 import { registerStaticMeshCandidates } from "../src/rendering/StaticMeshCandidates.ts";
 
 test("static candidates follow camera turns, streamed additions, overrides and disposal", () => {
@@ -23,6 +23,20 @@ test("static candidates follow camera turns, streamed additions, overrides and d
       return result.data.slice(0, result.length);
     };
     assert.deepEqual(new Set(candidates()), new Set([ahead, dynamic]));
+    dynamic.setEnabled(false);
+    assert.ok(!candidates().includes(dynamic), "staged geometry skips active-mesh evaluation");
+    dynamic.setEnabled(true);
+    assert.ok(candidates().includes(dynamic), "committed geometry returns without registration");
+    const stagingRoot = new TransformNode("staging", scene);
+    stagingRoot.setEnabled(false);
+    dynamic.parent = stagingRoot;
+    let matrixUpdates = 0;
+    const computeWorldMatrix = dynamic.computeWorldMatrix.bind(dynamic);
+    dynamic.computeWorldMatrix = (...args) => { matrixUpdates++; return computeWorldMatrix(...args); };
+    assert.ok(!candidates().includes(dynamic), "disabled ancestors also hide staged parts");
+    assert.equal(matrixUpdates, 0, "rendering does not update disabled geometry bounds");
+    dynamic.parent = null;
+    assert.ok(candidates().includes(dynamic));
     let tests = 0;
     const originalTest = behind.isInFrustum.bind(behind);
     behind.isInFrustum = (...args) => { tests++; return originalTest(...args); };

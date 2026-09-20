@@ -58,6 +58,25 @@ test("frame budget exposes an explicit boundary for large indivisible work", () 
   assert.equal(typeof yielder.nextFrame, "function");
 });
 
+test("concurrent construction phases share a frame boundary and its budget", async () => {
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const callbacks = [];
+  globalThis.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+  try {
+    const yielder = createFrameBudgetYielder(0);
+    const first = yielder();
+    const second = yielder();
+    const explicit = yielder.nextFrame();
+    assert.equal(callbacks.length, 1, "one shared boundary, not one reset per phase");
+    callbacks[0](0);
+    await Promise.all([first, second, explicit]);
+    const next = yielder();
+    assert.equal(callbacks.length, 2, "the next slice gets a new boundary");
+    callbacks[1](0);
+    await next;
+  } finally { globalThis.requestAnimationFrame = originalRequestAnimationFrame; }
+});
+
 test("unfocused documents keep streaming without waiting for animation frames", async () => {
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   let animationCallback;

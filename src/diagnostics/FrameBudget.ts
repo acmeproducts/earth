@@ -120,10 +120,14 @@ export function createFrameBudgetYielder(
   budget: number | (() => number) = DEFAULT_BUDGET_MILLISECONDS,
 ): FrameBudgetYielder {
   let frameStart = performance.now();
+  let pendingFrame: Promise<void> | undefined;
 
-  const nextFrame = async (): Promise<void> => {
-    await waitForNextFrame();
-    frameStart = performance.now();
+  const nextFrame = (): Promise<void> => {
+    // Concurrent tile phases share one slice, including its frame boundary.
+    return pendingFrame ??= waitForNextFrame().then(() => {
+      frameStart = performance.now();
+      pendingFrame = undefined;
+    });
   };
   const yieldIfNeeded = async (): Promise<void> => {
     const budgetMilliseconds = typeof budget === "function" ? budget() : budget;
