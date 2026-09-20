@@ -19,6 +19,8 @@ of roads, buildings, water, vegetation, weather, seasons, stars, and a fictional
 
 ## Screenshots
 
+![View across Manhattan rooftops toward the skyline](examples/manhattan-skyline.jpg)
+
 ![Waterfront house surrounded by trees and grass](examples/GESOsrvGO2.jpg)
 
 ![Aerial view of forested hills, roads, and buildings with the settings panel open](examples/chrome_xXVI3f2PjG.jpg)
