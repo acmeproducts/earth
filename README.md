@@ -72,4 +72,4 @@ Coverage is 60 S to 83 N. Dataset and attribution:
 
 ## License
 
-MIT
+[MIT](LICENSE)
