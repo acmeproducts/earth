@@ -76,17 +76,27 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
     try {
       const polygons = polygonClipping.union(rings(group[0].polygon), ...group.slice(1).map((s) => rings(s.polygon)));
       if (polygons.length !== 1) return group;
-      // Largest footprint supplies appearance/use; the tallest part supplies height/levels.
+      // Appearance, occupancy evidence, and height can come from different parts.
       const primary = group.reduce((a, b) => area(b.polygon) > area(a.polygon) ? b : a);
       const tallest = group.reduce((a, b) => planBuilding(b).heightMeters > planBuilding(a).heightMeters ? b : a);
+      const useSource = group.reduce((a, b) => {
+        const evidence = (source: BuildingSource): number => {
+          const plan = planBuilding(source);
+          return !plan.interiorUse ? 0 : plan.interiorUseSource === "tags" ? 3 : plan.interiorUseSource === "poi" ? 2 : 1;
+        };
+        return evidence(b) > evidence(a) ? b : a;
+      }, primary);
+      const usePlan = planBuilding(useSource);
       const ids = [...new Set(group.map((s) => s.id))];
       return [{
         ...primary,
+        inferredUse: useSource.inferredUse,
         heightBands: buildHeightBands(group),
         id: ids.length === 1 ? ids[0] : `composite:${JSON.stringify(ids)}`,
         polygon: { outer: polygons[0][0], holes: polygons[0].slice(1) },
         properties: {
           ...primary.properties,
+          ...(usePlan.interiorUseSource === "tags" ? { "building:use": usePlan.interiorUse } : {}),
           render_height: planBuilding(tallest).heightMeters,
           render_min_height: Math.min(...group.map((s) => planBuilding(s).minimumHeightMeters)),
           levels: tallest.properties.levels,
@@ -99,18 +109,35 @@ export function mergeOverlappingBuildings(sources: readonly BuildingSource[]): B
 }
 
 function buildHeightBands(group: BuildingSource[]): BuildingHeightBand[] | undefined {
+  // Work near the origin: geographic coordinates make almost-collinear
+  // roof edges lose precision in the clipping sweep-line calculations.
+  const [originX, originY] = group[0].polygon.outer[0];
+  const scale = 1e6;
+  const project = (polygon: BuildingPolygon): LonLat[][] => rings(polygon).map(ring =>
+    ring.map(([x, y]): LonLat => [(x - originX) * scale, (y - originY) * scale]));
+  const restore = (ring: LonLat[]): LonLat[] => ring.map(([x, y]) => [x / scale + originX, y / scale + originY]);
   const parts = group.flatMap((source) => source.heightBands ?? [{
     minimumHeightMeters: planBuilding(source).minimumHeightMeters,
     heightMeters: planBuilding(source).heightMeters,
     footprints: [source.polygon],
   }]);
   const heights = [...new Set(parts.flatMap((part) => [part.minimumHeightMeters, part.heightMeters]))].sort((a, b) => a - b);
-  const sections = heights.slice(0, -1).map((bottom, index) => {
-    const active = parts.filter((part) => part.minimumHeightMeters <= bottom && part.heightMeters >= heights[index + 1])
-      .flatMap((part) => part.footprints.map(rings));
-    return active.length ? polygonClipping.union(active[0], ...active.slice(1)) : [];
-  });
-  const polygons = (section: LonLat[][][]): BuildingPolygon[] => section.map(([outer, ...holes]) => ({ outer, holes }));
+  // Union creates new intersection vertices. Snap those before reusing them
+  // in subtraction so nearly identical edges agree (about 0.1 mm on Earth).
+  const snap = (section: LonLat[][][]): LonLat[][][] => section.map(polygon => polygon.map(ring =>
+    ring.map(([x, y]): LonLat => [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000])));
+  const activeSections = heights.slice(0, -1).map((bottom, index) => parts
+    .filter((part) => part.minimumHeightMeters <= bottom && part.heightMeters >= heights[index + 1])
+    .flatMap((part) => part.footprints.map(project)));
+  const sections = activeSections.map(active => active.length ? snap(polygonClipping.union(active[0], ...active.slice(1))) : []);
+  const exposed = (index: number, neighbor: number): LonLat[][][] => {
+    const clips = sections[neighbor] ?? [];
+    if (!clips.length) return sections[index];
+    return polygonClipping.difference(sections[index], ...clips);
+  };
+  const polygons = (section: LonLat[][][]): BuildingPolygon[] => section.map(([outer, ...holes]) => ({
+    outer: restore(outer), holes: holes.map(restore),
+  }));
   // A nested shorter part may introduce a height without changing the shell.
   // Keep the existing detailed renderer (including interiors) for uniform volumes.
   if (sections.every((section) => JSON.stringify(section) === JSON.stringify(sections[0]))) return undefined;
@@ -118,8 +145,8 @@ function buildHeightBands(group: BuildingSource[]): BuildingHeightBand[] | undef
     minimumHeightMeters: heights[index],
     heightMeters: heights[index + 1],
     footprints: polygons(section),
-    roofs: polygons(polygonClipping.difference(section, sections[index + 1] ?? [])),
-    soffits: polygons(polygonClipping.difference(section, sections[index - 1] ?? [])),
+    roofs: polygons(exposed(index, index + 1)),
+    soffits: polygons(exposed(index, index - 1)),
   }] : []);
 }
 

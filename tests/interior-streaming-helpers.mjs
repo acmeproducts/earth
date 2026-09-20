@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 const frames = new WeakMap();
 /** Advance the after-render callbacks without paying for an actual headless draw. */
 export function advanceInteriorFrame(scene) {
+  scene.activeCamera?.getViewMatrix(true);
   const original = scene.getFrameId;
   const frame = (frames.get(scene) ?? original.call(scene)) + 1;
   frames.set(scene, frame);

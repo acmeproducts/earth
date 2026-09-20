@@ -154,6 +154,37 @@ for (const [name, parts] of Object.entries(fixtures)) for (const scale of [1,10]
   });
 }
 
+for (const [name, parts] of Object.entries(fixtures)) test(`${name} streams upstairs without building the ground floor`, (t) => {
+  t.mock.method(performance, "now", () => 0);
+  const shrinkRing = (ring) => ring.map(([x, y]) => [0.5 + (x - 0.5) / 2, 0.5 + (y - 0.5) / 2]);
+  const smaller = parts.map((part) => ({ ...part, polygon: {
+    outer: shrinkRing(part.polygon.outer), holes: part.polygon.holes.map(shrinkRing),
+  } }));
+  const { engine, scene, mesh, point } = setup(smaller, 10);
+  try {
+    const tile = new TransformNode("tile", scene);
+    const exterior = ProceduralBuildingRenderer.merge([mesh], "buildings", tile);
+    const camera = new FreeCamera("camera", point(0.41, 0.5, 18), scene);
+    scene.activeCamera = camera;
+    drainInteriorBuilds(scene, () => exterior.metadata.loadedInteriorFloorCount > 0);
+    assert.deepEqual(exterior.metadata.loadedInteriors.map((entry) => entry.pending.floor.index), [2]);
+    const floor = exterior.metadata.loadedInteriors[0].mesh;
+    assert.equal(floor.metadata.furnitureReady, false);
+    assert.equal(scene.meshes.some((item) => item.name === "buildingInteriorRoot" && item.metadata.floorIndex === 0), false);
+    drainInteriorBuilds(scene);
+    assert.deepEqual(exterior.metadata.loadedInteriors.map((entry) => entry.pending.floor.index).sort(), [1, 2, 3]);
+    if (name.toLowerCase().includes("courtyard")) {
+      assert.equal(hits(floor.getChildMeshes(), point(0.5, 0.5, 19), new Vector3(0, -1, 0), 3).length, 0);
+    }
+    if (name === "towers") {
+      assert.equal(hits(floor.getChildMeshes(), point(0.5, 0.5, 19), new Vector3(0, -1, 0), 0.25).length, 0);
+    }
+    tile.dispose(false, true);
+    advanceInteriorFrame(scene);
+    assert.equal(scene.meshes.length, 0);
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test("complex gates preserve courtyard and tower voids, then open atomically and clean up", (t) => {
   t.mock.method(performance,"now", (() => { let time = 0; return () => time += 1000; })());
   for (const parts of [fixtures.courtyard,fixtures.towers]) {
@@ -176,8 +207,11 @@ test("complex gates preserve courtyard and tower voids, then open atomically and
       // need more simulated frames to furnish the complete complex.
       drainInteriorBuilds(scene, undefined, 40000);
       assert.equal(exterior.metadata.loadedInteriorCount,1);
-      assert.equal(exterior.metadata.interiorsLoaded,true);
-      assert.ok(scene.meshes.filter((m) => m.metadata?.buildingInteriorGate).every((m) => !m.isEnabled()));
+      assert.equal(exterior.metadata.interiorsLoaded,false, "remote floors stay deferred");
+      assert.equal(exterior.metadata.loadedInteriorFloorCount,2);
+      const gates = scene.meshes.filter((m) => m.metadata?.buildingInteriorGate);
+      assert.ok(gates.some((m) => !m.isEnabled()), "ready floors open independently");
+      assert.ok(gates.some((m) => m.isEnabled()), "remote floors remain blocked");
       camera.position.set(10000,12,10000);
       camera.getViewMatrix(true);
       advanceInteriorFrame(scene);

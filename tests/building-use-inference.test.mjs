@@ -34,9 +34,17 @@ test("explicit use wins and residential business POIs produce mixed floors", () 
 });
 
 test("conflicting business types stay unresolved regardless of feature order", () => {
-  const points = [point({ shop: "books" }), point({ office: "company" })];
+  const points = [point({ tourism: "hotel" }), point({ amenity: "school" })];
   assert.equal(infer(building(), points).interiorUse, undefined);
   assert.deepEqual(infer(building(), points), infer(building(), [...points].reverse()));
+});
+
+test("office tenants and street-level shops produce office upper floors", () => {
+  const points = [point({ class: "shop", subclass: "books" }), point({ class: "office", subclass: "company" })];
+  const plan = infer(building(), points);
+  assert.equal(plan.interiorUse, "office");
+  assert.equal(plan.groundFloorUse, "shop");
+  assert.deepEqual(plan, infer(building(), [...points].reverse()));
 });
 
 test("enclosing land use supplies a lower-priority prediction with the correct open-floor profile", () => {

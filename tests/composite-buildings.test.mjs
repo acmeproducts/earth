@@ -93,3 +93,49 @@ test("handles empty batches and duplicate provider footprints", () => {
   assert.equal(result[0].id, "same");
   assert.equal(area(result[0]), 4);
 });
+
+test("an untagged podium retains office evidence from a smaller tower", () => {
+  for (const tagged of [true, false]) {
+    const tower = source("tower", rectangle(2, 2, 4, 4), {
+      render_height: 30, ...(tagged ? { building: "office" } : {}),
+    });
+    if (!tagged) tower.inferredUse = { use: "office", source: "poi", groundFloorUse: "shop" };
+    const parts = [source("podium", rectangle(0, 0, 10, 10), { render_height: 6, colour: "red" }), tower];
+    const [result] = mergeOverlappingBuildings(parts);
+    const plan = planBuilding(result);
+    assert.equal(plan.interiorUse, "office");
+    assert.equal(plan.interiorUseSource, tagged ? "tags" : "poi");
+    assert.equal(plan.groundFloorUse, tagged ? undefined : "shop");
+    assert.equal(plan.wallColor, "red");
+    assert.deepEqual(mergeOverlappingBuildings([...parts].reverse()), [result]);
+  }
+});
+
+test("NYC near-collinear roof edges do not restore overlapping source buildings", () => {
+  // Reduced from OpenFreeMap tile 14/4823/6160. Subtracting unsnapped
+  // cross-sections used to throw and return the three original buildings.
+  const parts = [
+    source("2927195522", [
+      [-74.00649726390839,40.70862495929828],[-74.00658309459686,40.70854363079124],
+      [-74.0067332983017,40.70863715856578],[-74.00663137435913,40.70873068620895],
+      [-74.00655627250671,40.708690022032414],[-74.00654554367065,40.70869815486972],
+      [-74.00647044181824,40.70864529140951],[-74.00649726390839,40.70862495929828],
+    ], { render_height: 115, render_min_height: 0 }),
+    source("3753460342", [
+      [-74.00652408599854,40.708600560756594],[-74.00637924671173,40.70850703293067],
+      [-74.00648653507233,40.70840943853747],[-74.00663137435913,40.708498900070026],
+      [-74.00652408599854,40.708600560756594],
+    ], { render_height: 59, render_min_height: 51 }),
+    source("3753460372", [
+      [-74.00641143321991,40.70864529140951],[-74.00636851787567,40.708616826452044],
+      [-74.00639533996582,40.708592427907405],[-74.00638461112976,40.70858022863169],
+      [-74.006427526474,40.70853956436329],[-74.00648653507233,40.708576162205986],
+      [-74.00641143321991,40.70864529140951],
+    ], { render_height: 57, render_min_height: 54 }),
+  ];
+  const result = mergeOverlappingBuildings(parts);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].heightBands.map(b => [b.minimumHeightMeters, b.heightMeters]),
+    [[0, 51], [51, 54], [54, 57], [57, 59], [59, 115]]);
+  assert.deepEqual(mergeOverlappingBuildings([...parts].reverse()), result);
+});

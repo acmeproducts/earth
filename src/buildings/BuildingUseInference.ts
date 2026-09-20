@@ -44,6 +44,11 @@ export function inferBuildingUse(source: BuildingSource, context: BuildingUseCon
     const use = contextUse(point.properties, true);
     if (use) uses.add(use);
   }
+  // Street-level retail and office tenants are compatible evidence for an
+  // office building with a retail ground floor, not an unknown apartment block.
+  if (!tagged && uses.size === 2 && uses.has("office") && uses.has("shop")) {
+    return { ...source, inferredUse: { use: "office", source: "poi", groundFloorUse: "shop" } };
+  }
   if (uses.size > 1) return source;
   if (uses.size === 1) {
     const use = [...uses][0];

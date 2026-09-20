@@ -4,7 +4,8 @@ import { waitForNextFrame } from "../diagnostics/FrameBudget";
 import { BUILDING_INTERIOR_LOAD_DISTANCE_METERS } from "./BuildingRendererConstants";
 
 export const INTERIOR_WORK_BUDGET_MS = 2;
-export const INTERIOR_STEPS_PER_FRAME = 8;
+// Time is the normal limit; this guard also bounds work under a frozen/coarse clock.
+export const INTERIOR_STEPS_PER_FRAME = 256;
 export const INTERIOR_MERGE_VERTEX_BUDGET = 4096;
 const FOCUS_HYSTERESIS_METERS = 0.5;
 
@@ -14,6 +15,8 @@ export interface InteriorBuildJob {
   valid: () => boolean;
   /** Current distance in metres; evaluated again before each frame's work. */
   priority?: () => number;
+  background?: boolean;
+  blocksExterior?: () => boolean;
   complete: () => void;
   cancel: (retry: boolean) => void;
 }
@@ -48,7 +51,7 @@ class InteriorBuildQueue {
   }
 
   hasNearbyWork(): boolean {
-    return this.jobs.some(({ job }) => job.valid() &&
+    return this.jobs.some(({ job }) => !job.background && job.valid() && (job.blocksExterior?.() ?? true) &&
       (job.priority?.() ?? Infinity) <= BUILDING_INTERIOR_LOAD_DISTANCE_METERS);
   }
 
@@ -78,13 +81,15 @@ class InteriorBuildQueue {
     for (const entry of this.jobs) {
       const distance = entry.job.priority?.() ?? 0;
       if (entry === this.current) currentDistance = distance;
-      if (!selected || distance < nearest) {
+      if (!selected || Number(!!entry.job.background) < Number(!!selected.job.background) ||
+          (!!entry.job.background === !!selected.job.background && distance < nearest)) {
         selected = entry;
         nearest = distance;
       }
     }
     // Hysteresis applies only to an already active build, not initial queue ordering.
-    if (this.current && currentDistance <= nearest + FOCUS_HYSTERESIS_METERS) selected = this.current;
+    if (this.current && selected && !!this.current.job.background === !!selected.job.background &&
+        currentDistance <= nearest + FOCUS_HYSTERESIS_METERS) selected = this.current;
     if (!selected) return;
     const previous = this.current;
     this.current = selected;
@@ -146,9 +151,10 @@ class InteriorBuildQueue {
 
 const queues = new WeakMap<Scene, InteriorBuildQueue>();
 
-/** Let nearby interiors finish before spending more time constructing exteriors. */
+/** Give urgent floor structures a bounded head start over more exterior construction. */
 export async function yieldToNearbyInteriors(scene: Scene, isCancelled?: () => boolean): Promise<void> {
-  while (!isCancelled?.() && queues.get(scene)?.hasNearbyWork()) {
+  // Reserve most opportunities for urgent interiors without starving exterior streaming.
+  for (let frames = 0; frames < 2 && !isCancelled?.() && queues.get(scene)?.hasNearbyWork(); frames++) {
     const frame = scene.getFrameId();
     await waitForNextFrame();
     // Interiors advance on rendered frames. Do not park background loading when rendering stops.

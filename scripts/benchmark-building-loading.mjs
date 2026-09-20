@@ -52,7 +52,7 @@ for (const fixture of cases) {
         throw new Error(`Unexpected floor count: ${fixture.name}`);
       }
       const merge = measure(() => ProceduralBuildingRenderer.merge([exterior.result], "buildings", root));
-      // Exercise the actual proximity callback, including generation, materials and activation.
+      // Measure the first usable floor, excluding later furniture and adjacent-floor prefetch.
       const slices = [];
       while (merge.result.metadata.loadedInteriorCount !== 1 && slices.length < 20000) {
         slices.push(measure(() => advanceInteriorFrame(scene)).ms);
@@ -85,4 +85,5 @@ for (const fixture of cases) {
   summaries.push(summary);
 }
 if (!summaries.length) throw new Error(`Unknown --case: ${caseName}`);
-console.log("[Benchmark summary] " + JSON.stringify({ renderer: "Babylon NullEngine (CPU only)", paced, summaries }, null, 2));
+console.log("[Benchmark summary] " + JSON.stringify({ renderer: "Babylon NullEngine (CPU only)",
+  milestone: "first usable floor structure", paced, summaries }, null, 2));

@@ -22,7 +22,8 @@ export interface BuildingSource {
   id: string;
   polygon: BuildingPolygon;
   properties: Readonly<Record<string, unknown>>;
-  inferredUse?: { use: BuildingInteriorUse; source: "poi" | "landuse"; groundFloorOnly?: boolean };
+  inferredUse?: { use: BuildingInteriorUse; source: "poi" | "landuse"; groundFloorOnly?: boolean;
+    groundFloorUse?: BuildingInteriorUse };
 }
 
 export type BuildingDetailLevel = "far" | "detailed";
@@ -97,7 +98,7 @@ export function planBuilding(source: BuildingSource): BuildingPlan {
     buildingClass: mappedClass === "generic" && interiorUse
       ? normalizeBuildingClass(interiorUse === "shop" ? "retail" : interiorUse) : mappedClass,
     interiorUse,
-    groundFloorUse: inference?.groundFloorOnly ? inference.use : undefined,
+    groundFloorUse: inference?.groundFloorOnly ? inference.use : inference?.groundFloorUse,
     interiorUseSource: taggedUse ? "tags" : inference?.source,
     heightMeters,
     minimumHeightMeters,

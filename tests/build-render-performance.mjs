@@ -3,7 +3,7 @@ import webpack from 'webpack';
 import { fileURLToPath } from 'node:url';
 
 const compiler = webpack({ mode: 'development', devtool: false,
-  entry: fileURLToPath(new URL(process.argv.includes('--pixels')
+  entry: fileURLToPath(new URL(process.argv.includes('--floor-streaming') ? './fixtures/floor-streaming.ts' : process.argv.includes('--pixels')
     ? './fixtures/cloud-shadow-pixels.ts' : './fixtures/performance-scene.ts', import.meta.url)),
   output: { path: process.argv[2], filename: 'fixture.js' },
   resolve: { extensions: ['.ts', '.js'] },

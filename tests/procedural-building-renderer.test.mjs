@@ -960,7 +960,7 @@ test("interior construction is limited across all tile chunks in a frame", () =>
 
 test("leaving mid-build cleans up staged meshes and returning can finish the interior", (t) => {
   let clock = 0;
-  t.mock.method(performance, "now", () => clock);
+  t.mock.method(performance, "now", () => ++clock);
   const engine = new NullEngine(), scene = new Scene(engine);
   try {
     const parent = new TransformNode("tile", scene);
@@ -994,9 +994,9 @@ test("leaving mid-build cleans up staged meshes and returning can finish the int
     const frames = drainInteriorBuilds(scene);
     assert.ok(frames > 1);
     assert.equal(exterior.metadata.loadedInteriorCount, 1);
-    assert.equal(exterior.metadata.pendingInteriorCount, 0);
-    const loadedRoot = scene.getMeshByName("buildingInteriorRoot");
-    const chunks = loadedRoot.getChildMeshes();
+    assert.equal(exterior.metadata.pendingInteriorCount, 1, "remote floors remain deferred");
+    const loadedRoot = scene.meshes.find((mesh) => mesh.name === "buildingInteriorRoot" && mesh.metadata.interiorReady);
+    const chunks = loadedRoot.getChildMeshes().filter((mesh) => mesh.name !== "buildingFurnitureRoot");
     assert.ok(chunks.length > 1, "interior remains in bounded merge batches");
     assert.ok(chunks.every((mesh) => mesh.getTotalVertices() <= 4096));
     assert.ok(chunks.every((mesh) => mesh.isEnabled() && mesh.checkCollisions));
@@ -1069,9 +1069,10 @@ test("unfinished interiors stay hidden and block walking and flying until an ato
       assert.ok(++frames < 20000);
     } while (exterior.metadata.loadedInteriorCount === 0);
     assert.ok(frames > 1);
-    const root = scene.getMeshByName("buildingInteriorRoot");
+    const root = scene.meshes.find((mesh) => mesh.name === "buildingInteriorRoot" && mesh.metadata.interiorReady);
     assert.equal(root.metadata.interiorReady, true);
-    assert.ok(root.getChildMeshes().every((mesh) => mesh.isEnabled()));
+    assert.ok(root.getChildMeshes().filter((mesh) => mesh.name !== "buildingFurnitureRoot").every((mesh) => mesh.isEnabled()));
+    assert.equal(root.metadata.furnitureReady, false, "entry does not wait for furniture");
     assert.equal(gate.isEnabled(), false);
     camera.position.set(0, 11.5, 0);
     camera.getViewMatrix(true);
@@ -1104,7 +1105,7 @@ test("all nearby buildings in one chunk are queued and focus follows their actua
     advanceInteriorFrame(scene);
     assert.equal(exterior.metadata.loadingInteriorCount, 2);
     const roots = [0, 1].map((index) => scene.meshes.find((mesh) =>
-      mesh.name === "buildingInteriorRoot" && mesh.metadata.buildingId === `focus-${index}`));
+      mesh.name === "buildingInteriorRoot" && mesh.metadata.buildingId === `focus-${index}` && mesh.metadata.floorIndex === 0));
     assert.ok(roots.every(Boolean));
     advanceInteriorFrame(scene);
     const firstCount = roots[0].getChildMeshes().length;
@@ -1115,7 +1116,51 @@ test("all nearby buildings in one chunk are queued and focus follows their actua
     advanceInteriorFrame(scene);
     assert.equal(roots[0].getChildMeshes().length, firstCount, "farther building pauses without losing parts");
     assert.ok(roots[1].getChildMeshes().length > 0, "new nearest building starts within a frame");
-    assert.ok(roots.every((root) => !root.isEnabled()));
+    assert.ok(roots.every((root) => root.isEnabled() === root.metadata.interiorReady));
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
+for (const scale of [1, 10]) test(`floors stream around camera height before furniture at scale ${scale}`, (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const engine = new NullEngine(), scene = new Scene(engine);
+  try {
+    const tile = new TransformNode("movedTile", scene);
+    tile.position.set(100, 7, -200);
+    const exterior = ProceduralBuildingRenderer.merge([
+      ProceduralBuildingRenderer.createDetailed(scene, plan(123, { render_height: 24.8, levels: 8 }), terrain,
+        { meshWidth: 100 / scale, meshDepth: 100 / scale, metersPerUnit: scale }),
+    ], "buildings", tile);
+    const camera = new FreeCamera("camera", tile.position.add(new Vector3(0, (10 + 4 * 3.1 + 1.5) / scale, 0)), scene);
+    scene.activeCamera = camera;
+    drainInteriorBuilds(scene, () => exterior.metadata.loadedInteriorFloorCount > 0);
+    const loaded = exterior.metadata.loadedInteriors;
+    assert.deepEqual(loaded.map((entry) => entry.pending.floor.index), [4], "current floor completes first");
+    assert.equal(loaded[0].mesh.metadata.furnitureReady, false);
+    assert.ok(loaded[0].mesh.isEnabled());
+    assert.equal(exterior.metadata.interiorsLoaded, false);
+    assert.equal(scene.meshes.some((mesh) => mesh.name === "buildingInteriorRoot" && mesh.metadata.floorIndex === 0), false,
+      "ground floor is not generated when arriving upstairs");
+    const children = loaded[0].mesh.getChildMeshes().filter((mesh) => mesh.isEnabled());
+    const origin = tile.position.add(new Vector3(-13 / scale, (10 + 4 * 3.1 + 1.5) / scale, -6 / scale));
+    for (const direction of [new Vector3(0, -1, 0), new Vector3(0, 1, 0)]) {
+      assert.ok(children.some((mesh) => mesh.intersects(Ray.Transform(new Ray(origin, direction, 3 / scale),
+        mesh.computeWorldMatrix(true).clone().invert())).hit), "ready floor has both floor and ceiling before adjacent floors finish");
+    }
+    drainInteriorBuilds(scene);
+    assert.deepEqual(loaded.map((entry) => entry.pending.floor.index).sort(), [3, 4, 5]);
+    assert.ok(loaded.every((entry) => entry.mesh.metadata.furnitureReady));
+    const old = loaded.find((entry) => entry.pending.floor.index === 3).mesh;
+    camera.position.y = tile.position.y + (10 + 6 * 3.1 + 1.5) / scale;
+    clock += 150;
+    drainInteriorBuilds(scene);
+    assert.equal(old.isDisposed(), true, "floors outside the vertical retention range unload");
+    assert.ok(loaded.some((entry) => entry.pending.floor.index === 6));
+    assert.ok(loaded.some((entry) => entry.pending.floor.index === 7));
+    assert.equal(loaded.some((entry) => entry.pending.floor.index < 4), false);
+    tile.dispose(false, true);
+    advanceInteriorFrame(scene);
+    assert.equal(scene.meshes.length, 0);
   } finally { scene.dispose(); engine.dispose(); }
 });
 

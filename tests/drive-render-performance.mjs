@@ -13,7 +13,8 @@ import { runMemorySoak } from './memory-soak.mjs';
 
 const reuseBundle = process.argv.find(a => a.startsWith('--bundle='))?.slice(9);
 const output = reuseBundle ?? mkdtempSync(join(tmpdir(), 'earth-render-perf-'));
-const pixelTest = process.argv.includes('--pixels');
+const floorStreaming = process.argv.includes('--floor-streaming');
+const pixelTest = process.argv.includes('--pixels') || floorStreaming;
 const osloWalk = process.argv.includes('--oslo-walk');
 const vista = process.argv.includes('--vista');
 const memorySoak = process.argv.includes('--memory-soak');
@@ -32,6 +33,7 @@ if (!reuseBundle) await new Promise((resolve, reject) => {
     ...process.execArgv,
     fileURLToPath(new URL('./build-render-performance.mjs', import.meta.url)), output,
     ...(pixelTest ? ['--pixels'] : []),
+    ...(floorStreaming ? ['--floor-streaming'] : []),
   ], { stdio: 'inherit', windowsHide: true });
   build.on('error', reject);
   build.on('exit', code => code === 0 ? resolve() : reject(new Error(`Performance fixture build exited ${code}`)));
@@ -156,7 +158,11 @@ try {
   } else if (pixelTest) {
     for (let i=0;i<120;i++) {
       const state=await evaluate(`({done:window.pixelComplete,error:window.pixelError,results:window.pixelResults})`);
-      if(state.error)throw new Error(state.error);
+      if(state.error) {
+        const screenshot = await send('Page.captureScreenshot', { format: 'png' });
+        writeFileSync(join(output, 'failure.png'), Buffer.from(screenshot.data, 'base64'));
+        throw new Error(state.error);
+      }
       if(state.done) {
         console.log('Pixel equivalence:',JSON.stringify(state.results));
         writeFileSync(join(output,'pixels.json'),JSON.stringify(state.results,null,2));

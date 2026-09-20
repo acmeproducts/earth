@@ -306,6 +306,22 @@ export class ProceduralBuildingRenderer {
         Math.hypot(point.x - interiorCenter.x, point.z - interiorCenter.z) * options.metersPerUnit,
       ));
       const interiorParts = detailed.interiorParts;
+      const floorInteriors = detailed.floors.map((floor, index): PendingBuildingInterior => ({
+        id: plan.id,
+        center: new Vector3(interiorCenter.x, (floor.bottom + floor.top) / (2 * options.metersPerUnit), interiorCenter.z),
+        radiusMeters: interiorRadiusMeters,
+        distanceTo: (position) => pointInRing(position, prepared.outline) ? 0 :
+          Math.sqrt(nearestFootprintPoint(position, prepared.outline).distanceSquared) * options.metersPerUnit,
+        floor: { bottom: floor.bottom / options.metersPerUnit, top: floor.top / options.metersPerUnit,
+          margin: (floor.top - floor.bottom) / options.metersPerUnit, metersPerUnit: options.metersPerUnit, index },
+        createGate: (parent) => {
+          const gate = createInteriorGate(scene, prepared.outline, floor.bottom, floor.top, options, parent);
+          if (index === 0) detailed.createShellDoors(gate);
+          return gate;
+        },
+        build: (root) => buildInteriorChunks(floor.structure, root, options),
+        furnish: (root) => buildInteriorChunks(floor.furniture, root, options),
+      }));
       merged.metadata = {
         buildingId: plan.id,
         buildingClass: plan.buildingClass,
@@ -326,6 +342,7 @@ export class ProceduralBuildingRenderer {
         interiorsLoaded: false,
         pendingInterior: {
           id: plan.id,
+          floors: floorInteriors,
           // Use the footprint radius when deciding proximity. A camera can be
           // inside a large building while still being far from its centroid.
           center: new Vector3(
@@ -663,6 +680,36 @@ function* createComplexEnterableBuilding(
     return Math.sqrt(Math.min(...[section.outline, ...section.holes].map((ring) =>
       nearestFootprintPoint(position, ring).distanceSquared))) * options.metersPerUnit;
   }));
+  const floorInteriors = [...new Set(sections.map((section) => section.bottom))].sort((a, b) => a - b)
+    .map((bottom, index): PendingBuildingInterior => {
+      const level = sections.filter((section) => section.bottom === bottom);
+      const top = Math.max(...level.map((section) => section.top));
+      return {
+        id: plan.id, center: new Vector3(center.x, (bottom + top) / (2 * options.metersPerUnit), center.z),
+        radiusMeters: Math.max(...level.flatMap((section) => section.outline.map((p) => pointDistance(p, center)))) * options.metersPerUnit,
+        floor: { bottom: bottom / options.metersPerUnit, top: top / options.metersPerUnit,
+          margin: (top - bottom) / options.metersPerUnit, metersPerUnit: options.metersPerUnit, index },
+        distanceTo: (position) => Math.min(...level.map((section) => {
+          if (pointInRing(position, section.outline) && !section.holes.some((hole) => pointInRing(position, hole))) return 0;
+          return Math.sqrt(Math.min(...[section.outline, ...section.holes].map((ring) =>
+            nearestFootprintPoint(position, ring).distanceSquared))) * options.metersPerUnit;
+        })),
+        createGate: (parent) => {
+          const root = new Mesh("complexBuildingInteriorGate", scene);
+          root.parent = parent;
+          for (const section of level) createInteriorGate(scene, section.outline,
+            section.bottom, section.top, options, root, section.holes);
+          for (const facade of facades) facade.createShellDoors(root, bottom, top);
+          return root;
+        },
+        build: (root) => buildInteriorChunks(function* (parts) {
+          for (const facade of facades) yield* facade.facadeInteriorParts(parts, bottom, top);
+          yield* createComplexInteriorParts(parts, scene, plan, sections, options, appearance, bottom, "structure");
+        }, root, options),
+        furnish: (root) => buildInteriorChunks((parts) =>
+          createComplexInteriorParts(parts, scene, plan, sections, options, appearance, bottom, "furniture"), root, options),
+      };
+    });
   mesh.metadata = {
     buildingId: plan.id,
     buildingClass: plan.buildingClass,
@@ -688,6 +735,7 @@ function* createComplexEnterableBuilding(
     skyReflection: options.skyReflection,
     pendingInterior: {
       id: plan.id,
+      floors: floorInteriors,
       center: new Vector3(center.x, (prepared.baseElevation + plan.heightMeters / 2) / options.metersPerUnit, center.z),
       radiusMeters: Math.max(...prepared.outline.map((p) => pointDistance(p, center))) * options.metersPerUnit,
       distanceTo,
@@ -763,34 +811,63 @@ function* connectInteriorSections(sections: InteriorSection[], plan: BuildingPla
 function* createComplexInteriorParts(
   parts: Mesh[], scene: Scene, plan: BuildingPlan, sections: InteriorSection[],
   options: BuildingRenderOptions, appearance: BuildingAppearance,
+  selectedBottom?: number, contents: "all" | "structure" | "furniture" = "all",
 ): Generator<string, void, void> {
   const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
   const elevations = [...new Set(sections.map((item) => item.bottom))].sort((a, b) => a - b);
   for (const section of sections) {
-    const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
-    const floors = openings.length ? polygonClipping.difference(sectionRings(section), ...openings) : [sectionRings(section)];
-    for (const floor of floors) {
-      const polygon = scenePolygon(floor);
-      const slab = createBuildingPrism(scene, polygon.outline,
-        section.bottom + BUILDING_FLOOR_THICKNESS_METERS, section.bottom, options, polygon.holes);
-      setSolidVertexColor(slab, floorColor);
-      parts.push(slab);
-      yield "complex floor slabs";
-    }
-    for (const stair of section.outgoing) {
-      createStairFlight(parts, scene, stair, section.bottom, section.top - section.bottom, options, floorColor);
-      yield "complex stair flights";
-    }
-    if (section.roofAccess) {
-      createStairFlight(parts, scene, section.roofAccess.stair, section.bottom,
-        section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
-      yield "complex roof stair flight";
+    if (selectedBottom !== undefined && section.bottom !== selectedBottom) continue;
+    if (contents !== "furniture") {
+      const openings = section.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
+      const floors = openings.length ? polygonClipping.difference(sectionRings(section), ...openings) : [sectionRings(section)];
+      for (const floor of floors) {
+        const polygon = scenePolygon(floor);
+        const slab = createBuildingPrism(scene, polygon.outline,
+          section.bottom + BUILDING_FLOOR_THICKNESS_METERS, section.bottom, options, polygon.holes);
+        if (selectedBottom !== undefined && elevations.indexOf(section.bottom) > 0) retainSlabFaces(slab, false);
+        setSolidVertexColor(slab, floorColor);
+        parts.push(slab);
+        yield "complex floor slabs";
+      }
+      for (const stair of section.outgoing) {
+        createStairFlight(parts, scene, stair, section.bottom, section.top - section.bottom, options, floorColor);
+        yield "complex stair flights";
+      }
+      if (section.roofAccess) {
+        createStairFlight(parts, scene, section.roofAccess.stair, section.bottom,
+          section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
+        yield "complex roof stair flight";
+      }
     }
     yield* createFloorContents(parts, scene, plan, section.outline, section.bottom, options, appearance,
       elevations.indexOf(section.bottom), elevations.length, section.top - section.bottom,
       section.interior, section.openings, section.facadeOpenings, resolvedInteriorUse(plan),
-      [...section.holes, ...section.clearances]);
+      [...section.holes, ...section.clearances], contents);
   }
+  if (selectedBottom !== undefined && contents === "structure") {
+    const tops = new Set(sections.filter((section) => section.bottom === selectedBottom).map((section) => section.top));
+    for (const upper of sections.filter((section) => tops.has(section.bottom))) {
+      const openings = upper.incoming.map((stair) => [stairOpening(stair, options).map((p): LonLat => [p.x, p.z])]);
+      const caps = openings.length ? polygonClipping.difference(sectionRings(upper), ...openings) : [sectionRings(upper)];
+      for (const cap of caps) {
+        const polygon = scenePolygon(cap);
+        const ceiling = createBuildingPrism(scene, polygon.outline, upper.bottom + BUILDING_FLOOR_THICKNESS_METERS,
+          upper.bottom, options, polygon.holes);
+        retainSlabFaces(ceiling, true);
+        setSolidVertexColor(ceiling, floorColor);
+        parts.push(ceiling);
+        yield "floor ceiling";
+      }
+    }
+  }
+}
+
+/** A floor owns its ceiling underside; the floor above owns the slab top and edges. */
+function retainSlabFaces(mesh: Mesh, ceilingOnly: boolean): void {
+  const normals = mesh.getVerticesData(VertexBuffer.NormalKind)!;
+  const indices = Array.from(mesh.getIndices()!);
+  mesh.setIndices(indices.filter((_, index) =>
+    (normals[indices[index - index % 3] * 3 + 1] < -0.5) === ceilingOnly));
 }
 
 function doorwayClearance(opening: Opening2D, options: BuildingRenderOptions): ScenePoint[] {
@@ -882,9 +959,11 @@ function* createInteriorParts(
   plannedInterior: PlannedInterior | undefined, entranceOpenings: Opening2D[],
   facadeOpenings: Opening2D[], interiorUse: NonNullable<BuildingPlan["interiorUse"]>,
   roofAccess?: RoofAccess, roofElevation?: number,
+  selectedFloor?: number, contents: "all" | "structure" | "furniture" = "all",
 ): Generator<string, void, void> {
   const floorColor = mixColor(appearance.wall, new Color3(0.34, 0.31, 0.27), 0.48);
   for (let floor = 0; floor < floorCount; floor++) {
+    if (contents === "furniture" || (selectedFloor !== undefined && floor !== selectedFloor)) continue;
     const slabBottom = baseElevation + floor * storyHeight;
     const slab = createBuildingPrism(
       scene,
@@ -896,12 +975,23 @@ function* createInteriorParts(
         ? [stairOpening(stairs[floor - 1], options)]
         : undefined,
     );
+    if (selectedFloor !== undefined && floor > 0) retainSlabFaces(slab, false);
     setSolidVertexColor(slab, floorColor);
     parts.push(slab);
     yield "floor slabs";
   }
+  if (selectedFloor !== undefined && selectedFloor + 1 < floorCount && contents === "structure") {
+    const top = baseElevation + (selectedFloor + 1) * storyHeight;
+    const ceiling = createBuildingPrism(scene, outline, top + BUILDING_FLOOR_THICKNESS_METERS, top, options,
+      stairs[selectedFloor] ? [stairOpening(stairs[selectedFloor], options)] : undefined);
+    retainSlabFaces(ceiling, true);
+    setSolidVertexColor(ceiling, floorColor);
+    parts.push(ceiling);
+    yield "floor ceiling";
+  }
   if (stairs.length > 0) {
     for (let floor = 0; floor < stairs.length; floor++) {
+      if (contents === "furniture" || (selectedFloor !== undefined && floor !== selectedFloor)) continue;
       createStairFlight(
         parts,
         scene,
@@ -915,7 +1005,8 @@ function* createInteriorParts(
     }
   }
 
-  if (roofAccess && roofElevation !== undefined) {
+  if (contents !== "furniture" && (selectedFloor === undefined || selectedFloor === floorCount - 1) &&
+      roofAccess && roofElevation !== undefined) {
     const floorElevation = baseElevation + (floorCount - 1) * storyHeight;
     createStairFlight(parts, scene, roofAccess.stair, floorElevation,
       roofElevation - floorElevation - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
@@ -923,10 +1014,11 @@ function* createInteriorParts(
   }
 
   for (let floor = 0; floor < floorCount; floor++) {
+    if (selectedFloor !== undefined && floor !== selectedFloor) continue;
     yield* createFloorContents(parts, scene, plan, outline, baseElevation + floor * storyHeight,
       options, appearance, floor, floorCount, storyHeight, plannedInterior, entranceOpenings,
       facadeOpenings, interiorUse, [stairs[floor - 1], stairs[floor], floor === floorCount - 1 ? roofAccess?.stair : undefined]
-        .filter((stair): stair is StairLayout => stair !== undefined).map((stair) => stairClearance(stair, options)));
+        .filter((stair): stair is StairLayout => stair !== undefined).map((stair) => stairClearance(stair, options)), contents);
   }
 }
 
@@ -936,6 +1028,7 @@ function* createFloorContents(
   floor: number, floorCount: number, storyHeight: number, plannedInterior: PlannedInterior | undefined,
   entranceOpenings: Opening2D[], facadeOpenings: Opening2D[],
   interiorUse: NonNullable<BuildingPlan["interiorUse"]>, holes: ScenePoint[][] = [],
+  contents: "all" | "structure" | "furniture" = "all",
 ): Generator<string, void, void> {
   const doorOpenings = [...(floor === 0 ? entranceOpenings : [])];
   if (plannedInterior) {
@@ -962,6 +1055,7 @@ function* createFloorContents(
     }
     const furniture: FurniturePlacement[] = [];
     for (let index = 0; index < floorInterior.apartments.length; index++) {
+      if (contents === "structure") break;
       const apartment = floorInterior.apartments[index];
       for (const room of apartment.rooms) {
         furniture.push(...planInteriorFurniture({ ...apartment, rooms: [room] },
@@ -970,7 +1064,7 @@ function* createFloorContents(
         yield "furniture planning";
       }
     }
-    yield* addPlannedInteriorWalls(
+    if (contents !== "furniture") yield* addPlannedInteriorWalls(
       parts,
       scene,
       floorInterior,
@@ -983,7 +1077,8 @@ function* createFloorContents(
       floorElevation + BUILDING_FLOOR_THICKNESS_METERS,
       options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS,
       plan.detailSeed + floor);
-  } else if (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage") {
+  } else if (contents !== "structure" &&
+      (interiorUse === "warehouse" || interiorUse === "industrial" || interiorUse === "garage")) {
     const boundary = floorPolygon(outline, holes, options);
     const layout: ApartmentLayout = { boundary, rooms: [{ id: "open-floor", type: "room", polygon: boundary }],
       openings: [...entranceOpenings, ...facadeOpenings] };
@@ -994,6 +1089,7 @@ function* createFloorContents(
       options.metersPerUnit, storyHeight - BUILDING_FLOOR_THICKNESS_METERS, plan.detailSeed + floor);
   }
   const seenDoors = new Set<string>();
+  if (contents === "furniture") return;
   for (const opening of doorOpenings) {
     if (opening.type !== "door" || opening.fullHeight) continue;
     const key = canonicalSegmentKey(opening.start, opening.end);
@@ -1292,9 +1388,10 @@ function* createEnterableBuilding(
       }
     }
 
-    const facadeInteriorParts = function* (interiorParts: Mesh[]): Generator<string, void, void> {
-      for (const build of facadeDepth) {
-        const mesh = build();
+    const facadeInteriorParts = function* (interiorParts: Mesh[], bottom = -Infinity, top = Infinity): Generator<string, void, void> {
+      for (const panel of facadeDepth) {
+        if (panel.bottom < bottom - 1e-6 || panel.bottom >= top - 1e-6) continue;
+        const mesh = panel.build();
         setBuildingSurface(mesh, appearance.wallSurface);
         interiorParts.push(mesh);
         yield "facade thickness";
@@ -1302,8 +1399,23 @@ function* createEnterableBuilding(
     };
     return {
       facadeInteriorParts,
-      createShellDoors: (parent: TransformNode) => {
-        const doors = createWindowMesh(scene, shellDoors);
+      floors: Array.from({ length: floorCount }, (_, floor) => {
+        const bottom = baseElevation + floor * storyHeight;
+        const top = bottom + storyHeight;
+        const build = function* (interiorParts: Mesh[], contents: "structure" | "furniture") {
+          if (contents === "structure") yield* facadeInteriorParts(interiorParts, bottom, top);
+          yield* createInteriorParts(interiorParts, scene, plan, outline, baseElevation, options, appearance,
+            floorCount, storyHeight, stairs, plannedInterior, entranceOpenings, facadeOpenings, interiorUse,
+            roofAccess, roofElevation, floor, contents);
+        };
+        return { bottom, top, structure: (parts: Mesh[]) => build(parts, "structure"),
+          furniture: (parts: Mesh[]) => build(parts, "furniture") };
+      }),
+      createShellDoors: (parent: TransformNode, bottom = -Infinity, top = Infinity) => {
+        const doors = createWindowMesh(scene, { ...shellDoors, indices: shellDoors.indices.filter((_, index, indices) => {
+          const y = shellDoors.positions[indices[index - index % 3] * 3 + 1] * options.metersPerUnit;
+          return y >= bottom - 1e-6 && y < top - 1e-6;
+        }) });
         if (!doors) return;
         doors.name = "buildingShellDoors";
         setBuildingSurface(doors, "plaster");
@@ -1930,7 +2042,7 @@ function createWindowMesh(scene: Scene, geometry: WindowGeometry): Mesh | undefi
   return mesh;
 }
 
-type FacadeDepthBuilder = () => Mesh;
+type FacadeDepthBuilder = { bottom: number; build: () => Mesh };
 
 function addFacadePanel(
   parts: Mesh[],
@@ -1957,7 +2069,7 @@ function addFacadePanel(
     const mesh = createWindowMesh(scene, face)!;
     mesh.name = "buildingFacadeShell";
     parts.push(mesh);
-    facadeDepth.push(() => {
+    facadeDepth.push({ bottom: bottomElevation, build: () => {
       const depthParts: Mesh[] = [];
       addFacadePanel(depthParts, scene, edgeStart, edgeEnd, edgeLengthMeters, offsetMeters,
         widthMeters, bottomElevation, heightMeters, options, color, thicknessMeters, outwardOffsetMeters);
@@ -1967,7 +2079,7 @@ function addFacadePanel(
       const indices = Array.from(depth.getIndices()!);
       depth.setIndices(indices.filter((_, index) => normals[indices[index - index % 3] * 3 + 2] > -0.5));
       return depth;
-    });
+    } });
     return;
   }
   const directionX = (edgeEnd.x - edgeStart.x) * options.metersPerUnit / edgeLengthMeters;
@@ -2450,6 +2562,7 @@ function configureBuildingSurfaceMaterials(
       // the interior belonging to its footprint is resident; distant pending
       // interiors must not keep every window in the tile opaque.
       const hasLoadedInterior = loadedInteriors.some((interior) =>
+        (!interior.pending.floor || (y >= interior.pending.floor.bottom && y < interior.pending.floor.top)) &&
         Math.hypot(x - interior.center.x, z - interior.center.z) * metersPerUnit <=
           interior.pending.radiusMeters + BUILDING_WALL_THICKNESS_METERS,
       );
@@ -2506,19 +2619,25 @@ function configureLazyInteriors(
   pendingInteriors: PendingBuildingInterior[],
 ): void {
   if (pendingInteriors.length === 0) return;
+  pendingInteriors = pendingInteriors.flatMap((pending) => pending.floors ?? [pending]);
   exterior.metadata ??= {};
   delete exterior.metadata.pendingInterior;
   const loadedInteriors: LoadedBuildingInterior[] = [];
   const builds = new Map<PendingBuildingInterior, () => void>();
+  const furnishings = new Map<PendingBuildingInterior, () => void>();
   const gates = new Map(pendingInteriors.map((pending) => [pending, pending.createGate(exterior)]));
   let failedBuilds = 0;
   exterior.metadata.loadedInteriors = loadedInteriors;
   let lastCheckMilliseconds = -Infinity;
   const scene = exterior.getScene();
   const updateCounts = (): void => {
-    exterior.metadata.pendingInteriorCount = pendingInteriors.length + builds.size;
-    exterior.metadata.loadingInteriorCount = builds.size;
-    exterior.metadata.loadedInteriorCount = loadedInteriors.length;
+    const buildingCount = (items: PendingBuildingInterior[]): number => new Set(items.map((item) => item.id)).size;
+    exterior.metadata.pendingInteriorCount = buildingCount([...pendingInteriors, ...builds.keys()]);
+    exterior.metadata.loadingInteriorCount = buildingCount([...builds.keys(), ...furnishings.keys()]);
+    exterior.metadata.loadedInteriorCount = buildingCount(loadedInteriors.map((loaded) => loaded.pending));
+    exterior.metadata.loadedInteriorFloorCount = loadedInteriors.length;
+    exterior.metadata.loadingInteriorFloorCount = builds.size;
+    exterior.metadata.furnishingInteriorFloorCount = furnishings.size;
     exterior.metadata.failedInteriorCount = failedBuilds;
     exterior.metadata.interiorsLoaded = pendingInteriors.length + builds.size + failedBuilds === 0;
   };
@@ -2531,11 +2650,45 @@ function configureLazyInteriors(
   };
   const distance = (candidate: PendingBuildingInterior, localCamera = cameraPosition()): number =>
     localCamera ? candidate.distanceTo(localCamera) : Infinity;
+  const verticalGap = (candidate: PendingBuildingInterior, position = cameraPosition()): number =>
+    !position ? Infinity : !candidate.floor ? 0 :
+      Math.max(candidate.floor.bottom - position.y, position.y - candidate.floor.top, 0);
+  const inRange = (candidate: PendingBuildingInterior, unload: boolean, position = cameraPosition()): boolean =>
+    distance(candidate, position) <= (unload ? BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS : BUILDING_INTERIOR_LOAD_DISTANCE_METERS) &&
+    verticalGap(candidate, position) <= (candidate.floor ? candidate.floor.margin * (unload ? 2 : 1) : Infinity);
+  const priority = (candidate: PendingBuildingInterior): number =>
+    distance(candidate) + verticalGap(candidate) * (candidate.floor?.metersPerUnit ?? 1) * 4;
+  const furnish = (loaded: LoadedBuildingInterior): void => {
+    const candidate = loaded.pending;
+    if (!candidate.furnish || loaded.mesh.metadata.furnitureReady || loaded.mesh.metadata.furnitureFailed || furnishings.has(candidate)) return;
+    const root = new Mesh("buildingFurnitureRoot", scene);
+    root.parent = loaded.mesh;
+    root.setEnabled(false);
+    const cancel = enqueueInteriorBuild(scene, {
+      label: `building=${candidate.id} floor=${candidate.floor?.index} furniture`,
+      steps: candidate.furnish(root), background: true, priority: () => priority(candidate),
+      valid: () => !loaded.mesh.isDisposed() && exterior.isEnabled() && inRange(candidate, true),
+      complete: () => {
+        furnishings.delete(candidate);
+        root.setEnabled(true);
+        loaded.mesh.metadata.furnitureReady = true;
+        updateCounts();
+      },
+      cancel: (retry) => {
+        furnishings.delete(candidate);
+        root.dispose(false, true);
+        if (!retry && !loaded.mesh.isDisposed()) loaded.mesh.metadata.furnitureFailed = true;
+        updateCounts();
+      },
+    });
+    furnishings.set(candidate, cancel);
+  };
   updateCounts();
   // Residency checks only enqueue work. A single scene queue builds after rendering.
   const observer = scene.onAfterRenderObservable.add(() => {
     if (!exterior.isEnabled()) {
       for (const cancel of [...builds.values()]) cancel();
+      for (const cancel of [...furnishings.values()]) cancel();
       for (const loaded of loadedInteriors) if (loaded.mesh.isEnabled()) loaded.mesh.setEnabled(false);
       return;
     }
@@ -2546,7 +2699,8 @@ function configureLazyInteriors(
     if (!localCamera) return;
     for (let index = loadedInteriors.length - 1; index >= 0; index--) {
       const loaded = loadedInteriors[index];
-      if (distance(loaded.pending, localCamera) > BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS) {
+      if (!inRange(loaded.pending, true, localCamera)) {
+        furnishings.get(loaded.pending)?.();
         gates.get(loaded.pending)?.setEnabled(true);
         BuildingTrace.run(`building=${loaded.pending.id} interior unload`, () => loaded.mesh.dispose(false, true));
         pendingInteriors.push(loaded.pending);
@@ -2554,28 +2708,32 @@ function configureLazyInteriors(
       } else if (!loaded.mesh.isEnabled()) {
         loaded.mesh.setEnabled(true);
       }
+      if (!loaded.mesh.isDisposed()) furnish(loaded);
     }
     // Admit every nearby candidate so the scene queue can choose globally and switch focus.
     for (let index = pendingInteriors.length - 1; index >= 0; index--) {
-      if (distance(pendingInteriors[index], localCamera) > BUILDING_INTERIOR_LOAD_DISTANCE_METERS) continue;
+      if (!inRange(pendingInteriors[index], false, localCamera)) continue;
       const candidate = pendingInteriors.splice(index, 1)[0];
       const root = new Mesh("buildingInteriorRoot", scene);
-      root.metadata = { buildingId: candidate.id, interiorReady: false };
+      root.metadata = { buildingId: candidate.id, floorIndex: candidate.floor?.index, interiorReady: false, furnitureReady: false };
       root.parent = parent;
       root.setEnabled(false);
       const cancel = enqueueInteriorBuild(scene, {
         label: `building=${candidate.id} chunk=${parent.name}/${parent.uniqueId}`,
         steps: candidate.build(root),
-        priority: () => distance(candidate),
+        priority: () => priority(candidate),
+        blocksExterior: () => verticalGap(candidate) === 0,
         valid: () => !exterior.isDisposed() && exterior.isEnabled() && !root.isDisposed() &&
-          distance(candidate) <= BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
+          inRange(candidate, true),
         complete: () => {
           builds.delete(candidate);
-          // Publish atomically after rendering: no partial interiors or premature entry.
+          // Publish one complete floor's collision geometry before decorating it.
           root.setEnabled(true);
           root.metadata.interiorReady = true;
           gates.get(candidate)?.setEnabled(false);
-          loadedInteriors.push({ center: candidate.center, pending: candidate, mesh: root });
+          const loaded = { center: candidate.center, pending: candidate, mesh: root };
+          loadedInteriors.push(loaded);
+          furnish(loaded);
           updateCounts();
         },
         cancel: (retry) => {
@@ -2593,6 +2751,7 @@ function configureLazyInteriors(
   exterior.onDisposeObservable.addOnce(() => {
     scene.onAfterRenderObservable.remove(observer);
     for (const cancel of [...builds.values()]) cancel();
+    for (const cancel of [...furnishings.values()]) cancel();
     for (const loaded of loadedInteriors) loaded.mesh.dispose(false, true);
     for (const gate of gates.values()) gate.dispose(false, true);
   });

@@ -48,10 +48,16 @@ export interface Bounds {
 }
 
 export interface DetailedBuildingParts {
-  facadeInteriorParts: (parts: Mesh[]) => Generator<string, void, void>;
-  createShellDoors: (parent: TransformNode) => void;
+  facadeInteriorParts: (parts: Mesh[], bottom?: number, top?: number) => Generator<string, void, void>;
+  createShellDoors: (parent: TransformNode, bottom?: number, top?: number) => void;
   /** Reuses exterior planning; creates no interior geometry until advanced. */
   interiorParts: (parts: Mesh[]) => Generator<string, void, void>;
+  floors: {
+    bottom: number;
+    top: number;
+    structure: (parts: Mesh[]) => Generator<string, void, void>;
+    furniture: (parts: Mesh[]) => Generator<string, void, void>;
+  }[];
   parts: Mesh[];
   windowCount: number;
   floorCount: number;
@@ -84,6 +90,10 @@ export interface PendingBuildingInterior {
   distanceTo: (position: Vector3) => number;
   createGate: (parent: TransformNode) => Mesh;
   build: (root: TransformNode) => Generator<string, void, void>;
+  floors?: PendingBuildingInterior[];
+  /** Floor elevations and prefetch margin in building-local scene units. */
+  floor?: { bottom: number; top: number; margin: number; metersPerUnit: number; index: number };
+  furnish?: (root: TransformNode) => Generator<string, void, void>;
 }
 
 export interface LoadedBuildingInterior {

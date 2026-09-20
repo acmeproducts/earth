@@ -785,10 +785,34 @@ function mergeAlongSharedEdge(
         ...firstBoundary,
         ...secondBoundary.slice(1, -1),
       ]);
-      return outline.length >= 3 ? outline : undefined;
+      return outline.length >= 3 && simpleRoadBoundary(outline) ? outline : undefined;
     }
   }
   return undefined;
+}
+
+/** A shared edge alone does not guarantee that the merged ring is simple. */
+function simpleRoadBoundary(ring: readonly PlanningPoint[]): boolean {
+  for (let index = 0; index < ring.length; index++) {
+    const a = ring[index];
+    const b = ring[(index + 1) % ring.length];
+    const next = ring[(index + 2) % ring.length];
+    if (samePoint(a, b)) return false;
+    // Adjacent edges may meet, but must not double back along one another.
+    if (samePoint(closestPointOnSegment(next, a, b), next) ||
+        samePoint(closestPointOnSegment(a, b, next), a)) return false;
+    for (let other = index + 2; other < ring.length; other++) {
+      if (index === 0 && other === ring.length - 1) continue;
+      const c = ring[other];
+      const d = ring[(other + 1) % ring.length];
+      if (segmentIntersection(a, b, c, d) ||
+          samePoint(closestPointOnSegment(c, a, b), c) ||
+          samePoint(closestPointOnSegment(d, a, b), d) ||
+          samePoint(closestPointOnSegment(a, c, d), a) ||
+          samePoint(closestPointOnSegment(b, c, d), b)) return false;
+    }
+  }
+  return true;
 }
 
 function ringPath(
@@ -1465,7 +1489,11 @@ function partitionCandidates(
     }
     for (const { outline, bounds: pieceBounds } of pieces) {
       if (polygonArea(outline) <= 1e-10) continue;
-      const piece = { ...road, outline };
+      // Half-plane clipping preserves convexity mathematically, but nearly
+      // coincident intersections can leave tiny reversed edges in the ring.
+      const cleanOutline = convexHull(outline);
+      if (cleanOutline.length < 3 || polygonArea(cleanOutline) <= 1e-10) continue;
+      const piece = { ...road, outline: cleanOutline };
       accepted.push(piece);
       acceptedBounds.set(piece, pieceBounds);
       acceptedOrigin.set(piece, origin);
