@@ -86,11 +86,22 @@ test("date changes refresh autumn stages without rebuilding within a shared stag
   subject.tiles = new Map();
   let rebuilds = 0;
   subject.invalidateScenery = () => { rebuilds++; };
-  for (const [month, day, expected] of [[8, 10, 0], [8, 15, 1], [9, 1, 2], [9, 20, 2], [9, 21, 3], [10, 1, 4]]) {
+  for (const [month, day, expected] of [[8, 10, 0], [8, 17, 1], [8, 18, 1], [8, 21, 2], [8, 22, 2], [8, 24, 3]]) {
     subject.solarLighting = { currentDate: new Date(2026, month, day) };
     subject.refreshSeasonalScenery();
     assert.equal(rebuilds, expected);
   }
+});
+
+test("southern autumn cohorts refresh even during northern spring", () => {
+  const subject = new SeasonSubject();
+  subject.vegetationDate = new Date(2026, 2, 16);
+  subject.solarLighting = { currentDate: new Date(2026, 2, 17) };
+  subject.tiles = new Map();
+  let rebuilds = 0;
+  subject.invalidateScenery = () => { rebuilds++; };
+  subject.refreshSeasonalScenery();
+  assert.equal(rebuilds, 1);
 });
 
 test("live seasons change ground snow depth in place without swapping materials or colors", () => {

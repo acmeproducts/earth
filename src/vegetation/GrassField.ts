@@ -39,6 +39,7 @@ const GRASS_HEIGHT_METERS = 0.55;
 const GRASS_SPACING_METERS = 1.3;
 /** Let the sparse outer blades reach road verges; keep the roots clear. */
 const GRASS_SURFACE_CLEARANCE_METERS = 1.2;
+const GRASS_RIVER_CLEARANCE_SCALE = 0.75;
 const GRASSLAND_REFERENCE_COLOR = landCoverSurfaceColor(LandCoverClass.Grassland);
 const DEFAULT_DETAIL_TILES_ACROSS = 3;
 // Retain blade variation while anchoring brightness and saturation to ground.
@@ -51,8 +52,10 @@ const GRASS_WIDTH_SCALE_SPAN = 0.42;
 interface GrassFieldOptions extends VegetationPlacementOptions {
   /** Walls need clearance for the full clump, including its wind-driven fringe. */
   buildingExclusionMask?: HorizontalExclusionMask;
-  /** Lake outlines and river channels exclude the full grass clump footprint. */
+  /** Lake outlines exclude the full grass clump footprint. */
   lakeExclusionMask?: HorizontalExclusionMask;
+  /** Allow the sparse clump fringe to reach closer to river banks. */
+  riverExclusionMask?: HorizontalExclusionMask;
 }
 
 const OCCUPANCY: Readonly<Partial<Record<LandCoverClass, number>>> = {
@@ -75,7 +78,7 @@ export async function createGrassField(
 ): Promise<VegetationFieldResult> {
   const {
     meshWidth, meshDepth, metersPerUnit, modelVariantSeed, waterLineMeters,
-    landCover, exclusionMask, buildingExclusionMask, lakeExclusionMask, densityScale, renderMode, yieldControl,
+    landCover, exclusionMask, buildingExclusionMask, lakeExclusionMask, riverExclusionMask, densityScale, renderMode, yieldControl,
     root, random, columns, rows, cellWidth, cellDepth, matrices,
     renderHeight: grassHeight, variantBuckets,
   } = createFieldPlacement(scene, "grassField", options, {
@@ -107,6 +110,7 @@ export async function createGrassField(
         if (exclusionMask?.intersects(x, z, GRASS_SURFACE_CLEARANCE_METERS / metersPerUnit)) continue;
         if (buildingExclusionMask?.intersects(x, z, buildingClearance)) continue;
         if (lakeExclusionMask?.intersects(x, z, maximumHalfWidth)) continue;
+        if (riverExclusionMask?.intersects(x, z, maximumHalfWidth * GRASS_RIVER_CLEARANCE_SCALE)) continue;
         if (!isTerrainFootprintAbove(
           terrain,
           x,

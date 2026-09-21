@@ -90,6 +90,7 @@ export class PlayerControls {
 
     canvas.addEventListener("wheel", this.handleFlySpeedWheel, { passive: false });
     canvas.addEventListener("click", this.handleCanvasClick);
+    canvas.addEventListener("pointermove", this.handlePointerLockTransition, true);
     document.addEventListener("pointerlockchange", this.handlePointerLockChange);
     window.addEventListener("blur", this.handleWindowBlur);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
@@ -210,6 +211,7 @@ export class PlayerControls {
     const { canvas, scene } = this.options;
     canvas.removeEventListener("wheel", this.handleFlySpeedWheel);
     canvas.removeEventListener("click", this.handleCanvasClick);
+    canvas.removeEventListener("pointermove", this.handlePointerLockTransition, true);
     document.removeEventListener("pointerlockchange", this.handlePointerLockChange);
     window.removeEventListener("blur", this.handleWindowBlur);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -241,6 +243,14 @@ export class PlayerControls {
     if (!this.pointerLockWasActive) return;
     this.pointerLockWasActive = false;
     this.options.onPointerLockExit();
+  };
+
+  private readonly handlePointerLockTransition = (): void => {
+    // Cursor restoration can emit movement before pointerlockchange updates
+    // Babylon's cached lock state. Detach before it consumes that movement.
+    if (this.pointerLockWasActive && document.pointerLockElement !== this.options.canvas) {
+      this.handlePointerLockChange();
+    }
   };
 
   private readonly handleFlySpeedWheel = (event: WheelEvent): void => {

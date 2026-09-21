@@ -909,10 +909,11 @@ export class Game {
       offsetZ: offset.z,
       nativeTerrain: native,
       lakeSurfaces,
-      lakeExclusionMask: combineHorizontalExclusionMasks([new PolygonExclusionMask(
+      lakeExclusionMask: new PolygonExclusionMask(
         lakePolygons.map(polygon => ({ outer: polygon.outline, holes: polygon.holes })),
         Math.max(0.25, 20 / metersPerUnit),
-      ), new SegmentExclusionMask(waterwaySegments, Math.max(0.25, 20 / metersPerUnit))]),
+      ),
+      riverExclusionMask: new SegmentExclusionMask(waterwaySegments, Math.max(0.25, 20 / metersPerUnit)),
       farTreeField: carriedFarTreeField,
       farBuildings: carriedFarBuildings,
       farRoads: carriedFarRoads,
@@ -1092,6 +1093,7 @@ export class Game {
             Math.max(0.25, 20 / metersPerUnit),
           ),
           lakeExclusionMask: record.lakeExclusionMask,
+          riverExclusionMask: record.riverExclusionMask,
           seed: layerSeed(terrainData.generationSeed, "grass"),
           renderMode: this.vegetationModes.grass,
           densityScale: () => actorMix.grass.densityScale * snowFreeGroundCover,
@@ -1879,8 +1881,14 @@ export class Game {
         previousDate.getMonth() === date.getMonth() && previousDate.getDate() === date.getDate()) return;
     // Atlases use snow tiers, but low vegetation density follows the exact
     // depth. Both must be checked before keeping the generated fields.
-    const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").key;
-    const nextSeason = treeSeasonAt(date, 45, "oak").key;
+    // Every deciduous cohort has its own onset, including southern autumn.
+    const appearanceKey = (day: Date | undefined) => [45, -45].flatMap((latitude) =>
+      (["birch", "maple", "beech", "oak"] as const).flatMap((species) =>
+        [0, 1, 2].map((variant) => treeSeasonAt(day, latitude, species, variant).key),
+      ),
+    ).join("/");
+    const previousSeason = appearanceKey(this.vegetationDate);
+    const nextSeason = appearanceKey(date);
     this.vegetationDate = date;
     let rebuildScenery = previousSeason !== nextSeason;
     const metersPerUnit = this.terrainMetersPerUnit ?? 1;

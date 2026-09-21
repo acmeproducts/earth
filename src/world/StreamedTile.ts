@@ -49,6 +49,7 @@ export interface StreamedTile extends Partial<Record<VegetationFieldKind, Vegeta
   barrierField?: VegetationFieldResult;
   lakeSurfaces?: TerrainLakeLayer;
   lakeExclusionMask?: HorizontalExclusionMask;
+  riverExclusionMask?: HorizontalExclusionMask;
   farBuildings?: TransformNode;
   farRoads?: TransformNode;
   farTreeField?: VegetationFieldResult;

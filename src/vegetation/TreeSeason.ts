@@ -20,6 +20,7 @@ export interface TreeSeasonAppearance {
     /** Half-turned stop between the green and gold anchors. */
     yellowGreen: LeafTint;
     maturity: number;
+    greenShare?: number;
   };
 }
 
@@ -163,13 +164,17 @@ export function treeSeasonAt(
   }
 
   const climateStrength = Math.abs(latitude) < 35 ? 0.55 : 1;
+  const maturity = Math.max(0, Math.min(2, Math.floor(autumnVariant)));
   // A few shared bake stages keep peak color brief without daily atlas churn.
   const autumnMonth = (date.getMonth() - (latitude < 0 ? 2 : 8) + 12) % 12;
-  const autumnStage = autumnMonth === 0
-    ? (date.getDate() < 15 ? "green" : "turning")
-    : autumnMonth === 1
-      ? (date.getDate() <= 20 ? "peak" : "fading")
-      : "bare";
+  // Stagger whole crowns, not just their hue: early birches can turn while
+  // neighboring oaks and later individuals still retain their summer green.
+  const onsetDay = species === "birch" ? 24 : species === "maple" ? 28
+    : species === "beech" ? 32 : 36;
+  const autumnDay = autumnMonth * 30 + date.getDate();
+  const daysTurning = autumnDay - onsetDay + (maturity - 1) * 7;
+  const autumnStage = daysTurning < 0 ? "green" : daysTurning < 8 ? "turning"
+    : daysTurning < 28 ? "peak" : daysTurning < 39 ? "fading" : "bare";
   if (season === "autumn" && autumnStage === "green") {
     return { ...SUMMER, key: "autumn-green", season };
   }
@@ -177,7 +182,6 @@ export function treeSeasonAt(
   const turning = season === "autumn" && autumnStage === "turning";
   const fading = season === "autumn" && autumnStage === "fading";
   const seasonal = deciduousAppearance(bare ? "winter" : season, species);
-  const maturity = Math.max(0, Math.min(2, Math.floor(autumnVariant)));
   const tintForClimate = (tint: readonly [number, number, number]): LeafTint => [
     lerp(1, tint[0], climateStrength),
     lerp(1, tint[1], climateStrength),
@@ -199,9 +203,10 @@ export function treeSeasonAt(
     ...(season === "autumn" && !bare ? {
       autumnPalette: {
         maturity: turning ? 0 : maturity,
+        ...(turning ? { greenShare: 0.88 } : {}),
         yellowGreen: [...recolorForClimate(AUTUMN_YELLOW_GREEN).slice(0, 3) as [number, number, number], 0.5],
         tints: [
-          tintForClimate([1.05, 1, 0.75]),
+          tintForClimate([1, 1, 1]),
           recolorForClimate(AUTUMN_GOLD),
           recolorForClimate(autumnMatureColor(species)),
         ],
@@ -220,7 +225,7 @@ export function autumnLeafTint(season: TreeSeasonAppearance, sample: number): Le
   const palette = season.autumnPalette;
   if (!palette) return [season.foliageTint[0], season.foliageTint[1], season.foliageTint[2], 1];
   const [green, gold, mature] = palette.tints;
-  const greenShare = [0.48, 0.18, 0.04][palette.maturity];
+  const greenShare = palette.greenShare ?? [0.48, 0.18, 0.04][palette.maturity];
   if (sample <= greenShare) return green;
 
   // The turn runs green, yellow-green, gold, orange, then the species' mature

@@ -41,15 +41,15 @@ test("autumn has a short color peak followed by brown sparse crowns and leaf los
     const startMonth = latitude > 0 ? 8 : 2;
     const at = (month, day) => treeSeasonAt(new Date(2026, startMonth + month, day), latitude, "maple");
     const green = at(0, 1);
-    const turning = at(0, 20);
-    const peak = at(1, 1);
-    const fading = at(1, 21);
-    const bare = at(2, 1);
+    const turning = at(0, 28);
+    const peak = at(1, 10);
+    const fading = at(1, 26);
+    const bare = at(2, 10);
     assert.equal(green.leafCoverage, 1);
     assert.equal(green.autumnPalette, undefined);
     assert.ok(turning.leafCoverage > peak.leafCoverage);
     assert.ok(turning.autumnPalette.maturity < peak.autumnPalette.maturity);
-    assert.deepEqual(peak, at(1, 20), "shared peak bake lasts only twenty days");
+    assert.deepEqual(peak, at(1, 25), "peak ends before the crown fades");
     assert.ok(fading.leafCoverage < 0.3);
     assert.ok(fading.autumnPalette.tints[2][0] < peak.autumnPalette.tints[2][0]);
     assert.ok(bare.leafCoverage < 0.05);
@@ -69,7 +69,7 @@ test("tree models and impostors receive one shared seasonal variant", () => {
 });
 
 test("autumn crowns mix leaf colors and differ in maturity with stable cache identities", () => {
-  const date = new Date(2026, 9, 1);
+  const date = new Date(2026, 9, 15);
   const crowns = [0, 1, 2].map((variant) => treeSeasonAt(date, 52, "maple", variant));
   assert.equal(new Set(crowns.map((crown) => crown.key)).size, 3);
   const greenCounts = crowns.map((crown) => {
@@ -94,6 +94,25 @@ test("autumn crowns mix leaf colors and differ in maturity with stable cache ide
     treeSeasonAt(date, 52, "birch").autumnPalette.tints[2],
     crowns[1].autumnPalette.tints[2],
   );
+});
+
+test("September 20 keeps most crowns green and limits early color to small patches", () => {
+  for (const latitude of [52, 60, -52]) {
+    const date = new Date(2026, latitude < 0 ? 2 : 8, 20);
+    const crowns = ["birch", "maple", "beech", "oak"].flatMap((species) =>
+      [0, 1, 2].map((variant) => treeSeasonAt(date, latitude, species, variant)));
+    const green = crowns.filter((crown) => !crown.autumnPalette);
+    assert.equal(green.length, 11, "only the early birch cohort has started turning");
+    for (const crown of green) {
+      assert.equal(crown.leafCoverage, 1);
+      assert.deepEqual(crown.foliageTint, [1, 1, 1]);
+    }
+    const early = crowns.find((crown) => crown.autumnPalette);
+    const colors = Array.from({ length: 100 }, (_, index) => autumnLeafTint(early, index / 100));
+    assert.ok(colors.filter((color) => color === early.autumnPalette.tints[0]).length >= 88);
+    assert.deepEqual(early.autumnPalette.tints[0], [1, 1, 1, 1]);
+    assert.notDeepEqual(autumnLeafTint(early, 1), early.autumnPalette.tints[0]);
+  }
 });
 
 test("autumn variation leaves evergreen, tropical and other seasonal appearances alone", () => {

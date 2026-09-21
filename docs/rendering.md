@@ -57,9 +57,11 @@ Tree foliage is baked for the selected calendar date.
 Temperate deciduous trees gain sparse spring crowns, autumn color and leaf loss,
 or bare winter silhouettes; seasons reverse in the southern hemisphere, while
 tropical and evergreen crowns remain stable. Models and their impostors are
-generated from the same seasonal geometry. Autumn starts green, turns in late
-September, peaks October 1-20, then browns and thins before becoming mostly bare
-in November (shifted six months in the southern hemisphere). These shared bake
+generated from the same seasonal geometry. Autumn onset is staggered by species
+and three stable tree cohorts: early birches start with small patches of color
+while later trees remain summer green. Each cohort turns for eight days, peaks
+for twenty, then browns and thins before becoming mostly bare (shifted six months
+in the southern hemisphere). These shared bake
 stages limit atlas churn. Changing the date rebuilds scenery when its stage changes.
 During that hemisphere's winter, non-tropical terrain uses a shared snow
 material and grass placement is suppressed as well.
