@@ -1,5 +1,6 @@
 import { Mesh, ShaderMaterial, Vector3, VertexBuffer } from "@babylonjs/core";
 import { createFrameBudgetYielder } from "../diagnostics/FrameBudget";
+import { isPhone } from "../core/Device";
 
 export interface AlphaCutout { width: number; height: number; data: Uint8ClampedArray; }
 export interface ExposureGeometry {
@@ -172,7 +173,7 @@ export async function bakeTreeExposure(meshes: readonly Mesh[]): Promise<void> {
       cutout: url ? await loadCutout(url) : undefined,
     };
   }));
-  const baked = await bakeExposureGeometry(geometry, 256, createFrameBudgetYielder());
+  const baked = await bakeExposureGeometry(geometry, isPhone() ? 64 : 256, createFrameBudgetYielder());
   meshes.forEach((mesh, index) => {
     const source = baked[index];
     for (let band = 0; band < 2; band++) {

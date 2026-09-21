@@ -36,6 +36,29 @@ test("tropical and evergreen trees retain their crowns", () => {
   assert.equal(winterPine.leafCoverage, 1);
 });
 
+test("autumn has a short color peak followed by brown sparse crowns and leaf loss", () => {
+  for (const latitude of [52, -52]) {
+    const startMonth = latitude > 0 ? 8 : 2;
+    const at = (month, day) => treeSeasonAt(new Date(2026, startMonth + month, day), latitude, "maple");
+    const green = at(0, 1);
+    const turning = at(0, 20);
+    const peak = at(1, 1);
+    const fading = at(1, 21);
+    const bare = at(2, 1);
+    assert.equal(green.leafCoverage, 1);
+    assert.equal(green.autumnPalette, undefined);
+    assert.ok(turning.leafCoverage > peak.leafCoverage);
+    assert.ok(turning.autumnPalette.maturity < peak.autumnPalette.maturity);
+    assert.deepEqual(peak, at(1, 20), "shared peak bake lasts only twenty days");
+    assert.ok(fading.leafCoverage < 0.3);
+    assert.ok(fading.autumnPalette.tints[2][0] < peak.autumnPalette.tints[2][0]);
+    assert.ok(bare.leafCoverage < 0.05);
+    assert.equal(bare.autumnPalette, undefined);
+    assert.deepEqual(bare.foliageTint, treeSeasonAt(new Date(2026, startMonth + 3, 1), latitude, "maple").foliageTint);
+    assert.equal(new Set([green, turning, peak, fading, bare].map((crown) => crown.key)).size, 5);
+  }
+});
+
 test("tree models and impostors receive one shared seasonal variant", () => {
   const field = readFileSync(new URL("../src/vegetation/TreeField.ts", import.meta.url), "utf8");
   const impostor = readFileSync(new URL("../src/vegetation/TreeImpostor.ts", import.meta.url), "utf8");

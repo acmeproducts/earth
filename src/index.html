@@ -131,12 +131,23 @@
       left: 12px;
       bottom: 66px;
       z-index: 30;
-      pointer-events: none;
       text-shadow: 0 1px 2px #000;
       transition: opacity 180ms ease;
     }
 
-    #menuHint.hidden { opacity: 0; }
+    #menuHint.hidden { opacity: 0; pointer-events: none; }
+    button.menu-key-hint { padding: 10px; background: #151a20; border: 1px solid #647078; border-radius: 4px; cursor: pointer; }
+    #touchControls { position: fixed; inset: 0; pointer-events: none; z-index: 31; }
+    #touchControls > div { position: absolute; bottom: max(32px, env(safe-area-inset-bottom)); display: grid; gap: 6px; }
+    .touch-movement { left: max(12px, env(safe-area-inset-left)); grid-template-columns: repeat(3, 44px); }
+    .touch-actions { right: max(12px, env(safe-area-inset-right)); grid-template-columns: repeat(2, 44px); }
+    #touchControls button { width: 44px; height: 44px; pointer-events: auto; touch-action: none; user-select: none; border: 1px solid #89959b; border-radius: 4px; background: #182127d9; color: white; font: 20px system-ui; }
+    #touchControls button:active { background: #416858; }
+    .touch-movement button:first-child { grid-column: 2; }
+    .touch-movement button:nth-child(2) { grid-column: 1; }
+    body:not(.gameplay-input) #touchControls { display: none; }
+    .phone-input #flySpeed { bottom: auto; top: 48px; font-size: 11px; min-width: 0; }
+    .phone-input #menuHint { bottom: auto; top: 84px; }
 
     #sceneControls {
       position: fixed;

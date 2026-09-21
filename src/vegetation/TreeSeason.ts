@@ -163,7 +163,20 @@ export function treeSeasonAt(
   }
 
   const climateStrength = Math.abs(latitude) < 35 ? 0.55 : 1;
-  const seasonal = deciduousAppearance(season, species);
+  // A few shared bake stages keep peak color brief without daily atlas churn.
+  const autumnMonth = (date.getMonth() - (latitude < 0 ? 2 : 8) + 12) % 12;
+  const autumnStage = autumnMonth === 0
+    ? (date.getDate() < 15 ? "green" : "turning")
+    : autumnMonth === 1
+      ? (date.getDate() <= 20 ? "peak" : "fading")
+      : "bare";
+  if (season === "autumn" && autumnStage === "green") {
+    return { ...SUMMER, key: "autumn-green", season };
+  }
+  const bare = season === "autumn" && autumnStage === "bare";
+  const turning = season === "autumn" && autumnStage === "turning";
+  const fading = season === "autumn" && autumnStage === "fading";
+  const seasonal = deciduousAppearance(bare ? "winter" : season, species);
   const maturity = Math.max(0, Math.min(2, Math.floor(autumnVariant)));
   const tintForClimate = (tint: readonly [number, number, number]): LeafTint => [
     lerp(1, tint[0], climateStrength),
@@ -172,18 +185,20 @@ export function treeSeasonAt(
     1,
   ];
   const recolorForClimate = (color: readonly [number, number, number]): LeafTint => [
-    lerp(AUTUMN_LEAF_GREEN[0], color[0], climateStrength),
-    lerp(AUTUMN_LEAF_GREEN[1], color[1], climateStrength),
-    lerp(AUTUMN_LEAF_GREEN[2], color[2], climateStrength),
+    lerp(AUTUMN_LEAF_GREEN[0], fading ? lerp(color[0], 0.38, 0.8) : color[0], climateStrength),
+    lerp(AUTUMN_LEAF_GREEN[1], fading ? lerp(color[1], 0.27, 0.8) : color[1], climateStrength),
+    lerp(AUTUMN_LEAF_GREEN[2], fading ? lerp(color[2], 0.13, 0.8) : color[2], climateStrength),
     0,
   ];
   return {
-    key: `${climateStrength < 1 ? "mild-" : ""}${season}${season === "autumn" ? `-${maturity}` : ""}`,
+    key: `${climateStrength < 1 ? "mild-" : ""}${season}${season === "autumn" ? `-${autumnStage}-${maturity}` : ""}`,
     season,
-    leafCoverage: lerp(1, seasonal.leafCoverage + (season === "autumn" ? (1 - maturity) * 0.1 : 0), climateStrength),
-    ...(season === "autumn" ? {
+    leafCoverage: lerp(1, turning ? 0.96 - maturity * 0.02
+      : fading ? 0.28 - maturity * 0.06
+        : seasonal.leafCoverage + (season === "autumn" && !bare ? (1 - maturity) * 0.1 : 0), climateStrength),
+    ...(season === "autumn" && !bare ? {
       autumnPalette: {
-        maturity,
+        maturity: turning ? 0 : maturity,
         yellowGreen: [...recolorForClimate(AUTUMN_YELLOW_GREEN).slice(0, 3) as [number, number, number], 0.5],
         tints: [
           tintForClimate([1.05, 1, 0.75]),

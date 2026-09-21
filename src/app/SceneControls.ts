@@ -75,18 +75,22 @@ export class SceneControls {
 
     const heading = document.createElement("h1");
     heading.textContent = "Settings";
-    const closeHint = document.createElement("span");
+    const closeHint = document.createElement("button");
+    closeHint.type = "button";
+    closeHint.setAttribute("aria-label", "Close settings");
+    closeHint.addEventListener("click", () => this.setMenuOpen(false));
     closeHint.className = "menu-key-hint";
     closeHint.innerHTML = "<kbd>Esc</kbd> to close";
     heading.appendChild(closeHint);
     this.element.appendChild(heading);
 
     // A quiet reminder in the corner while the menu is closed.
-    this.menuHint = document.createElement("div");
+    this.menuHint = document.createElement("button");
     this.menuHint.id = "menuHint";
     this.menuHint.className = "menu-key-hint";
     this.menuHint.innerHTML = "<kbd>Esc</kbd> Settings";
-    this.menuHint.setAttribute("aria-hidden", "true");
+    this.menuHint.setAttribute("aria-label", "Open settings");
+    this.menuHint.addEventListener("click", () => this.setMenuOpen(true));
 
     const sceneGroup = this.createGroup("Scene");
     const weatherGroup = this.createGroup("Weather");

@@ -1,4 +1,5 @@
 import { creationStats } from "../diagnostics/CreationStats";
+import { isPhone } from "../core/Device";
 import { StreamingTrace } from "../diagnostics/StreamingDiagnostics";
 import {
   Color4,
@@ -242,15 +243,17 @@ export function createImpostorAssetProvider(
   const getDefaultSampling = (): ImpostorSampling => ({
     horizontalSamples: queryParameter(
       `${queryPrefix}-x-samples`,
-      definition.sampling.horizontalSamples,
+      { ...definition.sampling.horizontalSamples, default: isPhone() ? 3 : definition.sampling.horizontalSamples.default },
     ),
     verticalSamples: queryParameter(
       `${queryPrefix}-y-samples`,
-      definition.sampling.verticalSamples,
+      { ...definition.sampling.verticalSamples, default: isPhone() ? 3 : definition.sampling.verticalSamples.default },
     ),
     resolution: queryParameter(
       `${queryPrefix}-resolution`,
-      definition.sampling.resolution,
+      { ...definition.sampling.resolution, default: isPhone()
+        ? Math.max(definition.sampling.resolution.minimum, Math.min(64, definition.sampling.resolution.default))
+        : definition.sampling.resolution.default },
     ),
   });
 
@@ -382,6 +385,10 @@ async function captureDefinition(
   retainAtlasCanvases = true,
 ): Promise<ImpostorAssets> {
   const cooperative = cooperativeOverride ?? variant.key !== DEFAULT_IMPOSTOR_VARIANT.key;
+  // Phone gameplay uses the shader's unbaked lighting path: one color pass
+  // instead of three captures and an eight-direction CPU exposure bake.
+  // Export/demo captures keep directional lighting for inspection.
+  const directionalExposure = definition.directionalExposure && (!isPhone() || retainAtlasCanvases);
   // Stages nest inside the requesting tile's impostor acquire stage; the
   // label prefix feeds the per-tile timing aggregate.
   const trace = new StreamingTrace(`impostor ${definition.name} cooperative=${cooperative}`, "wall-clock", "capture frame wait");
@@ -408,7 +415,7 @@ async function captureDefinition(
     trace.stage("capture source textures");
     await waitForVertexColorTextures(meshes);
     trace.stage("capture exposure bake");
-    if (definition.directionalExposure) await bakeTreeExposure(meshes);
+    if (directionalExposure) await bakeTreeExposure(meshes);
     trace.stage("capture scene ready (shaders)");
     await scene.whenReadyAsync();
     trace.stage("capture atlas views and pixels");
@@ -450,7 +457,7 @@ async function captureDefinition(
     };
     const assets = await captureImpostorAtlases(scene, captureOptions);
     if (!retainAtlasCanvases) releaseAtlasCanvases(assets);
-    if (definition.directionalExposure) {
+    if (directionalExposure) {
       trace.stage("capture exposure atlas");
       try {
         assets.exposureTextures = await captureExposureAtlases(scene, captureOptions);

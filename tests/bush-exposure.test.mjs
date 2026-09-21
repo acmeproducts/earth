@@ -3,7 +3,13 @@ import test from "node:test";
 import { NullEngine, Scene, VertexBuffer } from "@babylonjs/core";
 import { createBushModel } from "../src/vegetation/BushImpostor.ts";
 
-test("bush foliage has directional occlusion that survives cached model scaling", async (t) => {
+for (const phone of [false, true]) test(`bush foliage has directional occlusion that survives cached model scaling (${phone ? "phone" : "desktop"})`, async (t) => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: phone ? "iPhone" : "desktop" } });
+  t.after(() => {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  });
   const originalFrame = globalThis.requestAnimationFrame;
   const originalCancel = globalThis.cancelAnimationFrame;
   globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 0);

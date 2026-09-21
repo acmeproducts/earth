@@ -80,6 +80,19 @@ test("unchanged calendar days do not resample terrain or revisit scenery", () =>
   subject.refreshSeasonalScenery();
 });
 
+test("date changes refresh autumn stages without rebuilding within a shared stage", () => {
+  const subject = new SeasonSubject();
+  subject.vegetationDate = new Date(2026, 8, 1);
+  subject.tiles = new Map();
+  let rebuilds = 0;
+  subject.invalidateScenery = () => { rebuilds++; };
+  for (const [month, day, expected] of [[8, 10, 0], [8, 15, 1], [9, 1, 2], [9, 20, 2], [9, 21, 3], [10, 1, 4]]) {
+    subject.solarLighting = { currentDate: new Date(2026, month, day) };
+    subject.refreshSeasonalScenery();
+    assert.equal(rebuilds, expected);
+  }
+});
+
 test("live seasons change ground snow depth in place without swapping materials or colors", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

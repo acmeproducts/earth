@@ -4,6 +4,7 @@ import {
   KeyboardEventTypes,
   Scene,
   UniversalCamera,
+  Vector3,
 } from "@babylonjs/core";
 import {
   adaptiveCameraNearClipMeters,
@@ -18,6 +19,8 @@ import { moveWalkerWithCollisions } from "./WalkerCollision";
 import type { WalkerBody } from "../vegetation/TreeTrunkCollision";
 import type { PlayerPose } from "../integration/GameProtocol";
 import { findInteraction } from "./InteractionSystem";
+import { isPhone } from "../core/Device";
+import { TouchControls } from "./TouchControls";
 
 const MIN_FLY_SPEED = 0.05;
 const MAX_FLY_SPEED = 10;
@@ -65,6 +68,8 @@ export class PlayerControls {
   private currentMovementMode: MovementMode = "fly";
   private lastLoadedX?: number;
   private lastLoadedZ?: number;
+  private readonly touchControls?: TouchControls;
+  private lookPointer?: { id: number; x: number; y: number };
 
   constructor(private readonly options: PlayerControlsOptions) {
     const { camera, canvas } = options;
@@ -87,9 +92,26 @@ export class PlayerControls {
     canvas.addEventListener("click", this.handleCanvasClick);
     document.addEventListener("pointerlockchange", this.handlePointerLockChange);
     window.addEventListener("blur", this.handleWindowBlur);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
     document.body.classList.add("gameplay-input");
 
     options.scene.onKeyboardObservable.add(this.handleKeyboard);
+    if (isPhone()) {
+      camera.inputs.removeByType("FreeCameraTouchInput");
+      camera.inputs.removeByType("FreeCameraMouseInput");
+      canvas.addEventListener("pointerdown", this.handleTouchLook);
+      canvas.addEventListener("pointermove", this.handleTouchLook);
+      canvas.addEventListener("pointerup", this.handleTouchLookEnd);
+      canvas.addEventListener("pointercancel", this.handleTouchLookEnd);
+      canvas.addEventListener("lostpointercapture", this.handleTouchLookEnd);
+      document.body.classList.add("phone-input");
+      this.touchControls = new TouchControls(code => {
+        if (options.isMenuOpen()) return;
+        if (code === "KeyG") this.toggleMovementMode();
+        if (code === "KeyF") this.getInteraction()?.activate();
+        if (code === "Space" && this.currentMovementMode === "walk") this.walkerJumpRequested = true;
+      });
+    }
   }
 
   get movementMode(): MovementMode {
@@ -97,6 +119,7 @@ export class PlayerControls {
   }
 
   updateMovement(): void {
+    this.updateTouchFlight();
     this.constrainToLoadedTile();
     this.updateWalker();
     const interaction = this.getInteraction();
@@ -124,6 +147,11 @@ export class PlayerControls {
   setMenuOpen(isOpen: boolean): void {
     const { camera, canvas } = this.options;
     this.heldMovementKeys.clear();
+    this.touchControls?.clear();
+    this.lookPointer = undefined;
+    this.walkerJumpRequested = false;
+    camera.cameraDirection.setAll(0);
+    camera.cameraRotation.setAll(0);
     document.body.classList.toggle("gameplay-input", !isOpen);
     this.interactionPrompt.hidden = true;
     if (isOpen) {
@@ -158,6 +186,8 @@ export class PlayerControls {
     camera.position.z = 0;
     camera.cameraDirection.setAll(0);
     this.heldMovementKeys.clear();
+    this.touchControls?.clear();
+    this.lookPointer = undefined;
     this.verticalVelocityMetersPerSecond = 0;
     this.lastLoadedX = undefined;
     this.lastLoadedZ = undefined;
@@ -182,14 +212,24 @@ export class PlayerControls {
     canvas.removeEventListener("click", this.handleCanvasClick);
     document.removeEventListener("pointerlockchange", this.handlePointerLockChange);
     window.removeEventListener("blur", this.handleWindowBlur);
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     scene.onKeyboardObservable.removeCallback(this.handleKeyboard);
     document.body.classList.remove("gameplay-input");
+    document.body.classList.remove("phone-input");
+    this.touchControls?.dispose();
+    canvas.removeEventListener("pointerdown", this.handleTouchLook);
+    canvas.removeEventListener("pointermove", this.handleTouchLook);
+    canvas.removeEventListener("pointerup", this.handleTouchLookEnd);
+    canvas.removeEventListener("pointercancel", this.handleTouchLookEnd);
+    canvas.removeEventListener("lostpointercapture", this.handleTouchLookEnd);
     if (document.pointerLockElement === canvas) document.exitPointerLock();
     this.flySpeedOutput.remove();
     this.interactionPrompt.remove();
   }
 
   private readonly handleCanvasClick = (): void => {
+    this.options.canvas.focus({ preventScroll: true });
+    if (this.touchControls) return;
     this.requestPointerLock();
   };
 
@@ -227,13 +267,24 @@ export class PlayerControls {
   };
 
   private readonly handleWindowBlur = (): void => {
+    this.lookPointer = undefined;
     this.heldMovementKeys.clear();
+    this.touchControls?.clear();
     this.walkerJumpRequested = false;
+    this.options.camera.cameraDirection.setAll(0);
+    this.options.camera.cameraRotation.setAll(0);
+  };
+
+  private readonly handleVisibilityChange = (): void => {
+    if (document.hidden) this.handleWindowBlur();
   };
 
   private readonly handleKeyboard = (kbInfo: KeyboardInfo): void => {
     if (this.options.isMenuOpen()) return;
-    const key = kbInfo.event.key.toLowerCase();
+    const key = /^Key[A-Z]$/.test(kbInfo.event.code)
+      ? kbInfo.event.code.slice(3).toLowerCase() : kbInfo.event.key.toLowerCase();
+    if (kbInfo.type === KeyboardEventTypes.KEYUP) this.heldMovementKeys.delete(key);
+    if (kbInfo.event.ctrlKey || kbInfo.event.altKey || kbInfo.event.metaKey) return;
     if (kbInfo.type === KeyboardEventTypes.KEYDOWN) {
       if (kbInfo.event.code === "KeyF" && !kbInfo.event.shiftKey && !kbInfo.event.ctrlKey &&
           !kbInfo.event.altKey && !kbInfo.event.metaKey && !(kbInfo.event as KeyboardEvent).repeat) {
@@ -268,7 +319,7 @@ export class PlayerControls {
   private getInteraction() {
     const { camera, scene, canvas } = this.options;
     const scale = this.options.getMetersPerUnit();
-    if (!scale || this.options.isMenuOpen() || document.pointerLockElement !== canvas) return undefined;
+    if (!scale || this.options.isMenuOpen() || (!this.touchControls && document.pointerLockElement !== canvas)) return undefined;
     return findInteraction(scene, camera.getForwardRay(3 / scale));
   }
 
@@ -327,8 +378,8 @@ export class PlayerControls {
       camera.position.z,
       camera.position.y,
     );
-    const forward = Number(this.heldMovementKeys.has("w")) - Number(this.heldMovementKeys.has("s"));
-    const right = Number(this.heldMovementKeys.has("d")) - Number(this.heldMovementKeys.has("a"));
+    const forward = Number(this.isMovementHeld("w")) - Number(this.isMovementHeld("s"));
+    const right = Number(this.isMovementHeld("d")) - Number(this.isMovementHeld("a"));
     if (forward !== 0 || right !== 0) {
       const inputLength = Math.hypot(forward, right);
       const yaw = camera.rotation.y;
@@ -367,6 +418,44 @@ export class PlayerControls {
     });
     camera.position.y = verticalMotion.eyeHeight;
     this.verticalVelocityMetersPerSecond = verticalMotion.verticalVelocityMetersPerSecond;
+  }
+
+  private readonly handleTouchLook = (event: PointerEvent): void => {
+    if (this.options.isMenuOpen()) return;
+    if (event.type === "pointerdown" && !this.lookPointer) {
+      this.options.canvas.setPointerCapture(event.pointerId);
+      this.lookPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    } else if (event.type === "pointermove" && this.lookPointer?.id === event.pointerId) {
+      const rotation = this.options.camera.rotation;
+      rotation.y += (event.clientX - this.lookPointer.x) * 0.004;
+      rotation.x = Math.max(-Math.PI * 0.49, Math.min(Math.PI * 0.49,
+        rotation.x + (event.clientY - this.lookPointer.y) * 0.004));
+      this.lookPointer.x = event.clientX;
+      this.lookPointer.y = event.clientY;
+    }
+  };
+
+  private readonly handleTouchLookEnd = (event: PointerEvent): void => {
+    if (this.lookPointer?.id === event.pointerId) this.lookPointer = undefined;
+  };
+
+  private isMovementHeld(key: string): boolean {
+    return this.heldMovementKeys.has(key) || this.touchControls?.held.has(`Key${key.toUpperCase()}`) === true;
+  }
+
+  private updateTouchFlight(): void {
+    if (!this.touchControls || this.options.isMenuOpen() || this.currentMovementMode !== "fly") return;
+    const held = this.touchControls.held;
+    const forward = Number(held.has("KeyW")) - Number(held.has("KeyS"));
+    const right = Number(held.has("KeyD")) - Number(held.has("KeyA"));
+    const up = Number(held.has("KeyE")) - Number(held.has("KeyQ"));
+    const length = Math.hypot(forward, right, up);
+    if (!length) return;
+    const { camera, engine } = this.options;
+    const distance = camera.speed * Math.min(engine.getDeltaTime() / 1000, 0.05) * 10 / length;
+    const direction = camera.getDirection(new Vector3(right, 0, forward));
+    camera.position.addInPlace(direction.scale(distance));
+    camera.position.y += up * distance;
   }
 
   private pushOutOfTreeTrunks(metersPerUnit: number): void {

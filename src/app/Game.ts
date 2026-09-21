@@ -1879,8 +1879,8 @@ export class Game {
         previousDate.getMonth() === date.getMonth() && previousDate.getDate() === date.getDate()) return;
     // Atlases use snow tiers, but low vegetation density follows the exact
     // depth. Both must be checked before keeping the generated fields.
-    const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").season;
-    const nextSeason = treeSeasonAt(date, 45, "oak").season;
+    const previousSeason = treeSeasonAt(this.vegetationDate, 45, "oak").key;
+    const nextSeason = treeSeasonAt(date, 45, "oak").key;
     this.vegetationDate = date;
     let rebuildScenery = previousSeason !== nextSeason;
     const metersPerUnit = this.terrainMetersPerUnit ?? 1;
