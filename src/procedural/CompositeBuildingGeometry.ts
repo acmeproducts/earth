@@ -10,6 +10,7 @@ export function compositeBuildingGeometry(
   elevation: (height: number) => number,
   showRoofs = true,
   showWalls = true,
+  roofClearance = 0,
 ): { positions: number[]; normals: number[]; indices: number[] } {
   const positions: number[] = [], normals: number[] = [], indices: number[] = [];
   const triangle = (a: number[], b: number[], c: number[]) => {
@@ -58,7 +59,7 @@ export function compositeBuildingGeometry(
         }
       }
     }
-    if (showRoofs) for (const roof of band.roofs) cap(roof, top, true);
+    if (showRoofs) for (const roof of band.roofs) cap(roof, top + roofClearance, true);
     for (const soffit of band.soffits) cap(soffit, bottom, false);
   }
   return { positions, normals, indices };

@@ -46,6 +46,39 @@ function plan(id, properties = {}) {
   return planBuilding({ id: `building/14/${id}/0`, polygon: footprint, properties });
 }
 
+test("touching buildings keep their facade thickness inside the shared boundary", () => {
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const neighbor = {
+    outer: [[0.65, 0.42], [0.95, 0.42], [0.95, 0.58], [0.65, 0.58], [0.65, 0.42]],
+    holes: [],
+  };
+  try {
+    for (const scale of [1, 10]) {
+      for (const polygon of [footprint, neighbor]) {
+        const building = planBuilding({ id: `clearance-${polygon.outer[0][0]}`,
+          polygon, properties: { render_height: 12, roof_shape: "flat" } });
+        const mesh = ProceduralBuildingRenderer.createDetailed(scene, building, terrain, {
+          meshWidth: 100 / scale, meshDepth: 100 / scale, metersPerUnit: scale,
+          neighboringBuildingFootprints: [footprint, neighbor],
+        });
+        const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+        let checked = 0;
+        for (let i = 0; i < positions.length; i += 3) {
+          const y = (positions[i + 1] + mesh.position.y) * scale;
+          if (y <= 10.5 || y >= 21.5) continue;
+          const x = (positions[i] + mesh.position.x) * scale;
+          assert.ok(polygon === footprint ? x <= 14.981 : x >= 15.019,
+            `facade vertex ${x} must leave clearance at the shared boundary`);
+          checked++;
+        }
+        assert.ok(checked > 0);
+        mesh.dispose(false, true);
+      }
+    }
+  } finally { scene.dispose(); engine.dispose(); }
+});
+
 test("high-rise facade faces upload in bounded batches rather than one mesh per panel", () => {
   const engine = new NullEngine();
   const scene = new Scene(engine);

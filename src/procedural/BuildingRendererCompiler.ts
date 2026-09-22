@@ -77,6 +77,7 @@ import {
   BUILDING_INTERIOR_LOAD_DISTANCE_METERS,
   BUILDING_INTERIOR_UNLOAD_DISTANCE_METERS,
   BUILDING_ROOF_EAVE_CLEARANCE_METERS,
+  BUILDING_COMPLEX_ROOF_CLEARANCE_METERS,
   BUILDING_ROOF_OVERHANG_METERS,
   BUILDING_ROOF_TRIM_METERS,
   BUILDING_STAIR_MAX_RUN_METERS,
@@ -556,10 +557,14 @@ function* createComplexEnterableBuilding(
   const bands = plan.heightBands ?? [{ minimumHeightMeters: plan.minimumHeightMeters,
     heightMeters: plan.heightMeters, footprints: [plan.footprint], roofs: [plan.footprint], soffits: [plan.footprint] }];
   const project = ([lon, lat]: LonLat) => lonLatToScene(lon, lat, terrain.bounds, options.meshWidth, options.meshDepth);
-  const projectPolygon = (polygon: BuildingPolygon) => scenePolygon(
-    [polygon.outer, ...polygon.holes].map((ring) => ring.map((p): LonLat => {
-      const point = project(p); return [point.x, point.z];
-    })));
+  const projectPolygon = (polygon: BuildingPolygon) => {
+    const projected = scenePolygon(
+      [polygon.outer, ...polygon.holes].map((ring) => ring.map((p): LonLat => {
+        const point = project(p); return [point.x, point.z];
+      })));
+    projected.outline = separateNeighboringWalls(plan.footprint, projected.outline, terrain, options);
+    return projected;
+  };
   const parts: Mesh[] = [];
   const sections: InteriorSection[] = [];
   const facades: DetailedBuildingParts[] = [];
@@ -661,7 +666,7 @@ function* createComplexEnterableBuilding(
   }) }));
   const caps = compositeBuildingGeometry(roofBands, project,
     (height) => (prepared.baseElevation + height) / options.metersPerUnit,
-    options.showRoofs !== false, false);
+    options.showRoofs !== false, false, BUILDING_COMPLEX_ROOF_CLEARANCE_METERS / options.metersPerUnit);
   const capMesh = stageBuildingMesh(new Mesh("complexBuildingCaps", scene));
   const capData = new VertexData();
   capData.positions = caps.positions;
@@ -675,7 +680,8 @@ function* createComplexEnterableBuilding(
     yield "complex rooftop equipment";
     const polygon = projectPolygon(roof);
     const equipment = createRooftopEquipment(scene, plan, polygon.outline, polygon.holes,
-      prepared.baseElevation + band.heightMeters, options.metersPerUnit, appearance.wall, roofAccesses.get(roof)?.placement);
+      prepared.baseElevation + band.heightMeters + BUILDING_COMPLEX_ROOF_CLEARANCE_METERS,
+      options.metersPerUnit, appearance.wall, roofAccesses.get(roof)?.placement);
     if (equipment) parts.push(stageBuildingMesh(equipment));
   }
   const mesh = yield* mergeDetailedParts(parts);
@@ -844,7 +850,8 @@ function* createComplexInteriorParts(
       }
       if (section.roofAccess) {
         createStairFlight(parts, scene, section.roofAccess.stair, section.bottom,
-          section.top - section.bottom - BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
+          section.top - section.bottom + BUILDING_COMPLEX_ROOF_CLEARANCE_METERS -
+            BUILDING_FLOOR_THICKNESS_METERS, options, floorColor);
         yield "complex roof stair flight";
       }
     }
@@ -1296,7 +1303,8 @@ function* createEnterableBuilding(
       const bayWidth = edgeLengthMeters / bayCount;
 
       if (shellOnly && options.showRoofs !== false) {
-        // Complex roof caps end at the footprint; bridge to the outer shell face.
+        // Slope down from the raised cap to the facade so wall tops cannot
+        // share the roof plane, including after interior panels stream in.
         const direction = unitDirection(start, end);
         const offset = scalePoint(outwardNormal(direction),
           BUILDING_WALL_THICKNESS_METERS / (2 * options.metersPerUnit));
@@ -1304,11 +1312,14 @@ function* createEnterableBuilding(
         const outerEnd = addPoint(end, offset);
         const roofJoin: WindowGeometry = { positions: [], indices: [0, 2, 1, 0, 3, 2], normals: [], colors: [] };
         for (const point of [start, end, outerEnd, outerStart]) {
-          roofJoin.positions.push(point.x, topElevation / options.metersPerUnit, point.z);
-          roofJoin.normals.push(0, 1, 0);
-          roofJoin.colors.push(appearance.wall.r, appearance.wall.g, appearance.wall.b, 1);
+          const clearance = point === start || point === end ? BUILDING_COMPLEX_ROOF_CLEARANCE_METERS : 0;
+          roofJoin.positions.push(point.x, (topElevation + clearance) / options.metersPerUnit, point.z);
+          roofJoin.colors.push(appearance.roof.r, appearance.roof.g, appearance.roof.b, 1);
         }
-        parts.push(createWindowMesh(scene, roofJoin)!);
+        VertexData.ComputeNormals(roofJoin.positions, roofJoin.indices, roofJoin.normals);
+        const join = createWindowMesh(scene, roofJoin)!;
+        setBuildingSurface(join, roofSurfaceFor(plan.roofMaterial, "flat", plan.buildingClass));
+        parts.push(join);
       }
 
       if (blockedFacadeEdges.has(edgeIndex)) {
@@ -2135,9 +2146,10 @@ function prepareBuildingFootprint(
     if (points.length > 1 && samePoint(points[0], points[points.length - 1])) points.pop();
     return options.renderWholeBuildingFootprints ? points : clipToBounds(points, clipBounds);
   };
-  const outline = projectRing(footprint.outer);
+  let outline = projectRing(footprint.outer);
   if (outline.length < 3) return undefined;
   if (signedArea(outline) < 0) outline.reverse();
+  outline = separateNeighboringWalls(footprint, outline, terrain, options);
   const holes = footprint.holes
     .map(projectRing)
     .filter((hole) => hole.length >= 3 && Math.abs(signedArea(hole)) > 1e-10)
@@ -2161,11 +2173,38 @@ function prepareBuildingFootprint(
   };
 }
 
+function separateNeighboringWalls(
+  footprint: BuildingPolygon,
+  outline: ScenePoint[],
+  terrain: TerrainData,
+  options: BuildingRenderOptions,
+): ScenePoint[] {
+  const shared = findSharedFacadeEdges(footprint, outline, terrain, options, 0.25);
+  if (!shared.size) return outline;
+  // Keep the outer half of each wall inside its lot, with 2 cm of clearance.
+  const setback = (BUILDING_WALL_THICKNESS_METERS / 2 + 0.02) / options.metersPerUnit;
+  const edges = outline.map((start, index) => {
+    const end = outline[(index + 1) % outline.length];
+    const offset = scalePoint(outwardNormal(unitDirection(start, end)), shared.has(index) ? -setback : 0);
+    return [addPoint(start, offset), addPoint(end, offset)];
+  });
+  return outline.map((point, index) => {
+    const previous = (index + outline.length - 1) % outline.length;
+    if (!shared.has(previous) && !shared.has(index)) return point;
+    const [a, b] = edges[previous], [c, d] = edges[index];
+    const intersection = lineIntersection(a, b, c, d);
+    // Avoid unbounded miters at nearly parallel provider edges.
+    return intersection && pointDistance(point, intersection) <= setback * 8
+      ? intersection : shared.has(index) ? c : b;
+  });
+}
+
 function findSharedFacadeEdges(
   footprint: BuildingPlan["footprint"],
   outline: readonly ScenePoint[],
   terrain: TerrainData,
   options: BuildingRenderOptions,
+  toleranceMeters = 0.25 + BUILDING_WALL_THICKNESS_METERS / 2 + 0.02,
 ): ReadonlySet<number> {
   const neighbors = options.neighboringBuildingFootprints ?? [];
   const ownPoints = footprint.outer;
@@ -2177,7 +2216,7 @@ function findSharedFacadeEdges(
   const projected = (ring: readonly (readonly [number, number])[]): ScenePoint[] =>
     ring.map(([lon, lat]) => lonLatToScene(
       lon, lat, terrain.bounds, options.meshWidth, options.meshDepth));
-  const tolerance = 0.25 / options.metersPerUnit;
+  const tolerance = toleranceMeters / options.metersPerUnit;
   const minimumOverlap = 0.5 / options.metersPerUnit;
   const blocked = new Set<number>();
   for (const neighbor of neighbors) {
@@ -3048,6 +3087,7 @@ function resolvedRoofShape(
   outline: ScenePoint[],
   areaSquareMeters: number,
 ): BuildingPlan["roofShape"] {
+  if (areaSquareMeters < 25) return "flat";
   if (plan.roofShape !== "unknown") {
     if (plan.roofShape === "flat") return "flat";
     // Render pitched roofs with a full-length ridge. Hipped, pyramidal, and

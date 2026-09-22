@@ -45,6 +45,38 @@ function hits(meshes, origin, direction, length) {
   }).filter((hit) => hit.hit);
 }
 
+for (const name of ["courtyard", "stepped"]) for (const scale of [1, 10]) {
+  test(`${name} roof surfaces clear streamed wall tops at scale ${scale}`, () => {
+    const { engine, scene, mesh } = setup(fixtures[name], scale);
+    try {
+      const root = new Mesh("interior", scene);
+      for (const _ of mesh.metadata.pendingInterior.build(root)) { /* Load wall thickness and partitions. */ }
+      let checked = 0;
+      const tops = new Set();
+      for (const child of root.getChildMeshes()) {
+        const positions = child.getVerticesData(VertexBuffer.PositionKind);
+        const normals = child.getVerticesData(VertexBuffer.NormalKind);
+        const indices = child.getIndices();
+        const world = child.computeWorldMatrix(true);
+        for (let i = 0; i < indices.length; i += 3) {
+          if (normals[indices[i] * 3 + 1] < 0.99) continue;
+          const vertices = indices.slice(i, i + 3).map((index) =>
+            Vector3.TransformCoordinates(Vector3.FromArray(positions, index * 3), world));
+          const center = vertices.reduce((sum, point) => sum.add(point), Vector3.Zero()).scale(1 / 3);
+          tops.add(Math.round(center.y * scale * 1000) / 1000);
+          if (![16.2, 22.4].some((top) => Math.abs(center.y * scale - top) < 1e-4)) continue;
+          const hit = hits([mesh], center.add(new Vector3(0, 0.1 / scale, 0)), Vector3.Down(), 0.11 / scale)[0];
+          if (!hit) continue; // Exterior corner caps extend beyond the roof footprint.
+          assert.ok((hit.pickedPoint.y - center.y) * scale > 0.001,
+            `roof must clear the loaded wall top at ${center}`);
+          checked++;
+        }
+      }
+      assert.ok(checked > 10, `must inspect streamed wall tops beneath the roof: ${checked}; ${[...tops].sort((a,b) => a-b)}`);
+    } finally { scene.dispose(); engine.dispose(); }
+  });
+}
+
 for (const [name, parts] of Object.entries({
   ordinary: [source("ordinary",rectangle(0.1,0.1,0.8,0.8),12.4)],
   courtyard: fixtures.courtyard,
